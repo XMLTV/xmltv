@@ -37,8 +37,15 @@ BEGIN {
 # Note that the Memoize module is not loaded unless --cache options
 # are found.
 #
+# Returns a ref to a list of code references for the memoized
+# versions, if memoization happened (but does install the memoized
+# versions under the original names too).  Returns undef if no
+# memoization was wanted.
+#
 sub check_argv( @ ) {
-    my ($yes, $filename);
+    local $Log::TraceMessages::On = 1;
+    my $yes = 0;
+    my $filename;
     my @new_argv;
     while (@ARGV) {
 	local $_ = shift @ARGV;
@@ -70,7 +77,8 @@ sub check_argv( @ ) {
 	}
     }
     @ARGV = (@new_argv, @ARGV);
-    return 0 if not $yes;
+    t 'do we want to cache? ' . d $yes;
+    return undef if not $yes;
 
     if (not defined $filename) {
 	my $basename = File::Basename::basename($0);
@@ -83,8 +91,21 @@ sub check_argv( @ ) {
     require DB_File;
     my @tie_args = ('DB_File', $filename,
 		    POSIX::O_RDWR() | POSIX::O_CREAT(), 0666);
+
+    # $from_caller is a sub which converts a function name into one
+    # seen from the caller's namespace.  Namespaces do not nest, so if
+    # it already has :: it should be left alone.
+    #
     my $caller = caller();
     t "caller: $caller";
+    my $from_caller = sub( $ ) {
+	for (shift) {
+	    return $_ if /::/;
+	    return "${caller}::$_";
+	}
+    };
+
+    my @r;
     if ($Memoize::VERSION > 0.62) {
 	# Use HASH instead of deprecated TIE.
 	my %cache;
@@ -93,20 +114,24 @@ sub check_argv( @ ) {
 	tie %cache, 'DB_File', $filename,
 	  POSIX::O_RDWR() | POSIX::O_CREAT(), 0666;
 	foreach (@_) {
-	    Memoize::memoize("${caller}::$_",
-			     SCALAR_CACHE => [ HASH => \%cache ],
-			     LIST_CACHE => 'MERGE');
+	    my $r = Memoize::memoize($from_caller->($_),
+				     SCALAR_CACHE => [ HASH => \%cache ],
+				     LIST_CACHE => 'MERGE');
+	    die "could not memoize $_" if not $r;
+	    push @r, $r;
 	}
     }
     else {
 	# Old version of Memoize.
 	foreach (@_) {
-	    Memoize::memoize("${caller}::$_",
-			     SCALAR_CACHE => [ 'TIE', @tie_args ],
-			     LIST_CACHE => 'MERGE');
+	    my $r = Memoize::memoize($from_caller->($_),
+				     SCALAR_CACHE => [ 'TIE', @tie_args ],
+				     LIST_CACHE => 'MERGE');
+	    die "could not memoize $_" if not $r;
+	    push @r, $r;
 	}
     }
-    return 1;
+    return \@r;
 }
 
 1;
