@@ -200,6 +200,11 @@ are present.",
 	       return $p;
 	   },
 	   'Python', '17105648', '1.5.2' ] ] },
+
+     { name => 'tv_grab_fi',
+       blurb => 'Tv_grab_fi is the listings grabber for Finland.',
+       exes => [ 'grab/fi/tv_grab_fi' ],
+       prereqs => { 'HTML::TreeBuilder' => 0 } },
     );
 
 foreach my $info (@opt_components) {
