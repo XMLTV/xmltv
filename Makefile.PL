@@ -302,6 +302,12 @@ my @opt_components
        exes => [ 'grab/dk/tv_grab_dk' ],
        prereqs => { 'HTML::TreeBuilder' => 0 } },
 
+     { name => 'tv_grab_jp',
+       blurb => 'Grabber for Japan',
+       exes => [ 'grab/jp/tv_grab_jp' ],
+       prereqs => { 'HTML::TreeBuilder' => 0,
+		    'Text::Kakasi' => 0 } },
+
      { name => 'tv_check',
        blurb => 'Program to report exceptions and changes in a schedule',
        exes => [ 'choose/tv_check/tv_check' ],
