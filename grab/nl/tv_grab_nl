@@ -190,8 +190,7 @@ if ($mode eq 'configure') {
 
 	# Print a config line, but comment it out if channel not wanted.
 	print CONF '#' if not $w;
-	my $name = shift @names;
-        print CONF "channel $_ $name\n";
+        print CONF "channel $_\n";
 	# TODO don't store display-name in config file.
     }
 
@@ -249,24 +248,33 @@ if ($mode eq 'list-channels') {
 die if $mode ne 'grab';
 my (%channels, @channels, $ch_did, $ch_name);
 my $line_num = 0;
+my $warned_old_format = 0;
+my $bad = 0;
 foreach (@config_lines) {
     ++ $line_num;
     next if not defined;
 
-    # FIXME channel data should be read from the site, and then the
-    # config file only gives the XMLTV ids that are interesting.
-    #
     if (/^channel:?\s+(\S+)\s+(.+)/) {
+	# Old format storing display-names in the config file.  Well,
+	# if they're there we ought to check them.
+	#
 	$ch_did = $1;
 	$ch_name = $2;
 	$ch_name =~ s/\s*$//;
 	push @channels, $ch_did;
 	$channels{$ch_did} = $ch_name;
+	warn "$config_file format needs upgrading, rerun --configure\n"
+	  unless $warned_old_format++;
+    }
+    elsif (/^channel\s+(\S+)\s*$/) {
+	push @channels, $1;
     }
     else {
 	warn "$config_file:$line_num: bad line\n";
+	$bad = 1;
     }
 }
+die "$config_file has errors, not continuing\n" if $bad;
 
 ######################################################################
 # begin main program
@@ -286,10 +294,7 @@ my @to_get;
 
 # the order in which we fetch the channels matters
 foreach $ch_did (@channels) {
-    $ch_name = $channels{$ch_did};
     my $ch_xid = "$ch_did.tvgids.nl";
-    $writer->write_channel({ id => $ch_xid,
-			     'display-name' => [ [ $ch_name ] ] });
     for (my $i = $opt_offset;$i<($opt_offset + $opt_days);$i++) {
 	my $url = 'http://www.tvgids.nl/zoekprogramma.php'
 	  . "?station=$ch_did&interval=$i";
@@ -312,6 +317,16 @@ foreach (@to_get) {
       [ $url, $ch_xmltv_id,
 	[ process_summary_page($url, $day, $day, \$channels{$ch_tvgids_id}) ] ];
     update $bar if Have_bar and not $opt_quiet;
+}
+
+# Now we've fetched the descriptions, we know the channel names.
+foreach $ch_did (@channels) {
+    $ch_name = $channels{$ch_did};
+    die "did not see any name for $ch_did in any listing pages"
+      if not defined $ch_name;
+    my $ch_xid = "$ch_did.tvgids.nl";
+    $writer->write_channel({ id => $ch_xid,
+			     'display-name' => [ [ $ch_name ] ] });
 }
 
 my @summary_programmes;
