@@ -50,7 +50,7 @@ use strict;
 
 package XMLTV::IMDB;
 
-our $VERSION = '0.4';
+our $VERSION = '0.5';
 
 sub new
 {
@@ -68,14 +68,17 @@ sub new
     $self->{replaceActors}=0       if ( !defined($self->{replaceActors}));
     $self->{replacePresentors}=1   if ( !defined($self->{replacePresentors}));
     $self->{replaceCommentators}=1 if ( !defined($self->{replaceCommentators}));
+    $self->{replaceStarRatings}=1  if ( !defined($self->{replaceStarRatings}));
 
     $self->{updateTitles}=1       if ( !defined($self->{updateTitles}));
     $self->{updateCategories}=1   if ( !defined($self->{updateCategories}));
+    $self->{updateCategoriesWithGenres}=1 if ( !defined($self->{updateCategoriesWithGenres}));
     $self->{updateURLs}=1         if ( !defined($self->{updateURLs}));
     $self->{updateDirectors}=1    if ( !defined($self->{updateDirectors}));
     $self->{updateActors}=1       if ( !defined($self->{updateActors}));
     $self->{updatePresentors}=1   if ( !defined($self->{updatePresentors}));
     $self->{updateCommentators}=1 if ( !defined($self->{updateCommentators}));
+    $self->{updateStarRatings}=1  if ( !defined($self->{updateStarRatings}));
 
     $self->{moviedbIndex}="$self->{imdbDir}/moviedb.idx";
     $self->{moviedbData}="$self->{imdbDir}/moviedb.dat";
@@ -239,6 +242,22 @@ sub basicVerificationOfIndexes($)
 	$self->closeMovieIndex();
 	return("basic verification of indexes failed\n".
 	       "movie details didn't show Bruce Campbell as the main actor in movie \"$title, $year\" (id=$id)\n");
+    }
+    if ( $res->{genres}[0] ne "Adventure" ||
+	 $res->{genres}[1] ne "Fantasy" ||
+	 $res->{genres}[2] ne "Action" ||
+	 $res->{genres}[3] ne "Comedy" ||
+	 $res->{genres}[4] ne "Horror" ) {
+	$self->closeMovieIndex();
+	return("basic verification of indexes failed\n".
+	       "movie details didn't show genres correctly for movie \"$title, $year\" (id=$id)\n");
+    }
+    if ( !defined($res->{ratingDist}) ||
+	 !defined($res->{ratingVotes}) ||
+	 !defined($res->{ratingRank}) ) {
+	$self->closeMovieIndex();
+	return("basic verification of indexes failed\n".
+	       "movie details didn't show imdbratings for movie \"$title, $year\" (id=$id)\n");
     }
     $self->closeMovieIndex();
     return(undef);
@@ -455,8 +474,8 @@ sub getMovieIdDetails($$)
 	last if ( !m/^$id:/ );
 	chop();
 	if ( s/^$id:// ) {
-	    my ($directors, $actors)=split('\t', $_);
-	    if ( $directors ne "<unknown>" ) {
+	    my ($directors, $actors, $genres, $ratingDist, $ratingVotes, $ratingRank)=split('\t', $_);
+	    if ( $directors ne "<>" ) {
 		for my $name (split('\|', $directors)) {
 		    # remove (I) etc from imdb.com names (kept in place for reference)
 		    $name=~s/\s\([IVX]+\)$//o;
@@ -465,7 +484,7 @@ sub getMovieIdDetails($$)
 		    push(@{$results->{directors}}, $name);
 		}
 	    }
-	    if ( $actors ne "<unknown>" ) {
+	    if ( $actors ne "<>" ) {
 		for my $name (split('\|', $actors)) {
 		    # remove (I) etc from imdb.com names (kept in place for reference)
 		    my $HostNarrator;
@@ -489,6 +508,12 @@ sub getMovieIdDetails($$)
 		    }
 		}
 	    }
+	    if ( $genres ne "<>" ) {
+		push(@{$results->{genres}}, split('\|', $genres));
+	    }
+	    $results->{ratingDist}=$ratingDist if ( $ratingDist ne "<>" );
+	    $results->{ratingVotes}=$ratingVotes if ( $ratingVotes ne "<>" );
+	    $results->{ratingRank}=$ratingRank if ( $ratingRank ne "<>" );
 	}
 	else {
 	    warn "lookup of movie (id=$id) resulted in garbage ($_)";
@@ -791,8 +816,8 @@ sub findTVSeriesInfo($$)
 # todo - add country of origin
 # todo - video (colour/aspect etc) details
 # todo - audio (stereo) details 
-# todo - ratings ? star ratings ? - use certificates.list
-# todo - add description (replace an option ?)
+# todo - ratings ? - use certificates.list
+# todo - add description - plot summaries ? - which one do we choose ?
 # todo - writer
 # todo - producer
 # todo - running time (duration)
@@ -805,10 +830,6 @@ sub findTVSeriesInfo($$)
 #        <a name="poster"><img src="http://ia.imdb.com/media/imdb/01/I/60/69/80m.jpg" height="139" width="99" border="0"></a>
 #        and grabbin' out the img entry. (BTW ..../npa.jpg seems to line up with no poster available)
 #
-# todo - should be augmenting data and not replacing everything when
-#        multiples are allowed. For instance we replace all titles
-#        when we have one to add instead of just adding it.
-#        Maybe adding actors should be an option instead of replacing.
 #
 sub applyFound($$$)
 {
@@ -862,36 +883,13 @@ sub applyFound($$$)
 	}
     }
 
-    if ( $self->{updateCategories} ) {
-	if ( $self->{replaceCategories} ) {
-	    if ( defined($prog->{category}) ) {
-		$self->debug("replacing (all) 'category'");
-		delete($prog->{category});
-	    }
-	}
+    my @categories;
 
-	my $mycategory=$self->{categories}->{$idInfo->{qualifier}};
-	die "how did we get here with an invalid qualifier '$idInfo->{qualifier}'" if (!defined($mycategory));
+    my $mycategory=$self->{categories}->{$idInfo->{qualifier}};
+    die "how did we get here with an invalid qualifier '$idInfo->{qualifier}'" if (!defined($mycategory));
 
-	# update/add category based on the type we matched from imdb.com
-	if ( defined($prog->{category}) ) {
-	
-	    my $found=0;
-	    for my $value (@{$prog->{category}}) {
-		#print "checking category $value->[0] with $mycategory\n";
-		if ( $value->[0]=~m/^$mycategory$/i ) {
-		    $found=1;
-	        }
-	    }
-	    if ( !$found ) {
-		push(@{$prog->{category}}, [$mycategory,'en']);
-	    }
-	}
-	else {
-	    push(@{$prog->{category}}, [$mycategory,'en']);
-	}
-    }
-    
+    push(@categories, [$mycategory,'en']);
+
     if ( $self->{updateURLs} ) {
 	if ( $self->{replaceURLs} ) {
 	    if ( defined($prog->{url}) ) {
@@ -1021,6 +1019,52 @@ sub applyFound($$$)
 		}
 		$prog->{credits}->{commentator}=$details->{commentator};
 	    }
+	}
+
+	if ( $self->{updateCategoriesWithGenres} ) {
+	    if ( defined($details->{genres}) ) {
+		for (@{$details->{genres}}) {
+		    push(@categories, [$_, 'en']);
+		}
+	    }
+	}
+    }
+    if ( $self->{updateCategories} ) {
+	if ( $self->{replaceCategories} ) {
+	    if ( defined($prog->{category}) ) {
+		$self->debug("replacing (all) 'category'");
+		delete($prog->{category});
+	    }
+	}
+	if ( defined($prog->{category}) ) {
+	    my $found=0;
+	    for my $value (@{$prog->{category}}) {
+		my $found=0;
+		#print "checking category $value->[0] with $mycategory\n";
+		for my $c (@categories) {
+		    if ( $c->[0]=~m/^$value->[0]$/i ) {
+			$found=1;
+		    }
+		}
+		if ( !$found ) {
+		    push(@categories, $value);
+		}
+	    }
+	}
+	else {
+	    push(@{$prog->{category}}, @categories);
+	}
+    }
+
+    if ( $self->{updateStarRatings} ) {
+	if ( defined($details->{ratingRank}) ) {
+	    if ( $self->{replaceStarRatings} ) {
+		if ( defined($prog->{'star-rating'}) ) {
+		    $self->debug("replacing (all) 'star-rating'");
+		    delete($prog->{'star-rating'});
+		}
+	    }
+	    $prog->{'star-rating'}=["$details->{ratingRank}/10", undef]
 	}
     }
     
@@ -1166,7 +1210,7 @@ sub new
     }
   CHECK_FILES:
     my %missingListFiles; # maps 'movies' to filename ...movies.gz
-    for ('movies', 'actors', 'actresses', 'directors') {
+    for ('movies', 'actors', 'actresses', 'directors', 'genres', 'ratings') {
 	my $filename="$listsDir/$_.list";
 	my $filenameGz="$filename.gz";
 	my $filenameExists = -f $filename;
@@ -1321,16 +1365,29 @@ sub openMaybeGunzip($)
     }
 }
 
-sub readMovies($$$)
+sub readMoviesOrGenres($$$$)
 {
-    my ($self, $countEstimate, $file)=@_;
+    my ($self, $whichMoviesOrGenres, $countEstimate, $file)=@_;
     my $startTime=time();
+    my $header;
+    my $whatAreWeParsing;
+    my $progressBarDescription;
 
+    if ( $whichMoviesOrGenres eq "Movies" ) {
+	$header="MOVIES LIST";
+	$whatAreWeParsing=1;
+	$progressBarDescription="parsing Movies";
+    }
+    elsif ( $whichMoviesOrGenres eq "Genres" ) {
+	$header="8: THE GENRES LIST";
+	$whatAreWeParsing=2;
+	$progressBarDescription="parsing Genres";
+    }
     my $fh = openMaybeGunzip($file) || return(-2);
     while(<$fh>) {
-	if ( m/^MOVIES LIST/o ) {
+	if ( m/^$header/o ) {
 	    if ( !($_=<$fh>) || !m/^===========/o ) {
-		$self->error("missing ======= after MOVIES LIST at line $.");
+		$self->error("missing ======= after $header at line $.");
 		return(-1);
 	    }
 	    if ( !($_=<$fh>) || !m/^\s*$/o ) {
@@ -1340,12 +1397,12 @@ sub readMovies($$$)
 	    last;
 	}
 	elsif ( $. > 1000 ) {
-	    $self->error("$file: stopping at line $., didn't see \"MOVIES LIST\" line");
+	    $self->error("$file: stopping at line $., didn't see \"$header\" line");
 	    return(-1);
 	}
     }
 
-    my $progress=Term::ProgressBar->new({name  => 'parsing Movies',
+    my $progress=Term::ProgressBar->new({name  => $progressBarDescription,
 					 count => $countEstimate,
 					 ETA   => 'linear'})
       if Have_bar;
@@ -1366,10 +1423,30 @@ sub readMovies($$$)
 	
 	my $tab=index($line, "\t");
 	if ( $tab != -1 ) {
-	    $line=substr($line, 0, $tab);
+	    my $mkey=substr($line, 0, $tab);
 
-	    push(@{$self->{movies}}, $line);
-	    $count++;
+	    if ( $whatAreWeParsing == 2 ) {
+		# skip enties that have {} in them since they're tv episodes
+		next if ( $mkey=~s/\s*\{[^\}]+\}$//o );
+
+		my $genre=substr($line, $tab);
+
+		# genres sometimes has more than one tab
+		$genre=~s/^\t+//og;
+		if ( defined($self->{movies}{$mkey}) ) {
+		    $self->{movies}{$mkey}.="|".$genre;
+		}
+		else {
+		    $self->{movies}{$mkey}=$genre;
+		    # returned count is number of unique titles found
+		    $count++;
+		}
+	    }
+	    else {
+		push(@{$self->{movies}}, $mkey);
+		# returned count is number of titles found
+		$count++;
+	    }
 	
 	    if (Have_bar) {
 		# re-adjust target so progress bar doesn't seem too wonky
@@ -1518,10 +1595,12 @@ sub readCastOrDirectors($$$)
 	    # don't see what these are...?
 	}
 
-	if ( $line=~s/\s*\(aka ([^\)]+)\).*$//o ) {
-	    # $attr=$1;
+	if ( $whatAreWeParsing < 3 ) {
+	    if ( $line=~s/\s*\(aka ([^\)]+)\).*$//o ) {
+		# $attr=$1;
+	    }
 	}
-	elsif ( $line=~s/  (\(.*)$//o ) {
+	if ( $line=~s/  (\(.*)$//o ) {
 	    # $attrs=$1;
 	}
 	$line=~s/^\s+//og;
@@ -1560,6 +1639,80 @@ sub readCastOrDirectors($$$)
     # close($fh); # see earlier comment
     $self->status(sprintf("Parsed $castNames $whichCastOrDirector in $count titles in %d seconds",time()-$startTime));
     return($castNames);
+}
+
+sub readRatings($$$$)
+{
+    my ($self, $countEstimate, $file)=@_;
+    my $startTime=time();
+
+    my $fh = openMaybeGunzip($file) || return(-2);
+    while(<$fh>) {
+	if ( m/^MOVIE RATINGS REPORT/o ) {
+	    if ( !($_=<$fh>) || !m/^\s*$/o) {
+		$self->error("missing empty line after \"MOVIE RATINGS REPORT\" at line $.");
+		return(-1);
+	    }
+	    if ( !($_=<$fh>) || !m/^New  Distribution  Votes  Rank  Title/o ) {
+		$self->error("missing \"New  Distribution  Votes  Rank  Title\" at line $.");
+		return(-1);
+	    }
+	    last;
+	}
+	elsif ( $. > 1000 ) {
+	    $self->error("$file: stopping at line $., didn't see \"MOVIE RATINGS REPORT\" line");
+	    return(-1);
+	}
+    }
+
+    my $progress=Term::ProgressBar->new({name  => "parsing Ratings",
+					 count => $countEstimate,
+					 ETA   => 'linear'})
+      if Have_bar;
+
+    $progress->minor(0) if Have_bar;
+    $progress->max_update_rate(1) if Have_bar;
+    my $next_update=0;
+
+    my $count=0;
+    while(<$fh>) {
+	my $line=$_;
+	#print "read line $.:$line";
+
+	$line=~s/\n$//o;
+	
+	# skip empty lines (only really appear right before last line ending with ----
+	next if ( $line=~m/^\s*$/o );
+	# end is line consisting of only '-'
+	last if ( $line=~m/^\-\-\-\-\-\-\-+/o );
+
+	if ( $line=~s/^\s+([\.|\*|\d]+)\s+(\d+)\s+(\d+)\.(\d+)\s+//o ) {
+	    $self->{movies}{$line}=[$1,$2,"$3.$4"];
+	    $count++;
+	    if (Have_bar) {
+		# re-adjust target so progress bar doesn't seem too wonky
+		if ( $count > $countEstimate ) {
+		    $countEstimate = $progress->target($count+1000);
+		    $next_update=$progress->update($count);
+		}
+		elsif ( $count > $next_update ) {
+		    $next_update=$progress->update($count);
+		}
+	    }
+	}
+	else {
+	    $self->error("$file:$.: unrecognized format");
+	    $next_update=$progress->update($count) if Have_bar;
+	}
+    }
+    $progress->update($countEstimate) if Have_bar;
+
+    # Would close($fh) but that causes segfaults on my system.
+    # Investigating, but in the meantime just leave it open.
+    #
+
+    $self->status(sprintf("Parsed $count titles in %d seconds",time()-$startTime));
+    return($count);
 }
 
 sub stageComplete($)
@@ -1619,7 +1772,7 @@ sub invokeStage($$)
     if ( $stage == 1 ) {
 	$self->status("starting prep stage $stage (parsing movies.list)..");
 	my $countEstimate=370000;
-	my $num=$self->readMovies($countEstimate, "$self->{imdbListFiles}->{movies}");
+	my $num=$self->readMoviesOrGenres("Movies", $countEstimate, "$self->{imdbListFiles}->{movies}");
 	if ( $num < 0 ) {
 	    if ( $num == -2 ) {
 		$self->error("you need to download $self->{imdbListFiles}->{movies} from ftp.imdb.com");
@@ -1663,6 +1816,7 @@ sub invokeStage($$)
 	    }
 	    $progress->update($countEstimate) if Have_bar;
 	    close(OUT);
+	    delete($self->{movies});
 	}
     }
     elsif ( $stage == 2 ) {
@@ -1727,6 +1881,7 @@ sub invokeStage($$)
 	    }
 	    $progress->update($countEstimate) if Have_bar;
 	    close(OUT);
+	    delete($self->{movies});
 	}
 	#unlink("$self->{imdbDir}/stage1.data");
     }
@@ -1779,6 +1934,7 @@ sub invokeStage($$)
 	    }
 	    $progress->update($countEstimate) if Have_bar;
 	    close(OUT);
+	    delete($self->{movies});
 	}
     }
     elsif ( $stage == 4 ) {
@@ -1828,10 +1984,112 @@ sub invokeStage($$)
 	    }
 	    $progress->update($countEstimate) if Have_bar;
 	    close(OUT);
+	    delete($self->{movies});
 	}
 	#unlink("$self->{imdbDir}/stage3.data");
     }
     elsif ( $stage == 5 ) {
+	$self->status("starting prep stage $stage (parsing genres.list)..");
+	my $countEstimate=250000;
+	my $num=$self->readMoviesOrGenres("Genres", $countEstimate, "$self->{imdbListFiles}->{genres}");
+	if ( $num < 0 ) {
+	    if ( $num == -2 ) {
+		$self->error("you need to download $self->{imdbListFiles}->{genres} from ftp.imdb.com");
+	    }
+	    return(1);
+	}
+	elsif ( abs($num - $countEstimate) > $countEstimate*.05 ) {
+	    $self->status("ARG estimate of $countEstimate for genres needs updating, found $num");
+	}
+	$self->dbinfoAdd("genres_list_file",         "$self->{imdbListFiles}->{genres}");
+	$self->dbinfoAdd("genres_list_file_size", -s "$self->{imdbListFiles}->{genres}");
+	$self->dbinfoAdd("db_stat_genres_count", "$num");
+
+	$self->status("writing stage5 data ..");
+	{
+	    my $countEstimate=$self->dbinfoGet("db_stat_genres_count", 0);
+	    my $progress=Term::ProgressBar->new({name  => "writing genres",
+						 count => $countEstimate,
+						 ETA   => 'linear'})
+	      if Have_bar;
+	    $progress->minor(0) if Have_bar;
+	    $progress->max_update_rate(1) if Have_bar;
+	    my $next_update=0;
+	    
+	    open(OUT, "> $self->{imdbDir}/stage$stage.data") || die "$self->{imdbDir}/stage$stage.data:$!";
+	    my $count=0;
+	    for my $movie (keys %{$self->{movies}}) {
+		print OUT "$movie\t$self->{movies}->{$movie}\n";
+		
+		$count++;
+		if (Have_bar) {
+		    # re-adjust target so progress bar doesn't seem too wonky
+		    if ( $count > $countEstimate ) {
+			$countEstimate = $progress->target($count+100);
+			$next_update=$progress->update($count);
+		    }
+		    elsif ( $count > $next_update ) {
+			$next_update=$progress->update($count);
+		    }
+		}
+	    }
+	    $progress->update($countEstimate) if Have_bar;
+	    close(OUT);
+	    delete($self->{movies});
+	}
+    }
+    elsif ( $stage == 6 ) {
+	$self->status("starting prep stage $stage (parsing ratings.list)..");
+	my $countEstimate=76000;
+	my $num=$self->readRatings($countEstimate, "$self->{imdbListFiles}->{ratings}");
+	if ( $num < 0 ) {
+	    if ( $num == -2 ) {
+		$self->error("you need to download $self->{imdbListFiles}->{ratings} from ftp.imdb.com");
+	    }
+	    return(1);
+	}
+	elsif ( abs($num - $countEstimate) > $countEstimate*.05 ) {
+	    $self->status("ARG estimate of $countEstimate for ratings needs updating, found $num");
+	}
+	$self->dbinfoAdd("ratings_list_file",         "$self->{imdbListFiles}->{ratings}");
+	$self->dbinfoAdd("ratings_list_file_size", -s "$self->{imdbListFiles}->{ratings}");
+	$self->dbinfoAdd("db_stat_ratings_count", "$num");
+
+	$self->status("writing stage6 data ..");
+	{
+	    my $countEstimate=$self->dbinfoGet("db_stat_ratings_count", 0);
+	    my $progress=Term::ProgressBar->new({name  => "writing ratings",
+						 count => $countEstimate,
+						 ETA   => 'linear'})
+	      if Have_bar;
+	    $progress->minor(0) if Have_bar;
+	    $progress->max_update_rate(1) if Have_bar;
+	    my $next_update=0;
+	    
+	    open(OUT, "> $self->{imdbDir}/stage$stage.data") || die "$self->{imdbDir}/stage$stage.data:$!";
+	    my $count=0;
+	    for my $movie (keys %{$self->{movies}}) {
+		my @value=@{$self->{movies}->{$movie}};
+		print OUT "$movie\t$value[0]\t$value[1]\t$value[2]\n";
+		
+		$count++;
+		if (Have_bar) {
+		    # re-adjust target so progress bar doesn't seem too wonky
+		    if ( $count > $countEstimate ) {
+			$countEstimate = $progress->target($count+100);
+			$next_update=$progress->update($count);
+		    }
+		    elsif ( $count > $next_update ) {
+			$next_update=$progress->update($count);
+		    }
+		}
+	    }
+	    $progress->update($countEstimate) if Have_bar;
+	    close(OUT);
+	    delete($self->{movies});
+	}
+    }
+    elsif ( $stage == 7 ) {
 	my $tab=sprintf("\t");
 
 	$self->status("starting prep stage $stage (creating indexes..)..");
@@ -1871,7 +2129,7 @@ sub invokeStage($$)
 	}
 
 	$self->status("merging in stage 2 data (directors)..");
-	{
+	if ( 1 ) {
 	    my $countEstimate=$self->dbinfoGet("db_stat_movie_count", 0);
 	    my $progress=Term::ProgressBar->new({name  => "reading directors",
 						 count => $countEstimate,
@@ -1905,16 +2163,18 @@ sub invokeStage($$)
 	    $progress->update($countEstimate) if Have_bar;
 	    close(IN);
 	}
-	    
-	# fill in default for movies we didn't have a director for
-	for my $key (keys %movies) {
-	    if ( !length($movies{$key})) {
-		$movies{$key}="nodir";
+
+	if ( 1 ) {
+	    # fill in default for movies we didn't have a director for
+	    for my $key (keys %movies) {
+		if ( !length($movies{$key})) {
+		    $movies{$key}="<>";
+		}
 	    }
 	}
 
 	$self->status("merging in stage 3 data (actors)..");
-	{
+	if ( 1 ) {
 	    my $countEstimate=$self->dbinfoGet("db_stat_movie_count", 0);
 	    my $progress=Term::ProgressBar->new({name  => "reading actors",
 						 count => $countEstimate,
@@ -1956,7 +2216,7 @@ sub invokeStage($$)
 	}
 	    
 	$self->status("merging in stage 4 data (actresses)..");
-	{
+	if ( 1 ) {
 	    my $countEstimate=$self->dbinfoGet("db_stat_movie_count", 0);
 	    my $progress=Term::ProgressBar->new({name  => "reading actresses",
 						 count => $countEstimate,
@@ -1996,6 +2256,125 @@ sub invokeStage($$)
 	    $progress->update($countEstimate) if Have_bar;
 	    close(IN);
 	}
+	if ( 1 ) {
+	    # fill in placeholder if no actors were found
+	    for my $key (keys %movies) {
+		if ( !($movies{$key}=~m/$tab/o) ) {
+		    $movies{$key}.=$tab."<>";
+		}
+	    }
+	}
+
+	$self->status("merging in stage 5 data (genres)..");
+	if ( 1 ) {
+	    my $countEstimate=$self->dbinfoGet("db_stat_genres_count", 0);
+	    my $progress=Term::ProgressBar->new({name  => "reading genres",
+						 count => $countEstimate,
+						 ETA   => 'linear'})
+	      if Have_bar;
+	    $progress->minor(0) if Have_bar;
+	    $progress->max_update_rate(1) if Have_bar;
+	    my $next_update=0;
+
+	    open(IN, "< $self->{imdbDir}/stage5.data") || die "$self->{imdbDir}/stage5.data:$!";
+	    while(<IN>) {
+		chop();
+		s/^([^\t]+)\t//o;
+		my $dbkey=$1;
+		my $genres=$_;
+		my $val=$movies{$dbkey};
+		if ( !defined($val) ) {
+		    $self->error("genres list references unidentified title '$1'");
+		    next;
+		}
+		$movies{$dbkey}.=$tab.$genres;
+
+		if (Have_bar) {
+		    # re-adjust target so progress bar doesn't seem too wonky
+		    if ( $. > $countEstimate ) {
+			$countEstimate = $progress->target($.+100);
+			$next_update=$progress->update($.);
+		    }
+		    elsif ( $. > $next_update ) {
+			$next_update=$progress->update($.);
+		    }
+		}
+	    }
+	    $progress->update($countEstimate) if Have_bar;
+	    close(IN);
+	    
+	}
+	if ( 1 ) {
+	    # fill in placeholder if no genres were found
+	    for my $key (keys %movies) {
+		my $val=$movies{$key};
+		my $t=index($val, $tab);
+		if ( $t == -1 ) {
+		    die "corrupt entry '$key' '$val'";
+		}
+		if ( index($val, $tab, $t+1) == -1 ) {
+		    $movies{$key}.=$tab."<>";
+		}
+	    }
+	}
+
+	$self->status("merging in stage 6 data (ratings)..");
+	if ( 1 ) {
+	    my $countEstimate=$self->dbinfoGet("db_stat_ratings_count", 0);
+	    my $progress=Term::ProgressBar->new({name  => "reading ratings",
+						 count => $countEstimate,
+						 ETA   => 'linear'})
+	      if Have_bar;
+	    $progress->minor(0) if Have_bar;
+	    $progress->max_update_rate(1) if Have_bar;
+	    my $next_update=0;
+
+	    open(IN, "< $self->{imdbDir}/stage6.data") || die "$self->{imdbDir}/stage6.data:$!";
+	    while(<IN>) {
+		chop();
+		s/^([^\t]+)\t([^\t]+)\t([^\t]+)\t([^\t]+)$//o;
+		my $dbkey=$1;
+		my ($ratingDist, $ratingVotes, $ratingRank)=($2,$3,$4);
+
+		my $val=$movies{$dbkey};
+		if ( !defined($val) ) {
+		    $self->error("genres list references unidentified title '$1'");
+		    next;
+		}
+		$movies{$dbkey}.=$tab.$ratingDist.$tab.$ratingVotes.$tab.$ratingRank;
+
+		if (Have_bar) {
+		    # re-adjust target so progress bar doesn't seem too wonky
+		    if ( $. > $countEstimate ) {
+			$countEstimate = $progress->target($.+100);
+			$next_update=$progress->update($.);
+		    }
+		    elsif ( $. > $next_update ) {
+			$next_update=$progress->update($.);
+		    }
+		}
+	    }
+	    $progress->update($countEstimate) if Have_bar;
+	    close(IN);
+	}
+	if ( 1 ) {
+	    # fill in placeholder if no genres were found
+	    for my $key (keys %movies) {
+		my $val=$movies{$key};
+
+		my $t=index($val, $tab);
+		if ( $t == -1  ) {
+		    die "corrupt entry '$key' '$val'";
+		}
+		my $j=index($val, $tab, $t+1);
+		if ( $j == -1  ) {
+		    die "corrupt entry '$key' '$val'";
+		}
+		if ( index($val, $tab, $j+1) == -1 ) {
+		    $movies{$key}.=$tab."<>".$tab."<>".$tab."<>";
+		}
+	    }
+	}
 
 	#unlink("$self->{imdbDir}/stage1.data");
 	#unlink("$self->{imdbDir}/stage2.data");
@@ -2030,16 +2409,31 @@ sub invokeStage($$)
 		# how rude, some entries have (TV) appearing more than once.
 		$dbkey=~s/\(TV\)\s*\(TV\)$/(TV)/o;
 		
-		$dbkey=~s/\(mini\) \(tv_series\)$/(tv_mini_series)/o;
-		$dbkey=~s/\(mini\)$/(tv-mini-series)/o;
-		$dbkey=~s/\(TV\)$/(tv_movie)/o;
-		$dbkey=~s/\(V\)$/(video_movie)/o;
-		$dbkey=~s/\(VG\)$/(video_game)/o;
-		
-		my $qualifier="movie";
-		if ( $dbkey=~s/\s+\((tv_series|tv_mini_series|tv_movie|video_movie|video_game)\)$//o ) {
-		    $qualifier=$1;
+		my $qualifier;
+		if ( $dbkey=~s/\s+\(TV\)$//o ) {
+		    $qualifier="tv_movie";
 		}
+		elsif ( $dbkey=~s/\s+\(mini\) \(tv_series\)$// ) {
+		    $qualifier="tv_mini_series";
+		}
+		elsif ( $dbkey=~s/\s+\(tv_series\)$// ) {
+		    $qualifier="tv_series";
+		}
+		elsif ( $dbkey=~s/\s+\(mini\)$//o ) {
+		    $qualifier="tv_mini_series";
+		}
+		elsif ( $dbkey=~s/\s+\(V\)$//o ) {
+		    $qualifier="video_movie";
+		}
+		elsif ( $dbkey=~s/\s+\(VG\)$//o ) {
+		    $qualifier="video_game";
+		}
+		else {
+		    $qualifier="movie";
+		}
+		#if ( $dbkey=~s/\s+\((tv_series|tv_mini_series|tv_movie|video_movie|video_game)\)$//o ) {
+		 #   $qualifier=$1;
+		#}
 		my $year;
 		my $title=$dbkey;
 
@@ -2048,16 +2442,17 @@ sub invokeStage($$)
 		    $title=~s/\"(\s*\()/$1/o; #"
 		}
 
-		if ( $title=~s/\s+\((\d\d\d\d|\?\?\?\?)\)$//o ) {
+		if ( $title=~s/\s+\((\d\d\d\d)\)$//o ||
+		     $title=~s/\s+\((\d\d\d\d)\/[IVX]+\)$//o ) {
 		    $year=$1;
 		}
-		elsif ( $title=~s/\s+\((\d\d\d\d|\?\?\?\?)\/[IVX]+\)$//o ) {
-		    $year=$1;
+		elsif ( $title=~s/\s+\((\?\?\?\?)\)$//o ||
+			$title=~s/\s+\((\?\?\?\?)\/[IVX]+\)$//o ) {
+		    $year="0000";
 		}
 		else {
 		    die "unable to decode year from title key \"$title\", report to xmltv-devel\@lists.sf.net";
 		}
-		$year="0000" if ( $year eq "????" );
 		$title=~s/(.*),\s*(The|A|Une|Les|L\'|Le|La|El|Das)$/$2 $1/og;
 		
 		my $hashkey=lc("$title ($year)");
@@ -2069,13 +2464,8 @@ sub invokeStage($$)
 		die "title \"$title\" contains a tab" if ( $title=~m/\t/o );
 		#print "key:$dbkey\n\ttitle=$title\n\tyear=$year\n\tqualifier=$qualifier\n";
 		#print "key $key: value=\"$movies{$key}\"\n";
-		my ($directors, $actors)=split('\t', delete($movies{$key}));
-		
-		$directors="<unknown>" if ( !defined($directors) || $directors eq "nodir");
-		$actors="<unknown>" if ( !defined($actors) );
 
-		$nmovies{$hashkey}=$dbkey.$tab.$year.$tab.$qualifier.$tab.$directors.$tab.$actors;
-
+		$nmovies{$hashkey}=$dbkey.$tab.$year.$tab.$qualifier.$tab.delete($movies{$key});
 		$count++;
 
 		if (Have_bar) {
@@ -2108,14 +2498,14 @@ sub invokeStage($$)
 	    $progress->max_update_rate(1) if Have_bar;
 	    my $next_update=0;
 	    
-	    open(OUT, "> $self->{moviedbIndex}") || die "$self->{moviedbIndex}:$!";
-	    open(ACT, "> $self->{moviedbData}") || die "$self->{moviedbData}:$!";
+	    open(IDX, "> $self->{moviedbIndex}") || die "$self->{moviedbIndex}:$!";
+	    open(DAT, "> $self->{moviedbData}") || die "$self->{moviedbData}:$!";
 	    my $count=0;
 	    for my $key (sort {$a cmp $b} keys %nmovies) {
 		my $val=delete($nmovies{$key});
 		#print "movie $key: $val\n";
 		#$val=~s/^([^\t]+)\t([^\t]+)\t([^\t]+)\t//o || die "internal failure ($key:$val)";
-		my ($dbkey, $year, $qualifier,$directors,$actors)=split('\t', $val);
+		my ($dbkey, $year, $qualifier,$directors,$actors,@rest)=split('\t', $val);
 		#die ("no 1") if ( !defined($dbkey));
 		#die ("no 2") if ( !defined($year));
 		#die ("no 3") if ( !defined($qualifier));
@@ -2127,8 +2517,8 @@ sub invokeStage($$)
 		
 		my $details="";
 		
-		if ( $directors eq "<unknown>" ) {
-		    $details.="<unknown>";
+		if ( $directors eq "<>" ) {
+		    $details.="<>";
 		}
 		else {
 		    # sort directors by last name
@@ -2137,13 +2527,15 @@ sub invokeStage($$)
 		    }
 		    $details=~s/\|$//o;
 		}
-		$details.=$tab;
+
 		#print "      $dbkey: $val\n";
-		if ( $actors eq "<unknown>" ) {
-		    $details.="<unknown>";
+		if ( $actors eq "<>" ) {
+		    $details.=$tab."<>";
 		}
 		else {
 		    my %order;
+		    $details.=$tab;
+
 		    # sort actors by billing
 		    for my $c (sort {$a cmp $b} split('\|', $actors)) {
 			my ($billing, $name)=split(':', $c);
@@ -2168,12 +2560,12 @@ sub invokeStage($$)
 			$details.="$name|";
 			#print "      $c: split gives'$billing' and '$name'\n";
 		    }
+		    $details=~s/\|$//o;
 		}
-		$details=~s/\|$//o;
 		$count++;
 		my $lineno=sprintf("%07d", $count);
-		print OUT "$key\t$dbkey\t$year\t$qualifier\t$lineno\n";
-		print ACT "$lineno:$details\n";
+		print IDX $key."\t".$dbkey."\t".$year."\t".$qualifier."\t".$lineno."\n";
+		print DAT $lineno.":".$details."\t".join($tab, @rest)."\n";
 
 		if (Have_bar) {
 		    # re-adjust target so progress bar doesn't seem too wonky
@@ -2187,8 +2579,8 @@ sub invokeStage($$)
 		}
 	    }
 	    $progress->update($countEstimate) if Have_bar;
-	    close(ACT);
-	    close(OUT);
+	    close(DAT);
+	    close(IDX);
 	}
 
 	$self->dbinfoAdd("db_version", $XMLTV::IMDB::VERSION);
