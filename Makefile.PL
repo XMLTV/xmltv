@@ -248,7 +248,7 @@ are present.",
 
      { name => 'tv_grab_dk',
        blurb => 'Tv_grab_dk is the listings grabber for Denmark.',
-       exes => [ 'grab/hu/tv_grab_dk' ],
+       exes => [ 'grab/dk/tv_grab_dk' ],
        prereqs => { 'HTML::TreeBuilder' => 0 } },
     );
 
