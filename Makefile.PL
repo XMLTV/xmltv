@@ -227,19 +227,19 @@ foreach my $p ((sort keys %prereqs), (sort keys %recommended)) {
 	# Installed and recent enough.
     }
     elsif ($r eq 'NOT_INSTALLED') {
-	warn "$Verbed module $p seems not to be installed.\n";
+	print STDERR "$Verbed module $p seems not to be installed.\n";
 	++ $err if $required;
     }
     elsif ($r eq 'FAILED') {
-	warn "$Verbed module $p failed to load: $more\n";
+	print STDERR "$Verbed module $p failed to load: $more\n";
 	++ $err if $required;
     }
     elsif ($r eq 'TOO_OLD') {
 	if (defined $more) {
-	    warn "$p-$minver is $verbed, but $more is installed\n";
+	    print STDERR "$p-$minver is $verbed, but $more is installed\n";
 	}
 	else {
-	    warn "$p-$minver is $verbed, but an unknown version is installed\n";
+	    print STDERR "$p-$minver is $verbed, but an unknown version is installed\n";
 	}
 	++ $err if $required;
     }
@@ -327,7 +327,7 @@ END
 	    s/Installing contents of (\S+) into (\S+)/Removing contents of $1 from $2/;
 	}
 	if (not $done) {
-	    warn "couldn't find \@\$(MOD_INSTALL) in target $_, uninstall may not work\n"
+	    print STDERR "couldn't find \@\$(MOD_INSTALL) in target $_, uninstall may not work\n"
 	      unless $warned_uninstall_broken;
 	}
 	(my $new_target = $_) =~ s/install$/uninstall/ or die;
