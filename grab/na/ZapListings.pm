@@ -158,8 +158,7 @@ sub new
 				  env_proxy => 1,
 				  timeout => 180);
     bless ($self, $class);
-    $self->agent('xmltv/0.5.7a');
-    #$self->agent('Mozilla/5.0');
+    $self->agent('xmltv/0.5.7');
     return $self;
 }
 
