@@ -20,23 +20,26 @@ use Carp;
 
 $Carp::MaxEvalLen=40; # limit confess output
 
-# Check for error of running from 'Run' dialogue box with redirection,
-# which Run doesn't understand,
 #
-if (grep /[<>|]/, @ARGV) {
-    warn <<END
-The command line:
-
-$0 @ARGV
-
-contains redirections, so should be run from a command prompt window.
-In general, it's a good idea to always run xmltv from a command prompt
-so that you can see any errors and warnings produced.
-END
-      ;
-    sleep 10;
-    exit 1;
-}
+# this check should not be done, at least not this way. it prevents some regular expressions!
+#
+## Check for error of running from 'Run' dialogue box with redirection,
+## which Run doesn't understand,
+##
+#if (grep /[<>|]/, @ARGV) {
+#    warn <<END
+#The command line:
+#
+#$0 @ARGV
+#
+#contains redirections, so should be run from a command prompt window.
+#In general, it's a good idea to always run xmltv from a command prompt
+#so that you can see any errors and warnings produced.
+#END
+#      ;
+#    sleep 10;
+#    exit 1;
+#}
 
 #
 # check for --quiet
