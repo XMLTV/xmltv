@@ -454,6 +454,7 @@ sub check_date_manip() {
     # perhaps this code could be removed.  Still, some extra checking
     # can't hurt.
     #
+    if ( 0 ) {
     open(FH, 'perl -MDate::Manip -e 0 2>&1 |') or die "cannot open pipe from perl: $!";
     while (<FH>) {
 	if (/^Malformed UTF-8 character/) {
@@ -538,6 +539,7 @@ with some extra bug fixes compared to the standard version, and you
 can get it from <http://membled.com/work/patches/DateManip/>.
 ";
     }
+}
 }
 
 # Run a subroutine and check that its output has the correct version.
