@@ -236,12 +236,12 @@ sub doRequest($$$$)
     $cookie_jar=$ua->cookie_jar();
     if ( defined($cookie_jar) ) {
 	if ( $debug ) {
-	    main::statusMessage("==== response cookies ====\n", $cookie_jar->as_string(), "\n");
+	    main::statusMessage("==== response cookies ====\n".$cookie_jar->as_string()."\n");
 	}
     }
 
     if ( $debug ) {
-	main::statusMessage("==== status: ", $res->status_line, " ====\n");
+	main::statusMessage("==== status: ".$res->status_line." ====\n");
     }
 
     if ( $debug ) {
@@ -254,9 +254,9 @@ sub doRequest($$$$)
 	else {
 	    main::statusMessage("==== bad code ".$res->code().":".HTTP::Status::status_message($res->code())."\n");
 	}
-	#main::statusMessage("".$res->headers->as_string(), "\n");
+	#main::statusMessage("".$res->headers->as_string()."\n");
 	#dumpPage($res->content());
-	#main::statusMessage("".$res->content(), "\n");
+	#main::statusMessage("".$res->content()."\n");
     }
     return($res);
 }
