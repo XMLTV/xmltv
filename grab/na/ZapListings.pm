@@ -1386,6 +1386,10 @@ sub readSchedule($$$$$)
     @{$self->{Programs}}=$self->scrapehtml($content, "$year-$month-$day on station $station_desc (id $stationid)");
     if ( scalar(@{$self->{Programs}}) == 0 ) {
 	print STDERR "zap2it page format looks okay, but no programs found (maybe site maintenance)\n";
+	if ( -d "urldata" ) {
+	    my $file="urldata/$stationid/content-$month-$day-$year.html";
+	    unlink($file) if ( -f $file );
+	}
 	return(-1);
     }
 
