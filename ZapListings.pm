@@ -10,11 +10,11 @@ use HTTP::Request::Common;
 sub doRequest($$$$)
 {
     my ($ua, $req, $debug)=@_;
-    
+
     if ( $debug ) {
 	print STDERR "==== req ====\n", $req->as_string();
     }
-    
+
     my $cookie_jar=$ua->cookie_jar();
     if ( defined($cookie_jar) ) {
 	if ( $debug ) {
@@ -22,7 +22,7 @@ sub doRequest($$$$)
 	    print STDERR "==== sending request ====\n";
 	}
     }
-    
+
     my $res = $ua->request($req);
     if ( $debug ) {
 	print STDERR "==== got response ====\n";
@@ -38,7 +38,7 @@ sub doRequest($$$$)
     if ( $debug ) {
 	print STDERR "==== status: ", $res->status_line, " ====\n";
     }
-    
+
     if ( $debug ) {
 	if ($res->is_success) {
 	    print STDERR "==== success ====\n";
@@ -72,11 +72,11 @@ sub getProviders($$$)
     $code=$zipcode if ( defined($zipcode) );
 
     my $req=POST("http://tvlistings2.zap2it.com/register.asp?id=form1&name=form1&zipcode=$code", [ ]);
-    
+
     # actually attempt twice since first time in, we get a cookie that
     # works for the second request
     my $res=&doRequest($ua, $req, $debug);
-    
+
     # looks like some requests require two identical calls since
     # the zap2it server gives us a cookie that works with the second
     # attempt after the first fails
@@ -168,7 +168,7 @@ sub getChannelList($$$$)
 	# again.
 	$res=&doRequest($ua, $req, $debug);
     }
-    
+
     $req=POST('http://tvlistings2.zap2it.com/listings_redirect.asp?spp=0', [ ]);
     $res=&doRequest($ua, $req, $debug);
 
@@ -221,12 +221,12 @@ sub getChannelList($$$$)
 	$row=~s/<\/tr>.*//so;
 
 	$rowNumber++;
-	
+
 	# remove space from leading space (and newlines) on every line of html
 	$row=~s/[\r\n]+\s*//og;
 
 	my $result=new ZapListings::ScrapeRow()->parse($row);
-	
+
 	my $desc=$result->summarize();
 	next if ( !$desc );
 
@@ -416,7 +416,7 @@ sub text($$)
 
     if ( $self->{infield} ) {
 	my $thing;
-    
+
 	$thing->{text}=$text;
 	push(@{$self->{Cell}->{things}}, $thing);
     }
@@ -430,7 +430,7 @@ sub end($$)
 	$self->{infield}--;
 
 	my $thing;
-	    
+
 	$thing->{endtag}=$tag;
 	push(@{$self->{Cell}->{things}}, $thing);
 
@@ -440,7 +440,7 @@ sub end($$)
     else {
 	if ( $self->{infield} ) {
 	    my $thing;
-	    
+
 	    $thing->{endtag}=$tag;
 	    push(@{$self->{Cell}->{things}}, $thing);
 	}
@@ -460,7 +460,7 @@ sub summarize($)
 	#push(@{$self->{Row}}, @{$self->{Cell}->{things}});
 	#delete($self->{Cell});
     }
-    
+
     my $desc="";
     foreach my $thing (@{$self->{Row}}) {
 	if ( $thing->{starttag} ) {
@@ -503,7 +503,7 @@ sub getHREF($$)
 	return($thing->{attr}->{href}) if ( defined($thing->{attr}->{href}) );
 	return($thing->{attr}->{HREF}) if ( defined($thing->{attr}->{HREF}) );
     }
-	       
+
     return(undef);
 }
 
@@ -517,12 +517,12 @@ sub new
 {
     my ($type) = shift;
     my $self={ @_ };            # remaining args become attributes
-    
+
     if ( ! defined($self->{PostalCode}) &&
 	 ! defined($self->{ZipCode}) ) {
 	die "no PostalCode or ZipCode specified in create";
     }
-    
+
     # since I know we don't care, lets pretend there's only one code :)
     if ( defined($self->{PostalCode}) ) {
 	$self->{ZipCode}=$self->{PostalCode};
@@ -530,11 +530,11 @@ sub new
     }
 
     die "no ProviderID specified in create" if ( ! defined($self->{ProviderID}) );
-    
+
     $self->{cookieJar}=HTTP::Cookies->new();
-    
+
     my $ua=ZapListings::RedirPostsUA->new('cookie_jar'=>$self->{cookieJar});
-    
+
     my $req=POST('http://tvlistings2.zap2it.com/edit_provider_list.asp?id=form1&name=form1',
 		 [FormName=>"edit_provider_list.asp",
 		  zipCode => "$self->{ZipCode}", 
@@ -581,7 +581,7 @@ sub setValue($$$$)
 {
     my ($self, $hash_ref, $key, $value)=@_;
     my $hash=$$hash_ref;
-    
+
     if ( $self->{Debug} ) {
 	if ( defined($hash->{$key}) ) {
 	    print STDERR "replaced value '$key' from '$hash->{$key}' to '$value'\n";
@@ -689,7 +689,7 @@ sub scrapehtml($$$)
 	# nuke everything leading up to first >
 	# which amounts to html attributes of <tr used in split
 	$row=~s/^[^>]*>//so;
-	
+
 	# skipif the split didn't end with a row end </tr>
 	#next if ( !($row=~s/[\n\r\s]*<\/tr>[\n\r\s]*$//iso));
 	$row=~s/<\/tr>.*//so;
@@ -1072,14 +1072,14 @@ sub scrapehtml($$$)
 			     $i=~/^\(([a-zA-Z]+)\s+with\s+([a-zA-Z]+)\)$/io ) {
 			    my $lang=$1;
 			    my $sub=$2;
-			    
+
 			    my $found1=0;
 			    my $found2=0;
 			    for my $k (@knownLanguages) {
 				$found1++ if ( $k eq $lang );
 				$found2++ if ( $k eq $sub );
 			    }
-			    
+
 			    # only print message if one matched and the other didn't
 			    if ( ! $found1 && $found2 ) {
 				print STDERR "identified possible candidate for new language $lang in $i\n";
@@ -1150,18 +1150,18 @@ sub scrapehtml($$$)
 				push(@sure, $i);
 				next;
 			    }
-			    
+
 			    if ( $i=~/^\(/o && $i=~/\)$/o ) {
 				print STDERR "possible candidate for program detail we didn't identify $i\n"
 				  unless $warnedCandidateDetail{$i}++;
 			    }
-			    
+
 			    $success=0;
 			    push(@backup, $i);
 			}
 		    }
 		}
-		
+
 		# always copy the ones we're sure about
 		for (keys %$resultSure) {
 		    $self->setValue(\$prog, $_, $resultSure->{$_});
@@ -1219,7 +1219,7 @@ sub scrapehtml($$$)
 	    }
 	    #$desc=~s/<text>(.*?)<\/text>/<text>/og;
 	    #print STDERR "\t$desc\n";
-	    
+
 
 	    # final massage.
 
@@ -1262,7 +1262,7 @@ sub readSchedule($$$$$)
 	    print STDERR "upgrade to 5.61 or later and try again\n";
 	    return(-1);
 	}
-    
+
 	my $req=POST('http://tvlistings2.zap2it.com/listings_redirect.asp',
 		     [ displayType => "Text",
 		       duration => "1",
@@ -1282,7 +1282,7 @@ sub readSchedule($$$$$)
 	    # again.
 	    $res=&ZapListings::doRequest($ua, $req, $self->{Debug});
 	}
-	
+
 	if ( !$res->is_success ) {
 	    print STDERR "zap2it failed to give us a page\n";
 	    print STDERR "check postal/zip code or www site (maybe they're down)\n";
@@ -1320,7 +1320,7 @@ sub readSchedule($$$$$)
 
     print STDERR "Day $year-$month-$day schedule for station $station_desc has:".
 	scalar(@{$self->{Programs}})." programs\n";
-	    
+
     return(scalar(@{$self->{Programs}}));
 }
 
