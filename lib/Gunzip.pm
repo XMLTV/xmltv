@@ -71,7 +71,8 @@ sub zlib_gunzip_open( $ ) {
     my $fname = shift;
     # Use the XMLTV::Zlib_handle package defined later in this file.
     local *FH;
-    tie *FH, 'XMLTV::Zlib_handle', $fname, 'r';
+    tie *FH, 'XMLTV::Zlib_handle', $fname, 'r'
+      or die "cannot open $fname using XMLTV::Zlib_handle: $!";
     return *FH;
 }
 sub external_gunzip_open( $ ) {
