@@ -38,6 +38,11 @@ noninteractively, usually to update an existing set of choices.  The
 following options are used to invoke --configure in a non-interactive
 mode:
 
+B<--retry-limit X> Specify retry limit on www site failures.
+
+B<--retry-delay X> Specify number of seconds to delay before retrying
+www site failures.
+
 B<--postalcode X>, B<--zipcode X> Specify your postal code or zip code.
 
 B<--provider ID> Specify the id of your service provider.  This is a
@@ -75,6 +80,11 @@ B<--days N> When grabbing, grab N days of listings.  The default is 7.
 
 B<--offset N> Number of days in the future to offset the start of the
 listings.  The default is 0, meaning today.
+
+B<--retry-limit X> Specify retry limit on www site failures.
+
+B<--retry-delay X> Specify number of seconds to delay before retrying
+www site failures.
 
 =head1 SEE ALSO
 
@@ -148,7 +158,9 @@ sub setValue($$$)
     if ( $key ne "option_postalcode" &&
 	 $key ne "option_zipcode" &&
 	 $key ne "option_provider" &&
-	 $key ne "option_provider_desc" ) {
+	 $key ne "option_provider_desc" &&
+	 $key ne "option_retry_limit" &&
+	 $key ne "option_retry_delay" ) {
 	die "attempt to set invalid key $key to $value";
     }
 }
@@ -272,6 +284,12 @@ sub save($$)
     print FD "# with a '#' to signal that they should be ignored during the\n";
     print FD "# grab step\n";
     print FD "#\n";
+    if ( defined($self->{option_retry_limit})) {
+	print FD "retry limit: $self->{option_retry_limit}\n";
+    }
+    if ( defined($self->{option_retry_delay})) {
+	print FD "retry delay: $self->{option_retry_delay}\n";
+    }
     if ( defined($self->{option_postalcode})) {
 	print FD "postal code: $self->{option_postalcode}\n";
     }
@@ -329,6 +347,12 @@ sub load($$$)
 		close(FD);
 		return(-1);
 	    }
+	}
+	elsif ( m/^retry limit:\s*([^\s]+)$/o ) {
+	    $self->setValue("option_retry_limit", $1);
+	}
+	elsif ( m/^retry delay:\s*([^\s]+)$/o ) {
+	    $self->setValue("option_retry_delay", $1);
 	}
 	elsif ( m/^postal code:\s*([^\s]+)$/o ) {
 	    $self->setValue("option_postalcode", $1);
@@ -474,6 +498,13 @@ sub ConfigureUsage($)
     print $fp "   --auto-missing-channels [ignore|remove]\n";
     print $fp "     ignore/remove - ignore or remove channels no longer in schedule listing\n";
     print $fp "\n";
+    print $fp "   --retry-limit <count>\n";
+    print $fp "       upon possible www site failure, retry <count> times before hard failure.\n";
+    print $fp "       (default 2)\n";
+    print $fp "\n";
+    print $fp "   --retry-delay <seconds>\n";
+    print $fp "       number of seconds to sleep between retries (default 30).\n";
+    print $fp "\n";
     print $fp "If any neccessary options are given, interactive mode is enabled\n";
     print $fp "(ie no postal/zip code in config file and not on command line)\n";
     print $fp "Result of running configure is a configuration file\n";
@@ -538,6 +569,14 @@ sub Usage($)
     print $fp "   --offset n\n";
     print $fp "       specify number of days (in the future) to offset the\n";
     print $fp "       start of the listings (default 0)\n";
+    print $fp "\n";
+    print $fp "   --retry-limit <count>\n";
+    print $fp "       upon possible www site failure, retry <count> times before hard failure.\n";
+    print $fp "       (default 2)\n";
+    print $fp "\n";
+    print $fp "   --retry-delay <seconds>\n";
+    print $fp "       number of seconds to sleep between retries (default 30).\n";
+    print $fp "\n";
 }
 
 # First lets check to see if someone asked for help.
@@ -558,12 +597,12 @@ foreach ( @ARGV ) {
 }
 
 if ( $configure ) {
-    use vars qw/$opt_configure $opt_help $opt_postalcode $opt_zipcode $opt_provider $opt_config_file $opt_debug $opt_auto_fail_on_provider_changes $opt_auto_new_channels $opt_auto_missing_channels/;
+    use vars qw/$opt_configure $opt_help $opt_postalcode $opt_zipcode $opt_provider $opt_config_file $opt_debug $opt_auto_fail_on_provider_changes $opt_auto_new_channels $opt_auto_missing_channels $opt_retry_limit $opt_retry_delay/;
 
     $opt_debug=0;
     $opt_auto_fail_on_provider_changes="false";
 
-    if ( ! GetOptions('configure', 'help', 'postalcode=s', 'zipcode=s', 'provider=s', 'config-file=s', 'debug', 'auto-fail-on-provider-changes=s', 'auto-new-channels=s', 'auto-missing-channels=s') ) {
+    if ( ! GetOptions('configure', 'help', 'postalcode=s', 'zipcode=s', 'provider=s', 'config-file=s', 'debug', 'auto-fail-on-provider-changes=s', 'auto-new-channels=s', 'auto-missing-channels=s', 'retry=i', 'retry-delay=i') ) {
 	ConfigureUsage(0);
 	exit(1);
     }
@@ -651,6 +690,14 @@ if ( $configure ) {
 	exit(1);
     }
 
+    if ( defined($opt_retry_limit) ) {
+	$config->setValue("option_retry_limit", $opt_retry_limit);
+    }
+
+    if ( defined($opt_retry_delay) ) {
+	$config->setValue("option_retry_delay", $opt_retry_delay);
+    }
+
     #
     # Go interactive to collect what we don't have
     #
@@ -666,6 +713,40 @@ if ( $configure ) {
     print "starting manual configuration process..\n";
     print "\n";
   
+    while ( !defined($config->{option_retry_limit}) ) {
+	my $res=ask('how many times do you want to retry on www site failers ? (default=2)');
+	if ( !defined($res) || length($res) == 0 ) {
+	    $res="2";
+	}
+	$res=~s/\s+//og if ( defined($res) );
+	if ( defined($res) && length($res) ) {
+	    $res=int($res);
+	    if ( $res >= 0 ) {
+		$config->setValue("option_retry_limit", $res);
+		last;
+	    }
+	}
+	print STDERR "$0: please specify an integer retry count\n\n";
+    }
+
+    while ( !defined($config->{option_retry_delay}) ) {
+	my $res=ask('how many seconds do you want to between retries ? (default=30)');
+	if ( !defined($res) || length($res) == 0 ) {
+	    $res="30";
+	}
+	$res=~s/\s+//og if ( defined($res) );
+	if ( defined($res) && length($res) ) {
+	    $res=int($res);
+	    if ( $res >= 0 ) {
+		$config->setValue("option_retry_delay", $res);
+		last;
+	    }
+	}
+	print STDERR "$0: please specify an integer retry delay\n\n";
+    }
+    $opt_retry_limit=$config->{option_retry_limit};
+    $opt_retry_delay=$config->{option_retry_delay};
+
     # if we have no postal code or zip code, the prompt for it
     if ( !defined($config->{option_postalcode}) && !defined($config->{option_zipcode})) {
 	my $res=ask('what is your postal/zip code ?');
@@ -693,10 +774,26 @@ if ( $configure ) {
 	$code=$config->{option_zipcode} if ( defined($config->{option_zipcode}) );
 
 	print "\ngetting list of providers for postal/zip code $code, be patient..\n";
-	my @providers=XMLTV::ZapListings::getProviders($config->{option_postalcode},
+
+	my @providers;
+	my $failed=0;
+	for (my $retry=0 ; $retry<=$opt_retry_limit; $retry++ ) {
+	    if ( $retry != 0 ) {
+		print STDERR "failed, will retry after \#$opt_retry_limit seconds..\n";
+		sleep($opt_retry_delay) if ( $opt_retry_delay > 0 );
+	    }
+	    @providers=XMLTV::ZapListings::getProviders($config->{option_postalcode},
 						       $config->{option_zipcode},
 						       $opt_debug);
-	if ( ! @providers || !defined($providers[0]) ) {
+	    if ( ! @providers || !defined($providers[0]) ) {
+		$failed=1;
+	    }
+	    else {
+		$failed=0;
+		last;
+	    }
+	}
+	if ( $failed ) {
 	    #print STDERR "$0: failed to get list of providers for postal/zip code $code\n";
 	    #print STDERR "   visit zap2it.com and try the postal/zip code for more information\n";
 	    exit(1);
@@ -784,12 +881,27 @@ if ( $configure ) {
 	print "\ngetting channel list, be patient..\n";
     }
 
-    my @channels=XMLTV::ZapListings::getChannelList($config->{option_postalcode},
-						    $config->{option_zipcode},
-						    $config->{option_provider},
-						    $opt_debug);
-    
-    if ( ! @channels || !defined($channels[0]) ) {
+    my @channels;
+    my $failed=0;
+    for (my $retry=0 ; $retry<=$opt_retry_limit; $retry++ ) {
+	if ( $retry != 0 ) {
+	    print STDERR "failed, will retry after \#$opt_retry_limit seconds..\n";
+	    sleep($opt_retry_delay) if ( $opt_retry_delay > 0 );
+	}
+	@channels=XMLTV::ZapListings::getChannelList($config->{option_postalcode},
+						     $config->{option_zipcode},
+						     $config->{option_provider},
+						     $opt_debug);
+	if ( ! @channels || !defined($channels[0]) ) {
+	    $failed=1;
+	}
+	else {
+	    $failed=0;
+	    last;
+	}
+    }
+
+    if ( $failed ) {
 	#print STDERR "$0: failed to get list of channels for postal/zip code $config->{option_postalzipcode}\n";
 	#print STDERR "   visit zap2it.com and try the postal/zip code for more information\n";
 	exit(1);
@@ -932,12 +1044,12 @@ if ( $configure ) {
 
 # in grabber mode - yeah !
 
-use vars qw/$opt_help $opt_config_file $opt_debug $opt_programs $opt_channels $opt_listings $opt_output $opt_days $opt_debuglistings $opt_offset/;
+use vars qw/$opt_help $opt_config_file $opt_debug $opt_programs $opt_channels $opt_listings $opt_output $opt_days $opt_debuglistings $opt_offset $opt_retry_limit $opt_retry_delay/;
 
 $opt_debug=0;
 $opt_debuglistings=0;
 
-if ( ! GetOptions('help', 'config-file=s', 'debug', 'programs=s', 'channels=s', 'listings=s', 'output=s', 'days=i', 'debuglistings', 'offset=i') ) {
+if ( ! GetOptions('help', 'config-file=s', 'debug', 'programs=s', 'channels=s', 'listings=s', 'output=s', 'days=i', 'debuglistings', 'offset=i', 'retry=i', 'retry-delay=i') ) {
     Usage(0);
     exit(1);
 }
@@ -1059,6 +1171,26 @@ sub grab
 	return(1);
     }
     
+    if ( !defined($opt_retry_limit) ) {
+	if ( !defined($config->{option_retry_limit}) ) {
+	    print STDERR "no retry limit set in configuration, re-running --configure\n";
+	    $opt_retry_limit=2;
+	}
+	else {
+	    $opt_retry_limit=$config->{option_retry_limit};
+	}
+    }
+
+    if ( !defined($opt_retry_delay) ) {
+	if ( !defined($config->{option_retry_delay}) ) {
+	    print STDERR "no retry delay set in configuration, re-running --configure\n";
+	    $opt_retry_delay=30;
+	}
+	else {
+	    $opt_retry_delay=$config->{option_retry_delay};
+	}
+    }
+
     # check provider information, usually fast anyway.
     #
     if ( 1 ) {
@@ -1067,10 +1199,26 @@ sub grab
 	$code=$config->{option_zipcode} if ( defined($config->{option_zipcode}) );
 
 	print STDERR "\nchecking provider information for postal/zip code $code, be patient..\n";
-	my @providers=XMLTV::ZapListings::getProviders($config->{option_postalcode},
-						       $config->{option_zipcode},
-						       $opt_debug);
-	if ( ! @providers || !defined($providers[0]) ) {
+
+	my @providers;
+	my $failed=0;
+	for (my $retry=0 ; $retry<=$opt_retry_limit; $retry++ ) {
+	    if ( $retry != 0 ) {
+		print STDERR "failed, will retry after \#$opt_retry_limit seconds..\n";
+		sleep($opt_retry_delay) if ( $opt_retry_delay > 0 );
+	    }
+	    @providers=XMLTV::ZapListings::getProviders($config->{option_postalcode},
+							$config->{option_zipcode},
+							$opt_debug);
+	    if ( ! @providers || !defined($providers[0]) ) {
+		$failed=1;
+	    }
+	    else {
+		$failed=0;
+		last;
+	    }
+	}
+	if ( $failed ) {
 	    #print STDERR "$0: failed to get list of providers for postal/zip code $code\n";
 	    #print STDERR "   visit zap2it.com and try the postal/zip code for more information\n";
 	    exit(1);
@@ -1096,14 +1244,30 @@ sub grab
     if ( 1 ) {
 	print STDERR "double checking channel information, be patient..\n";
 
-	my @channels=XMLTV::ZapListings::getChannelList($config->{option_postalcode},
-							$config->{option_zipcode},
-							$config->{option_provider},
-							$opt_debug);
-    
-	if ( ! @channels || !defined($channels[0]) ) {
-	    #print STDERR "$0: failed to get list of channels for postal/zip code $config->{option_postalzipcode}\n";
-	    #print STDERR "   visit zap2it.com and try the postal/zip code for more information\n";
+	my @channels;
+	my $failed=0;
+	for (my $retry=0 ; $retry<=$opt_retry_limit; $retry++ ) {
+	    if ( $retry != 0 ) {
+		print STDERR "failed, will retry after \#$opt_retry_limit seconds..\n";
+		sleep($opt_retry_delay) if ( $opt_retry_delay > 0 );
+	    }
+	    @channels=XMLTV::ZapListings::getChannelList($config->{option_postalcode},
+							 $config->{option_zipcode},
+							 $config->{option_provider},
+							 $opt_debug);
+	    
+	    if ( ! @channels || !defined($channels[0]) ) {
+		$failed++;
+		#print STDERR "$0: failed to get list of channels for postal/zip code $config->{option_postalzipcode}\n";
+		#print STDERR "   visit zap2it.com and try the postal/zip code for more information\n";
+		#exit(1);
+	    }
+	    else {
+		$failed=0;
+		last;
+	    }
+	}
+	if ( $failed ) {
 	    exit(1);
 	}
 	
@@ -1253,19 +1417,32 @@ sub grab
 
 	    my ($Year,$month,$day,$hr,$min,$sec)=Date::Manip::Date_NthDayOfYear($year, $runNDayOfYear+$nday);
 	    
-	    if ( $lg->readSchedule($config->getStationTransientFlag($station, 'zap2it-id'),
-				   $station,
-				   $day, $month, $Year) == -1 ) {
-		warn("readSchedule failed for $Year-$month-$day for station $station");
-		$failedCount++;
+	    for (my $retry=0 ; $retry<=$opt_retry_limit; $retry++ ) {
+		if ( $retry != 0 ) {
+		    print STDERR "will retry schedule $Year-$month-$day for station $station after \#$opt_retry_limit seconds..\n";
+		    sleep($opt_retry_delay) if ( $opt_retry_delay > 0 );
+		}
+		if ( $lg->readSchedule($config->getStationTransientFlag($station, 'zap2it-id'),
+				       $station,
+				       $day, $month, $Year) == -1 ) {
+		    warn("readSchedule failed for $Year-$month-$day for station $station");
+		    # fail hard on first failure
+		    $failedCount++;
+		}
+		else {
+		    last;
+		}
 	    }
-	    else {
-		# set time zone for date conversions
-		#Date::Manip::Date_SetConfigVariable('TZ', $lg->{TimeZone});
-		#Date::Manip::Date_Init();
-		
-		$stats->{num_programs}+=writeOutPrograms($lg, $runNDayOfYear+$nday, $Year, $tz, $writer, $station);
+
+	    if ( $failedCount ) {
+		return($failedCount);
 	    }
+
+	    # set time zone for date conversions
+	    #Date::Manip::Date_SetConfigVariable('TZ', $lg->{TimeZone});
+	    #Date::Manip::Date_Init();
+	    
+	    $stats->{num_programs}+=writeOutPrograms($lg, $runNDayOfYear+$nday, $Year, $tz, $writer, $station);
 	}
 	
 	if ( !defined($writer_g) || $writer != $writer_g ) {
