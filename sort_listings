@@ -23,6 +23,7 @@ use strict;
 use XMLTV;
 use Date::Manip;
 use Log::TraceMessages qw<t d>; Log::TraceMessages::check_argv(); $| = 1;
+use Data::Dumper;
 Date_Init(); # because we call ParseDate() while sorting
 
 # Memoize some subroutines if possible
@@ -31,16 +32,21 @@ if ($@) {
     warn "could not load Memoize module, things will run slowly";
 }
 else {
-    foreach (qw/Date_Cmp ParseDate/) {
+    foreach (qw/Date_Cmp ParseDate programme_eq/) {
 	Memoize::memoize($_) or die "cannot memoize $_: $!";
     }
+    # clumpidx_cmp() isn't memoized, since it uses undef arguments and
+    # they cause warnings.
+    #
 }
 
 # Prototype declarations
 sub programme_cmp();
 sub chan_cmp( $$ );
 sub clumpidx_cmp( $$ );
+sub overlap( $$ );
 sub add_stop( $ );
+sub programme_eq( $$ );
 
 my $filename;
 if (@ARGV == 0) {
@@ -69,6 +75,46 @@ foreach (keys %chan) {
     add_stop($chan{$_});
 }
 
+# Remove duplicates and sanity-check that there is no overlap on a
+# channel.
+#
+foreach (keys %chan) {
+    my $progs = $chan{$_};
+    my @new_progs;
+    die if not @$progs;
+    my $first = shift @$progs;
+    while (@$progs) {
+	my $second = shift @$progs;
+	die if not defined $first or not defined $second;
+	if (overlap($first, $second)) {
+	    if (programme_eq($first, $second)) {
+		# Quietly drop the duplicate.  We could have done the
+		# programme_eq() step first but I thought (perhaps
+		# wrongly) that it would be expensive, and best called
+		# only when we know there is an overlap.  No overlap
+		# implies not equal.
+		#
+		next;
+	    }
+	    else {
+		local $^W = 0;
+		warn <<END
+overlapping programmes on channel $_:
+    $first->{title}->[0]->[0]\tat $first->{start}-|$first->{stop}
+and $second->{title}->[0]->[0]\tat $second->{start}-|$second->{stop}
+END
+  ;
+	    }
+	}
+	push @new_progs, $first;
+	$first = $second;
+    }
+    # Got to the last element.
+    push @new_progs, $first;
+    $chan{$_} = \@new_progs;
+}
+
+
 # Mix the channels back into a big list and sort again (could use
 # merge sort).
 #
@@ -92,7 +138,14 @@ sub programme_cmp() {
     my $r;
 
     # Assume that {start} is always there, as it should be.
-    $r = Date_Cmp(ParseDate($xa->{start}), ParseDate($xb->{start}));
+    my ($a_start, $b_start) = (ParseDate($xa->{start}), ParseDate($xb->{start}));
+    if (not defined $a_start) {
+	die "cannot parse start time: $xa->{start}";
+    }
+    if (not defined $b_start) {
+	die "cannot parse start time: $xb->{start}";
+    }
+    $r = Date_Cmp($a_start, $b_start);
     t "compare start times: " . d $r;
     return $r if $r;
 
@@ -101,9 +154,16 @@ sub programme_cmp() {
     # undefined values taking part in sort comparisons, and besides,
     # it stops sort_listings from being idempotent.)
     #
-    my ($a_stop, $b_stop) = ($xa->{stop}, $xb->{stop});
-    if (defined $a_stop and defined $b_stop) {
-	$r = Date_Cmp(ParseDate($a_stop), ParseDate($b_stop));
+    my ($a_stop_u, $b_stop_u) = ($xa->{stop}, $xb->{stop});
+    if (defined $a_stop_u and defined $b_stop_u) {
+	my ($a_stop, $b_stop) = (ParseDate($a_stop_u), ParseDate($b_stop_u));
+	if (not defined $a_stop) {
+	    die "cannot parse stop time: $a_stop_u";
+	}
+	if (not defined $b_stop) {
+	    die "cannot parse stop time: $b_stop_u";
+	}
+	$r = Date_Cmp($a_stop, $b_stop);
 	t "compare stop times: " . d $r;
 	return $r if $r;
     }
@@ -118,13 +178,15 @@ sub programme_cmp() {
     return $r if $r;
 
     t 'do not sort';
-    warn("programmes at $a->{start} on $a->{channel} do not sort");
+    # No warning, because we'll be weeding out duplicates later.  This
+    # routine should just do what it's told and compare.
+    #
     return 0;
 }
 
 
 # Compare indexes-within-clump
-sub clumpidx_cmp($$) {
+sub clumpidx_cmp( $$ ) {
     my ($A, $B) = @_;
 
     if (not defined $A and not defined $B) {
@@ -151,20 +213,79 @@ sub clumpidx_cmp($$) {
 }
 
 
+# Test whether two programmes overlap in time.  This takes account of
+# start time and stop time, and clumpidx (so two programmes with the same
+# start and stop times, but different places within the clump, are not
+# considered to overlap).
+#
+sub overlap( $$ ) {
+    my ($xa, $xb) = @_;
+
+    my ($xa_start, $xb_start) = (ParseDate($xa->{start}), ParseDate($xb->{start}));
+    die "cannot parse start time: $xa->{start}" if not defined $xa_start;
+    die "cannot parse start time: $xb->{start}" if not defined $xb_start;
+    my ($xa_stop, $xb_stop);	
+    for ($xa->{stop}) {
+	if (defined) {
+	    $xa_stop = ParseDate($_);
+	    die "cannot parse stop time: $_" if not defined $xa_stop;
+	}
+    }
+    for ($xb->{stop}) {
+	if (defined) {
+	    $xb_stop = ParseDate($_);
+	    die "cannot parse stop time: $_" if not defined $xb_stop;
+	}
+    }
+
+    # If we don't know the stop times we can't do an overlap test; if
+    # we know only one stop time we can do only one half of the
+    # test.  We assume no overlap if we can't prove otherwise.
+    #
+    { local $^W = 0;
+      t "xa: $xa_start -| $xa_stop"; t "xb: $xb_start -| $xb_stop" }
+    if ((
+	 # XB starts while XA on
+	 defined $xa_stop and Date_Cmp($xa_start, $xb_start) <= 0
+	 and Date_Cmp($xb_start, $xa_stop) < 0
+	) or (
+	      # XA starts while XB on
+	      defined $xb_stop and Date_Cmp($xb_start, $xa_start) <= 0
+	      and Date_Cmp($xa_start, $xb_stop) < 0
+	     )
+       ) {
+	my $cmp = clumpidx_cmp($xa->{clumpidx}, $xb->{clumpidx});
+	if (not defined $cmp) {
+	    # No clumpidxes, so must overlap.  (Also happens if
+	    # the two indexes were not comparable - but that will
+	    # have been warned about already.)
+	    #
+	    t 'no clumpidxes, overlap';
+	    return 1;
+	}
+	t 'compared clumpidxes: same? ' . not $cmp;
+	return not $cmp;
+    }
+    t 'no time overlap, returning 0';
+    return 0;
+}
+
+
 # Add 'stop time' to a list of programmes (hashrefs).
-# stop time of a programme is the start time of the next.
+# The stop time of a programme is the start time of the next.
 #
 # Parameters: reference to list of programmes, sorted by date, to be
 # shown consecutively (except for 'clumps').
 #
 # Modifies the list passed in.
 #
-sub add_stop($) {
+sub add_stop( $ ) {
     die 'usage: add_stop(ref to list of programme hashrefs)' if @_ != 1;
     my $l = shift;
 
     my $this_start; # Start time of current clump
     my $next_start; # Start time of next clump
+    my $next_next_start; # Start time of next-but-one clump
     for (my $i = $#$l; $i >= 0; $i--) {
 	my $this = $l->[$i];
 	my $clumpidx = $this->{clumpidx};
@@ -174,14 +295,50 @@ sub add_stop($) {
 	
 	$this_start = $this->{start};
 	if (not defined $this->{stop} and defined $next_start) {
-	    $this->{stop} = $next_start;
+	    if ($next_start ne $this_start) {
+		$this->{stop} = $next_start;
+	    }
+	    else {
+		# Special handling for overlapping programmes: going
+		# backwards in time and finding one programme
+		# immediately before another with the same start time.
+		# We should guess the stop time to be the same as the
+		# stop time for the overlapping programme.
+		#
+		# This is for the case you have the following three
+		# programmes:
+		#   A from 00 to ?
+		#   A from 00 to ?
+		#   B from 01 to 02
+		# We need to make the two As have the same stop time.
+		#
+		$this->{stop} = $next_next_start
+		  if defined $next_next_start;
+	    }
 	}
 
 	if ($clumpidx == 0) {
 	    # First programme in clump - we're going backwards, so
 	    # next time we will move on to the previous clump.
 	    #
-	    $next_start = $this_start;
+	    if (not defined $next_start
+		or $this_start ne $next_start) {
+		($next_start, $next_next_start) = ($this_start, $next_start);
+	    }
 	}
     }
+}
+
+
+# Equality of two programmes.  The programme details are just text, so
+# we can stringify the whole data structure and compare that.  We do
+# assume that Data::Dumper will list hashes in a consistent order.  We
+# don't care what the order is, just as long as it's the same each
+# time.
+#
+sub programme_eq( $$ ) {
+    t 'comparing programmes ' . d($_[0]) . ' and ' . d($_[1]);
+    my $r = Dumper($_[0]) eq Dumper($_[1]);
+    t "equal? $r";
+    return $r;
 }
