@@ -69,7 +69,7 @@ if (index('--version', $cmd) == 0 and length $cmd >= 3) {
 #
 # some grabbers aren't included
 #
-if ($cmd =~ /^tv_grab_(?:nz|jp|se)$/) {
+if ($cmd =~ /^tv_grab_(?:nz|jp)$/) {
     die <<END
 Sorry, $cmd is not available in this Windows binary release, although
 it is included in xmltv source releases.
