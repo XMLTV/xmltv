@@ -24,7 +24,7 @@ unless ($@) {
 }
 
 use base 'Exporter'; use vars '@EXPORT';
-@EXPORT = qw(parse_eur_date date_to_eur);
+@EXPORT = qw(parse_eur_date date_to_eur utc_offset);
 
 # parse_eur_date()
 #
@@ -177,6 +177,23 @@ sub date_to_eur( $$ ) {
     return [ Date_ConvTZ($d, 'UTC', $use_tz), $use_tz ];
 }
 
+# utc_offset()
+#
+# given a date/time string in a ParseDate compatible format
+# (preferably YYYYMMDDhhmmss) and a "base" timezone (eg "CET"), return
+# this time string with UTC offset appended. The "base" timezone
+# should be the non-DST timezone for the country ("winter time"). This
+# function figures out (through parse_eur_date and date_to_eur) wheter
+# DST is in effect for the specified date, and adjusts the UTC offset
+# appropriately.
+
+sub utc_offset( $$ ) {
+    my ($indate, $basetz) = @_;
+    die "empty date" if not defined $indate;
+    die "empty base TZ" if not defined $basetz;
+    my $d = date_to_eur(parse_eur_date($indate, $basetz), $basetz);
+    return UnixDate($d->[0],"%Y%m%d%H%M%S") . " " . $d->[1];
+}
 
 # dst_dates()
 #
