@@ -110,6 +110,24 @@ my %share_files = ('grab/uk/channel_ids' => 'tv_grab_uk/channel_ids',
 		   'grab/it/dud_channels' => 'tv_grab_it/dud_channels',
 		  );
 
+# Files which 'make clean' should remove, but doesn't by default, so
+# we have to patch it.
+#
+my @to_clean = ('filter/tv_grep',
+		(map { "grab/$_/tv_grab_$_" } qw(uk uk_rt it)),
+		'lib/XMLTV.pm');
+
+# Extra dependencies to add to the Makefile.
+my @deps = ('filter/tv_grep' => [ qw(filter/tv_grep.in pm_to_blib) ],
+	    (map { ("grab/$_/tv_grab_$_" => [ "grab/$_/tv_grab_$_.in" ]) }
+	     qw(uk uk_rt it)),
+	    'lib/XMLTV.pm' => [ 'lib/XMLTV.pm.in' ]);
+
+# Some grabbers which are generated from .PL files need the share/
+# directory passed as an extra argument.
+#
+my @grab_need_share = qw(uk uk_rt it);
+
 # There is something particularly broken about Date::Manip on Red Hat
 # 8.0, we check for that specially.
 #
@@ -229,6 +247,9 @@ are present.",
        exes => [ 'grab/nz/tv_grab_nz' ],
        pl_files => { 'grab/nz/tv_grab_nz.PL' => 'grab/nz/tv_grab_nz' },
        share_files => { 'grab/nz/episode_names' => 'tv_grab_nz/episode_names' },
+       to_clean => [ 'grab/nz/tv_grab_nz' ],
+       deps => [ 'grab/nz/tv_grab_nz' => [ 'grab/nz/tv_grab_nz.in' ] ],
+       grab_need_share => [ 'nz' ],
        prereqs => {},
        special_prereqs =>
        [ [ sub {
@@ -338,6 +359,10 @@ foreach my $info (@opt_components) {
 	%pl_files = (%pl_files, %{$info->{pl_files}}) if $info->{pl_files};
 	%share_files = (%share_files, %{$info->{share_files}})
 	  if $info->{share_files};
+	push @to_clean, @{$info->{to_clean}}          if $info->{to_clean};
+	push @deps, @{$info->{deps}}                  if $info->{deps};
+	push @grab_need_share, @{$info->{grab_need_share}}
+	if $info->{grab_need_share};
     }
     print STDERR "\n";
 }
@@ -673,9 +698,6 @@ sub MY::clean {
     package MY;
     my $inherited = shift->SUPER::clean(@_);
     $inherited =~ s/\s+$//;
-    my @to_clean = ('filter/tv_grep',
-		    (map { "grab/$_/tv_grab_$_" } qw(uk uk_rt it nz)),
-		    'lib/XMLTV.pm');
     $inherited .= "\n\t-rm -f $_\n" foreach @to_clean;
     return $inherited;
 }
@@ -685,10 +707,6 @@ sub MY::processPL {
     my $inherited = shift->SUPER::processPL(@_);
 
     # Add some exra dependencies.
-    my @deps = ('filter/tv_grep' => [ qw(filter/tv_grep.in pm_to_blib) ],
-		(map { ("grab/$_/tv_grab_$_" => [ "grab/$_/tv_grab_$_.in" ]) }
-		 qw(uk uk_rt it nz)),
-		'lib/XMLTV.pm' => [ 'lib/XMLTV.pm.in' ]);
     my ($k, $v);
     while (@deps) {
 	($k, $v, @deps) = @deps;
@@ -699,7 +717,6 @@ sub MY::processPL {
     # And some of the .in generators need the share/ directory passed
     # as an extra argument.
     #
-    my @grab_need_share = qw(uk uk_rt it nz);
     foreach (@grab_need_share) {
 	$inherited =~
 	  s<(grab/$_/tv_grab_$_.PL grab/$_/tv_grab_$_)\s*$>
