@@ -21,6 +21,12 @@ END
 sub run( $$$$ );
 sub read_file( $ );
 
+# tv_to_latex depends on Lingua::Preferred and that module's behaviour
+# is influenced by the current language.  Really I should set this to
+# 'C' and fix Lingua::Preferred to recognize that.
+#
+$ENV{LANG} = 'en';
+
 my $tests_dir = 't/data';     # directory test files live in
 die "no directory $tests_dir" if not -d $tests_dir;
 my $cmds_dir = 'blib/script'; # directory filter programs live in
