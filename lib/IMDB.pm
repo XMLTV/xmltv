@@ -35,6 +35,8 @@
 #       returned close enough match instead of trying the closest date match of
 #       the approx hits.
 #
+# FUTURE - could use Term::ProgressBar to be more consistant with other
+#       xmltv tools.
 #
 
 use strict;
