@@ -10,10 +10,11 @@ use XMLTV::Ask;
 # false).
 #
 # May do other magic things like migrating a config file to a new
-# location.
+# location; you can specify the old program name as an optional fourth
+# argument if your program has recently been renamed.
 #
-sub filename( $$;$ ) {
-    my ($explicit, $progname, $quiet) = @_;
+sub filename( $$;$$ ) {
+    my ($explicit, $progname, $quiet, $old_progname) = @_;
     return $explicit if defined $explicit;
     $quiet = 0 if not defined $quiet;
 
@@ -23,12 +24,16 @@ sub filename( $$;$ ) {
     (-d $conf_dir) or mkdir($conf_dir, 0777)
       or die "cannot mkdir $conf_dir: $!";
     my $new = "$conf_dir/$progname.conf";
-    my $old = "$conf_dir/$progname";
 
-    if (-f $old and not -e $new) {
-	warn "migrating config file $old -> $new\n";
-	rename($old, $new)
-	  or die "cannot rename $old to $new: $!";
+    my @old;
+    for ($old_progname) { push @old, "$conf_dir/$_.conf" if defined }
+    foreach (@old) {
+	if (-f and not -e $new) {
+	    warn "migrating config file $_ -> $new\n";
+	    rename($_, $new)
+	      or die "cannot rename $_ to $new: $!";
+	    last;
+	}
     }
 
     print STDERR "using config filename $new\n" unless $quiet;
