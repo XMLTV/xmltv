@@ -138,6 +138,24 @@ are present.",
        blurb => 'Tv_grab_sn is the listings grabber for Sweden and Norway.',
        exes => [ 'grab/sn/tv_grab_sn' ],
        prereqs => { 'HTML::TableExtract' => 0 } },
+
+     { name => 'tv_grab_uk_rt',
+       blurb => 
+       "Tv_grab_uk_rt is an alternative grabber for British listings.  The
+normal UK grabber tv_grab_uk is always installed.  This alternative
+may provide slightly more programme details, and is able to fetch up
+to a fortnight's listings while the standard grabber fetches only a
+week.
+
+However, it is much slower and works by scraping a website, whereas the
+standard UK grabber has its own special data source.  You should use
+this alternative grabber only when you have a particular need for it
+(such as if the normal one temporarily breaks :-)).
+
+FIXME note this is a work in progress anyway, though I hope to have it
+cleaned up for the 0.5.2 release.",
+       exes => [ 'grab/uk_rt/tv_grab_uk_rt' ],
+       prereqs => { 'Time::ParseDate' => 0 } },
     );
 
 foreach my $info (@opt_components) {
