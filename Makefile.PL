@@ -23,6 +23,8 @@ my %prereqs
      'Unicode::String' => 0,
      'Compress::Zlib' => 0,
      'CGI' => 0,
+     'Tk' => 0,
+     'Tk::TableMatrix' => 0,
     );
 
 # 'Recommended but not required'.  It isn't currently handled to have
