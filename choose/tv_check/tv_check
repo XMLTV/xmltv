@@ -10,8 +10,7 @@
 # The show list is a custom XML format.
 # The channel guide needs to be in XMLTV format.
 #
-# syntax
-#       tv_check --listings=file --show=file (--configure|--scan (--output))) 
+# for details, see Usage below
 #
 # (C)2001 - Robert Eden, free to use under the GNU License.
 #
@@ -27,14 +26,16 @@ use XML::Simple;
 use Date::Manip;
 use Data::Dumper;
 use Getopt::Long;
-
+use HTTP::Cookies;
+use HTTP::Request::Common qw(POST GET);
+use LWP::UserAgent;
 use XMLTV qw(best_name);
 use XMLTV::Usage
 ' tv_check v $Revision$ ' . <<END
 
  part of the xmltv toolkit ( http://xmltv.sourceforge.net )
 
-usage $0 (--configure|--scan) [--options] [--output=file] [--html]
+usage $0 (--configure|--scan) [--myreplay=unit,user,pass,nonguarantee] [--options] [--output=file] [--html]
 where --options are:
    --shows <file>
      xml files with show info (default shows.xml )
@@ -47,6 +48,7 @@ where --options are:
 
    --html
      scan output is in HTML format
+
 END
   ;
 
@@ -77,7 +79,7 @@ my $OUTPUT_FILE = undef;
 my $TODAY    = $WEEKDAY[(localtime())[6]];
 
 #
-# Global Vars
+# Global Vars/Databases
 #
 my @SHOWS        = (); # raw show data
 my $SHOW_TABLE   = ""; # stores pointer to SHOW_TABLE
@@ -86,13 +88,44 @@ my %SHOW_DATA    = (); # data for SHOW_TABLE
 my %SHOW_WIDTH   = (); # column widths for SHOW_TABLE
 my %SHOW_TIME;
 
+my $MYREPLAY_UNIT = "";  # parameters for MYREPLAY fetch
+my $MYREPLAY_USER = "";
+my $MYREPLAY_PASS = "";
+my $MYREPLAY_NONG = "";
+my $MYREPLAY_SAVE = "";  # 0=ignore, 1=save to replay.html, 2=load from replay.html
+
+
 my $SHOW_CHANGED = 0;  # updated if show needs to be saved
 my $SHOW_SORT    = $COL{title};  # column to sort SHOW_TABLE
 my $SHOW_ROW     = 0;  # last selected row
 
+#
+# Episode data is comes from XMLTV, but data is added to the hash
+# for our own use.  Since we never write out the Episode XLM, this is ok.
+# The following non XMLTV fields are used
+#   {prev} = pointer to previous episode on channel
+#   {next} = pointer to next episode on channel
+#   {device} = device that will record this episode
+#   {hhmm} = start time     ( computed on demand or if $CONFIGURE)
+#   {day}  = start day      ( computed on demand or if $CONFIGURE)
+#   {mmdd} = start date     ( computed on demand or if $CONFIGURE)
+#   {len } = episode length ( computed on demand or if $CONFIGURE)
+
+
 my @GUIDE     = ();    # episode list
 my %GUIDE     = ();    # episode indexes
-
+#
+# Episode Indexes ( CAPS are constants )
+#
+#  $GUIDE{ALL}{title}=[ep...]
+#  $GUIDE{chan}{mmdd}{hhmm}=$ep
+#
+# The following indexes are only used by configure mode
+#                                          array=[day,channel,hhmm,len]
+#  $GUIDE{CHAN}{chan}{title}=[ [day,chan,hhmm,len]...]
+#  $GUIDE{DAY}{day}{title}  =[ [day,chan,hhmm,len]...]
+#  $GUIDE{day}{chan}{title} =[ [day,chan,hhmm,len]...] This works since day!=chan.  I hope :) 
+#
 my @CHAN      = ();    # channel list (sorted)
 my %CHAN      = ();    # channel list ( channel-id key )
 
@@ -119,8 +152,10 @@ $COL_VALUE[$_] = "" foreach (0..$#COL);
 {
     my $scan=0;
     my $help=0;
-    GetOptions('configure'        => \$CONFIGURE,
+    my $myreplayargs;
+    GetOptions('configure'    => \$CONFIGURE,
 	       'scan'             => \$scan,
+	       'myreplaytv=s'     => \$myreplayargs,
 	       'html'             => \$HTML,
 	       'shows=s'          => \$SHOW_XML,
 	       'output=s'         => \$OUTPUT_FILE,
@@ -136,13 +171,194 @@ $COL_VALUE[$_] = "" foreach (0..$#COL);
            open(STDOUT,">$OUTPUT_FILE") or die "Can't open for output $OUTPUT_FILE\n";
     }
 
+    if (defined $myreplayargs)
+    {
+        ($MYREPLAY_UNIT,$MYREPLAY_USER,$MYREPLAY_PASS,$MYREPLAY_NONG,$MYREPLAY_SAVE)=split(/,/,$myreplayargs);
+        $MYREPLAY_NONG=0 unless defined $MYREPLAY_NONG;
+        $MYREPLAY_SAVE=0 unless defined $MYREPLAY_SAVE;
+        die "MYREPLAY UNIT not specified\n" unless length($MYREPLAY_UNIT)>0;
+        die "MYREPLAY USER not specified\n" unless length($MYREPLAY_USER)>0;
+        die "MYREPLAY PASS not specified\n" unless length($MYREPLAY_PASS)>0;
+    }
+
 } # get params
 
 load_shows($SHOW_XML);
 load_guide($GUIDE_XML);
 
 #
-# Step 3, is it time to CONFIGURE?  --------------------------------------------------------
+# do we need to get shows from MYREPLAYTV? ----------------------------------------
+#
+if ($MYREPLAY_USER ne '' )
+{
+    my $html="";
+    my $device="MyReplayTV$MYREPLAY_UNIT";
+
+    print STDERR "Fetching shows from MyReplayTV\n";
+    
+if ($MYREPLAY_SAVE != 2)
+{
+#
+# create user agent
+#
+    my $ua = LWP::UserAgent->new;
+       $ua->cookie_jar( HTTP::Cookies->new);
+       $ua->agent("tv_check/1.0" . $ua->agent);
+
+#
+# login to MyReplayTV
+#
+#   print STDERR "MyReplayTV logging in\n";
+    my $res = $ua->request(POST 'http://my.replaytv.com/servlet/Login',
+                          [ username => $MYREPLAY_USER,
+                            password => $MYREPLAY_PASS,
+         		            savePassword => '',
+                          ]);
+
+    unless ( $res->is_success && $res->title eq 'ReplayGuideRecordings' )
+    {
+       open(FILE,">error.html") && print(FILE $res -> as_string);
+       die "MyReplayTV login error. Debug info in 'error.html'\n";
+    }
+
+#
+# get MyReplayTV show info
+#
+    sleep 5;
+#    print STDERR "MyReplayTV getting Replay Channels\n";
+    $res = $ua->request( GET('http://my.replaytv.com/servlet/ReplayGuideRequests',
+                              HTTP::Headers->new(
+                                  Referer => 'http://my.replaytv.com/servlet/ReplayGuideRecordings'
+                         )));
+
+    unless ($res->is_success && $res->title eq 'Replay Guide Shows')
+    {
+       open(FILE,">error.html") && print(FILE $res -> as_string);
+       die "MyReplayTV show fetch error. Debug info in 'error.html'\n";
+    }
+
+#
+# debug save (to make things faster and not overload Replay's servers during debug)
+#
+    if ($MYREPLAY_SAVE == 1)
+    {
+        open(FILE,">replay.html");
+        print FILE $res -> as_string;
+        close FILE;
+    }
+    $html=$res->as_string;
+}
+else
+{
+    open(FILE,"<replay.html") || die "Can't open relay.html";
+    $html = join("\n",<FILE>);
+    close FILE;
+} # quick debug hack
+
+#
+# Got the listings... find our shows
+#
+foreach (split(/\n/,$html))
+{
+	s/\s+/ /g;
+	next unless length($_)>5;
+
+	if (my @a= / This show.+current episode.s. of (.+) occurring every \((.+)\) on Channel (\d+)\((.+)\).+ (\d+):(\d+)(\w)..-.+\. (.+) at /)
+    {
+      next if /was scheduled to record/;
+  	  next if /Nothing else is scheduled to record/;
+
+      $a[4]  = "0"             if ($a[4]==12 and $a[6] eq 'A');  # midnight -> 00;
+
+      my $title = $a[0]; 
+      my $days  = $a[1];
+      my $chan  = "$a[2] $a[3]";
+      my $hhmm  = sprintf("%02d%02d",($a[6] eq 'P' ? $a[4]+12 : $a[4]),$a[5]);
+      my $guar  = ( $a[7] =~ /^Not/ ? 0 : 1 );
+
+      next unless $guar || $MYREPLAY_NONG;
+      $title =~ s/’/'/g;  # illegal character in Replay Feed
+
+#     print STDERR "\nMyReplay looking for ",join("|",$title,$chan,$hhmm,$days),"\n";
+
+#
+# Check Channel
+#
+      unless ( exists $CHAN{$chan})
+      {
+          print STDERR "MyReplayTV Channel '$chan' not in guide\n";
+          $CHAN{$chan}{'display-name'}[0][0]=$chan;
+      }
+
+#
+# if Replay expects our show on a specific day, we can just add it
+#
+      if (length($days) == 3)
+      {
+        add_myreplaytv_show($title,$chan,$hhmm,$days);
+        next;
+      }
+
+#
+# Check for a time match in our list of episodes.
+#
+      my $found="";
+      for my $ep (@{$GUIDE{all}{$title}})
+      {
+
+        my $next = $ep->{next};
+        my $prev = $ep->{prev};
+
+        gen_episode_dates($ep)   unless $ep->{day};
+        gen_episode_dates($next) if $next && !$next->{day};
+        gen_episode_dates($prev) if $prev && !$prev->{day};
+
+#
+#     timeslot is a hit if start time is greater than previous show's
+#                      and start time and less than next show's start time.
+#
+#print STDERR "\n";
+#print STDERR join(",",get_text($prev->{title}),$prev->{hhmm})."\n" if $prev;
+#print STDERR join(",",get_text($ep->{title}  ),$ep->{hhmm})."\n"  ;
+#print STDERR join(",",get_text($next->{title}),$next->{hhmm})."\n" if $next;
+#printf STDERR "<%s><%s>\n",$chan,$ep->{channel};
+#printf STDERR "<%s><%s>\n",$days,$ep->{day};
+
+        next if $chan ne $ep->{channel};
+        next if $days !~ /$ep->{day}/;
+
+      next if (   $prev
+               && $prev->{mmdd} eq $ep->{mmdd}
+               && $prev->{hhmm} gt $hhmm);
+
+      next if (   $next
+               && $next->{mmdd} eq $ep->{mmdd}
+               && $next->{hhmm} lt $hhmm);
+
+      add_myreplaytv_show($title,$chan,$hhmm,$ep->{day});
+      $ep->{device} = $device; # if $hhmm eq $ep->{hhmm};
+      $found     .= $ep->{day};
+
+      } #epiosde scan
+
+#
+# add it as an unknown if not found
+#
+      unless ($found)
+      {
+          print STDERR "        MyReplayTV no matches for ",join("|",$title,$chan,$hhmm,$days),"\n";
+
+          add_myreplaytv_show($title,$chan,$hhmm,"");
+      }
+    } # show entry match
+} # listing loop
+
+load_show_table(); # build indexes
+} # MYREPLAY
+    
+
+#
+# is it time to CONFIGURE?  --------------------------------------------------------
 #
 if ($CONFIGURE)
 {
@@ -261,7 +477,7 @@ $SHOW_TABLE->bind('<1>', sub {
 
             if ($row)
             {
-                return unless $SHOW_DATA{"$row,4"}; # title must exist
+                return unless $SHOW_DATA{"$row,$COL{title}"}; # title must exist
                 $SHOW_ROW=$row;
 		        $UPDATE_BUTTON -> configure ( -state => "normal" );
 		        $DELETE_BUTTON -> configure ( -state => "normal" );
@@ -502,6 +718,20 @@ for my $start (sort keys %SHOW_TIME)
     if ( $show -> {mmdd} ) # skip this phase for certain shows
     {
         my $ep = find_episode($show);
+
+#
+# look for close episode matches
+#
+        $ep=$ep->{prev} if ($ep && $ep->{prev}
+                                && get_text($ep->{title}      ) ne $show->{title}
+                                && get_text($ep->{prev}{title}) eq $show->{title});
+
+        $ep=$ep->{next} if ($ep && $ep->{next}
+                                && get_text($ep->{title}      ) ne $show->{title}
+                                && get_text($ep->{next}{title}) eq $show->{title});
+#
+# display results
+#
         if (!defined $ep)
         {
            printf "${R_ON}%-60s **** NO GUIDE DATA ****${OFF}\n",sh_summary($show).opt_summary($show);
@@ -544,6 +774,10 @@ for my $start (sort keys %SHOW_TIME)
     {
         next if $ep->{displayed} eq $show;
         $ep->{displayed}=$show;
+#
+# ignore it if already scheduled to record with the same device
+#
+        next if $ep->{device} eq $show->{device};
 
         gen_episode_dates($ep) unless $ep->{day};
     
@@ -577,7 +811,7 @@ for my $start (sort keys %SHOW_TIME)
 #
 # special hack to for ReplayTV's "smart" record
 #
-        if ($show->{device} =~ /REPLAY/i)
+        if ($show->{device} =~ /^REPLAY/i)
         {
           next unless length($show->{day} ); # don't record title-only scans
           next unless length($show->{hhmm}); # this should never happen
@@ -649,6 +883,12 @@ if ($HTML)
     print "</pre></body>\n";
 }
 
+#
+# If we're doing a MyReplayTV scan, save show file
+#    (we can't do this earlier, due to null cleanup breaking scan)
+#
+Save_shows() if ($MYREPLAY_USER ne '' );
+
 } # tv check scan
 
 #
@@ -719,7 +959,7 @@ sub ep_summary
         		   ($flag ? "" : get_text( $ep->{title} ) ),
         		    "\"$desc\" $part",
         			($ep->{"previously-shown"} ? "(R)" : "" ),
-        			(exists $ep->{device} ? "[$ep->{device}] " : "" ));
+        			($ep->{device} ? "[$ep->{device}] " : "" ));
 } # ep_summary
 
 #
@@ -751,8 +991,6 @@ sub sh_summary
 # given a pointer to a show ( with channel/date/time info) see what's playing then.
 # Scan through start times on a specified day and report the last episode not greater than our start time.
 #
-# There are midnight issues there ( a 2 hour 11pm show will not be found for a requested midnight start ), but
-# I'm not sure it's worth the performance penalty of scanning through multiple days.
 #
 # Returns undef if no episodes are found (or all are greater, see above)  This is signifies no guide info
 #
@@ -763,15 +1001,15 @@ sub find_episode
     my $mmdd = $show->{mmdd};
     my $hhmm = $show->{hhmm};
 
-    my $a;
+    my $ep=undef;
     for my $key ( sort keys %{$GUIDE{$chan}{$mmdd}} )
     {
+        $ep=$GUIDE{$chan}{$mmdd}{$key}{prev} unless defined $ep;
         last if $key gt $hhmm;
-        $a=$key;
+        $ep=$GUIDE{$chan}{$mmdd}{$key};
     }
 
-    return undef unless defined $a;
-    return $GUIDE{$chan}{$mmdd}{$a};
+    return $ep;
 } # find_episode
 
 #
@@ -1054,9 +1292,18 @@ sub load_shows
 #
 # convert numeric date if needed.
 #
-        next unless length($show->{day});
+#        next unless length($show->{day});
         $show->{day}=$WEEKDAY[$1] if $show->{day} =~ /^(\d+)/;
-    }
+
+#
+# remove existing MYREPLAY_UNIT entries (they will be loaded fresh later)
+#
+        if (defined $MYREPLAY_UNIT and $show->{device} eq "MyReplayTV$MYREPLAY_UNIT")
+        {
+            $show->{title}='';
+        }
+
+    } # fix entries
     
     unless (@SHOWS)
     {
@@ -1093,6 +1340,7 @@ sub load_guide
     $GUIDE_XML = $file;
     print STDERR "Loading xml guide info ($file) ";
     my $xml = XMLTV::parsefile($file);
+        
     %CHAN   = %{$xml->[2] };
     @GUIDE  = @{$xml->[3] };
     %GUIDE  = ();
@@ -1129,29 +1377,59 @@ sub load_guide
 
        $ep->{start}    =~ s/://g;
        $ep->{displayed}="";
+       $ep->{device}="";
 
+#
+# build general indexes (--scan + --configure)
+#
+       push @{$GUIDE{all}{$title}},$ep;                                # all titles
+       if ( $ep->{start} =~ /^(\d{4})(\d{4})(\d{4})/ )
+       {            
+         $GUIDE{$chan}{$2}{$3}=$ep;                                    # index by chan, date, time
+       }
+
+#
+# build --configure only indexes
+#
        if ($CONFIGURE)
        {
-        gen_episode_dates($ep);
-        my $array = [$ep->{day},$ep->{channel},$ep->{hhmm},$ep->{len}]; 
+          gen_episode_dates($ep);
+          my $array = [$ep->{day},$ep->{channel},$ep->{hhmm},$ep->{len}]; 
 
-        push @{$GUIDE{all}       {$title}             }    ,$array; # all titles
-        push @{$GUIDE{chan}      {$chan}      {$title}}    ,$array; # titles by chan
-        push @{$GUIDE{day}       {$ep->{day}} {$title}}    ,$array; # titles by day
-        push @{$GUIDE{$ep->{day}}{$chan}      {$title}}    ,$array; # titles by chan by day
-        }
-        else
-        {
-            push @{$GUIDE{all}{$title}},$ep;    # all titles
-
-            if ( $ep->{start} =~ /^(\d{4})(\d{4})(\d{4})/ )
-            {            
-               $GUIDE{$chan}{$2}{$3}=$ep; # index by chan, date, time
-             }
+          push @{$GUIDE{chan}      {$chan}      {$title}}    ,$array; # titles by chan
+          push @{$GUIDE{day}       {$ep->{day}} {$title}}    ,$array; # titles by day
+          push @{$GUIDE{$ep->{day}}{$chan}      {$title}}    ,$array; # titles by chan by day
         }
     } # building guide indexes
+
+#
+# Now compute next/prev episodes
+#
+    for my $chan (keys %GUIDE)
+    {
+        my $prev=undef;
+        next if $chan eq 'chan';
+        next if $chan eq 'day';
+        
+        for my $date ( sort keys %{$GUIDE{$chan}})
+        {
+            next unless $date =~ /^\d\d\d\d$/;
+
+            for my $hhmm ( sort keys %{$GUIDE{$chan}{$date}})
+            {
+                next unless $hhmm=~ /^\d\d\d\d$/;
+                my $ep=$GUIDE{$chan}{$date}{$hhmm};
+
+                $ep  ->{prev}=$prev;
+                $prev->{next}=$ep    if defined $prev;
+                $prev        =$ep;
+            } #hhmm
+        } #date
+      $prev->{next}=undef if defined $prev;
+    } #chan
+
     print STDERR " $c recs / ",time()-$st,"secs \n";
-  error_popup("guide file $GUIDE_XML does not appear to be valid") unless @GUIDE;
+    error_popup("guide file $GUIDE_XML does not appear to be valid") unless @GUIDE;
 
   load_selection_items() if $SELECT{day};  
 } #load_guide
@@ -1257,3 +1535,23 @@ sub validate_col_value
     }
 } # validate_col_value
 
+sub add_myreplaytv_show
+{
+#    print STDERR "                   adding myreplaytv: @_\n";
+    my $row = $#SHOWS+1;
+    my $title = shift || '';
+    my $chan  = shift || '';
+    my $start = shift || '';
+    my $day   = shift || '';
+    foreach (0..$#COL)
+    {
+        my $val='';
+        $val="MyReplayTV$MYREPLAY_UNIT" if $COL[$_] eq 'device';
+        $val=$title                     if $COL[$_] eq 'title';
+        $val=$chan                      if $COL[$_] eq 'channel';
+        $val=$start                     if $COL[$_] eq 'hhmm';
+        $val=$day                       if $COL[$_] eq 'day';
+        $val=1                          if $COL[$_] eq 'chanonly';
+        $SHOWS[$row]{$COL[$_]}=$val;
+    }
+} #add_myreplaytv_show
