@@ -40,7 +40,7 @@ sub ParseDate_PreservingTZ($) {
       if @_ != 1;
     my $u = shift;
     my $p = ParseDate($u); return undef if not defined $p;
-    my $tz = gettz($u) || 'UT';
+    my $tz = gettz($u) || 'UTC';
 #    print STDERR "date $u parsed to $p (timezone read as $tz)\n";
     $p = Date_ConvTZ($p, undef, $tz);
 #    print STDERR "...converted to $p\n";
