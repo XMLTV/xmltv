@@ -62,8 +62,6 @@ Further more the program will not be able to parse programs that are
 not having both start and end time defined. This will be something
 that I will look at
 
-I havenE<39>t even considered what happens with DST issues.
-
 =cut
 
 ######################################################################
@@ -81,6 +79,7 @@ use XMLTV;
 use XMLTV::Memoize;
 use XMLTV::Ask;
 use XMLTV::Config_file;
+use XMLTV::Europe_TZ;
 # Todo: perhaps we should internationalize messages and docs?
 use XMLTV::Usage <<END
 $0: get Dutch television listings in XMLTV format
@@ -121,8 +120,8 @@ sub parse_dutch_date( $ );
 # Whether zero-length programmes should be included in the output.
 my $WRITE_ZERO_LENGTH = 0;
 
-# Timezone string appended to all dates.  FIXME this will break with a
-# change to daylight saving time.
+# Base timezone for the Netherlands.  Summer time is one hour ahead of
+# this.
 #
 my $TZ = '+0100';
 
@@ -292,9 +291,12 @@ if (not $opt_slow) {
 	die if not defined $day;
 	foreach (process_summary_page($url, $day, $day)) {
 	    my ($start, $stop, $title, $url) = @$_;
+	    my ($start_base, $start_tz) = @{date_to_eur($start, $TZ)};
+	    my ($stop_base, $stop_tz) = @{date_to_eur($stop, $TZ)};
+
 	    $writer->write_programme
-	      ({ start => UnixDate($start, '%q') . " $TZ",
-		 stop => UnixDate($stop, '%q') . " $TZ",
+	      ({ start => UnixDate($start_base, '%q') . " $start_tz",
+		 stop => UnixDate($stop_base, '%q') . " $stop_tz",
 		 channel => $ch_xmltv_id,
 		 title => [ [ $title, $LANG ] ],
 	       });
@@ -620,6 +622,13 @@ sub write_details( $$$$$ ) {
 		warn "seen 'Orginele titel' twice" if defined $orig_title;
 		$orig_title = $text;
 	    }
+	    elsif ($regel eq 'Behaalde prijzen') {
+		# Awards won.  It doesn't seem worth adding a separate
+		# field for this to the XMLTV format, just append to
+		# the description.
+		#
+		push @desc, "$regel: $text";
+	    }
 	    else {
 		# Unknown key, but let's add it to the desc so we
 		# don't lose information.  These newlines are just for
@@ -669,11 +678,13 @@ sub write_details( $$$$$ ) {
 
 	my @title = ([ $naam, $LANG]);
 	push @title, [ $orig_title ] if defined $orig_title; # not Dutch!
+	my ($van_base, $van_tz) = @{date_to_eur($van, $TZ)};
+	my ($tot_base, $tot_tz) = @{date_to_eur($tot, $TZ)};
 	my %prog
 	  = (channel  => $ch_xmltv_id,
 	     title    => \@title,
-	     start    => UnixDate($van, '%q') . " $TZ",
-	     stop     => UnixDate($tot, '%q') . " $TZ",
+	     start    => UnixDate($van_base, '%q') . " $van_tz",
+	     stop     => UnixDate($tot_base, '%q') . " $tot_tz",
 	    );
 	
 	# We have lots of bits of description.  But we make them
@@ -721,20 +732,18 @@ sub time_tot_str( $ ) {
     my ($HH, $MM) = ($1, $2);
 
     my $str = "$yyyy-$mm-$dd $HH:$MM:00";
-    my $p = ParseDate($str);
+    my $p = parse_eur_date($str, $TZ);
     die "could not parse date $str" if not defined $p or not length $p;
-    my $r = UnixDate($p, '%q');
-    die "could not call UnixDate() on $p" if not defined $r;
-    return $r;
+    return $p;
 }
 sub time_van_str( $ ) {
     my $input = shift; 
     if (length($input) == 15) {
-	$input .= '06:00'; 
+	$input .= '06:00';
     }
-    my $datum = substr($input,0,length($input)-11); 
-    my $van = substr($input,-11); 
-    $van = substr($van,0,5); 
+    my $datum = substr($input,0,length($input)-11);
+    my $van = substr($input,-11);
+    $van = substr($van,0,5);
 
     $datum =~ /(\d\d?)-(\d\d?)-(\d{4})/
       or die "cannot find year in '$datum'";
@@ -744,11 +753,9 @@ sub time_van_str( $ ) {
       or die "cannot find time in '$van'";
     my ($HH, $MM) = ($1, $2);
     my $str = "$yyyy-$mm-$dd $HH:$MM:00";
-    my $p = ParseDate($str);
+    my $p = parse_eur_date($str, $TZ);
     die "could not parse date $str" if not defined $p or not length $p;
-    my $r = UnixDate($p, '%q');
-    die "could not call UnixDate() on $p" if not defined $r;
-    return $r;
+    return $p;
 }
 
 
@@ -875,8 +882,9 @@ sub process_summary_page( $$$ ) {
 	my $date_str = $bits[0]->[2];
 	my $d = parse_dutch_date($date_str);
 	if (defined $d) {
-	    die "date in page $d ($date_str) doesn't match expected $official_day"
-	      if UnixDate($d, '%Q') ne UnixDate($official_day, '%Q');
+	    my ($d_base, $d_tz) = @{date_to_eur($d, $TZ)};
+	    die "date in page $d_base ($date_str) doesn't match expected $official_day"
+	      if UnixDate($d_base, '%Q') ne UnixDate($official_day, '%Q');
 	    shift @bits;
 	}
 	# otherwise, leave it for later processing
@@ -921,13 +929,13 @@ sub process_summary_page( $$$ ) {
 	}
 	my ($start_hh, $start_mm, $stop_hh, $stop_mm) = ($1, $2, $3, $4);
 	die if not defined $day;
-	my $start = ParseDate("$day $start_hh:$start_mm");
+	my $start = parse_eur_date("$day $start_hh:$start_mm", $TZ);
 	die if not defined $start;
-	my $stop = ParseDate("$day $stop_hh:$stop_mm");
+	my $stop = parse_eur_date("$day $stop_hh:$stop_mm", $TZ);
 	die if not defined $stop;
 	if (Date_Cmp($start, $stop) > 0) {
 	    $day = UnixDate(DateCalc($day, '+ 1 day'), '%Y-%m-%d');
-	    $stop = ParseDate("$day $stop_hh:$stop_mm");
+	    $stop = parse_eur_date("$day $stop_hh:$stop_mm", $TZ);
 	    die if not defined $stop;
 	    die unless Date_Cmp($start, $stop) < 0;
 	}
@@ -1027,7 +1035,7 @@ sub parse_dutch_date( $ ) {
 	s/\bvrijdag\b/Friday/g;
 	s/\bzaterdag\b/Saturday/g;
 
-	my $r = ParseDate($_);
+	my $r = parse_eur_date($_, $TZ);
 	die "could not parse date $_ (from Dutch $_[0])"
 	  if not defined $r;
 	return $r;
