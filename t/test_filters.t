@@ -81,6 +81,22 @@ if ($full) {
       );
 }
 
+if (@ARGV) {
+    # Remaining arguments are regexps to match commands to run.
+    my @new_cmds;
+    my %seen;
+    foreach my $arg (@ARGV) {
+	foreach my $cmd (@cmds) {
+	    for (join(' ', @{$cmd->[0]})) {
+		push @new_cmds, $cmd if /$arg/ and not $seen{$_}++;
+	    }
+	}
+    }
+    die "no commands matched regexps: @ARGV" if not @new_cmds;
+    @cmds = @new_cmds;
+    print "running commands:\n", join("\n", map { join(' ', @{$_->[0]}) } @cmds), "\n";
+}
+
 # Input files we could use to build test command lines.
 my @inputs = <$tests_dir/*.xml>;
 my @inputs_gz = <$tests_dir/*.xml.gz>; s/\.gz$// foreach @inputs_gz;
