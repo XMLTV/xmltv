@@ -1,4 +1,7 @@
-#!/usr/bin/perl -wT
+#!/usr/bin/perl -w
+#
+# FIXME -T should be on but Date::Manip is currently broken under
+# taint mode.
 #
 # $Id$
 #
@@ -16,11 +19,6 @@
 # although you may get hundreds of programmes to wade through the
 # first time, the second time round most of them will be listed in the
 # preferences file and you'll be asked only about new ones.
-#
-# The final list of programmes to watch is stored in $TOWATCH.
-# Unfortunately at the moment this needs post-processing with
-# pick_process, due to sloppiness in writing this program.  I will do
-# things properly soon.
 #
 # So to use this CGI script to plan your TV viewing, here's what
 # you'll typically need to do:
@@ -45,18 +43,14 @@
 # you are asked again next time.
 #
 # - Submit the form and go on to the next page.  Repeat until you have
-# got to the end of the listings ('Finished').
-#
-# - Now the numbers of programmes you want to watch are stored in
-# $TOWATCH.  Process it to get an XML listing:
-#
-# % pick_process <towatch >towatch.xml
-#
-# and you might want to print out this XML file:
+# got to the end of the listings ('Finished').  You can now download
+# an XMLTV file with the programmes you want to watch.  You might want
+# to print out this XML file:
 #
 # % listings_to_latex <towatch.xml >towatch.tex
 # % latex towatch.tex
 # % dvips towatch.dvi
+# % lpr towatch.ps
 #
 # - Also look at $PREFS_FILE to see all the programmes you have
 # killfiled (including those you 'always' want to see without
@@ -70,24 +64,22 @@
 # Remember, once you've said 'never' to watch a programme, it becomes
 # as if it does not exist at all!
 #
-# See release notes and/or cvs logs entries for module history
-#
 # -- Ed Avis, epa98@doc.ic.ac.uk
 #
 
-# Since this program runs with taint mode on, it won't pick up changes
-# in PERL5LIB.  So if you have installed modules somewhere
-# non-standard (such as your home directory), you have to add the
-# paths here explicitly.
+# If taint checking were turned on (which used to be the case, and is
+# planned for future versions) we'd need these lines.
+# 
+# Keep the taint checking happy (the Cwd module runs pwd(1))
+#$ENV{PATH} = '/bin:/usr/bin';
 #
-#use lib '/homes/epa98/lib/perl5/5.00503';
-#use lib '/homes/epa98/lib/perl5/site_perl';
-#use lib '/homes/epa98/lib/perl5/site_perl/5.005';
+# The PERL5LIB environment variable is ignored, so you might need
+#use lib '.';
 
 use strict;
 use CGI qw<:standard -newstyle_urls>;
 use CGI::Carp qw<fatalsToBrowser carpout>; BEGIN { carpout(\*STDOUT) }
-use XMLTV qw<best_name>;
+use XMLTV qw<best_name read_data write_data>;
 use Fcntl ':flock';
 use Date::Manip;
 use File::Copy;
@@ -99,16 +91,21 @@ use Lingua::EN::Numbers::Ordinate;
 ########
 # Configuration
 
-# Maximum number of programmes to display in a single page
+# Maximum number of programmes to display in a single page.
 my $CHUNK_SIZE = 100;
 
-# Input file containing all TV listings
+# Input file containing all TV listings.
 my $LISTINGS = './tv.xml'; # path needed for XML::Simple strangeness
 
-# Output file where programme numbers to watch will be placed
-my $TOWATCH = 'towatch';
+# Scratch file for storage between requests (this should really be
+# done with form data or cookies).
+#
+my $TOWATCH = 'towatch.tmp';
 
-# Input file containing preferences (killfiled programmes, etc)
+# Final output file
+my $OUTPUT = 'towatch.xml';
+
+# Input file containing preferences (killfiled programmes, etc).
 my $PREFS_FILE = 'tvprefs';
 
 # Preferred languages - if information is available in several
@@ -139,8 +136,9 @@ sub print_date_for($;$);
 sub clumpidx_to_english($);
 sub download_xml();
 
-# Keep the taint checking happy (the Cwd module runs pwd(1))
-$ENV{PATH} = '/bin:/usr/bin';
+# Load data into globals $data and @programmes.
+my $data = read_data($LISTINGS);
+my @programmes = @{$data->[3]};
 
 if (url_param('download')) {
     download_xml();
@@ -172,9 +170,6 @@ print <<END
   </head>
 END
 ;
-
-my $data = read_data($LISTINGS);
-my @programmes = @{$data->[3]};
 
 # %wanted
 #
@@ -233,7 +228,7 @@ elsif (not defined $skip and not defined $next) {
     if (-e $TOWATCH) {
 	if (-M _ < -M $LISTINGS) {
 	    print p <<END
-The output file $TOWATCH already exists and is newer than $LISTINGS - 
+The temporary file $TOWATCH already exists and is newer than $LISTINGS - 
 refusing to overwrite it.
 END
   ;
@@ -244,12 +239,12 @@ END
 	    unlink $TOWATCH or die "cannot unlink $TOWATCH: $!";
 	}
     }
- 
-    # Should really have file locking here
+
+    # Should really have file locking here.
     open(TOWATCH, ">>$TOWATCH") 
       or die "cannot append to $TOWATCH: $!";
     print TOWATCH <<END
-# 'towatch' file
+# 'towatch.tmp' file
 #
 # This file was created by $0 and contains the numbers of programmes
 # that the user has chosen to watch, either by giving a preference of
@@ -258,9 +253,8 @@ END
 #
 # The format is 'filename/number' on each line.
 #
-# Process this file with pick_process to get the actual XML listings.
-# Note that if the XML file referenced changes, then so will the
-# results from processing this file.
+# When the user has finished picking programmes, $0 should reread this
+# file and make an XML file to download.
 #
 
 END
@@ -363,9 +357,10 @@ END
 
     my $url = url(-relative => 1);
     if ($next >= @programmes) {
+	write_output();
 	print p <<END
 Finished choosing listings.  You can now download
-<a href="$url?download=1">an XML file of the programmes to watch</a>.
+<a href="$OUTPUT">an XML file of the programmes to watch</a>.
 END
   ;
     }
@@ -440,18 +435,8 @@ sub display_form($) {
 	print "<br><em>$sub_title</em>\n" if defined $sub_title;
 	print "<p>\n$desc\n</p>\n" if defined $desc;
 	if ($h{credits}) {
-	    # Gather up the data structure from XML::Simple into a
-	    # single hash mapping job to person.
-	    #
-	    my %credits;
-	    foreach my $h (@{$h{credits}}) {
-		foreach my $job (sort keys %$h) {
-		    foreach my $person (@{$h->{$job}}) {
-			push @{$credits{$job}}, $person;
-		    }
-		}
-	    }
-	    
+	    # XMLTV.pm returns a hash mapping job to list of people.
+	    local *credits = $h{credits}; use vars '%credits';
 	    print "<table class='credits'>\n";
 	    foreach (sort keys %credits) {
 		print '<tr>';
@@ -579,16 +564,14 @@ sub clumpidx_to_english($) {
 }
 
 
-# download_xml()
+# write_output()
 #
 # After all the programmes have been picked, convert the 'towatch'
 # file (which is really just a list of numbers) to an XML document for
 # the user to download.
 #
-sub download_xml() {
-    die 'usage: download_xml()' if @_;
-    print header({ expires => 'now',
-		   'Content-Type' => 'text/xml; charset=UTF-8' });
+sub write_output() {
+    die 'usage: write_output()' if @_;
 
     # Find programme numbers to keep
     my %nums;
@@ -603,8 +586,12 @@ sub download_xml() {
 
     # We read the original XML file and weed out <programme> elements.
     my @new_programmes;
-    for (my $i = 0; $i < @$programmes; $i++) {
-	push @new_programmes, $programmes->[$i] if $nums{$i};
+    for (my $i = 0; $i < @programmes; $i++) {
+	push @new_programmes, $programmes[$i] if $nums{$i};
     }
-    write_data($data->[0], $data->[1], $data->[2], \@new_programmes);
+
+    my $output = new IO::File(">$OUTPUT");
+    die "cannot write to $OUTPUT" if not $output;
+    XMLTV::write_data([ $data->[0], $data->[1], $data->[2], \@new_programmes ],
+		     OUTPUT => $output);
 }
