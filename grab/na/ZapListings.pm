@@ -663,6 +663,7 @@ sub scrapehtml($$$)
 			  Colonial
 			  Cree
 			  Dene
+			  Diwlai
 			  English
 			  Farsi
 			  French
