@@ -1,0 +1,250 @@
+#!/usr/bin/perl -w
+#
+# tv_grab_na_icon
+#
+# This script goes to the zap2it web site and downloads icon links or images
+# to the share/icons directory.
+#
+# (C)2001 - Robert Eden, free to use under the GNU License.
+#
+#  Robert Eden - reden@cpan.org
+#  	
+#     See cvs logs entries for module history
+#
+
+=pod
+
+=head1 NAME
+
+tv_grab_na_icons - Grab channel icon images or links from zap2it.com
+
+=head1 SYNOPSIS
+
+tv_grab_na_icons [--links] 
+
+=head1 DESCRIPTIONS
+
+This script goes to the zap2it web site and downloads icon
+links or images to the share/icons directory.
+
+It was designed to allow icons to be added by tv_grab_na_dd,
+but there is no reason it can't be used for other purposes.
+
+To minimize the load on zap2it.com, downloaded icons are recommended.
+Links are available for those applications that need it.
+
+Also to reduce the load on zap2it.com, this script should be run
+sparingly. There is really no need to run it frequently, new networks
+or icons don't show up that often.  To emphasize that point, there is
+no --configure mode, the questions need to be answered each run.
+
+=head1 OPTIONS
+
+B<--links> store imge URLs in *.url files instead of downloading images.
+
+
+=head1 SEE ALSO
+
+L<xmltv(5)>.
+
+=head1 AUTHOR
+
+Robert Eden
+
+=cut 
+
+use strict;
+use Getopt::Long;
+use Data::Dumper;
+use File::Basename;
+use HTML::TableExtract;
+use WWW::Mechanize 1.02;
+
+use XMLTV::Ask;
+use XMLTV::Version '$Id$ ';
+use XMLTV::Usage <<END
+tv_grab_na_icons [--images]
+
+END
+;
+
+select STDERR; $|=1;
+select STDOUT; $|=1;
+
+my $opt_help=0;
+my $opt_debug=0;
+my $opt_links=0;
+my $opt_share="";
+my $SHARE_DIR = '/share';
+
+GetOptions(
+	   'help'          => \$opt_help,
+	   'debug'         => \$opt_debug,
+	   'links'         => \$opt_links,
+	   'share=s'       => \$opt_share,
+	  )
+  or usage(0);
+
+usage(1) if $opt_help;
+
+die "Share directory '$SHARE_DIR' not found\n" unless -d $SHARE_DIR;
+mkdir "$SHARE_DIR/icons" unless -d "$SHARE_DIR/icons";
+
+#
+# create our agent
+#
+my $a = WWW::Mechanize->new(agent => "$0/0.1");
+
+$a->get('http://www.zap2it.com/index');
+check_page($a);
+
+#
+# select zip
+#
+while (1)
+{
+    die "Can't find zipcode form\n" unless find_form($a,"zipcode");
+
+    my $zip=ask("\nPostal Code:")|75104;
+    $a->field("zipcode",$zip);
+    $a->submit;
+    check_page($a);
+    last if grep(/No Provider Selected/,$a->content);
+    print "  Invalid Postal Code, try again\n";
+}
+
+#
+# select lineup
+#
+{
+    die "Can't find provider form\n" unless find_form($a,"provider");
+
+    my $field=$a->current_form->find_input("provider");
+    my @names=$field->value_names;
+    my @ids  =$field->possible_values;
+    map {s/\xa0//g} @names;  # remove non-breaking spaces
+
+    my $name=$names[0];    
+    $name=askQuestion("\nLineup?",$name,@names);
+
+    foreach (0..$#names)
+    {
+        next unless $names[$_] eq $name;
+        $a->field("provider",$ids[$_]);
+        last;
+    }
+    $a->click;
+    check_page($a);
+}
+    
+#
+# select all channels
+#
+    die "Can't find rowdisplay form\n" unless find_form($a,"rowdisplay");
+    $a->field("rowdisplay",0);
+    $a->click;
+    check_page($a);
+
+#
+# set up handlers to extract the text and images from our table;
+# 
+my $image;
+my %icons;
+my $p = HTML::Parser->new;
+$p->report_tags(["img"]);
+$p->handler(start =>  sub { $image=$_[0]->{src}          },'attr');
+$p->handler(text  =>  sub { $_=$_[0];
+                            s/\s//g;
+                            return unless length($_);
+                            return unless defined $image;
+                            return if     /--if/;
+                            return if     /^\d+$/;
+                            return if     $image =~ /ads.zap2it/;
+                            $icons{$_}=$image;
+                            $image=undef;
+                                                         },'text');
+
+
+#
+# Now parse the page to get the right column 
+# can't use column headers, there are none!
+#
+my $te = new HTML::TableExtract( depth => 2, count => 1 , keep_html => 1);
+$te->parse($a->content);
+
+#
+# step through results, run the column through the parser above
+#
+for my $ts ($te->table_states)
+{
+   for my $row ($ts->rows)
+   {
+      $p->parse($row->[0]);
+   }
+}
+
+#
+# print results
+#
+my $base=$a->base;
+foreach (sort keys %icons)
+{
+    my $image=URI->new_abs($icons{$_},$base);
+    if ($opt_links)
+    {
+        my $file="$SHARE_DIR/icons/$_.url";
+        open(FILE,">$file") || die "Can't write to $file\n";
+            print FILE $image."\n";
+            close FILE;
+        printf "Stored %10s in %20s\n",$_,$file;
+    }
+    else
+    {
+        my $type=(fileparse($image,'\..*'))[2];
+        my $file="$SHARE_DIR/icons/$_$type";
+        printf "Getting %10s as %20s: %s\n",$_,$file,$a->mirror($image,$file)->message;
+    }
+}
+    
+exit;
+
+#print Dumper($a);
+#print "Link: ", Dumper($_)  foreach $a->links();
+#print "Form: ", $_->dump  foreach $a->forms();
+#print $a->current_form->dump;
+
+#
+# check status, write out html file
+#
+sub check_page {
+    my $res=shift || die "No Mechanize specified\n";
+    if ($opt_debug)
+    {
+        open  FILE,">out.htm" || die "Can't open out.htm file\n";
+        print FILE $res->content;
+        close FILE;
+
+        open  FILE,">out.txt" || die "Can't open out.txt file\n";
+        print FILE Dumper($res);
+        close FILE;
+    }
+    die "page error ",$res->status_line unless $res->success;
+} # check_page
+
+#
+# subroutine to search for form w/o knowing it's name
+#
+sub find_form
+{
+    my $mech=shift || die "find_form: mechanize object not specified";
+    my $name=shift || die "find_form: field name not specified";
+    my @forms=$mech->forms;
+    my $fn=0;
+    foreach (0..$#forms)
+    {
+        $fn=$_ if $forms[$_]->find_input($name);
+    }
+    $mech->form_number($fn+1) if $fn;
+    return $fn;
+} #find_form
+

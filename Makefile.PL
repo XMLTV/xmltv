@@ -245,6 +245,16 @@ my @opt_components
        exes => [ 'grab/na_dd/tv_grab_na_dd' ],
        prereqs => { 'SOAP::Lite' => 0 } },
 
+     { name     => 'tv_grab_na_icons',
+       blurb    => 'Grabber for North American Channel Icons',
+       exes     => [ 'grab/na_icons/tv_grab_na_icons' ],
+       pl_files => { 'grab/na_icons/tv_grab_na_icons.PL' => 'grab/na_icons/tv_grab_na_icons' },
+       to_clean => [ 'grab/na_icons/tv_grab_na_icons' ],
+       prereqs  => { 'HTML::TableExtract' => 0,
+                    'WWW::Mechanize' => 1.02 },
+       grab_need_share => [ 'na_icons' ],
+     },
+
      { name => 'tv_grab_nz',
        blurb => 'Grabber for New Zealand',
        exes => [ 'grab/nz/tv_grab_nz' ],
