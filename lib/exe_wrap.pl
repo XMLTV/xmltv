@@ -15,6 +15,8 @@
 # Robert Eden rmeden@yahoo.com
 #
 
+use File::Basename;
+
 #
 # get/check time zone
 #
