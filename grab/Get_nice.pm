@@ -2,6 +2,11 @@
 # requests.  We really should be using LWP::RobotUI but this is better
 # than nothing.
 #
+# If you're sure your app doesn't need a random delay (because it is
+# fetching from a site designed for that purpose) then set
+# $XMLTV::Get_nice::Delay to zero, or a value in seconds.  This is the
+# maximum delay - on average the sleep will be half that.
+#
 # get_nice() is the function to call, however
 # XMLTV::Get_nice::get_nice_aux() is the one to cache with
 # XMLTV::Memoize or whatever.
@@ -11,6 +16,7 @@ package XMLTV::Get_nice;
 use base 'Exporter';
 our @EXPORT = qw(get_nice);
 use LWP::Simple;
+our $Delay = 5; # in seconds
 
 sub get_nice( $ ) {
     # This is to ensure scalar context, to work around weirdnesses
@@ -33,7 +39,7 @@ sub get_nice_aux( $ ) {
     # Be nice to the server.  Technically we don't need to do this
     # after the very last fetch, but sleeping every time is simpler.
     #
-    sleep(rand 5);
+    sleep(rand $Delay);
 
     return $r;
 }
