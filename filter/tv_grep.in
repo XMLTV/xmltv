@@ -200,127 +200,141 @@ sub whole_programme_regexp( $ );
 
 my $ignore_case = 0; # global flag
 
-# Data types we are able to query on.  This maps the name of a handler
-# to a flag saying whether an extra argument is required, and a sub
-# which takes the key, the multiplicity specifier of the data type,
-# maybe an extra argument (depending on the aforementioned flag), and
-# returns a sub which matches a programme.
+my %key_type = %{XMLTV::list_programme_keys()};
+
+# Given the name of a key (found in programme hashes), return a pair
+# of 
+# 
+#   extra argument type needed to filter on this key:
+#     undef: no extra argument required
+#     'regexp': extra argument should be regexp
+#     'empty': extra argument must be the empty string, and is ignored
 #
-
-# First define this pair for the various 'with-lang' types.
-my $wl = [ 1, sub { my ($key, $mult, $regexp) = @_;
-		    if ($mult eq '?') {
-			return sub {
-			    return 0 if not exists $_->{$key};
-			    return 1 if $regexp eq '';
-			    for ($_->{$key}->[0]) {
-				return 0 if not defined;
-				if ($ignore_case) {
-				    return /$regexp/i;
-				}
-				else {
-				    return /$regexp/;
-				}
-			    }
-			};
-		    }
-		    elsif ($mult eq '1') {
-			return sub {
-			    die if not exists $_->{$key};
-			    return 1 if $regexp eq '';
-			    for ($_->{$key}->[0]) {
-				return 0 if not defined;
-				if ($ignore_case) {
-				    return /$regexp/i;
-				}
-				else {
-				    return /$regexp/;
-				}
-			    }
-			};
-		    }
-		    elsif ($mult eq '*') {
-			return sub {
-			    return 0 if not exists $_->{$key};
-			    foreach (map { $_->[0] } @{$_->{$key}}) {
-				return 1 if $regexp eq '';
-				next if not defined;
-				return 1 if ($ignore_case ? /$regexp/i : /$regexp/);
-			    }
-			    return 0;
-			};
-		    }
-		    elsif ($mult eq '+') {
-			return sub {
-			    die if not @{$_->{$key}};
-			    foreach (map { $_->[0] } @{$_->{$key}}) {
-				return 1 if $regexp eq '';
-				next if not defined;
-				return 1 if ($ignore_case ? /$regexp/i : /$regexp/);
-			    }
-			    return 0;
-			};
-		    }
-		    else { die }
-		} ];
-
-my %queryable =
-  (presence => [ 0, sub { my ($key, $mult) = @_;
-			  die "bad multiplicity $mult for 'presence'"
-			    if $mult ne '?';
-			  return sub { exists $_->{$key} }; } ],
-
-   scalar => [ 1, sub { my ($key, $mult, $regexp) = @_;
-			if ($mult eq '?') {
-			    return sub {
-				return 0 if not exists $_->{$key};
-				if ($ignore_case) {
-				    return $_->{$key} =~ /$regexp/i;
-				}
-				else {
-				    return $_->{$key} =~ /$regexp/;
-				}
-			    };
-			}
-			elsif ($mult eq '1') {
-			    return sub {
-				die if not exists $_->{$key};
-				if ($ignore_case) {
-				    return $_->{$key} =~ /$regexp/i;
-				}
-				else {
-				    return $_->{$key} =~ /$regexp/;
-				}
-			    };
-			}
-			elsif ($mult eq '*') {
-			    return sub {
-				return 0 if not exists $_->{$key};
-				foreach (@{$_->{$key}}) {
-				    return 1 if ($ignore_case ? /$regexp/i : /$regexp/);
-				}
-				return 0;
-			    };
-			}
-			elsif ($mult eq '+') {
-			    return sub {
-				die if not @{$_->{$key}};
-				foreach (@{$_->{$key}}) {
-				    return 1 if ($ignore_case ? /$regexp/i : /$regexp/);
-				}
-				return 0;
-			    };
-			}
-			else { die } } ],
-
-   'with-lang'    => $wl,
-   'with-lang/'   => $wl,
-   'with-lang/e'  => $wl,
-   'with-lang/m'  => $wl,
-   'with-lang/em' => $wl,
-   'with-lang/me' => $wl,
-  );
-   
+#   subroutine which may take an argument (depending on whether
+#   argument type is 'regexp'), and matches a programme hash in $_.
+#
+sub get_matcher( $ ) {
+    my $key = shift;
+    my ($handler, $mult) = @{$key_type{$key}};
+    if ($handler eq 'presence') {
+	die "bad multiplicity $mult for 'presence'"
+	  if $mult ne '?';
+	return [ undef, sub { exists $_->{$key} } ];
+    }
+    elsif ($handler eq 'scalar') {
+	if ($mult eq '?') {
+	    return [ 'regexp', sub {
+			 my $regexp = shift;
+			 return 0 if not exists $_->{$key};
+			 if ($ignore_case) {
+			     return $_->{$key} =~ /$regexp/i;
+			 }
+			 else {
+			     return $_->{$key} =~ /$regexp/;
+			 }
+		     } ];
+	}
+	elsif ($mult eq '1') {
+	    return [ 'regexp', sub {
+			 my $regexp = shift;
+			 die if not exists $_->{$key};
+			 if ($ignore_case) {
+			     return $_->{$key} =~ /$regexp/i;
+			 }
+			 else {
+			     return $_->{$key} =~ /$regexp/;
+			 }
+		     } ];
+	}
+	elsif ($mult eq '*') {
+	    return [ 'regexp', sub {
+			 my $regexp = shift;
+			 return 0 if not exists $_->{$key};
+			 foreach (@{$_->{$key}}) {
+			     return 1 if ($ignore_case ? /$regexp/i : /$regexp/);
+			 }
+			 return 0;
+		     } ];
+	}
+	elsif ($mult eq '+') {
+	    return [ 'regexp', sub {
+			 my $regexp = shift;
+			 die if not @{$_->{$key}};
+			 foreach (@{$_->{$key}}) {
+			     return 1 if ($ignore_case ? /$regexp/i : /$regexp/);
+			 }
+			 return 0;
+		     } ];
+	}
+	else { die }
+    }
+    elsif ($handler =~ m!^with-lang(?:/[a-z]*)$!) {
+	if ($mult eq '?') {
+	    return [ 'regexp', sub {
+			 my $regexp = shift;
+			 return 0 if not exists $_->{$key};
+			 return 1 if $regexp eq '';
+			 for ($_->{$key}->[0]) {
+			     return 0 if not defined;
+			     if ($ignore_case) {
+				 return /$regexp/i;
+			     }
+			     else {
+				 return /$regexp/;
+			     }
+			 }
+		     } ];
+	}
+	elsif ($mult eq '1') {
+	    return [ 'regexp', sub {
+			 my $regexp = shift;
+			 die if not exists $_->{$key};
+			 return 1 if $regexp eq '';
+			 for ($_->{$key}->[0]) {
+			     return 0 if not defined;
+			     if ($ignore_case) {
+				 return /$regexp/i;
+			     }
+			     else {
+				 return /$regexp/;
+			     }
+			 }
+		     } ];
+	}
+	elsif ($mult eq '*') {
+	    return [ 'regexp', sub {
+			 my $regexp = shift;
+			 return 0 if not exists $_->{$key};
+			 foreach (map { $_->[0] } @{$_->{$key}}) {
+			     return 1 if $regexp eq '';
+			     next if not defined;
+			     return 1 if ($ignore_case ? /$regexp/i : /$regexp/);
+			 }
+			 return 0;
+		     } ];
+	}
+	elsif ($mult eq '+') {
+	    return [ 'regexp', sub {
+			 my $regexp = shift;
+			 die if not @{$_->{$key}};
+			 foreach (map { $_->[0] } @{$_->{$key}}) {
+			     return 1 if $regexp eq '';
+			     next if not defined;
+			     return 1 if ($ignore_case ? /$regexp/i : /$regexp/);
+			 }
+			 return 0;
+		     } ];
+	} 
+	else { die }
+    }
+    else {
+	# Cannot query on this except for presence.  But empty string
+	# argument for future expansion.
+	#
+	return [ 'empty', sub { exists $_->{$key} } ];
+    }
+}
+  
 
 # Tests to apply.  We store them as a disjunction of conjunctions, for
 # example (a && b && c) || (d && e) || (f && g).
@@ -349,7 +363,6 @@ my $oa = new OptionAbbrev(qw(--ignore-case --help --output
 # Add the autogenerated options.  We add even those which aren't
 # supported just so we can annoy the user with an error message.
 #
-my %key_type = %{XMLTV::list_programme_keys()};
 $oa->add(map { "--$_" } keys %key_type);
 
 my ($output, $regexp, $ended_options, @filenames);
@@ -492,35 +505,22 @@ while (@ARGV) {
 	    # Must be one of the autogenerated ones like --title.
 	    $lo =~ /^--(.+)/ or die "matched long option $lo, no --";
 	    my $key = $1;
-	    my $kt = $key_type{$key};
-	    my ($h_name, $mult) = @$kt;
+	    my ($arg_type, $matcher) = get_matcher($key);
 	    my $s;
-	    my $queryable = $queryable{$h_name};
-	    if ($queryable) {
-		my ($need_arg, $make_sub) = @$queryable;
-		if ($need_arg) {
-		    my $arg = shift @ARGV;
-		    die "$lo requires an argument\n" if not defined $arg;
-		    $s = $make_sub->($key, $mult, $arg);
-		}
-		else {
-		    $s = $make_sub->($key, $mult);
-		}
+	    if (not defined $arg_type) {
+		$s = $matcher;
 	    }
-	    else {
-		# We don't have special code to work with this, but we
-		# allow querying on presence.  You do have to give an
-		# empty string 'regexp' to emphasize that the element
-		# has content which is being ignored.
-		#
-		my $a = shift @ARGV;
-		if (not defined $a) {
-		    die "$lo requires an extra empty-string argument, ie $lo ''\n";
-		}
-		if ($a ne '') {
-		    die "querying the content of $lo is not supported, only $lo '' will work\n";
-		}
-		$s = sub { exists $_->{$key} };
+	    elsif ($arg_type eq 'regexp') {
+		my $arg = shift @ARGV;
+		die "$lo requires an argument, a Perl regular expression\n"
+		  if not defined $arg;
+		$s = sub { $matcher->($arg) };
+	    }
+	    elsif ($arg_type eq 'empty') {
+		my $arg = shift @ARGV;
+		die "$lo requires an argument, which currently must be the empty string\n"
+		  if $arg ne '';
+		$s = $matcher;
 	    }
 	    push @curr_prog_conj, $s;
 	    next;
@@ -670,22 +670,18 @@ END
 
     # FIXME commonize this with pod generation.
     foreach (sort keys %key_type) {
-	my $kt = $key_type{$_};
-	my ($h_name, $mult) = @$kt;
-	my $queryable = $queryable{$h_name};
-	if ($queryable) {
-	    my $need_arg = $queryable->[0];
-	    if ($need_arg) {
-		$msg .= "    --$_ REGEXP\n";
-	    }
-	    else {
-		$msg .= "    --$_\n";
-	    }
+	my $arg_type = get_matcher($_)->[0];
+	if (not defined $arg_type) {
+	    $msg .= "    --$_\n";
 	}
-	else {
+	elsif ($arg_type eq 'regexp') {
+	    $msg .= "    --$_ REGEXP\n";
+	}
+	elsif ($arg_type eq 'empty') {
 	    # Can query on this only for presence.
 	    $msg .= "    --$_ ''\n";
 	}
+	else { die }
     }
 
     $msg .= <<END
