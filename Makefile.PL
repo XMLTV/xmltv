@@ -4,7 +4,12 @@ use ExtUtils::MakeMaker;
 use Config;
 use File::Basename ();
 use File::Find;
-use Getopt::Long qw(:config pass_through);
+
+# Don't use ':config pass_through' because that requires Getopt::Long
+# 2.24 or later, and we don't have a clean way to require that.
+#
+use Getopt::Long; Getopt::Long::Configure('pass_through');
+
 use strict;
 
 sub test_module( $$ );
