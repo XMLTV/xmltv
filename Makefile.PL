@@ -89,11 +89,12 @@ my %pm
 # Modules required to install.
 my %prereqs
   = (
-     'LWP' => 5.65,
-     'XML::Twig' => 3.09,
+     'LWP'         => 5.65,
+     'XML::Twig'   => 3.09,
      'Date::Manip' => 5.42,
      'XML::Writer' => 0,
-     'Memoize' => 0,
+     'Memoize'     => 0,
+     'Storable'    => 2.04,
     );
 
 # Files which are run to generate source code.
