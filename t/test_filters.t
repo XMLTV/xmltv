@@ -14,7 +14,7 @@ use Getopt::Long;
 use File::Copy;
 use XMLTV::Usage <<END
 $0: test suite for filter programs
-usage: $0 [--tests-dir DIR] [--cmds-dir DIR] [--verbose] [--full]
+usage: $0 [--tests-dir DIR] [--cmds-dir DIR] [--verbose] [--full] [cmd_regexp...]
 END
 ;
 
@@ -63,6 +63,7 @@ my @cmds
      [ [ 'tv_sort'                                               ], 1 ],
      [ [ 'tv_sort', '--by-channel'                               ], 1 ],
      [ [ 'tv_to_latex'                                           ], 0 ],
+     [ [ 'tv_to_text',                                           ], 0 ],
      [ [ 'tv_remove_some_overlapping'                            ], 1 ],
      [ [ 'tv_grep', '--on-after', '200302161330 UTC'             ], 1 ],
      [ [ 'tv_grep', '--on-before', '200302161330 UTC'            ], 1 ],
@@ -88,7 +89,6 @@ if ($full) {
        [ [ 'tv_grep', '--category', 'g', '--or', '--title', 'h'    ], 1 ],
        [ [ 'tv_grep', '-i', '--category', 'i', '--title', 'j'      ], 1 ],
        [ [ 'tv_grep', '-i', '--category', 'i', '--title', 'h'      ], 1 ],
-       [ [ 'tv_to_text'                                            ], 0 ],
       );
 }
 
@@ -225,6 +225,15 @@ if ($full) {
 
     # Then all the single files.
     add_test([ $_ ]) foreach @inputs;
+}
+else {
+    # Check overlapping warning from tv_sort.  This ends up giving the
+    # input file to every command, not just tv_sort; oh well.
+    #
+    # Not needed in the case when $full is true because we test every
+    # individual file then.
+    #
+    add_test([ 'overlap.xml' ]);
 }
 
 # Any other environment needed (relative to $tests_dir)
