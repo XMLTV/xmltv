@@ -17,7 +17,7 @@ tv_grab_de_tvtoday [--config-file FILE] [--output FILE]
                    [--days N] [--offset N]
                    [--quiet] [--slow] [--nosqueezeout]
 
-tv_grab_de_tvtoday --list-channels
+tv_grab_de_tvtoday --list-channels [--icons]
 
 =head1 DESCRIPTION
 
@@ -62,6 +62,10 @@ it's corresponding field.
 B<--list-channels> write output giving <channel> elements for every
 channel available (ignoring the config file), but no programmes.
 
+B<--icons> get the URL for channel-logos together with the channel-list.
+Mind that this takes a long time, since a webpage has to be requested for
+every channel.
+
 B<--help> print a help message and exit.
 
 =head1 SEE ALSO
@@ -101,7 +105,7 @@ To configure: $0 --configure [--config-file FILE]
 To grab data: $0 [--config-file FILE] [--output FILE] 
                  [--days N] [--offset N]
                  [--quiet] [--slow] [--nosqueezeout]
-Channel List: $0 --list-channels
+Channel List: $0 --list-channels [--icons]
 END
   ;
 
@@ -123,6 +127,7 @@ sub grab_data($$$);
 sub squeeze_out_desc($$);
 sub refine_category_attr($$);
 sub get_channels();
+sub get_icons();
 sub channel_id($);
 sub split_up_names($$);
 sub parse_date_data($);
@@ -166,6 +171,7 @@ my $opt_quiet = 0;
 my $opt_slow = 0;
 my $opt_nosqueeze = 0;
 my $opt_list_channels;
+my $opt_icons = 0;
 my $opt_help;
 my $opt_share;
 
@@ -179,6 +185,7 @@ GetOptions(
     'slow'           => \$opt_slow,
     'nosqueezeout'   => \$opt_nosqueeze,
     'list-channels'  => \$opt_list_channels,
+    'icons'          => \$opt_icons,
     'help'           => \$opt_help,
     'share=s'        => \$opt_share,
 ) or usage(0);
@@ -221,6 +228,11 @@ else { die("never heard of XMLTV mode $mode, sorry :-(") }
 
 #-- hey, we can't live without channel data, so let's get that now!
 my %channels = get_channels();
+
+#-- if wanted, get the channel logos (only in list-channels-mode done here!)
+my %icons;
+%icons = get_icons() if $opt_icons && $opt_list_channels;
+
 
 # share/ directory for storing channel mapping files.  This next line
 # is altered by processing through tv_grab_de_tvtoday.PL.  But we can
@@ -331,8 +343,11 @@ $writer->start($head);
 
 if ($mode eq 'list-channels') {
     foreach (keys %channels) {
-	$writer->write_channel({'id'=>channel_id($_),
-				'display-name'=>[[$channels{$_}, $lang]]});
+        my %channel = ('id'           => channel_id($_), 
+                       'display-name' => [[$channels{$_}, $lang]]); 
+        $channel{'icon'} = [{'src' => "http://www.tvtoday.de" . $icons{$_}}] 
+          if(defined($icons{$_}));
+        $writer->write_channel(\%channel);
     }
 
     $writer->end();
@@ -346,14 +361,10 @@ die unless ($mode eq 'grab');
 die "No channels specified, run me with --configure flag\n" unless(scalar(@requests));
 
 
+#--  We need to wait with writing the channels, therefore buffer the program-infos
+my @writebuffer;
 
-#-- write out <channel> tags
-foreach(@requests) {
-    $writer->write_channel({'id'=>channel_id($_),
-			    'display-name'=>[[$channels{$_}, $lang]]});
-}
-
-#-- write out <programme> tags
+#-- get <programme> tags
 my $numdays = $opt_days + $opt_offset - 1;
 my $bar = new Term::ProgressBar('grabbing', scalar(@requests) * $opt_days)
   if Have_bar && not $opt_quiet;
@@ -365,6 +376,17 @@ foreach my $channel (@requests) {
     }
 }
 
+#-- write out <channel> tags
+foreach(@requests) {
+    my %channel = ('id'           => channel_id($_), 
+                   'display-name' => [[$channels{$_}, $lang]]); 
+    $channel{'icon'} = [{'src' => "http://www.tvtoday.de" . $icons{$_}}] 
+      if(defined($icons{$_}));
+    $writer->write_channel(\%channel);
+}
+
+#-- write out <program> tags
+$writer->write_programme($_) foreach(@writebuffer);
 
 #-- hey, looks like we've finished ...
 $writer->end();
@@ -466,7 +488,9 @@ sub parse_page($$) {
 		
 	@el = $el[0]->content_list();
 
-	$_ = shift @el; #-- in this column there's only the logo of the tv station, ignore that
+	$_ = shift @el; #-- in this column there's the logo of the tv station
+	$icons{$grab->{'channel'}} = $_->look_down('_tag' => 'img')->attr('src')
+	  unless(exists($icons{$grab->{'channel'}}));
 
 	$_ = shift @el; #-- there we should have the time when our show begins ...
 	die "unable to extract time-information from html code, content:\n", $_->as_text()
@@ -547,7 +571,7 @@ sub parse_page($$) {
 
 	#-- okay, commit that data now ...
 	$show{channel} = $grab->{channel};
-	$writer->write_programme(\%show);
+	push @writebuffer, \%show; 
 
 	last if($grab->{"lasttime"} >= 86400 && !$grab->{"lastday"});
     }
@@ -1010,10 +1034,36 @@ sub refine_credits($) {
 
 
 
+#-- get channel logos
+sub get_icons() {
+    my %icons;
+    my $url="http://www.tvtoday.de/tv/programm/programm.php?ztag=0&sparte=alle&uhrzeit=Ax00&sender=";
+    my $chan;
+    my $tag;
+    my $addr;
+
+    foreach (keys %channels) {
+        my $tb = new HTML::TreeBuilder();
+        $tb->parse(get_page($url.$_));
+        $tag = $tb->look_down('_tag' => 'img',
+        sub {
+            return ($_[0]->attr('src') =~ m/^\/tv\/programm\/bilder\/senderlogos\//);
+        });
+        next unless(ref($tag) eq "HTML::Element");
+
+        $icons{$_} = $tag->attr('src');
+        $tb->delete;
+    }
+
+    return %icons;
+}
+
+
+
 #-- get channel listing
 sub get_channels() {
     my %channels;
-    my $url="http://www.tvtoday.de/tv/programm/programm.php?ztag=0&sparte=alle&uhrzeit=Ax00&sender=ZDF";
+    my $url="http://www.tvtoday.de/tv/programm/programm.php?ztag=0&sparte=alle&uhrzeit=Ax00&sender=alle";
 
     my $tb=new HTML::TreeBuilder();
     $tb->parse(get_page($url));
