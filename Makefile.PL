@@ -82,6 +82,7 @@ my %pm
      'grab/Grab_XML.pm'           => '$(INST_LIBDIR)/XMLTV/Grab_XML.pm',
      'grab/Europe_TZ.pm'          => '$(INST_LIBDIR)/XMLTV/Europe_TZ.pm',
      'grab/Config_file.pm'        => '$(INST_LIBDIR)/XMLTV/Config_file.pm',
+     'grab/Get_nice.pm'           => '$(INST_LIBDIR)/XMLTV/Get_nice.pm',
     );
 
 # Modules required to install.
@@ -707,7 +708,7 @@ sub MY::makefile {
 sub MY::manifypods {
     package MY;
     for (my $inherited = shift->SUPER::manifypods(@_)) {
-	foreach my $s (qw(Grab_XML Europe_TZ Config_file)) {
+	foreach my $s (qw(Grab_XML Europe_TZ Config_file Get_nice)) {
 	    s!\$\(INST_MAN3DIR\)/grab::$s[.]\$\(MAN3EXT\)!"\$(INST_MAN3DIR)/XMLTV::$s.\$(MAN3EXT)"!;
 	}
 	s!\$\(INST_MAN3DIR\)/Summarize.\$\(MAN3EXT\)!"\$(INST_MAN3DIR)/XMLTV::Summarize.\$(MAN3EXT)"!;
