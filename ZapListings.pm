@@ -211,7 +211,7 @@ sub getChannelList($$$$)
     $html=~s/<TR/<tr/og;
     $html=~s/<\/TR/<\/tr/og;
 
-    for my $row (split(qw/<tr/, $html)) {
+    for my $row (split(/<tr/, $html)) {
 	# nuke everything leading up to first >
 	# which amounts to html attributes of <tr used in split
 	$row=~s/^[^>]*>//so;
@@ -676,7 +676,7 @@ sub scrapehtml($$$)
     $html=~s/<\/TR/<\/tr/og;
 
     my @programs;
-    for my $row (split(qw/<tr/, $html)) {
+    for my $row (split(/<tr/, $html)) {
 	# nuke everything leading up to first >
 	# which amounts to html attributes of <tr used in split
 	$row=~s/^[^>]*>//so;
@@ -805,12 +805,8 @@ sub scrapehtml($$$)
 		elsif ( $prog->{start_hour} > 18 && $posted_start_hour > $prog->{end_hour} ) {
 		    $self->setValue(\$prog, "end_hour", $prog->{end_hour}+24);
 		}
-		# prog started in pm and ended at 12 (assume am)
-		elsif ( $pm && $prog->{end_hour} == 12 ) {
-		    $self->setValue(\$prog, "end_hour", $prog->{end_hour}+12);
-		}
-		# if started in pm, then assume end hour needs adjustment to 24 hr clock
-		elsif ( $pm ) {
+		# if started in pm and end was not 12, then adjustment to 24 hr clock
+		elsif ( $pm && $prog->{end_hour} != 12 ) {
 		    $self->setValue(\$prog, "end_hour", $prog->{end_hour}+12);
 		}
 	    }
@@ -1220,7 +1216,7 @@ sub readSchedule($$$$$)
 	    if ( ! -f $file ) {
 		print STDERR "cache enabled, writing $file..\n";
 		if ( ! -d "urldata/$station" ) {
-		    mkdir("urldata/$station") || warn "failed to create dir urldata/$station:$!";
+		    mkdir("urldata/$station", 0775) || warn "failed to create dir urldata/$station:$!";
 		}
 		if ( open(FD, "> $file") ) {
 		    print FD $res->content();
