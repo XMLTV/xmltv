@@ -33,6 +33,7 @@ my @cmds
      [ 'tv_grep', '--category', 'g', '--or', '--title', 'h' ],
      [ 'tv_grep', '-i', '--category', 'i', '--title', 'j' ],
      [ 'tv_sort' ],
+     [ 'tv_sort', '--by-channel' ],
      [ 'tv_to_latex' ],
     );
 
