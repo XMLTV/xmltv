@@ -22,11 +22,24 @@ sub whole_programme_regexp( $ );
 # Tests to apply.  We store them as a disjunction of conjunctions, for
 # example (a && b && c) || (d && e) || (f && g).
 #
-my @conjunctions;
-my @curr_conjunction;
+# We keep tests separately for programmes and channels: but really the
+# channel tests are just extras and not important.  When we add a
+# programme test referring to channels, we add a channel test to go
+# with it so that the list of channels in the output is trimmed.  But
+# remember that the tests primarily are there to filter programmes.
+#
+my (@prog_conjs, @curr_prog_conj);
+my (@chan_conjs, @curr_chan_conj);
 
-my $oa = new OptionAbbrev(qw(--ignore-case --and --or --eval --on-after));
+# Hash mapping regexp -> channel id -> true/undef (see later)
+my %ch_name;
+my @ch_regexps; # regexps to populate %ch_name with
 
+# Prepare an OptionAbbrev object with all the long options we expect
+# to find.
+#
+my $oa = new OptionAbbrev(qw(--ignore-case --and --or --eval
+			     --on-after --channel-id --channel-name));
 my %key_type = %{XMLTV::list_programme_keys()};
 $oa->add(map { "--$_" } keys %key_type);
 
@@ -70,12 +83,17 @@ while (@ARGV) {
 	    #
 	    # Won't be this easy if we ever implement ( and ).
 	    #
-	    if (not @curr_conjunction) {
+	    if (not @curr_prog_conj) {
 		warn "nothing to the left of $arg, should use as EXPR1 $arg EXPR2\n";
 		usage();
 	    }
-	    push @conjunctions, [ @curr_conjunction ]; # make a copy
-	    @curr_conjunction = ();
+	    push @prog_conjs, [ @curr_prog_conj ]; # make a copy
+	    @curr_prog_conj = ();
+
+	    # And the same for the channel predicates (if any).
+	    push @chan_conjs, [ @curr_chan_conj ];
+	    @curr_chan_conj = ();
+
 	    next;
 	}
 
@@ -92,7 +110,7 @@ while (@ARGV) {
 		# Shouldn't happen, I think.
 		die "-e $code failed for some reason";
 	    }
-	    push @curr_conjunction, $pred;
+	    push @curr_prog_conj, $pred;
 	    next;
 	}
 
@@ -103,7 +121,32 @@ while (@ARGV) {
 	    my $pd = ParseDate($date);
 	    die "--on-after $date: invalid date\n"
 	      if not defined $pd;
-	    push @curr_conjunction, sub { on_after($pd) };
+	    push @curr_prog_conj, sub { on_after($pd) };
+	    next;
+	}
+
+	if (defined $lo and $lo eq '--channel-id') {
+	    my $id = shift @ARGV;
+	    die "--channel-id requires an argument, an XMLTV internal channel id\n"
+	      if not defined $id;
+	    push @curr_prog_conj, sub { $_->{channel} eq $id };
+	    push @curr_chan_conj, sub { $_->{id} eq $id };
+	    next;
+	}
+
+	if (defined $lo and $lo eq '--channel-name') {
+	    my $regexp = shift @ARGV;
+	    die "--channel name requires an argument, a Perl regular expression\n"
+	      if not defined $regexp;
+
+	    # The matchers check against a global hash mapping
+	    # channel-name regexps to channel ids to true/undef.  We
+	    # must remember to create this hash later when we've read
+	    # in the channels.
+	    #
+	    push @curr_prog_conj, sub { $ch_name{$regexp}->{$_->{channel}} };
+	    push @curr_chan_conj, sub { $ch_name{$regexp}->{$_->{id}} };
+	    push @ch_regexps, $regexp;
 	    next;
 	}
 
@@ -117,7 +160,7 @@ while (@ARGV) {
 		die "cannot regexp match against $key, too complex\n";
 	    }
 	    elsif ($kt eq 'boolean') {
-		push @curr_conjunction, sub { defined $_->{$key} };
+		push @curr_prog_conj, sub { defined $_->{$key} };
 		next;
 	    }
 
@@ -127,7 +170,7 @@ while (@ARGV) {
 	      if not defined $regexp;
 
 	    if ($kt eq 'scalar') {
-		push @curr_conjunction, sub {
+		push @curr_prog_conj, sub {
 		    for ($_->{$key}) {
 			return 0 if not defined;
 			return $ignore_case ? /$regexp/oi : /$regexp/o;
@@ -136,7 +179,7 @@ while (@ARGV) {
 		next;
 	    }
 	    elsif ($kt eq 'with_lang') {
-		push @curr_conjunction, sub {
+		push @curr_prog_conj, sub {
 		    for ($_->{$key}) {
 			return 0 if not defined;
 			for ($_->[0]) {
@@ -147,7 +190,7 @@ while (@ARGV) {
 		next;
 	    }
 	    elsif ($kt eq 'many') {
-		push @curr_conjunction, sub {
+		push @curr_prog_conj, sub {
 		    for ($_->{$key}) {
 			return 0 if not defined;
 			foreach (@$_) {
@@ -159,7 +202,7 @@ while (@ARGV) {
 		next;
 	    }
 	    elsif ($kt eq 'many_with_lang') {
-		push @curr_conjunction, sub {
+		push @curr_prog_conj, sub {
 		    for ($_->{$key}) {
 			return 0 if not defined;
 			foreach (map { $_->[0] } @$_) {
@@ -183,7 +226,7 @@ while (@ARGV) {
     # haven't got any of the fancy boolean tests.
     #
     if (not defined $regexp
-	and not @conjunctions and not @curr_conjunction) {
+	and not @prog_conjs and not @curr_prog_conj) {
 	$regexp = $arg;
 	next;
     }
@@ -196,39 +239,81 @@ while (@ARGV) {
 	usage();
     }
 }
-push @conjunctions, \@curr_conjunction if @curr_conjunction;
-if (not @conjunctions and not defined $regexp) {
+push @prog_conjs, \@curr_prog_conj if @curr_prog_conj;
+push @chan_conjs, \@curr_chan_conj if @curr_chan_conj;
+if (not @prog_conjs and not defined $regexp) {
     warn "neither boolean tests nor regexp given\n";
     usage();
 }
-elsif (not @conjunctions and defined $regexp) {
-    @conjunctions = ([ sub { whole_programme_regexp($regexp) } ]);
+elsif (not @prog_conjs and defined $regexp) {
+    @prog_conjs = ([ sub { whole_programme_regexp($regexp) } ]);
 }
-elsif (@conjunctions and not defined $regexp) {
+elsif (@prog_conjs and not defined $regexp) {
     # Okay.
 }
-elsif (@conjunctions and defined $regexp) {
+elsif (@prog_conjs and defined $regexp) {
     warn "bad argument $regexp\n";
     usage();
 }
+# No test for @chan_conjs since there is no test which weeds out
+# channels but does not weed out programmes.  (How could there be?)
+#
 
 $filename = '-' if not defined $filename;
 my ($encoding, $credits, $ch, $progs) = @{XMLTV::read_data($filename)};
 
-my @out;
+# Prepare the channel name lookup.
+my %seen_ch_id;
+foreach my $ch_id (keys %$ch) {
+    $seen_ch_id{$ch_id}++ && die "duplicate channel id $ch_id\n";
+    my $ch = $ch->{$ch_id}; die if not defined $ch;
+    my %seen_re;
+    foreach my $re (@ch_regexps) {
+	next if $seen_re{$re}++;
+	my $matched = 0;
+	foreach (map { $_->[0] } @{$ch->{'display-name'}}) {
+	    if ($ignore_case ? /$re/i : /$re/) {
+		$matched = 1;
+		last;
+	    }
+	}
+	if ($matched) {
+	    $ch_name{$re}->{$ch_id}++ && die;
+	}
+    }
+}
+
+# Filter channels.  This has an effect only for the --channel-id and
+# --channel-name predicates; we do not drop channels simply because no
+# programmes remained on them after filtering.
+#
+my %new_ch;
+CH: foreach my $ch_id (keys %$ch) {
+    local $_ = $ch->{$ch_id};
+  CONJ: foreach my $conj (@chan_conjs) {
+	foreach my $test (@$conj) {
+	    # Every test in the conjunction must succeed.
+	    next CONJ if not $test->();
+	}
+	# They all succeeded, the channel should be kept.
+	$new_ch{$ch_id} = $_;
+	next CH;
+    }
+    # All the conjunctions failed, won't write.
+}
+
+# Filter programmes.
+my @new_progs;
 PROG: foreach (@$progs) {
-    CONJ: foreach my $conj (@conjunctions) {
+    CONJ: foreach my $conj (@prog_conjs) {
 	  foreach my $test (@$conj) {
-	      # Every test in the conjunction must succeed.
 	      next CONJ if not $test->();
 	  }
-	  # They all succeeded, write the programme.
-	  push @out, $_;
+	  push @new_progs, $_;
 	  next PROG;
       }
-      # All the conjunctions failed, won't write.
 }
-XMLTV::write_data([$encoding, $credits, $ch, \@out]);
+XMLTV::write_data([$encoding, $credits, \%new_ch, \@new_progs]);
 
 sub usage() {
     my $msg = <<END
@@ -255,6 +340,8 @@ END
     }
 
     $msg .= <<END
+    --channel-name REGEXP
+    --channel-id CHANNEL_ID
     --eval PERL_CODE
     --on-after DATE
     EXPR1 [--and|-and] EXPR2
