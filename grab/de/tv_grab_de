@@ -46,9 +46,9 @@ use strict;
 use Getopt::Long;
 use Date::Manip;
 use LWP::Simple;
-use Compress::Zlib;
 
 use XMLTV;
+use XMLTV::Memoize;
 # Todo: perhaps we should internationalize messages and docs?
 use XMLTV::Usage <<END
 $0: get Germany/Austria television listings in XMLTV format
@@ -76,6 +76,26 @@ BEGIN {
     eval { require Term::ProgressBar };
     $have_bar = not defined $@;
 }
+
+# Use Compress::Zlib if installed, else spawn external gzip.
+use File::Temp;
+sub my_gunzip {
+    my ($fh, $fname) = tempfile();
+    print $fh $_[0] or die "cannot write to $fname: $!";
+    close $fh or die "cannot close $fname: $!";
+    open(GZIP, "gzip -d <$fname |") or die "cannot run gzip: $!";
+    local $/ = undef;
+    my $r = <GZIP>;
+    close GZIP or die "cannot close pipe from gzip: $!";
+    unlink $fname or die "cannot unlink $fname: $!";
+    return $r;
+}
+BEGIN {
+    eval { require Compress::Zlib };
+    if ($@) { *gunzip = \&my_gunzip }
+    else { *gunzip = \*Compress::Zlib::memGunzip }
+}
+
 
 sub nextday( $ );
 
@@ -121,6 +141,9 @@ if (defined $days_left and $days_left > 0) {
     warn "couldn't get all of $opt_days days, only "
       . ($opt_days - $days_left) . "\n";
 }
+elsif (not @to_get) {
+    warn "couldn't get any listings from the site for today or later\n";
+}
 
 my $bar = new Term::ProgressBar('downloading listings', scalar @to_get)
   if $have_bar;
@@ -130,7 +153,7 @@ foreach (@to_get) {
     {
 #	local $Log::TraceMessages::On = 1;
 	t "downloading page: $_";
-	$xml = Compress::Zlib::memGunzip(get($_));
+	$xml = gunzip(get($_));
 	t 'got XML: ' . d $xml;
 	
 	# Fix empty 'length' elements that wrongly appear in the XML.

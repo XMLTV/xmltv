@@ -1,3 +1,4 @@
+#!/usr/bin/perl -w
 use ExtUtils::MakeMaker;
 use Config;
 use File::Basename ();
@@ -24,15 +25,27 @@ use vars '@docs';
 @docs = qw(doc/COPYING doc/QuickStart README);
 
 # Executables to be installed.
-my @exes = qw(grab/de/tv_grab_de
-	   grab/na/tv_grab_na
-	   grab/uk/tv_grab_uk
-	   filter/tv_extractinfo_en
-	   filter/tv_grep
-	   filter/tv_sort
-	   filter/tv_to_latex
-	   filter/tv_cat
-	  );
+my @exes
+  = qw(grab/de/tv_grab_de
+       grab/uk/tv_grab_uk
+       filter/tv_extractinfo_en
+       filter/tv_grep
+       filter/tv_sort
+       filter/tv_to_latex
+       filter/tv_cat
+      );
+
+# Libraries to be installed.
+my %pm
+  = ('lib/XMLTV.pm'               => '$(INST_LIBDIR)/XMLTV.pm',
+     'lib/TZ.pm'                  => '$(INST_LIBDIR)/XMLTV/TZ.pm',
+     'lib/Clumps.pm'              => '$(INST_LIBDIR)/XMLTV/Clumps.pm',
+     'lib/Usage.pm'               => '$(INST_LIBDIR)/XMLTV/Usage.pm',
+     'lib/Ask.pm'                 => '$(INST_LIBDIR)/XMLTV/Ask.pm',
+     'grab/Memoize.pm'            => '$(INST_LIBDIR)/XMLTV/Memoize.pm',
+     'grab/uk/Ananova_Channel.pm' => '$(INST_LIBDIR)/XMLTV/Ananova_Channel.pm',
+     'grab/uk/UK_TZ.pm'           => '$(INST_LIBDIR)/XMLTV/UK_TZ.pm',
+    );
 
 # Modules required to install.
 my %prereqs
@@ -41,10 +54,6 @@ my %prereqs
      XML::DOM => 0,
      Date::Manip => 5.4,
      XML::Writer => 0,
-     XML::Simple => 0,
-     Unicode::String => 0,
-     Compress::Zlib => 0,
-     CGI => 0,
     );
 
 # 'Recommended but not required'.  It isn't currently handled to have
@@ -52,10 +61,12 @@ my %prereqs
 #
 my %recommended
   = (
-     'Lingua::EN::Numbers::Ordinate' => 0,
-     'Lingua::Preferred' => 0,
-     'Memoize' => 0,
-     'Term::ProgressBar' => 0,
+     Lingua::EN::Numbers::Ordinate => 0,
+     Lingua::Preferred => 0,
+     Memoize => 0,
+     Term::ProgressBar => 0,
+     Compress::Zlib => 0,
+     Unicode::String => 0,
     );
 
 # And Log::TraceMessages is 'suggested' but we don't warn about that.
@@ -66,27 +77,85 @@ my %recommended
 #
 do 'lib/Ask.pm' or die 'could not load lib/Ask.pm, aborting';
 
-# tv_check
-my @tv_check_docs = qw(choose/tv_check/README.tv_check
-		       choose/tv_check/tv_check_doc.html
-		       choose/tv_check/tv_check_doc.jpg);
-my @tv_check_exes = ('choose/tv_check/tv_check');
-my %tv_check_prereqs = (Tk => 0, Tk::TableMatrix => 0);
-print <<END
-Tv_check is a graphical front-end to listings data.  You pick the
+my @opt_components
+  = ({ name => 'tv_check',
+       blurb =>
+       'Tv_check is a graphical front-end to listings data.  You pick the
 shows you are interested in, and then tv_check alerts you to
-unexpected extra episodes or schedule changes.
+unexpected extra episodes or schedule changes.',
+       exes => [ 'choose/tv_check/tv_check' ],
+       pm => {},
+       docs => [ qw(choose/tv_check/README.tv_check
+		    choose/tv_check/tv_check_doc.html
+		    choose/tv_check/tv_check_doc.jpg
+		   ) ],
+       prereqs => { Tk => 0,
+		    Tk::TableMatrix => 0,
+		    XML::Simple => 0,
+		  } },
 
-To install tv_check, you require the Tk and Tk::TableMatrix modules.
+     { name => 'tv_pick_cgi',
+       blurb =>
+       "Tv_pick_cgi is a front-end to choose your TV viewing.  It presents all
+programmes in the listings and asks you about each one.  But you can
+killfile programmes by answering 'never', in which case you won't be
+asked again about that show.
 
-END
-  ;
-if (XMLTV::Ask::askBooleanQuestion('Do you wish to install tv_check?')) {
-    push @docs, @tv_check_docs;
-    push @exes, @tv_check_exes;
-    %prereqs = (%prereqs, %tv_check_prereqs);
+It is a CGI program which runs through a web server and web browser, or
+with the lynxcgi mode of the lynx web browser.  You need to install it
+by hand; this Makefile.PL will only check that the necessary libraries
+are present.",
+       exes => [],
+       pm => {},
+       docs => [],
+       prereqs => { CGI => 0, CGI::Carp => 0 } },
+
+     { name => 'tv_grab_na',
+       blurb => "Tv_grab_na is the listings grabber for North America.",
+       exes => [ 'grab/na/tv_grab_na' ],
+       pm => { 'grab/na/ZapListings.pm' =>
+	       '$(INST_LIBDIR)/XMLTV/ZapListings.pm' },
+       docs => [],
+       prereqs => { HTML::Parser => 0 } },
+    );
+
+foreach my $info (@opt_components) {
+    my $name = $info->{name};
+    print STDERR "* $info->{blurb}\n\n";
+    my @prereqs_names = keys %{$info->{prereqs}};
+    if (not @prereqs_names) {
+	# Nothing to print.
+    }
+    elsif (@prereqs_names == 1) {
+	my $mod = $prereqs_names[0];
+	print STDERR "To install $name, you will need the $mod module.";
+	my $min_ver = $prereqs{$mod};
+	if ($min_ver) {
+	    print STDERR " (version $min_ver or higher)";
+	}
+	print STDERR "\n\n";
+    }
+    else {
+	print STDERR "To install $name, you will need the following modules:\n\n";
+	foreach (sort @prereqs_names) {
+	    print STDERR "$_";
+	    my $min_ver = $prereqs{$_};
+	    if ($min_ver) {
+		print STDERR " (version $min_ver or higher)";
+	    }
+	    print STDERR "\n";
+	}
+	print STDERR "\n";
+    }
+
+    if (XMLTV::Ask::askBooleanQuestion("Do you wish to install $name?")) {
+	push @exes, @{$info->{exes}};
+	push @docs, @{$info->{docs}};
+	%pm = (%pm, %{$info->{pm}});
+	%prereqs = (%prereqs, %{$info->{prereqs}});
+    }
+    print STDERR "\n";
 }
-print STDERR "\n";
 
 my $warned_uninstall_broken = 1;
 
@@ -104,14 +173,19 @@ foreach my $p ((sort keys %prereqs), (sort keys %recommended)) {
     my $verbed = $required ? 'required' : 'recommended';
     my $Verbed = uc(substr($verbed, 0, 1)) . substr($verbed, 1);
     eval "require $p";
-    if ($@) {
-	if ($@ =~ /^Can\'t locate \S+\.pm in \@INC/) {
-	    warn "$Verbed module $p seems not to be installed.\n";
+    if (defined $@) {
+	# This if-test is separate to suppress spurious 'Use of
+	# uninitialized value in numeric lt (<)' warning.
+	#
+	if ($@ ne '') {
+	    if ($@ =~ /^Can\'t locate \S+\.pm in \@INC/) {
+		warn "$Verbed module $p seems not to be installed.\n";
+	    }
+	    else {
+		warn "$Verbed module $p failed to load: $@";
+	    }
+	    ++ $err if $required;
 	}
-	else {
-	    warn "$Verbed module $p failed to load: $@";
-	}
-	++ $err if $required;
     }
     elsif ($p->VERSION < $prereqs{$p}) {
 	warn "Version $prereqs{$p} or later of module $p $verbed\n";
@@ -125,20 +199,11 @@ WriteMakefile
    'NAME'          => 'XMLTV',
    # No VERSION_FROM, it's set in this file
    'EXE_FILES'     => \@exes,
-   'PL_FILES' => { 'filter/tv_grep.PL'     => 'filter/tv_grep',
-		   'grab/uk/tv_grab_uk.PL' => 'grab/uk/tv_grab_uk',
-		   'lib/XMLTV.pm.PL'       => 'lib/XMLTV.pm',
-		 },
-   'PM'            => { 'lib/XMLTV.pm'               => '$(INST_LIBDIR)/XMLTV.pm',
-			'lib/TZ.pm'                  => '$(INST_LIBDIR)/XMLTV/TZ.pm',
-			'lib/Clumps.pm'              => '$(INST_LIBDIR)/XMLTV/Clumps.pm',
-			'lib/Usage.pm'               => '$(INST_LIBDIR)/XMLTV/Usage.pm',
-			'lib/Ask.pm'                 => '$(INST_LIBDIR)/XMLTV/Ask.pm',
-			'grab/Memoize.pm'            => '$(INST_LIBDIR)/XMLTV/Memoize.pm',
-			'grab/na/ZapListings.pm'     => '$(INST_LIBDIR)/XMLTV/ZapListings.pm',
-			'grab/uk/Ananova_Channel.pm' => '$(INST_LIBDIR)/XMLTV/Ananova_Channel.pm',
-			'grab/uk/UK_TZ.pm'           => '$(INST_LIBDIR)/XMLTV/UK_TZ.pm',
+   'PL_FILES'      => { 'filter/tv_grep.PL'     => 'filter/tv_grep',
+			'grab/uk/tv_grab_uk.PL' => 'grab/uk/tv_grab_uk',
+			'lib/XMLTV.pm.PL'       => 'lib/XMLTV.pm',
 		      },
+   'PM'            => \%pm,
    'PREREQ_PM'     => \%prereqs,
     # No special parameters for 'make clean' or 'make dist'
 );
