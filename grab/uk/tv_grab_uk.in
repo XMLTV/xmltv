@@ -170,6 +170,11 @@ END {
     }
 }
 
+# And Ananova may be one day behind.  If this happens warn about it
+# once and then continue.
+#
+my $fudge_day; # true, false, or undef
+
 # Convert an internal (Date::Manip) date to output format.
 sub ud {
     my ($internal, $tz) = @{date_to_uk($_[0])};
@@ -535,10 +540,14 @@ sub grab( @ ) {
 	my $day_offset = $day-1;
 	t 'day offset: ' . d $day_offset;
 
-	# FIXME I noticed that at 00:49 the pages had not changed
-	# over. 
 	my $day_date = DateCalc($today, "+ $day_offset days");
-#	$day_date = DateCalc($day_date, '- 1 day'); # Aargh! FIXME!
+	die if not defined $day_date;
+
+	# I noticed that at 00:49 the pages had not changed over. This
+	# is a horrible kludge, but these listings will soon be taken
+	# out of service so who cares.
+	#
+	$day_date = DateCalc($day_date, '- 1 day') if $fudge_day;
 	die if not defined $day_date;
 
 	# Get a list of programmes from this filename, fix the dates and
@@ -547,7 +556,7 @@ sub grab( @ ) {
 	my $ch = XMLTV::Ananova_Channel->find_by_ananova_id($ananova_id);
 	die if not defined $ch;
 	my $g = $got->{$filename};
-	my $progs = read_file($day_date, $ch, $g->{content}, $filename, $g->{url});
+	my $progs = read_file(\$day_date, $ch, $g->{content}, $filename, $g->{url});
 	if (defined $progs) {
 	    date_programmes($progs, $day_date);
 	    add_clumpidx($progs);
@@ -733,7 +742,7 @@ sub read_channels_page( $ ) {
 # Read data for a particular day.
 #
 # Parameters:
-#   date expected in file (in Date::Manip format)
+#   reference to date expected in file (in Date::Manip format)
 #   XMLTV::Ananova_Channel object, used to check and set display name
 #   content of page from Ananova
 # Plus two used for error reporting and checking:
@@ -747,9 +756,15 @@ sub read_channels_page( $ ) {
 # included, you should add that to each programme (probably in RFC2838
 # style) afterwards.
 #
+# The expected date is used for two things.  For error checking, and
+# if read_file() gets a different date to the one expected but decides
+# it is worth working around, then the scalar pointed to will be
+# changed to the new date.  See also the global $fudge_day.
+#
 my (%warned_shorter, $warned_wrong_date); # cut down on duplicate warnings
 sub read_file( $$$$$ ) {
-    my ($date_expected, $ch, $data, $file, $url) = @_;
+    use vars '$date_expected'; local *date_expected = shift;
+    my ($ch, $data, $file, $url) = @_;
     my @lines = split /\n/, $data;
     foreach (@lines) { s/^\s+//; s/\s+$//; s/\#.*// }
     @lines = grep { length } @lines;
@@ -773,7 +788,7 @@ sub read_file( $$$$$ ) {
     }
 
     # Check the date.
-    if (not check_page_date((shift @lines), $date_expected)) {
+    if (not check_page_date(\$date_expected, shift @lines)) {
 	warn "bad date in $file (expected $date_expected), skipping";
 	return undef;
     }
@@ -1128,7 +1143,7 @@ sub read_file( $$$$$ ) {
 	# Source - used for debugging and written out only as a
 	# comment in the output.
 	#
-	$p{source} = $file;
+	$p{debug_source} = $file;
 
 	push @r, \%p;
     }
@@ -1142,8 +1157,16 @@ sub read_file( $$$$$ ) {
 # According to Ananova's comment there's some odd procedure you have
 # to follow to make sure it is correct.
 #
+# Parameters:
+#   reference to expected date
+#   date string from page
+#
+# As with read_file(), the expected date is passed by reference and
+# modified sometimes.
+#
 sub check_page_date($$) {
-    my ($got, $expected) = @_;
+    use vars '$expected'; local *expected = shift;
+    my $got = shift;
 
     if (not $got =~
 /^((?:Sun|Mon|Tues|Wednes|Thurs|Fri|Satur)day)\|(\d\d)\|(\d\d)\|(\d\d\d\d)$/)
@@ -1186,12 +1209,27 @@ sub check_page_date($$) {
 		warn "since cache is in use, ignoring wrong date in pages\n";
 	    }
 	}
-	else {
+	elsif (not defined $fudge_day) {
+	    # There's still a chance to set the fudge-flag for
+	    # days and work around Ananova being one day out.
+	    #
+	    my $yesterday = DateCalc($expected, '- 1 day');
+	    die if not defined $yesterday;
+	    if ($day_got eq UnixDate($yesterday, '%Q')) {
+		warn "Ananova is one day behind, so day 1 is yesterday\n";
+		$fudge_day = 1;
+		$expected = $yesterday; # passed by ref, remember
+	    } else {
+		warn "wrong date in page: expected $day_expected, got $day_got\n";
+		$fudge_day = 0; # don't try this trick again
+		return 0;
+	    }
+	} else {
 	    warn "wrong date in page: expected $day_expected, got $day_got\n";
 	    return 0;
 	}
     }
-
+    
     return 1;
 }
 
