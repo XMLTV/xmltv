@@ -31,6 +31,10 @@
 #
 # FUTURE "Columbo Cries Wolf" appears instead of "Columbo:Columbo Cries Wolf"
 #
+# BUG - we identify 'presenters' by the word "Host" appearing in the character
+#       description. For some movies, character names include the word Host.
+#       ex. Animal, The (2001) has a character named "Badger Milk Host".
+#
 # BUG - if there is a matching title with > 1 entry (say made for tv-movie and
 #       at tv-mini series) made in the same year (or even "close" years) it is
 #       possible for us to pick the wrong one we should pick the one with the
