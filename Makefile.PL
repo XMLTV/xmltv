@@ -629,12 +629,7 @@ xmltv.exe :: $(EXE_FILES) lib/exe_wrap.pl lib/exe_opt.pl
 	$(RM_F) exe_opt.txt
 
 windows_dist ::
-	@if test -e $(PREFIX); then \
-	        echo To build a Windows distribution, please rerun Makefile.PL with >&2; \
-	        echo "PREFIX set to a new (nonexistent) directory then 'make windows_dist'." >&2; \
-	        echo '(Remember that only absolute paths work properly with MakeMaker.)' >&2; \
-	        exit 1; \
-	fi
+	@perl -e "if (-e '$(PREFIX)') { print STDERR qq[To build a Windows distribution, please rerun Makefile.PL with\nPREFIX set to a new (nonexistent) directory then 'make windows_dist'.\n(Remember that only absolute paths work properly with MakeMaker.)\n]; exit 1 }"
 	$(MAKE) install
 	perl -MExtUtils::Command -e mv $(INSTALLPLAINDOC) $(PREFIX)/doc/
 	perl -MExtUtils::Command -e rm_r $(PREFIX)/share/doc
@@ -660,6 +655,10 @@ windows_dist ::
 	# My MakeMaker creates this dud directory.
 	rm -rfv $(PREFIX)/5.8.0
 	rmdir $(PREFIX)/share/doc
+
+	# Generate Date::Manip docs by filtering perldoc output.  The
+	# use of temp files instead of pipes is so set -e works properly.
+	#
 	set -e; \
 	out=$(PREFIX)/doc/man/date_formats.txt; \
 	echo Extracting part of Date::Manip manual page into $$out; \
@@ -670,14 +669,20 @@ windows_dist ::
 	     "the % characters on the command line somehow (see" \
 	     "README.win32)." | fmt >$$out; \
 	echo >>$$out; \
-	(perldoc -u Date::Manip | perl -ne 'BEGIN { print "\n=pod\n\n" } print if (/^The format options are:/ .. /^=/) and not /^=/' | pod2text) >>$$out
+	perldoc -u Date::Manip >$$out.tmp; \
+	perl -ne 'BEGIN { print "\n=pod\n\n" }  print if (/^The format options are:/ .. /^=/) and not /^=/' <$$out.tmp >$$out.tmp.1; \
+	pod2text <$$out.tmp.1 >>$$out; \
+	rm $$out.tmp*
 	perl -MExtUtils::Command -e rm_rf $(INSTALLBIN) $(PREFIX)/lib/ $(INSTMANDIR) $(INSTALLMAN3DIR)
 	perl -MExtUtils::Command -e cp xmltv.dtd $(PREFIX)
 	# The following command will not be necessary when the source
 	# tree was checked out on a DOSish system.  It may not even
 	# work properly when run on a DOSish system - should check.
 	#
-	find $(PREFIX) -type f ! -name \*.jpg | xargs perl -i -pe 'BEGIN { binmode STDIN } s/\r*\n*$$/\r\n/'
+	# (Simulation in perl of find | xargs; there's probably a
+	# better way but I'm too lazy to find it.)
+	#
+	perl -MFile::Find -e "find(sub { print qq[\\$$File::Find::name\n] if -f and not /[.]jpg/ }, '$(PREFIX)')" | perl -e 'chomp(@ARGV = (@ARGV, <STDIN>)); exec @ARGV' perl -i -pe 'BEGIN { binmode STDIN } s/\r*\n*$$/\r\n/'
 	perl -MExtUtils::Command -e mv $(PREFIX)/doc/README* $(PREFIX)
 	perl -MExtUtils::Command -e mv $(PREFIX)/README.win32 $(PREFIX)/README
 	@echo
