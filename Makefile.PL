@@ -15,6 +15,47 @@ use vars '%extra_constants';
      INSTALLSHARE    => '$(PREFIX)/share/xmltv',
     );
 
+my %prereqs
+  = (
+     'LWP' => 0,
+     'XML::DOM' => 0,
+     'Date::Manip' => 5.4,
+     'XML::Writer' => 0,
+     'XML::Simple' => 0,
+     'Log::TraceMessages' => 0,
+     'Lingua::Preferred' => 0,
+     'Lingua::EN::Numbers::Ordinate' => 0,
+     'Memoize' => 0,
+     'Term::ProgressBar' => 0,
+     'Tie::IxHash' => 0,
+     'Unicode::String' => 0,
+     'Compress::Zlib' => 0,
+    );
+
+# MakeMaker's warning message can be intimidating, check ourselves
+# first.  This code can later be replaced with a less demanding
+# dependency checker that asks what you intend to run and picks those
+# dependencies.
+#
+my $err = 0;
+foreach my $p (sort keys %prereqs) {
+    eval "require $p";
+    if ($@) {
+	if ($@ =~ /^Can\'t locate \S+\.pm in \@INC/) {
+	    warn "Required module $p seems not to be installed.\n";
+	}
+	else {
+	    warn "Required module $p failed to load: $@";
+	}
+	++ $err;
+    }
+    elsif ($p->VERSION < $prereqs{$p}) {
+	warn "Version $prereqs{$p} or later of module $p required\n";
+	++ $err;
+    }
+}
+exit(1) if $err;
+
 WriteMakefile
   (
    'NAME'          => 'XMLTV',
@@ -41,20 +82,7 @@ WriteMakefile
 			'grab/uk/Ananova_Channel.pm' => '$(INST_LIBDIR)/XMLTV/Ananova_Channel.pm',
 			'grab/uk/UK_TZ.pm'           => '$(INST_LIBDIR)/XMLTV/UK_TZ.pm',
 		      },
-   'PREREQ_PM'     => { 'LWP' => 0,
-			'XML::DOM' => 0,
-			'Date::Manip' => 5.4,
-			'XML::Writer' => 0,
-			'XML::Simple' => 0,
-			'Log::TraceMessages' => 0,
-			'Lingua::Preferred' => 0,
-			'Lingua::EN::Numbers::Ordinate' => 0,
-			'Memoize' => 0,
-			'Term::ProgressBar' => 0,
-			'Tie::IxHash' => 0,
-			'Unicode::String' => 0,
-			'Compress::Zlib' => 0,
-		      },
+   'PREREQ_PM'     => \%prereqs,
     # No special parameters for 'make clean' or 'make dist'
 );
 
