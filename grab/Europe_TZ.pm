@@ -52,6 +52,8 @@ use base 'Exporter'; use vars '@EXPORT';
 #
 sub parse_eur_date($$) {
     my ($date, $base) = @_;
+    croak 'usage: parse_eur_date(unparsed date, base timezone)'
+      if @_ != 2 or not defined $date or not defined $base;
     my $winter_tz = tz_to_num($base);
     croak "bad timezone $base" if not defined $winter_tz;
     my $summer_tz = sprintf('%+05d', $winter_tz + 100); # 'one hour'
