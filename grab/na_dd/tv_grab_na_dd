@@ -10,6 +10,8 @@ tv_grab_na_dd - Grab TV listings for North America using Zap2IT's Data Direct se
 
     tv_grab_na_dd --help
 
+    tv_grab_na_dd --version
+    
     tv_grab_na_dd --configure [--config-file FILE] [--dd-data FILE]
                               [--reprocess] [--auto-config add|ignore]
 
@@ -21,6 +23,7 @@ tv_grab_na_dd - Grab TV listings for North America using Zap2IT's Data Direct se
                   [--days N]  [--offset N] [--quiet]
                   [--old-chan-id] [--low-mem] [--output FILE]
                   [--list-channel] [--tz-offset n]
+                  [--download-only]
 
 =head1 DESCRIPTION
 
@@ -115,6 +118,11 @@ write xml to I<file> rather than standard output.
 =item --list-channel
 
 same as L<--days> 0
+
+=item --download-only
+
+Don't generate any output, just fetch the data.  Personally I don't see the point,
+but it was requested and easy to add.
 
 =item --tz-offset n
 
@@ -221,14 +229,18 @@ use XMLTV::Config_file;
 use XMLTV::Version '$Id$';
 use XMLTV::Usage <<END
 $0: get lists from Zap2IT's DataDirect service in XMLTV format
+
+    $0 [--version] [--help]
+  
 To Configure
     $0 --configure [--config-file FILE] [--dd-data FILE]
                               [--reprocess] [--auto-config add|ignore]
 To get listings
     $0 [--config-file FILE] [--dd-data FILE]
                   [--reprocess] [--auto-config add|ignore]
-                  [--days N]  [--offset N.N] [--quiet]  [--old-chan-id] [--low-mem]
-                  [--output FILE] [--tz-offset n]
+                  [--days N]  [--offset N.N] [--quiet]  [--old-chan-id]
+                  [--low-mem] [--output FILE] [--tz-offset n]
+                  [--download-only]
 END
 ;
 
@@ -256,6 +268,7 @@ my $dd_user="";         # dd username
 my $dd_pass="";         # dd password
 my $dd_lineup="";       # dd lineup (empty all lineups)
 my $dd_data;            # temp file handle to store DD data
+my $dd_schema="";       # dd schema found
 my $dd_data_name;       # filename for above
 my $dd_data_size;       # amount of data returned 
 my $dd_start;           # dd start time
@@ -275,7 +288,8 @@ my $opt_dd_data    =''; # save dd data
 my $opt_reprocess  =''; # reprocess dd data
 my $opt_auto_config  =''; # auto add/ignore channels
 my $opt_list_channels=''; # 
-my $opt_list_lineups=''; # 
+my $opt_list_lineups='' ; #
+my $opt_down_only=0     ; #
 my $opt_tz_offset="+0000";
 
 #
@@ -306,6 +320,7 @@ GetOptions(
            'list-channels' => \$opt_list_channels,
            'list-lineups'  => \$opt_list_lineups,
            'tz-offset=s'   => \$opt_tz_offset,
+           'download-only' => \$opt_down_only,
            'debug'         => \$DEBUG,
 	  )
   or usage(0);
@@ -314,6 +329,7 @@ die 'number of days must not be negative' if ($opt_days < 0);
 die "must specify --dd_data during reprocess\n" if $opt_reprocess and not $opt_dd_data;
 die "--auto-config must be 'add' or 'ignore'\n" if $opt_auto_config && $opt_auto_config !~ /^(add|ignore)$/;
 die "--tz-offset must be [+/-]####, for example +0500\n" if $opt_tz_offset!~ /[+-]\d\d\d\d/;
+die "--down-only without --dd-data is pointless!\n" if $opt_down_only && ! $opt_dd_data;
 
 $opt_days    = 0 if $opt_configure || $opt_list_channels || $opt_list_lineups;
 $config_file = XMLTV::Config_file::filename($opt_config_file, 'tv_grab_na_dd', $opt_quiet);
@@ -489,6 +505,11 @@ else
 } # get data
 
 #
+# quit if --download-only
+#
+exit(0) if $opt_down_only;
+
+#
 # load supporting details
 #
 my $twig=XML::Twig->new(   
@@ -499,11 +520,21 @@ my $twig=XML::Twig->new(
 		         HTML     => sub {
                                   die "\n*** FETCH ERROR***\n".$_->first_child_text;
                 		         },
+                 xtvd  => sub {
+                                  $dd_schema=$_->att('schemaVersion');
+
+                                  warn "\nDD Schema # is $dd_schema, check for upgrade\n"
+                                       if $dd_schema > 1.2;
+
+                                  $_->twig->purge;
+                                  return 1;
+                                 },
                  message  => sub {
                                   push @messages, $_->first_child_text;
                                   $_->twig->purge;
                                   return 1;
                                  },
+
 		         stations => sub { $_->twig->purge;  return 1;},
 		         station  => sub {
                                   my $hash=$_->simplify;
@@ -570,6 +601,7 @@ my $twig=XML::Twig->new(
                   		          },
 	         });
 
+
 unless ($opt_quiet)
 {
     if (Have_bar) { $bar = new Term::ProgressBar('loading data',$dd_data_size+1) }
@@ -581,6 +613,7 @@ $bar->update($dd_data_size+1) if $bar;
 print STDERR "\n" unless ($opt_quiet || $bar );
 
 $twig=undef;  # destroy twig (just in case)
+
 
 #
 # --list-lineup mode
@@ -775,7 +808,8 @@ for my $map (@{$lineups{$dd_lineup}{map}})
 #
 # prepare to output schedule
 #
-$twig=XML::Twig->new( twig_roots => { schedule => 1 }, twig_handlers => {                 
+$twig=XML::Twig->new( twig_roots => { schedule => 1 },
+                      twig_handlers => {                 
     schedule => sub {
                      $prog_count++;
                      unless ( $opt_quiet || $count++ % 10 )
@@ -787,9 +821,9 @@ $twig=XML::Twig->new( twig_roots => { schedule => 1 }, twig_handlers => {
                      my %prog=();
                      my $ptr;
                      my $twig=$_;
-                     $_=$_->simplify;
+                     $_=$twig->simplify;
 
-                     ## Skip programs not in our lineup.
+# Skip programs not in our lineup.
 		     if (exists $chan_id{$_->{station}}) {
                   
 		
@@ -820,9 +854,9 @@ $twig=XML::Twig->new( twig_roots => { schedule => 1 }, twig_handlers => {
                      my @gStop = gmtime( $stop+$tz_offset );
                      $prog{stop} = sprintf("%d%02d%02d%02d%02d%02d %s",
 		                            $gStop[5] + 1900,
-					    $gStop[4] + 1,
-					    @gStop[3,2,1,0],
-					    $opt_tz_offset);
+            					    $gStop[4] + 1,
+			            		    @gStop[3,2,1,0],
+					                $opt_tz_offset);
 
                      $prog{channel} = $chan_id{$_->{station}};
                      $prog{'previously-shown'}={}           if exists $_->{repeat};
@@ -834,19 +868,48 @@ $twig=XML::Twig->new( twig_roots => { schedule => 1 }, twig_handlers => {
                         $_->{tvRating} =~ s/^TV/TV-/  unless $_->{tvRating} =~ /-/;
                         push @{ $prog{rating} }, [$_->{tvRating},'VCHIP'];
                      }
-                     
-                     if (exists $_->{part} )
+
+#
+# Note, xmltv-ns values will probably be overwritten with the dd-prog system
+#
+                     if (exists $_->{part}{number} && exists $_->{part}{total})
                      {
-                          $prog{clumpidx} = sprintf("%d/%d",$_->{part}{number},
-                                                            $_->{part}{total})
+                         $prog{'episode-num'}=[sprintf("..%d/%d",$_->{part}{number}-1,
+                                                                  $_->{part}{total}),
+                                                'xmltv-ns'];
+                     }
+                                                       
+#
+# Store TMS Show ID, Episode ID, part in <episode-num> of "id.episode.part/total"
+# using our own numbering system.
+#
+                     if ( $_->{program} =~ /^(..\d{6})(\d{4})/ )
+                     {
+                       my $value =sprintf("%s.%s",$1,$2);
+                          $value.=sprintf(".%d/%d",$_->{part}{number}-1,
+                                                   $_->{part}{total}) if exists $_->{part}{number} && exists $_->{part}{total};
+                        $prog{'episode-num'}=[$value,'dd-progid'];
                      }
 
-#todo.. parse program ID to get episode num
-#                     if ( $_->{program} =~ /^EP/ )
-#                     {
-#                            #episode-num?
-#                     }
-                   
+#
+# add elements from program Genre tag
+# Note: before program so Genra comes before ShowType in <category>
+#
+                     if ($ptr = $programGenre{$_->{program}})
+                     {
+                         if (ref $ptr->{genre} eq 'HASH')
+                        {
+                            push @{$prog{category}},[$ptr->{genre}{class},'en']
+                        }
+                        else
+                        {
+                            foreach (@{$ptr->{genre}})
+                            {
+                                push @{$prog{category}},[$_->{class},'en'];
+                            }
+                        }
+                     } # Genra items
+
 #
 # add elements from program tag
 #
@@ -857,18 +920,33 @@ $twig=XML::Twig->new( twig_roots => { schedule => 1 }, twig_handlers => {
                         $prog{desc}         =[[$ptr->{description},'en']] if exists $ptr->{description};
                         $prog{date}         =$ptr->{year}                 if exists $ptr->{year};
 
-                        $prog{length}       =substr($ptr->{runTime},2,2)*3600+
-                                             substr($ptr->{runTime},5,2)*60 if exists $ptr->{runTime};
+                        $prog{length}       = substr($ptr->{runTime},2,2)*3600+
+                                              substr($ptr->{runTime},5,2)*60 if exists $ptr->{runTime};
 
-                        push @{ $prog{rating} }, [$ptr->{mpaaRating},'MPAA'] if exists $ptr->{mpaaRating};
-
+#use Data::Dumper;
+#die Dumper($ptr->{advisories}{advisory});
+                        if (exists $ptr->{advisories})
+                        {
+                           if (ref $ptr->{advisories}{advisory})
+                           {
+                              for my $val (@{$ptr->{advisories}{advisory}})
+                              {
+                                push @{$prog{rating}},[$val,'advisory'];
+                              }
+                           }
+                           else
+                           {
+                              push @{$prog{rating}},[$ptr->{advisories}{advisory},'advisory'];
+                           }
+                        }
                         
+                        push @{ $prog{rating}  }, [$ptr->{mpaaRating},'MPAA'] if exists $ptr->{mpaaRating};
+                       
                         if (exists $ptr->{colorCode})
                         {
                             $prog{video}{colour}=$ptr->{colorCode}; # wants boolean but try anyway
                             $prog{video}{colour}=0 if $ptr->{colorCode} =~ /^B/i;
                         }
-
 
                         if (exists $ptr->{starRating})
                         {
@@ -883,26 +961,11 @@ $twig=XML::Twig->new( twig_roots => { schedule => 1 }, twig_handlers => {
                                   $prog{'star-rating'}=[sprintf("%d/%d",$star,4)];
                              }
                         }
+
+                        push @{ $prog{category}}, [$ptr->{showType}   ,'en' ] if exists $ptr->{showType};
+
                      } # %program items
 
-#
-# add elements from program Genre tag
-#
-                     if ($ptr = $programGenre{$_->{program}})
-                     {
-                        $prog{category}=[];
-                        if (ref $ptr->{genre} eq 'HASH')
-                        {
-                            push @{$prog{category}},[$ptr->{genre}{class},'en'];
-                        }
-                        else
-                        {
-                            foreach (@{$ptr->{genre}})
-                            {
-                                push @{$prog{category}},[$_->{class},'en'];
-                            }
-                        }
-                     } # Genra items
 
 #
 # add elements from crew tag
@@ -938,10 +1001,10 @@ $twig=XML::Twig->new( twig_roots => { schedule => 1 }, twig_handlers => {
 # write record
 #
                      $writer->write_programme(\%prog);
-		} # channel exists
                      $twig->twig->purge;
                      return 1;
-       		     } # schedule subroutine
+       		     }
+       		 }, # schedule subroutine
 	         }); #twig setup
 
 #
@@ -967,6 +1030,5 @@ if (@messages)
 printf STDERR "Downloaded %d programs in %d seconds\n",$prog_count,time()-$start_time
     unless $opt_quiet;
 
-exit();
-
+exit(0);
 
