@@ -30,6 +30,7 @@ WriteMakefile
 			'filter/tv_grep',
 			'filter/tv_sort',
 			'filter/tv_to_latex',
+			'filter/tv_cat',
 		      ],
    'PM'            => { 'XMLTV.pm'                   => '$(INST_LIBDIR)/XMLTV.pm',
 			'grab/na/ZapListings.pm'     => '$(INST_LIBDIR)/XMLTV/ZapListings.pm',
