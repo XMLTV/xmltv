@@ -67,8 +67,16 @@ use Tie::RefHash;
 use Term::ProgressBar;
 use IO::File;
 use Tie::RefHash;
+use Sort::Versions;
+use Data::Dumper;
 
 use XMLTV;
+# Modify the XMLTV module's tables to add a <distribution> element to
+# <channel>s.  We assume each channel has exactly one distribution
+# method.
+#
+push @XMLTV::Channel_Handlers, [ 'distribution', 'scalar', '1' ];
+
 use XMLTV::TZ qw(gettz);
 use XMLTV::UK_TZ;
 use XMLTV::Ananova_Channel;
@@ -81,19 +89,15 @@ END
   ;
 
 # Prototype declarations
-sub get_copyright( $ );
+sub get_copyright( $$ );
 sub get_regions( $$ );
-sub get_dir( $$ );
-sub read_channels_page( $ );
-sub read_files_and_jump_around( $$$$$$ );
-sub read_file( $$$$$ );
-sub page_date_diff( $$ );
-sub date_programmes( $$ );
-sub add_clumpidx( $ );
+sub read_channels_page( $$ );
+sub fix_times( $ );
+#sub fix_dates( $ );
+sub fix_zero_length( $ );
 sub extract_variant( $$ );
 sub get_channel_pkgs();
 sub init_channels();
-sub write_channels( $$ );
 sub get_pages( $$ );
 sub configure();
 sub grab( @ );
@@ -104,6 +108,7 @@ sub grab( @ );
 my $using_cache = XMLTV::Memoize::check_argv('get');
 my ($opt_days, $opt_help, $opt_output, $opt_share,
     $opt_configure, $opt_config_file);
+$opt_days = 7; # default
 GetOptions('days=i'        => \$opt_days,
 	   'help'          => \$opt_help,
 	   'configure'     => \$opt_configure,
@@ -138,7 +143,7 @@ my $OUR_SHARE_DIR = (defined $SHARE_DIR) ? "$SHARE_DIR/tv_grab_uk" : '.';
 # This is used as an inital substring of all the URLs gotten by this
 # program.
 #
-my $A = 'http://www.ananova.com/tv_listings/_tv_raw.php';
+my $BASE_URL = 'http://www.ananova.com/tv_listings/_xmltv.php';
 
 # File that stores which channels to download.
 my $CONFIG_FILE = $opt_config_file;
@@ -174,23 +179,13 @@ END {
     }
 }
 
-# And Ananova may be one day behind.  If this happens warn about it
-# once and then continue.
-#
-my $fudge_day; # true, false, or undef
-
 # Convert an internal (Date::Manip) date to output format.
 sub ud {
     my ($internal, $tz) = @{date_to_uk($_[0])};
     return UnixDate($internal, '%q') . ' ' . $tz;
 }
 
-# What language the pages are in.  This has no real effect :-)
-my $LANG = 'en';
-
-# The date libraries, however, do benefit from memoization.  It's only
-# about an 8% speed increase for the program as a whole, but worth it.
-#
+# Memoize some date parsing routines.
 use Memoize;
 eval { require Memoize };
 if ($@) {
@@ -203,18 +198,28 @@ else {
      }
 }
 
-# Download the three index pages now.
-my $index_pages = get_pages('getting list of channels', [ qw(regions allchannels dir) ]);
+# Download the two index pages now.
+my $index_pages = get_pages('getting list of channels', [ qw(regions allchannels) ]);
 
 # Set up the global channels and regions data.  This is needed for
 # both configuration and grabbing.
 #
+init_channels();
+read_channels_page($index_pages->{allchannels}->{content},
+		   $index_pages->{allchannels}->{url});
+
+# Then regions uses information already gathered about channels.
 my $regions = get_regions($index_pages->{regions}->{content},
 			  $index_pages->{regions}->{url});
-XMLTV::Ananova_Channel->know_regions(values %$regions);
 my %region_display = reverse %$regions;
-init_channels();
-read_channels_page($index_pages->{allchannels}->{content});
+#$Log::TraceMessages::On = 1;
+t 'regions: ' . d $regions;
+foreach my $r (keys %$regions) {
+    t "region $r:";
+    foreach (grep { $_->is_region($r) } XMLTV::Ananova_Channel->all()) {
+	t "...contains channel " . $_->stringify();
+    }
+}
 
 # Predefined channel packages for ease of configuration.
 my %channel_pkgs = get_channel_pkgs();
@@ -235,6 +240,7 @@ else {
 
 # Ask the user which channels to download, and write $CONFIG_FILE.
 sub configure() {
+#    local $Log::TraceMessages::On = 1;
     warn "FIXME overwriting existing $CONFIG_FILE\n";
     # FIXME need to make directory
     open(CONF, ">$CONFIG_FILE") or die "cannot write to $CONFIG_FILE: $!";
@@ -250,10 +256,12 @@ sub configure() {
     my $terr = askBooleanQuestion
       ('Do you get terrestrial analogue television?', 1);
     if ($terr) {
-	my @region_dns = sort keys %$regions;
+	my @region_dns = sort keys %region_display;
 	die if not @region_dns;
+	t '\%region_display: ' . d \%region_display;
+	t 'region display names: ' . d \@region_dns;
 	my $default_region = 'Carlton';
-	if (not defined $regions->{$default_region}) {
+	if (not defined $region_display{$default_region}) {
 	    warn "default region '$default_region' seems to have disappeared\n";
 	    $default_region = $region_dns[0];
 	}
@@ -262,7 +270,7 @@ sub configure() {
 	my $aid;
 	foreach (@region_dns) {
 	    if ($_ eq $region_dn) {
-		$aid = $regions->{$_};
+		$aid = $region_display{$_};
 		last;
 	    }
 	}
@@ -368,55 +376,27 @@ END
 #
 sub grab( @ ) {
     my %args = @_;
-    my $copyright = get_copyright($index_pages->{regions}->{content});
+    my $copyright = get_copyright($index_pages->{regions}->{content},
+				  $index_pages->{regions}->{url});
+
+    # The copyright message is in whatever encoding the XML web pages
+    # use.  But our output is always UTF-8, since we parse the XML and
+    # write it out again.  Reduce the copyright message to ASCII.
+    #
+    for ($copyright) {
+	# Try to preserve at least the magic word or magic symbol.
+	s/©/copyright/g if not /copyright/i;
+	s/©/(C)/g;
+	tr/\200-\377//d;
+    }
+    # A proper way to do this would be to recode the data into UTF-8,
+    # but that would require Yet Another Module installed.
+    #
 
     # Hopefully nobody will confuse this copyright message for the
     # listings with the copyright in this program.
     #
     print STDERR "\n$copyright\n";
-
-    # Set up an XMLTV::Writer; print copyright and start of
-    # document.  Ananova's data is in Latin-1.
-    #
-    my $writer = new XMLTV::Writer(encoding => 'ISO-8859-1', %args);
-    $writer->comment($copyright);
-    $writer->start({ 'source-info-url'     =>
-		     'http://www.ananova.com/tv_listings/_tv_full_listings.html',
-		     'source-info-name'    => 'Ananova',
-		     'source-data-url'     => $A,
-		     'generator-info-name' => 'XMLTV/0.5pre2', # FIXME
-		     'generator-info-url'  =>
-		     'http://www.doc.ic.ac.uk/~epa98/work/apps/xmltv/',
-	       });
-
-    # Find which listing files are available.
-    my @files = get_dir($index_pages->{dir}->{content},
-			$index_pages->{dir}->{url});
-
-    # Provide some means to go to the 'next' and 'previous' days'
-    # listings for a given channel+day.  This should not be needed,
-    # but occasionally Ananova's dates are screwed up and we need to
-    # thrash around continually trying to get the correct file.
-    #
-    my (%prev, %next);
-    my %by_aid_and_day; my %seen_filename;
-    foreach (@files) {
-	my ($filename, $day, $ananova_id) = @$_;
-	if ($seen_filename{$filename}++) {
-	    warn "filename $filename seen twice in dir";
-	    next;
-	}
-	warn "more than one file for Ananova id $ananova_id and day $day"
-	  if defined $by_aid_and_day{$ananova_id}->{$day};
-	$by_aid_and_day{$ananova_id}->{$day} = $filename;
-    }
-    foreach (@files) {
-	my ($filename, $day, $ananova_id) = @$_;
-	my $prev = $by_aid_and_day{$ananova_id}->{$day - 1};
-	$prev{$filename} = $prev if defined $prev;
-	my $next = $by_aid_and_day{$ananova_id}->{$day + 1};
-	$next{$filename} = $next if defined $next;
-    }
 
     # Now read the config file to find which files to download.  The
     # user can choose channels by type (radio or satellite), region,
@@ -424,18 +404,29 @@ sub grab( @ ) {
     # --configure.  The choices 'satellite' and 'ALL' are not normally
     # user-visible, they'd be a huge set of channels.
     #
-    my (%wanted_type, %wanted_region, %wanted_xmltv_id);
-    my $want_all;
+    my %wanted; tie %wanted, 'Tie::RefHash';
     open(CONF, $CONFIG_FILE)
       or die "cannot read $CONFIG_FILE, run $0 --configure\n";
+    my @all_chs = XMLTV::Ananova_Channel->all();
     while (<CONF>) {
 	s/\#.*//; s/^\s+//; s/\s+$//;
 	next if not length;
+	t "got line from config file: $_";
 	if ($_ eq 'ALL') {
-	    $want_all = 1;
+	    foreach (@all_chs) {
+		$wanted{$_} = 1;
+	    }
 	}
 	elsif (/^type\s+(radio|satellite)$/) {
-	    $wanted_type{$1} = 1;
+	    my $type = $1;
+	    foreach (@all_chs) {
+		my $got_type = $_->get_type();
+		if (not defined $got_type) {
+#		    warn 'channel with no type, not getting: ' . $_->stringify();
+		    next;
+		}
+		$wanted{$_} = 1 if $got_type eq $type;
+	    }
 	}
 	elsif (/^region\s+(.+)/) {
 	    my $region = $1;
@@ -448,122 +439,27 @@ sub grab( @ ) {
 	    }
 	    die "$CONFIG_FILE:$.:bad region specification $region"
 	      if $region =~ tr/0-9//c;
-	    $wanted_region{$region} = 1;
+
+	    t "want region $region, marking channels";
+	    foreach (@all_chs) {
+		if ($_->is_region($region)) {
+		    t 'marking channel ' . $_->stringify();
+		    $wanted{$_} = 1;
+		}
+	    }
 	}
 	# No way to ask for channel packages directly, they are used
 	# only by --configure.  So far.
 	elsif (/^channel\s+(.+)/) {
-	    $wanted_xmltv_id{$1} = 1;
+	    my $xmltv_id = $1;
+	    my $ch = XMLTV::Ananova_Channel->find_by_xmltv_id($xmltv_id);
+	    if (not defined $ch) {
+		warn "$CONFIG_FILE:$.: no channel with XMLTV id $xmltv_id, skipping\n";
+		next;
+	    }
+	    $wanted{$ch} = 1;
 	}
 	else { die "$CONFIG_FILE:$.: bad line\n" }
-    }
-
-    # Filter out the files we want to download - those with the correct
-    # channel type, region or channel id.
-    #
-    t 'deciding which files to download';
-    my %used_xmltv_id;
-    my $wanted_file = sub( $ ) {
-#	local $Log::TraceMessages::On = 1;
-	t 'looking at file: ' . d $_[0];
-	my ($filename, $day, $aid) = @{$_[0]};
-	if (defined $opt_days and $opt_days < $day) {
-	    t 'outside the --days range';
-	    return 0;
-	}
-
-	if ($want_all) {
-	    t 'want all files, so want this one';
-	    return 1;
-	}
-
-	my @chs = XMLTV::Ananova_Channel->find_by_ananova_id($aid);
-	t 'looked up by Ananova id: ' . d \@chs;
-	if (not @chs) {
-	    warn "cannot lookup $aid";
-	    return 0;
-	}
-
-	# Whether an Ananova_Channel object is wanted.  This has the
-	# side effect of updating %used_xmltv_id for checking later.
-	#
-	my $wanted_ch_obj = sub( $ ) {
-	    my $ch = shift;
-	    # The same channels may be available as two different
-	    # files.  We want only the first Ananova set of pages
-	    # for this channel.
-	    #
-	    if (defined $ch->get_variant()) {
-		t 'is a variant';
-		# The same page for two variants will be 'downloaded'
-		# twice, which is ugly but not a big deal since it's
-		# cached.
-		#
-	    } elsif ($ch->get_first_ananova_id() eq $aid) {
-		t 'is first Ananova id, continuing';
-	    } else {
-		t 'a secondary Ananova page for this channel, skipping';
-		return 0;
-	    }
-
-	    my $type = $ch->get_type();
-	    if (defined $type) {
-		if ($wanted_type{$type}) {
-		    t "wanted by type $type";
-		    return 1;
-		}
-	    } else {
-		warn 'channel ' . $ch->stringify() . ' has no type';
-		return 0;
-	    }
-
-	    foreach my $wr (keys %wanted_region) {
-		if ($ch->is_region($wr)) {
-		    t "belongs to wanted region $wr";
-		    return 1;
-		}
-	    }
-
-	    my $xmltv_id = $ch->get_xmltv_id();
-	    t 'channel has XMLTV id: ' . d $xmltv_id;
-	    if (defined $xmltv_id) {
-		if ($wanted_xmltv_id{$xmltv_id}) {
-		    t 'this id is wanted';
-		    $used_xmltv_id{$xmltv_id}++;
-		    return 1;
-		}
-	    } else {
-		warn 'channel has no XMLTV id: ' . $ch->stringify();
-		return 0;
-	    }
-
-	    t 'nothing matched';
-	    return 0;
-	};
-
-	my $wanted = 0;
-	foreach my $ch (@chs) {
-	    $wanted |= $wanted_ch_obj->($ch);
-	}
-	return $wanted;
-    };
-
-    @files = grep { $wanted_file->($_) } @files;
-    foreach (@files) { die 'file not ref' if not ref }
-#    local $Log::TraceMessages::On = 1;
-    t 'files to download: ' . d \@files;
-    t 'checking that every wanted XMLTV id was found';
-    foreach (sort keys %wanted_xmltv_id) {
-	t "checking XMLTV id $_ was found";
-	next if $used_xmltv_id{$_};
-	my $ch = XMLTV::Ananova_Channel->find_by_xmltv_id($_);
-	if (defined $ch) {
-	    warn 'Channel ' . $ch->stringify()
-	      . ", found for xmltv id $_, is defined in $CHANNEL_NAMES_FILE - but not found on site.  Skipping.\n";
-	}
-	else {
-	    warn "Channel $_ not found on site (or even listed in $CHANNEL_NAMES_FILE).  Skipping.\n";
-	}
     }
 
     # We want to get them in day order, so that we can get the first day's
@@ -573,223 +469,377 @@ sub grab( @ ) {
     #
     # We download all the files at once, then process them one by one.
     #
-    my $got = get_pages('downloading listings', [ map { $_->[0] } @files ]);
-    my $bar = new Term::ProgressBar('parsing', scalar @files);
-    my $first_day;
-    my %chans_todo; tie %chans_todo, 'Tie::RefHash';
-    my $wrote_channels = 0;
-    my @progs_todo;
-    foreach (sort { $a->[1] <=> $b->[1] } @files) { # FIXME use
-                                                    # hashrefs not lists
-	my ($filename, $day, $ananova_id) = @$_;
-	t "getting file for day $day, Ananova id $ananova_id, filename $filename";
-
-	# FIXME either we get a file or we don't.  But this makes it
-	# impossible to get just one variant - eg Radio 4 LW but not
-	# FM.
-	#
-
-	die if defined $opt_days and $day > $opt_days;
-	$first_day = $day if not defined $first_day;
-
-	# Work out the actual day this number corresponds to: 1 is
-	# today.
-	#
-	my $day_offset = $day-1;
-	t 'day offset: ' . d $day_offset;
-
-	my $day_date = DateCalc($today, "+ $day_offset days");
-	die if not defined $day_date;
-
-	# I noticed that at 00:49 the pages had not changed over. This
-	# is a horrible kludge, but these listings will soon be taken
-	# out of service so who cares.
-	#
-	$day_date = DateCalc($day_date, '- 1 day') if $fudge_day;
-	die if not defined $day_date;
-
-	# Get a list of programmes from this filename, fix the dates and
-	# add clumpidxes.
-	#
-	my @chs = XMLTV::Ananova_Channel->find_by_ananova_id($ananova_id);
+    my @to_get;
+    if (keys %wanted) {
+	my @chs = sort { versioncmp($a, $b) }
+	  map { $_->get_first_ananova_id() }
+	    keys %wanted;
 	die if not @chs;
-	my $g = $got->{$filename};
-	foreach my $ch (@chs) {
-	    my $progs = read_files_and_jump_around(\$day_date, $ch, $got, $filename,
-						   \%prev, \%next);
-	    if (defined $progs) {
-		date_programmes($progs, $day_date);
-		add_clumpidx($progs);
-
-		# Split Radio 4 (and maybe others) into MW and LW.
-		my $variant = $ch->get_variant(); # 'MW', 'FM', etc
-		if (defined $variant) {
-		    extract_variant($progs, $variant);
-		}
-
-		push @progs_todo, @$progs;
-
-		# Add the channel to the list of channels to output.  Well
-		# actually it's a hash because in the case of grabbing ALL
-		# files on Ananova we may grab the same channel twice (but
-		# it should be written as a <channel> element only once).
-		#
-		++$chans_todo{$ch};
-	    }
-	    else {
-		my $chd = $ch->get_a_display_name();
-		warn "not writing any programmes for channel $chd, day $day_date\n";
+	foreach my $day (1 .. $opt_days) {
+	    my $CHS_PER_REQ = 10;
+	    for (my $i = 0; $i < @chs; $i += $CHS_PER_REQ) {
+		my $end = $i + $CHS_PER_REQ;
+		$end = @chs if $end > @chs;
+		push @to_get, "$BASE_URL?day=day$day&c="
+		  . join('.', @chs[$i .. $end-1]);
 	    }
 	}
+    }
+    else {
+	warn "apparently nothing to download\n";
+    }
 
-	# Check to see if we have to write channels data first.
-	if (not $wrote_channels) {
-	    if ($day != $first_day) {
-		# Must have done a whole day's listings, channels are
-		# ready to write.  We write only those channels for
-		# which there were programmes during the first day -
-		# this is good enough and avoids writing out channels
-		# which were listed in dir but didn't really have any
-		# programmes.
-		#
-		write_channels($writer, [ keys %chans_todo ]);
-		$wrote_channels = 1;
+    my $bar = new Term::ProgressBar('downloading listings', scalar @to_get);
+    my @listingses;
+    foreach (@to_get) {
+	t "downloading page: $_";
+	eval {
+	    my $got = get($_);
+
+	    # FIXME work around bad characters
+	    $got =~ s/\s&\s/ &amp; /g;
+
+	    # (Spurious backslash in regexp to keep Emacs happy.)
+	    if ($got =~ s!<(\w+) lang="\w+"(?:\s+x-\w+="[^\"]*")*></\1>!!) {
+#		warn "got page $_ containing empty $1\n";
 	    }
-	}
 
-	if ($wrote_channels) {
-	    t 'channels have been written before, write programmes';
-	    $writer->write_programme($_) foreach @progs_todo;
-	    @progs_todo = ();
-	}
+	    if ($got =~ /^\s*Can\'t connect to db$/) {
+		die "\nWeb site giving 'Can't connect to db' error.  Please try again later.\n";
+	    }
 
+	    t "parsing content of $_";
+	    my $data;
+	    {
+		local $Log::TraceMessages::On = 0;
+		eval { $data = XMLTV::parse($got) };
+		die "$_: $@" if $@;
+	    }
+	    push @listingses, $data;
+	};
+	die "$_: $@" if $@;
 	update $bar;
     }
+    my %w_args = ();
+    if (defined $opt_output) {
+	my $fh = new IO::File ">$opt_output";
+	die "cannot write to $opt_output\n" if not $fh;
+	%w_args = (OUTPUT => $fh);
+    }
+    my $catted = XMLTV::cat(@listingses);
 
-    # In case we never got to the second day, make sure the pending stuff
-    # is written.
+    # We need to reconcile the channels data with the Ananova_Channel
+    # objects that are lying around.  FIXME this information should be
+    # in a single place - perhaps the Ananova_Channel package should
+    # go.
     #
-    if (not $wrote_channels) {
-	write_channels($writer, [ keys %chans_todo ]);
-	$writer->write_programme($_) foreach @progs_todo;
-	$wrote_channels = 1; @progs_todo = ();
+    use vars '%ch'; local *ch = $catted->[2];
+    use vars '@progs'; local *progs = $catted->[3];
+    fix_xmltv_ids(\%ch, \@progs);
+    add_display_names(\%ch);
+
+    # A couple of fixes to make, on a per-channel basis.
+    my %by_ch;
+    foreach (@progs) {
+	die if not defined;
+	push @{$by_ch{$_->{channel}}}, $_;
+    }
+#    local $Log::TraceMessages::On = 1;
+    t '\%by_ch: ' . d \%by_ch;
+    @progs = ();
+    foreach (keys %by_ch) {
+	t "doing channel $_";
+	my $progs = $by_ch{$_};
+	t 'progs are: ' . d $progs;
+
+	# Get rid of Ananova's bizarre system for follow-on
+	# programmes.  The XMLTV way of dealing with them is not ideal
+	# either, but it's the standard right now.
+	#
+	fix_times($progs);
+
+	# Remove the occasional zero-length programmes which pop up.  NB
+	# we rely here on the ordering which Ananova generates within each
+	# channel.
+	#
+	fix_zero_length($progs);
+
+	push @progs, @$progs;
     }
 
-    # Finish.
-    $writer->end();
+    # Warn about occasional bug where blank titles are generated.
+    PROG: foreach my $p (@progs) {
+	foreach (@{$p->{title}}) {
+	    if (not length $_->[0]) {
+		warn "programme at $p->{start} on $p->{channel} has blank title";
+		last PROG; # don't warn any more
+	    }
+	}
+    }
+
+    XMLTV::write_data($catted, %w_args, comment => $copyright);
+}
+
+
+# Convert Ananova channel ids to XMLTV ids.  Ananova serves the pages
+# with its own internal numeric ids.
+#
+# Parameters:
+#   reference to list of channels
+#   reference to list of programmes
+#
+# Modifies the data passed in.
+#
+sub fix_xmltv_ids( $$ ) {
+    my ($ch, $progs) = @_;
+
+    my %new_ch;
+    foreach (keys %$ch) {
+	die if not defined;
+	my $xid = XMLTV::Ananova_Channel->ananova_id_to_xmltv_id($_);
+	if (not defined $xid) {
+	    # Shouldn't happen as we read the allchannels page before.
+	    warn "cannot convert Ananova id $_ to XMLTV id";
+	}
+	else {
+	    warn "channel with XMLTV id $xid seen twice"
+	      if defined $new_ch{$xid};
+	    ($new_ch{$xid} = $ch->{$_})->{id} = $xid;
+	}
+    }
+#    local $Log::TraceMessages::On = 1;
+    t 'old channels: ' . d $ch;
+    t 'new channels: ' . d \%new_ch;
+    %$ch = %new_ch;
+    t 'updated old channels: ' . d $ch;
+
+    foreach (@$progs) {
+	my $xid = XMLTV::Ananova_Channel->ananova_id_to_xmltv_id($_->{channel});
+	if (not defined $xid) {
+	    warn "cannot convert Ananova id $_ to XMLTV id";
+	}
+	else {
+	    $_->{channel} = $xid;
+	}
+    }
+}
+
+# Add extra display names to channels, based on the display names
+# stored in Ananova_Channel objects.
+#
+# Parameter: reference to list of channels, with proper XMLTV ids.
+#
+# Modifies the data passed in.
+#
+sub add_display_names( $ ) {
+    my $ch = shift;
+    foreach (keys %$ch) {
+	my $ch_obj = XMLTV::Ananova_Channel->find_by_xmltv_id($_);
+	if (not defined $ch_obj) {
+	    # Shouldn't happen.
+	    warn "no object for XMLTV id $_";
+	}
+	else {
+	    # Discard the existing display name data and replace it
+	    # with the list from the object.  Urgh, this is horrible.
+	    #
+	    my @new = ();
+	    foreach ($ch_obj->get_display_names()) {
+		if (not tr/0-9//c) {
+		    # Only numbers, this name is language independent.
+		    push @new, [ $_ ];
+		}
+		else {
+		    # Assume the channel_ids file is in English.
+		    push @new, [ $_, 'en' ];
+		}
+	    }
+	    $ch->{$_}->{'display-name'} = \@new;
+	}
+    }
 }
 
 
 # Extract the copyright message from the comment at the start of every
 # page served.  Takes page content, returns the copyright message.
 #
-sub get_copyright( $ ) {
+# Parameters:
+#   content
+#   URL (for error messages)
+#
+sub get_copyright( $$ ) {
+    my ($content, $url) = @_;
     my $r;
-    foreach (split /\n/, $_[0]) {
-	s/^\s*\#// or die "unexpected non-comment line in page";
-	s/^\s+//;
-	last if not length;
-	$r .= "$_\n";
+    my @lines = split /\n/, $content;
+    my $msg;
+    while (@lines) {
+	local $_ = shift @lines;
+	if (s/^(\W*)Copyright\b/Copyright/) {
+	    my $prefix = $1;
+	    $msg .= "$_\n";
+	    # Find following lines with the same prefix.
+	    while (@lines) {
+		local $_ = shift @lines;
+		s/^\Q$prefix\E// or last;
+		$msg .= "$_\n";
+	    }
+	    return $msg;
+	}
     }
-    return $r;
+    warn "no copyright message found in $url\n";
 }
 
 
-# Return a reference to an ordered hash mapping region display name to
-# Ananova internal region number.  The old Ananova region names like
-# 'ea_0' are ignored, now we just look at the number 0.
+# Reads the Ananova 'regions' page and sets up channel objects.  Also
+# returns a hashref mapping region ids to region names.
 #
 # Parameters:
 #   contents of Ananova 'regions' page
 #   URL of that page (for error reporting)
 #
 sub get_regions( $$ ) {
-    my ($data, $url) = @_;
-    my %r; tie %r, 'Tie::IxHash';
-    foreach (split /\n/, $data) {
-	t "doing line: $_";
-	s/^\s+//; s/\s+$//;
-	s/\#.*//;
-	next if $_ eq '';
-	if (/^region\.(?:[a-z]+_)?(\d+)=(.+)$/) {
-	    $r{$2} = $1;
+    my ($xml, $url) = @_;
+    my %r;
+
+    # Call some internal routines of the XMLTV module to parse this
+    # XML, which is similar to XMLTV's channel listings but not quite
+    # the same.
+    #
+    my $p = new XML::DOM::Parser;
+    my $doc = $p->parse($xml);
+    die "$url is not XML" if not defined $doc;
+
+    # FIXME ignoring attributes of <tv>.
+    my $nodes = $doc->getElementsByTagName('region');
+    my $n = $nodes->getLength();
+    for (my $i = 0; $i < $n; $i++) {
+	my $node = $nodes->item($i);
+
+	# Get the Ananova region id.
+	use vars '%reg_attrs'; local *reg_attrs = XMLTV::dom_attrs($node);
+	delete $reg_attrs{tag}; # old-style id, not used.
+	my $reg_id = delete $reg_attrs{id};
+	if (not defined $reg_id) {
+	    warn "$url: region with no id, skipping";
+	    next;
 	}
-	else {
-	    warn "bad line from $url: $_";
+	foreach (keys %reg_attrs) {
+	    warn "$url: unknown attribute $_ in region";
+	}
+
+	# Store the region id and name.
+	my $fc = $node->getFirstChild();
+	$node->removeChild($fc);
+	if ($fc->getNodeTypeName() ne 'TEXT_NODE') {
+	    warn 'first child of region should be region name';
+	    next;
+	}
+	my $reg_name = $fc->getData();
+	for ($reg_name) { s/^\s+//; s/\s+$// }
+	$r{$reg_id} = $reg_name;
+
+	# Inside a <region> element are some <channel> elements.
+	foreach (XMLTV::dom_subelements($node)) {
+	    if ($_->getNodeName() ne 'channel') {
+		warn "$url: something other than channel inside region";
+		next;
+	    }
+	    t '\@XMLTV::Channel_Handlers=' . d \@XMLTV::Channel_Handlers;
+	    t 'calling XMLTV::node_to_channel()';
+	    my $ch_data = XMLTV::node_to_channel($_);
+	    my @chs = XMLTV::Ananova_Channel->find_by_ananova_id($ch_data->{id});
+	    if (not @chs) {
+		warn "$url: channel $ch_data->{id} mentioned in regions but not channels";
+		next;
+	    }
+
+	    # Tell each channel with this Ananova id that it belongs to
+	    # this region.
+	    #
+	    $_->add_region($reg_id) foreach @chs;
 	}
     }
-    if (not keys %r) {
-	warn "couldn't get any region data from $url";
-    }
+
+    # We just told some existing channel objects about their
+    # terrestrial regions.  That is the main purpose of this
+    # subroutine.  But we also return a hash mapping region ids to
+    # region names.
+    #
     return \%r;
 }
 
 
-# Get the list of Ananova 'filenames' and parse each filename into a
-# tuple of:
-#
-# [ original filename, day number, Ananova channel id ]
-#
-# Returns a list of these tuples (er, listrefs).
-#
-# Parameters:
-#   contents of Ananova 'dir' page
-#   URL of 'dir' page
-#
-sub get_dir( $$ ) {
-    my ($data, $url) = @_;
-    local $Log::TraceMessages::On = 0;
-
-    my @r;
-    my %warned_unknown_region;
-    foreach (split /\n/, $data) {
-	t "doing line: $_";
-	s/^\s+//; s/\s+$//;
-	s/\#.*//;
-	next if $_ eq '';
-	
-	my $orig = $_;
-
-	s/^day(\d+)_// or die "bad Ananova filename $_ (no 'dayX_')";
-	my $day = $1;
-	my $channel = $_;
-
-	push @r, [ $orig, $day, $channel ];
-    }
-    return @r;
-}
-
-
-# Read Ananova's Channels page.  This tells us about radio and
+# Read Ananova's 'allchannels' page.  This tells us about radio and
 # satellite channels.
 #
-# Parameter: content of channels page
+# Parameters:
+#   contents of allchannels page
+#   URL (for error reporting)
 #
-sub read_channels_page( $ ) {
-    my $data = shift; die if not defined $data;
-    local $Log::TraceMessages::On = 0;
+sub read_channels_page( $$ ) {
+    my ($xml, $url) = @_;
+#    local $Log::TraceMessages::On = 1;
+    my $data;
 
+    # FIXME work around bad characters
+    $xml =~ s/\s&\s/ &amp; /g;
+
+    t 'parsing XML for channels page: ' . d $xml;
+    {
+	local $Log::TraceMessages::On = 0;
+	eval { $data = XMLTV::parse($xml) };
+	die "$url: $@" if $@;
+    }
+    my ($encoding, $credits, $channels, $progs) = @$data;
+    t '$encoding=' . d $encoding;
+    t '$credits=' . d $credits;
+    t '$channels=' . d $channels;
+    t '$progs=' . d $progs;
+
+    die if $encoding ne 'UTF-8';
+    # FIXME ignoring the credits
+    die if @$progs;
+
+    # FIXME perhaps a cleaner way of doing this than parsing then
+    # writing out again?
+    #
     my (%type, %display);
-    my %seen_display;
-    foreach (split /\n/, $data) {
-	t "doing line: $_";
-	s/^\s+//; s/\s+$//;
-	s/\#.*//;
-	next if $_ eq '';
-	
-	if (not /^([^=]+)=(.+)/) {
-	    warn "bad line in channels listing: $_\n";
-	    next;
+    foreach my $id (keys %$channels) {
+	my $c = $channels->{$id};
+	die "undef \$channels->{$id}" if not defined $c;
+	die "\$channels->{$id} not hash: $c" if ref $c ne 'HASH';
+	die "\$channels->{$id} has no 'id' key" if not defined $c->{id};
+
+	# FIXME handle multiple display names; keep lang attribute
+	for ($c->{'display-name'}) {
+	    if (not defined or @$_ == 0) {
+		warn "no display names for channel $c->{id}, skipping";
+		next;
+	    }
+	    elsif (@$_ == 1) {
+		# Okay.
+	    }
+	    elsif (@$_ >= 2) {
+		warn "skipping additional display names for $_->[0]->[0]";
+	    }
+	    else {
+		die;
+	    }
 	}
-	my ($ananova_id, $display) = ($1, $2);
-	t "ananova_id=$ananova_id, display=$display";
-	my @chs = XMLTV::Ananova_Channel->find_by_ananova_id($ananova_id);
+	
+	my ($type, $aid, $display) = ($c->{distribution}, $c->{id}, $c->{'display-name'}->[0]->[0]);
+	die if ref $type;
+	die if $id ne $aid;
+	t "got line with type $type, aid $aid, dn $display";
+	my @chs = XMLTV::Ananova_Channel->find_by_ananova_id($aid);
+	t 'maybe looked up by aid: ' . d \@chs;
 	if (not @chs) {
+	    t 'not found, create new channel object';
 	    my $ch = new XMLTV::Ananova_Channel();
-	    $ch->add_ananova_id($ananova_id);
+	    $ch->add_ananova_id($aid);
 	    @chs = ($ch);
 	}
-
+	
 	foreach my $ch (@chs) {
 	    # Only set the display name based on the first (ie,
 	    # best) Ananova id for this channel.  Otherwise we'd
@@ -797,8 +847,12 @@ sub read_channels_page( $ ) {
 	    # (Scottish viewers)'.  Only the first of the two should
 	    # have a chance to set the display name.
 	    #
-	    if ($ch->get_first_ananova_id() eq $ananova_id) {
+	    my $first_aid = $ch->get_first_ananova_id();
+	    t "first Ananova id: $first_aid";
+	    if ($first_aid eq $aid) {
+		t 'this Ananova channel is the first for this channel';
 		$ch->set_main_display_name($display);
+		t "set display name to $display";
 	    }
 	    # Additional display names are added from the channel_ids file
 	    # but *not* from Ananova's extra names.
@@ -806,830 +860,36 @@ sub read_channels_page( $ ) {
 	    # No warning for duplicate display names, that often happens.
 	    #
 
-	    $ch->guess_type() if not defined $ch->get_type();
-	}
-    }
-}
-
-
-# read_files_and_jump_around()
-#
-# Read data for a particular day.  Ideally this would correspond to
-# one file on the server, and we would be able to construct the
-# filename based on the day and channel.  Unfortunately the server
-# sometimes screws up and gets some channels a certain number of days
-# out of sync, so we have to be prepared to retry with 'wrong' day
-# numbers specified in the hope of getting the right result.
-#
-# Parameters:
-#   - Reference to date you expect to get.  Due to a global kludge to
-#     move the whole grabber back in time by one day, this may be
-#     modified.  (FIXME this kludge may no longer be necessary?  Keep for now.)
-#   - Ananova channel id.
-#   - Hash mapping server filenames to hashes of 'url' and 'content';
-#     hopefully everything needed is already in here, but extra pages
-#     could be downloaded if necessary.  (FIXME objectify this)
-#   - Filename to download, which will 90% of the time be the right file.
-#   - 'Prev' hash mapping filename to previous-day's filename (or undef).
-#   - 'Next' hash, ditto.
-#
-# Returns: ref to list of programmes for that day, or undef.
-#
-# This has to be the silliest subroutine name I have ever used.
-#
-sub read_files_and_jump_around( $$$$$$ ) {
-    my ($date_expected_r, $ch, $downloads, $filename, $prev, $next) = @_;
-    die if ref $filename;
-#    local $Log::TraceMessages::On = 1;
-    t 'read_files_and_jump_around() ENTRY';
-    t 'date expected (passed by ref): ' . d $$date_expected_r;
-    t 'aid: ' . d $ch;
-    t 'filename to get: ' . d $filename;
-    my %already;
-
-  RECURSE: # heh, heh
-    my $url = $downloads->{$filename}->{url}; die if ref $url;
-    my $content = $downloads->{$filename}->{content}; die if ref $content;
-    if (not defined $url) {
-	t "necessary to download $filename extra";
-	my $new_download = get_pages('Additional download', [ $filename ]);
-	%$downloads = (%$downloads, %$new_download);
-	goto RECURSE;
-    }
-    my $r = read_file($date_expected_r, $ch, $content, $filename, $url);
-    if (ref $r eq 'ARRAY') {
-	return $r;
-    }
-    elsif (not defined $r) {
-	warn "something went wrong reading $filename from server";
-	return undef;
-    }
-    elsif (not ref $r and $r != 0) {
-	# At this point we do the 'jump around' bit by trying to find
-	# what filename we should use, given that the current one has
-	# the wrong date at the server end.
-	#
-	$already{$filename}++ && warn "trying to get $filename twice";
-	my $orig_filename = $filename;
-	my $succ;
-	if ($r > 0) {
-	    t "need to go backwards $r steps";
-	    $succ = $prev;
-	}
-	elsif ($r < 0) {
-	    $r = -$r;
-	    t "need to go forwards $r steps";
-	    $succ = $next;
-	}
-	else { die }
-
-	while ($r > 0) {
-	    $filename = $succ->{$filename}; die if ref $filename;
-	    return undef if not defined $filename;
-	    --$r;
-	}
-	if ($already{$filename}) {
-	    # Oops, already done this one.  Guess even more
-	    # wildly.
+	    # Guess an XMLTV id if it wasn't set before.  This would go
+	    # wrong if two channels had the same Ananova id, but that can
+	    # only happen if it's specified in the channel_ids file -
+	    # which also defines the XMLTV ids.
 	    #
-	    my $filename = $orig_filename;
-	    while ($already{$filename}) {
-		$filename = $succ->{$filename}; die if ref $filename;
-		return undef if not defined $filename;
+	    if (not defined $ch->get_xmltv_id()) {
+#		warn "no XMLTV id in channel_ids file for Ananova id $aid\n";
+		$ch->set_xmltv_id("$aid.tv-listings.ananova.com");
 	    }
-	}
-	# Right, now $filename contains a successor filename that is
-	# vaguely in the right direction and hasn't been tried before.
-	#
-	warn "$orig_filename had wrong date, trying $filename\n";
-	goto RECURSE;
-    }
-    else { die }
-}
 
-
-# Read data for a particular listing 'file'.
-#
-# Parameters:
-#   reference to date expected in file (in Date::Manip format)
-#   XMLTV::Ananova_Channel object, used to check and set display name
-#   content of page from Ananova
-# Plus two used for error reporting and checking:
-#   Ananova 'filename'
-#   Ananova URL
-#
-# Returns:
-#   - If everything okay, reference to list of programme details.
-#   These won't have proper start and stop times; instead they have a
-#   'time' key and you should use date_programmes() or similar to fix up
-#   the list of programmes afterwards.
-#
-#   - If the date in the page was wrong (and so wrong that even
-#   applying magic kludges to go back one day globally), the return
-#   value is a number indicating (got day) - (expected day).  Eg if
-#   unexpectedly the file is two days behind, returns -1.  This number
-#   is relative to the new expected date (since the expected date is
-#   passed by reference and may be modified).
-#
-#   - If something more seriously wrong, undef.
-#
-# The expected date is used for two things.  For error checking, and
-# if read_file() gets a different date to the one expected but decides
-# it is worth working around, then the scalar pointed to will be
-# changed to the new date.  See also the global $fudge_day.
-#
-my (%warned_shorter, $warned_wrong_date); # cut down on duplicate warnings
-sub read_file( $$$$$ ) {
-    use vars '$date_expected'; local *date_expected = shift;
-    my ($ch, $data, $file, $url) = @_;
-    t 'read_file() ENTRY';
-    t 'date expected (passed by ref): ' . d $date_expected;
-    t 'Ananova_Channel object: ' . d $ch;
-#    t 'content of page: ' . d $data;
-    t 'Ananova filename: ' . d $file;
-    t 'URL: ' . d $url;
-    my @lines = split /\n/, $data;
-    foreach (@lines) { s/^\s+//; s/\s+$//; s/\#.*// }
-    @lines = grep { length } @lines;
-
-    if (not @lines) {
-	# No non-comment lines.  This could be because the PHP script
-	# is returning 'file not found'.  That happens if you request
-	# the directory listing, it contains obsolete files which
-	# (wrongly) are still around, and then your request for the
-	# file itself is handled by a different box where the file is
-	# in fact deleted.
-	#
-	if ($data =~ /\n\# \Q$file\E does not exist$/) {
-	    warn "file $file does not exist on server, probably should be removed from dir\n";
-	    return undef;
-	}
-	else {
-	    warn "cannot get data from $url, returns:\n$data";
-	    return undef;
-	}
-    }
-
-    # Check the date.
-    my $date_diff = page_date_diff(\$date_expected, shift @lines);
-    if (not defined $date_diff) {
-	warn "cannot find any date in $file, skipping\n";
-	return undef;
-    }
-    elsif ($date_diff != 0) {
-	return $date_diff;
-    }
-
-    # No need to check the display name, we assume it will be the same
-    # as in the show=allchannels list.  Ah, bliss.
-    #
-    shift @lines;
-
-    my $copyright = pop @lines;
-    if ($copyright !~ /^\(c\) Copyright/) {
-	warn "strange copyright message: $copyright\n";
-    }
-
-    if (@lines and $lines[0] =~
-	/^There are no listings available for this channel today\|\|/) {
-	return [];
-    }
-
-    # Right, got that cruft out of the way, each remaining line is a
-    # |-separated list of programme details.
-    #
-    my @r;
-    my $prev_time;
-    foreach (@lines) {
-	my @fields = split /\|/, $_, -1; # toothpicks ahoy!
-	my $num_fields = scalar @fields;
-	if ($num_fields == 1 and $fields[0] =~ /copyright/i) {
-	    next;
-	}
-	if ($num_fields < 17 or $num_fields >= 22) {
-	    warn "wrong number of fields ($num_fields, need 17..21) "
-	      . "in line from $url: $_\n";
-	    warn "fields are: " . join("\n", @fields) . "\n";
-	    warn "skipping line\n";
-	    next;
-	}
-	my ($title, $time, $when, $episode_num, $episode_name, $cast,
-	    $director, $duration, $main_desc, $type, $subtitled, $bw,
-	    $stereo, $mono, $new, $repeat, $digital)
-	  = @fields;
-	my %p;
-
-	# In the XMLTV format, title is multivalued, so it needs to be
-	# a list.  Furthermore each element is itself a list of
-	# [ string, language ].  Many other elements are like this.
-	#
-	$p{title} = [ [ $title, $LANG ] ];
-	
-	# The comment from Ananova says that the time is 'probably in
-	# time zone existing at 5:00am of the correct file date'.  I
-	# assume that means that it might not be, and it might instead
-	# have an explicit timezone.  We'll just use the old
-	# date-parsing routines to figure out the timezone.
-	#
-	# That means that for now, we add an element 'time' to the
-	# programme details, and later on, date_programmes() turns
-	# this into a proper start and stop time.
-	#
-	if (length $time) {
-	    if (not $time =~ /^\d\d?:\d\d$/) {
-		warn "bad time '$time' in line from page $url: $_";
-		warn "skipping line";
-		next;
-	    }
-	}
-	else {
-	    # No time was given for this programme.  This is probably
-	    # because it's contained in the same 'clump' as the
-	    # previous one, for example 'CBBC' at 6:45 is followed in
-	    # the listings by 'Teletubbies' without a time.
-	    #
-	    # For this case, we give the programme the same time as
-	    # the previous one.  That's the way it appears in the
-	    # Ananova user-visible pages and it's what add_clumpidx()
-	    # expects.
-	    #
-	    if (not defined $prev_time) {
-		warn "no time for first line from page $url: $_";
-		warn "skipping line";
-		next;
-	    }
-	    $time = $prev_time;
-	}
-
-	# For sanity-checking the time against 'when',
-	# comparing raw hours and minutes will probably be faster
-	# than using Date::Manip.
-	#
-	$time =~ /^(\d\d?):(\d\d)$/ or die;
-	my ($hours, $minutes) = ($1, $2);
-	if (length($hours) == 1) {
-	    $hours = "0$hours";
-	    $time = "$hours:$minutes";
-	}
-	$p{time} = $time;
-	$prev_time = $time;
-	
-	# The 'when' attribute can be DAYTIME, EVENING or LATENIGHT.
-	# It seems a bit redundant to me.  But on the principle that
-	# no scrap of information should be thrown away, we check that
-	# it's sensible.
-	#
-	if ($when eq 'DAYTIME') {
-	    if (5 <= $hours and $hours < 18) {
-		# Daytime is between 05:00 and 18:00.  It overlaps
-		# slightly with LATENIGHT.
-		#
-	    }
-	    else {
-		warn "time $time is wrongly considered 'DAYTIME' "
-		  . "in line from url $url: $_\n";
-	    }
-	}
-	elsif ($when eq 'EVENING') {
-	    if (17 <= $hours) {
-		# Evening is from 18:00 until midnight, and sometimes
-		# you see programmes at 17:45 or so considered
-		# EVENING, so we'll say it starts at 17:00.
-		#
-	    }
-	    else {
-		warn "time $time is wrongly considered 'EVENING' "
-		  . "in line from url $url: $_\n";
-	    }
-	}
-	elsif ($when eq 'LATENIGHT') {
-	    # Latenight is until 07:00 (or sometimes a programme just
-	    # beginning at that time is still latenight).  Annoyingly,
-	    # 23:59 is also counted as latenight, so we'll say it runs
-	    # from 23:00 to 07:00.
-	    #
-	    if (23 <= $hours
-		or $hours < 7
-		or ($hours == 7 and $minutes == 0)) {
-		# Okay.
-	    }
-	    else {
-		warn "time $time is wrongly considered 'LATENIGHT' "
-		  . "in line from url $url: $_\n";
-	    }
-	}
-	else {
-	    warn "unknown 'when' specifier $when "
-	      . "in line from url $url: $_";
-	}
-
-	# Episode number.
-	if (length $episode_num) {
-	    if ($episode_num =~ m!^[0-9/]+$!) {
-		# Assume that Ananova numbers episodes from 1; but
-		# XMLTV - like all good languages - counts from 0.
-		#
-		$episode_num =~ s/^(\d+)/$1 - 1/e;
-
-		# We don't know the series or part.
-		$p{'episode-num'} = [ ". $episode_num .", 'xmltv_ns' ];
-	    }
-	    else {
-		warn "bad episode number '$episode_num' "
-		  . "in line from url $url: $_";
-	    }
-	}
-
-	# Epsiode name.  This corresponds to the badly named
-	# 'sub-title' in XMLTV.
-	#
-	if (length $episode_name) {
-	    $p{'sub-title'} = [ [ $episode_name, $LANG ] ];
-	}
-
-	# Cast.
-	if (length $cast) {
-	    foreach (split /\s*,\s*/, $cast) {
-		push @{$p{credits}{actor}}, $_;
-	    }
-	}
-
-	# Director.
-	if (length $director) {
-	    foreach (split /\s*,\s*/, $director) {
-		push @{$p{credits}{director}}, $_;
-	    }
-	}
-	
-	# Ananova's idea of 'duration' is usually the original length
-	# of a film - not the length it is shown at on TV.  Now we do
-	# have a 'length' element in the XMLTV format, but that's
-	# meant for the length _as shown_, just not including adverts
-	# or other junk.  So we just discard duration.
-	#
-	# There is an occasional bug in the site where the duration has
-	# what looks like a year stuck three times onto the end.  As
-	# in '85 mins1997 1997 1997'.
-	#
-	$duration =~ s/(\d{4}) \1 \1$//;
-	if ($duration ne '' and $duration !~ /^(\d+)\s+(?:mins|minutes)$/) {
-	    warn "bad duration $duration "
-	      . "in line from url $url: $_";
-	}
-
-	# Programme type.
-	if (length $type) {
-	    foreach (split /\s*,\s*/, $type) {
-		# Convert Ananova's categories into English.
-		my %lookup = (chldren => 'children',
-			      diy => 'DIY');
-		$_ = lc;
-		$_ = $lookup{$_} if defined $lookup{$_};
-		push @{$p{category}}, [ $_, $LANG ];
-	    }
-	}
-
-	# Subtitles.  Assume that when Ananova say this, they mean
-	# teletext (I don't know what happens for foreign films with
-	# on-screen subtitles).
-	#
-	if ($subtitled) {
-	    # We don't know what language the subtitles are in.  $LANG
-	    # sets the language for the descriptions, not the
-	    # programmes themselves.
-	    #
-	    $p{subtitles} = [ { type => 'teletext' } ];
-	}
-	
-	# Check 'type' of channel to decide whether video and audio
-	# elements need be present.  If $p{video}{present} is false,
-	# that means there's definitely no picture; if it's undefined
-	# then we don't know yet.
-	#
-	my $ch_type = $ch->get_type();
-	if ($ch_type eq 'terrestrial') {
-	    # Terrestrial television.  We can't infer anything from
-	    # that, because occasionally programmes are broadcast with
-	    # no picture or no sound.
-	    #
-	}
-	elsif ($ch_type eq 'satellite') {
-	    # Similar.
-	}
-	elsif ($ch_type eq 'radio') {
-	    $p{video}{present} = 0;
-	    $p{audio}{present} = 1;
-	}
-	elsif ($ch_type eq 'duff') {
-	    die "trying to download listings for duff channel";
-	}
-	else { die "bad type $ch_type for channel $ch" }
-
-	# Black and white - in other words, not colour.
-	if ($bw) {
-	    if (defined $p{video}{present} and not $p{video}{present}) {
-		warn "black-and-white flag set for a programme with no picture";
-	    }
-	    $p{video}{present} = 1;
-	    $p{video}{colour} = 0;
-	}
-	
-	# Stereo or mono.
-	if (not $stereo and not $mono) {
-	    # Just don't set any of the flags.
-	}
-	else {
-	    if (defined $p{audio}{present} and not $p{audio}{present}) {
-		warn "stereo information set for a programme with no sound";
-	    }
-	    $p{audio}{present} = 1;
-
-	    if (not $stereo and $mono) {
-		$p{audio}{stereo} = 'mono';
-	    }
-	    elsif ($stereo and not $mono) {
-		$p{audio}{stereo} = 'stereo';
-	    }
-	    elsif ($stereo and $mono) {
-		warn "line in page $url has both stereo and mono: $_";
-	    }
-	    else { die }
-	}
-
-	if ($repeat) {
-	    # 'Repeat' in British TV usually means 'previously shown
-	    # on the same channel'.  It has happened that series
-	    # transferred from one channel to another got repeated on
-	    # the new channel as 'new'.
-	    #
-	    # However, we can't say this for sure.  Things can be
-	    # shown on BBC1 and then 'repeated' on BBC2, for example.
-	    # Short of some really ornate system to describe all
-	    # different nuances of previously-shown in the file
-	    # format, we just have to leave the element empty.
-	    #
-	    $p{'previously-shown'} = {};
-	}
-
-	if ($new) {
-	    # Ananova's 'new' flag does not correspond to <new> in
-	    # XMLTV.  In fact I don't know exactly what it stands for.
-	    # I think it might mean 'new series' of an existing show,
-	    # but for the time being ignore it.
-	    #
-	}
-
-	# I don't know what the 'digital' flag is for: Ananova says
-	# 'if known to be available on as digital transmission'.  Just
-	# ignore it.
-	#
-
-	# There is one main description and up to four additional
-	# descriptions with increasing levels of detail.  We
-	# sanity-check that they have more or less increasing length.
-	#
-	my @descs = @fields[17..$#fields];
-	foreach my $i (0 .. $#descs) {
-	    next if not defined $descs[$i] or not length $descs[$i];
-	    foreach my $j ($i+1 .. $#descs) {
-		next if not defined $descs[$j] or not length $descs[$j];
-		# Sometimes the data really does have shorter text for
-		# the supposedly more detailed description.  So we
-		# can't check it pedantically.  OTOH this has caught
-		# some errors in data input.  So we use a heuristic:
-		# the more detailed description should be at least
-		# half as long as a less detailed one.
-		#
-		if (2 * length $descs[$j] < length $descs[$i]) {
-		    unless ($warned_shorter{$descs[$j]}{$descs[$i]}++) {
-			warn
-			  "description $j ($descs[$j]) is much shorter than description $i ($descs[$i]) "
-			    . "in line from url $url: $_";
-		    }
-		}
-	    }
-	}
-	# The most detailed description should be the same as the main
-	# description.  Er, except when it is not present at all.
-	#
-	if (defined $descs[3] and $descs[3] ne '' and $descs[3] ne $main_desc) {
-	    warn "description 3 ($descs[3]) isn't the same as main desc ($main_desc) "
-	      . "in line from url $url: $_";
-	    # Add on the main description so we don't lose it.
-	    push @descs, $main_desc;
-	}
-	my %seen;
-	foreach (reverse @descs) {
-	    next if $_ eq '';
-	    next if $seen{$_}++;
-	    push @{$p{desc}}, [ $_, $LANG ];
-	}
-
-	# Channel.  By now we know the display name of the
-	# channel, so we can call get_xmltv_id().
-	#
-	$p{channel} = $ch->get_xmltv_id();
-
-	# Source - used for debugging and written out only as a
-	# comment in the output.
-	#
-	$p{debug_source} = $file;
-
-	push @r, \%p;
-    }
-    return \@r;
-}
-
-
-# page_date_diff()
-#
-# Check the date in a day's listings matches what we expect.
-# According to Ananova's comment there's some odd procedure you have
-# to follow to make sure it is correct.
-#
-# Parameters:
-#   reference to expected date
-#   date string from page
-#
-# As with read_file(), the expected date is passed by reference and
-# modified sometimes.
-#
-# The return value is the difference between the found date and the
-# expected date, after performing any devious machinations needed to
-# alter the expected date a little.  Obviously if difference == 0 then
-# the dates match.  If the date of the page could not be determined
-# then undef is returned (so unfortunately you can't treat the return
-# value as a Boolean).
-#
-sub page_date_diff( $$ ) {
-    use vars '$expected'; local *expected = shift;
-    my $got = shift;
-    t 'page_date_diff() ENTRY';
-    t 'expected date (passed by ref): ' . d $expected;
-    t 'got date: ' . d $got;
-
-    if (not $got =~
-/^((?:Sun|Mon|Tues|Wednes|Thurs|Fri|Satur)day)\|(\d\d)\|(\d\d)\|(\d\d\d\d)$/)
-    {
-	warn "bad date '$got'";
-	return undef;
-    }
-    my ($weekday, $dd, $mm, $yyyy) = ($1, $2, $3, $4);
-    t "got date: $weekday $yyyy-$mm-$dd";
-    my $dp = ParseDate("$yyyy-$mm-$dd");
-    if (not defined $dp) {
-	warn "bad date '$got'";
-	return undef;
-    }
-    t "parsed out date $dp, check it matches $weekday";
-    if (UnixDate($dp, '%A') ne $weekday) {
-	# Apparently you have to step backwards by one or two days
-	# until the date matches the weekday given.
-	#
-	my $found = 0;
-	foreach (0, 1) {
-	    $dp = DateCalc($dp, '- 1 day'); die if not defined $dp;
-	    if (UnixDate($dp, '%A') eq $weekday) {
-		$found = 1;
-		last;
-	    }
-	}
-	if (not $found) {
-	    warn "weekday of $got is wrong (even tried going back a couple of days)";
-	    return undef;
-        }
-    }
-
-    # But does it match what we expect?
-    my $day_got = UnixDate($dp, '%Q');
-    my $day_expected = UnixDate($expected, '%Q');
-    if ($day_got ne $day_expected) {
-	if ($using_cache) {
-	    warn "since cache is in use, ignoring wrong date in pages\n"
-	      unless $warned_wrong_date++;
-	    return 0;
-	}
-	
-	if (not defined $fudge_day) {
-	    # There's still a chance to set the fudge-flag for
-	    # days and work around Ananova being one day out.
-	    #
-	    my $yesterday = DateCalc($expected, '- 1 day');
-	    die if not defined $yesterday;
-	    if ($day_got eq UnixDate($yesterday, '%Q')) {
-		warn "Ananova is one day behind, so day 1 is yesterday\n";
-		$fudge_day = 1;
-		$expected = $yesterday; # passed by ref, remember
-	    }
-	    else {
-		$fudge_day = 0; # don't try this trick again
+	    if ($type eq 'terrestrial') {
+		$ch->set_type('terrestrial');
+	    } elsif ($type eq 'digital') {
+		# FIXME losing distinction between ITV Digital and Sky
+		$ch->set_type('satellite');
+	    } elsif ($type eq 'satellite') {
+		$ch->set_type('satellite');
+	    } elsif ($type eq 'localradio') {
+		# FIXME losing distinction between local and national radio
+		$ch->set_type('radio');
+	    } elsif ($type eq 'radio') {
+		$ch->set_type('radio');
+	    } elsif ($type eq 'unknown') {
+		$ch->set_type('duff');
+	    } else {
+		warn "$url: unknown <distribution>: $type";
+		$ch->set_type('duff');
 	    }
 	}
     }
-
-    $day_expected = UnixDate($expected, '%Q'); # recalculate
-    my $delta = DateCalc($day_expected, $day_got);
-    my $day_diff = Delta_Format($delta, 0, '%dh') + 0; # force numberify
-    warn "wrong date in page: expected $day_expected, got $day_got (diff $day_diff day(s))\n"
-      if $day_diff;
-    return $day_diff;
-}
-
-
-# date_programmes()
-#
-# Given a list of programme details (from extract_progs()) and the date
-# of this listing, add proper time and date for each programme.  In UT.
-#
-# Parameters:
-#   reference to list of programme details
-#   date in Date::Manip format
-#
-# Modifies the list passed in, so that each programme no longer has
-# {time} but has {start} instead.  If the programme has
-# {length}, gets rid of that too and puts in {stop}.
-#
-sub date_programmes($$) {
-#    local $Log::TraceMessages::On = 1;
-    die 'usage: date_programmes(ref to list of programmes, date)'
-      if @_ != 2;
-    my ($progs, $base_date) = @_;
-    t 'adding date to programmes: ' . d $progs;
-    t 'base date: ' . d $base_date;
-    my $base_day = UnixDate($base_date, '%Q');
-    die if not defined $base_day;
-    die 'bad base day, format should be YYYYMMDD'
-      if $base_day !~ /^\d{8}$/;
-
-    my $prev_date;
-    my $day_later = ParseDateDelta('+1 day') or die;
-    my $current_tz = 0; # not undef, because of Memoize complaining
-
-    foreach (@$progs) {
-	t('adding date to programme ' . d($_));
-	my $t = $_->{'time'};
-	
-	# $t should be hours and minutes, add seconds
-	$t =~ s/\b(\d\d):(\d\d)\b/$1:$2:00/ or die "bad hh:mm $t";
-
-	if (defined gettz($t)) {
-#	    local $Log::TraceMessages::On = 1;
-	    t "found explicit timezone $t, using for future progs";
-	    $current_tz = gettz($t);
-	}
-
-	t "doing 24h UK time $t with base day $base_day";
-	my $prog_date = parse_uk_date("$base_day $t", $current_tz);
-	if (not defined $prog_date) {
-	    # It's not a valid UK time.  Two reasons for this: it
-	    # really isn't, or we're just confused about what day it
-	    # is and need to 'jump' forward a day.
-	    #
-	    t 'that date is bad, maybe need to jump a day?';
-	    my $err;
-	    my $new_base_day = UnixDate
-	      DateCalc($base_day, $day_later, \$err),
-	      '%Q';
-	    die "error from DateCalc(): $err" if defined $err;
-	    my $new_prog_date = parse_uk_date("$new_base_day $t", $current_tz);
-	    die "bad base day + time '$t' (even tried next day)"
-	      if (not defined $new_prog_date) or ($new_prog_date !~ /\S/);
-	    t 'okay... assume we will jump a day (do it later)';
-	}
-
-	if ((not defined $prog_date)
-	    or (defined $prev_date
-		and (Date_Cmp($prev_date, $prog_date) > 0) ) )
-        {
-	    # Seem to have jumped backwards in time.  Must be the next
-	    # day - but see below.
-	    #
-	    t 'time is lower than before';
-	    my $prev_day = UnixDate $prev_date, '%Q';
-	    t 'previous programme was at ' . d($prev_date);
-	    my $threshold = ParseDate("$prev_day 12:00:00");
-	    t 'threshold is ' . d($threshold);
-	    if (Date_Cmp($prev_date, $threshold) < 0) {
-		# I can't believe that one programme would last from
-		# before 12:00 until after midnight on any day.  So
-		# this seeming jump to the next day is bogus - it's
-		# the same day but the time is a little bit earlier
-		# for some reason.  (Probably UT/BST switching)
-		#
-		t 'previous programme started before threshold, ' .
-		  'cannot be next day';
-	    }
-	    else {
-		t 'must be next day';
-		my $err;
-		$base_day = UnixDate
-		  DateCalc($base_day, $day_later, \$err),
-		  '%Q';
-		die "error from DateCalc(): $err" if defined $err;
-		$prog_date = parse_uk_date("$base_day $t", $current_tz);
-		die "bad base day + time '$t'"
-		  if (not defined $prog_date) or ($prog_date !~ /\S/);
-		t 'new base day: ' . d($base_day);
-	    }
-	}
-
-	delete $_->{'time'};
-	$_->{start} = ud($prog_date);
-	t 'new start time: ' . d($_->{start});
-	$prev_date = $prog_date;
-
-	if (defined(my $length = delete $_->{length})) {
-	    # Try to calculate the stop time based on start time and length.
-	    if (not defined $_->{stop}) {
-		my $stop = DateCalc(ParseDate($_->{start}), "+ $length");
-		if (defined $stop) {
-		    $_->{stop} = ud($stop);
-		}
-		else {
-		    warn "could not calculate stop time from $_->{start} + $length";
-		}
-	    }
-	    else {
-		warn 'programme has both length and stop';
-	    }
-	}
-    }
-}
-
-
-# add_clumpidx()
-#
-# Sometimes two programmes on a channel are given the same
-# start time in the listings.  This seems to happen when the
-# first is a 'mothership' containing several smaller things,
-# for example '11:00 The Core, 11:00 Core News'.
-#
-# We add a 'clumpidx' attribute to distinguish these
-# programmes.  Eg 'The Core' has clumpidx '0/2' and 'Core
-# News' has '1/2'.
-#
-# Parameters:
-#   a reference to a list of programmes for one channel, which will
-#   be modified
-#
-sub add_clumpidx($) {
-    die "usage: add_clumpidx(ref to list of programmes)"
-      if @_ != 1;
-    my $progs = shift;
-    t('add_clumpidx() ENTRY');
-
-    my $last_start;
-    my %num_in_clump; # Maps start time to num. progs at that time
-    foreach (@$progs) {
-	t 'looking at programme: ' . d($_);
-	my $start = ParseDate($_->{start});
-	t '$start=' . d($start);
-	$_->{clumpidx} = $num_in_clump{$start}++;
-	t 'clumpidx now ' . d($_->{clumpidx});
-
-	if ($num_in_clump{$start} > 1) {
-	    if (not defined $last_start or $last_start ne $start) {
-		warn <<END
-more than one programme at $start on same channel, \
-but not consecutive in listings (this is $_->{title})
-END
-				 ;
-	    }
-	}
-	$last_start = $start;
-    }
-
-    # Okay, we've got clumpidx of '0', '1' where needed, but even
-    # better would be '0/2', '1/2'.  We look at how many programmes
-    # are in each clump: if only one, remove the clumpidx entirely.
-    # If more than one, put the full 'x/y' clumpidx.
-    #
-    t "refine clumpidx's and build todo list";
-    my %todo;
-    foreach (@$progs) {
-	t 'looking at programme: ' . d($_);
-	my $start = ParseDate($_->{start});
-	my $num = $num_in_clump{$start};
-	die if not defined $_->{clumpidx};
-	if ($num == 1) {
-	    # Ordinary, sane programme not sharing its slot.  This
-	    # would have a clumpidx of '0/1', which isn't worth
-	    # putting in the output.
-	    #
-	    t 'only programme in slot';
-	    die if $_->{clumpidx} ne '0';
-	    delete $_->{clumpidx};
-	}
-	elsif ($num > 1) {
-	    t 'shares a slot';
-	    $_->{clumpidx} .= "/$num";
-	    t 'new clumpidx: ' . d($_->{clumpidx});
-	    push @{$todo{$start}}, $_;
-	    t "\$todo{$start} now " . d($todo{$start});
-	}
-	else { die }
-    }
-    t 'add_clumpidx() EXIT';
 }
 
 
@@ -1704,22 +964,6 @@ sub extract_variant( $$ ) {
 }
 	
 
-
-# Write channels as XMLTV.
-#
-# Parameters:
-#     XMLTV::Writer to use
-#     ref to list of Ananova_Channel objects.
-#
-sub write_channels( $$ ) {
-#    local $Log::TraceMessages::On = 1;
-    my $writer = shift;
-    foreach (sort { $a->get_xmltv_id() cmp $b->get_xmltv_id() } @{shift()}) {
-	$_->write($writer, $LANG);
-    }
-}
-
-
 ####
 # Channels stuff
 #
@@ -1757,9 +1001,9 @@ sub init_channels() {
 	next unless length;
 	my @fields = split /:/;
 	die "$CHANNEL_NAMES_FILE:$.: wrong number of fields"
-	  if @fields < 3 or @fields > 4;
+	  if @fields < 2 or @fields > 3;
 
-	my ($xmltv_id, $ananova_ids, $type, $extra_dn) = @fields;
+	my ($xmltv_id, $ananova_ids, $extra_dn) = @fields;
 	my @aids = split /,/, $ananova_ids;
 	die "$CHANNEL_NAMES_FILE:$.: no Ananova ids"
 	  if not @aids;
@@ -1794,8 +1038,6 @@ sub init_channels() {
 	    t "setting variant $variant";
 	    $ch->set_variant($variant);
 	}
-	t 'setting type: ' . d $type;
-	$ch->set_type($type);
 	t 'maybe adding extra display name: ' . d $extra_dn;
 	$ch->add_extra_display_names($extra_dn)
 	  if defined $extra_dn;
@@ -1841,7 +1083,7 @@ sub get_channel_pkgs() {
 #
 # Parameters:
 #   text to use for progress bar
-#   listref of page names to download, eg for show=dir name is 'dir'
+#   listref of page names to download, eg for show=regions name is 'regions'
 #
 # Returns: reference to hash mapping page name to a hash with 'url'
 # and 'content'.  Although 'url' may be shared with other pages.
@@ -1858,18 +1100,19 @@ sub get_pages( $$ ) {
     t "initializing progress bar with $num_pages items";
     my $bar = new Term::ProgressBar($text, $num_pages);
 
-    # Arbitrary limit on number of pages fetched at once, requested by
-    # Ananova to keep down memory usage on the server.
-    #
-    my $max_at_once = 10;
+    # FIXME currently multiple pages are not supported.
+    my $max_at_once = 1;
+
+    my @got;
     while (@pages) {
 	my @this_fetch = ();
+	die if $max_at_once != 1;
 	while (@pages and (@this_fetch < $max_at_once)) {
 	    push @this_fetch, shift @pages;
 	}
 	t 'this fetch: ' . d \@this_fetch;
 	t 'remaining to fetch: ' . d \@pages;
-	my $url = "$A?" . join('&', map { "show[]=$_" } @this_fetch);
+	my $url = "$BASE_URL?" . join('&', map { "show[]=$_" } @this_fetch);
 	t "fetching url: $url";
 	foreach (@this_fetch) { $r{$_}->{url} = $url }
 
@@ -1877,51 +1120,12 @@ sub get_pages( $$ ) {
       GET:
 	my $got = get $url;
 	die "cannot fetch $url" if not defined $got;
-	
-	# Each new page begins with some comment (#) lines.
-	my @lines = split /\n/, $got;
-	my @got = ();
-	my $curr = '';
-	my $in_comment = 1;
-	foreach (@lines) {
-	    my $is_comment = /^\#/;
 
-	    # Horrible kludge: there is one page which does have a
-	    # comment in the middle of it, ignore that line.
-	    #
-	    $is_comment = 0 if /^\#\s+OK,/;
+	# FIXME need to split up pages, when multiple ones are
+	# returned.
+	#
+	push @got, $got;
 
-	    # Another: if a file doesn't exist this is given in a
-	    # comment!
-	    #
-	    if ($is_comment and /^\#\s+\S+ does not exist/) {
-		$is_comment = 0;
-	    }
-
-	    if (not $is_comment and not $in_comment) {
-		# Another ordinary line on the current page.
-		$curr .= "$_\n";
-	    }
-	    elsif (not $is_comment and $in_comment) {
-		# Reached the end of the comments on the current page.
-		$curr .= "$_\n";
-		$in_comment = 0;
-	    }
-	    elsif ($is_comment and not $in_comment) {
-		# Reached some comments, must be start of next page.
-		t 'reached end of page: ' . d $curr;
-		push @got, $curr; update $bar;
-		$curr = "$_\n";
-		$in_comment = 1;
-	    }
-	    elsif ($is_comment and $in_comment) {
-		# Another comment at the top of the current page.
-		$curr .= "$_\n";
-	    }
-	    else { die }
-	}
-	t 'last page: ' . d $curr;
-	push @got, $curr;
 	if (@got != @this_fetch) {
 	    warn 'expected ' . (scalar @this_fetch) .
 	      " pages from URL $url, got " . (scalar @got);
@@ -1942,3 +1146,146 @@ sub get_pages( $$ ) {
     die if (keys %r) != $num_pages;
     return \%r;
 }
+
+
+# fix_times()
+#
+# Often there are follow-on programmes like Weather in 'News;
+# Weather'.  Ananova represents these by having the followon overlap
+# the last 15 seconds of the main programme.  This isn't the XMLTV
+# way, which is to use clumpidx.  Neither answer is ideal but we want
+# to follow the existing standard.
+#
+# Parameters: a reference to a list of programmes for one channel.
+#   The programmes will be modified, but not the list itself.
+#
+sub fix_times($) {
+#    local $Log::TraceMessages::On = 1;
+    die 'usage: fix_times(ref to list of programmes)' if @_ != 1;
+    t('fix_times() ENTRY');
+    my @progs = @{shift()}; # take a copy
+
+    for (my $prev = shift @progs; my $p = $progs[0]; $prev = shift @progs) {
+	my $start = $p->{start};
+	my $stop = $p->{stop};
+	my $prev_stop = $prev->{stop};
+	if (defined $stop and defined $prev_stop) {
+	    my $start_p = ParseDate($start); die if not defined $start_p;
+	    my $stop_p = ParseDate($stop); die if not defined $stop_p;
+	    my $prev_stop_p = ParseDate($prev_stop); die if not defined $prev_stop_p;
+	    my $start_plus_15 = DateCalc($start_p, '+ 15 seconds');
+	    die if not defined $start_plus_15;
+	    if (not Date_Cmp($start_plus_15, $prev_stop_p)
+		and not Date_Cmp($stop_p, $prev_stop_p)) {
+		# Found the magic 15 second difference.  Fix it.
+		if (defined $prev->{clumpidx} or defined $p->{clumpidx}) {
+		    # I really don't expect this to happen.
+		    warn 'cannot add clumpidx to programmes, already there';
+		    next;
+		}
+		$prev->{clumpidx} = '0/2';
+		$p->{clumpidx} = '1/2';
+		$p->{start} = $prev->{start};
+	    }
+	}
+    }
+    t 'fix_times() EXIT';
+}
+
+
+# # fix_dates()
+# #
+# # Turn dates like 'TVM 1996' into date and category.  Takes a
+# # reference to a list of programmes and modifies them.
+# #
+# sub fix_dates( $ ) {
+#     die 'usage: fix_dates(ref to list of programmes)' if @_ != 1;
+#     use vars '@progs'; local *progs = shift;
+#
+#     # This code is similar to special_tv_movie() in tv_extractinfo_en,
+#     # but acts on the <date> field and not the programme description.
+#     #
+#     PROG: foreach (@progs) {
+# 	if (defined $_->{date} and $_->{date} =~ s/^TVM\s*//) {
+# 	    # Add the category (unless it's already there).
+# 	    my $cat = 'TV movie';
+# 	    if (defined $_->{category}) {
+# 		foreach (@{$_->{category}}) {
+# 		    next PROG if $_->[0] eq $cat;
+# 		}
+# 	    }
+# 	    push @{$_->{category}}, [ $cat, 'en' ];
+# 	}
+#     }
+# }
+
+
+# fix_zero_length()
+#
+# I once saw 'News' with start time 0700 and stop time 0700, and then
+# on the same channel immediately afterwards, 'News' from 0700 to
+# 0705.  This subroutine looks for similar glitches and removes the
+# zero-length programme.
+#
+# Parameter: ref to list of programmes: the programmes will not be
+# modified, but the list may be.
+#
+sub fix_zero_length( $ ) {
+#    local $Log::TraceMessages::On = 1;
+    t 'fix_zero_length() ENTRY';
+#    t 'progs: ' . d $_[0];
+    use vars '@progs'; local *progs = shift;
+    foreach (@progs) { die if not defined }
+
+    # Consider all consecutive pairs of programmes.
+    my $last = $#progs - 1;
+    for (my $i = 0; $i <= $last; $i++) {
+	my $first = $progs[$i]; die if not defined $first;
+#	t 'first: ' . d $first;
+	die if not defined $first->{start};
+	die if not defined $first->{channel};
+	die if not defined $progs[$i+1];
+	die if not defined $progs[$i+1]->{start};
+	die if not defined $progs[$i+1]->{channel};
+	if ($first->{channel} eq '622.tv-listings.ananova.com') {
+	    t 'urk!';
+	    t 'first: ' . d $first;
+	    t 'second: ' . d $progs[$i+1];
+	}
+
+	my $first_stop = $first->{stop};
+	next if not defined $first_stop;
+	my $first_start = $first->{start};
+	next if $first_stop ne $first_start;
+
+	# OK, the first programme is zero length.
+	my $second = $progs[$i+1];
+	my $second_start = $second->{start};
+	next if $first_start ne $second_start;
+
+	# A likely candidate.  Check the non-time details are identical.
+	t 'suspect: ' . d $first;
+	t '...and: ' . d $second;
+	my $first_notimes = { %$first };
+	my $second_notimes = { %$second };
+	foreach ($first_notimes, $second_notimes) {
+	    delete $_->{start};
+	    delete $_->{stop};
+	}
+	t 'without times: ' . d $first_notimes;
+	t '...and: ' . d $second_notimes;
+	if (Dumper($first_notimes) eq Dumper($second_notimes)) {
+	    # The first programme is a duplicate of the second,
+	    # except that it has zero length.  Remove it.
+	    #
+	    t 'identical, removing the first';
+	    @progs[$i..$i] = ();
+#	    t 'progs now: ' . d \@progs;
+	    -- $i;
+	    -- $last;
+	}
+    }
+    t 'fix_zero_length() EXIT';
+}
+
+

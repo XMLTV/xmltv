@@ -5,13 +5,13 @@
 package XMLTV::Ananova_Channel;
 use Carp ();
 use Log::TraceMessages qw(t d);
+use strict;
 use Tie::RefHash; # 5.6 version required
 
 my @all;
 my %idx_a; # index by Ananova id, to 'set' of objects
 tie %idx_a, 'Tie::RefHash::Nestable';
 my %idx_x; # index by XMLTV id
-my %known_regions;
 sub new {
     my $proto = shift;
     my $class = (ref $proto) || $proto;
@@ -87,7 +87,7 @@ sub add_ananova_id {
     }
     else {
 	my $type = $self->get_type();
-	die "trying to add Ananova id $id, which has no region, to a terrestrial channel"
+	$self->carp("trying to add Ananova id $id, which has no region, to a terrestrial channel")
 	  if defined $type and $type eq 'terrestrial';
     }
 
@@ -141,23 +141,23 @@ sub set_xmltv_id {
 sub get_xmltv_id {
     my $self = shift;
 
-    if (not defined $self->{xmltv_id}) {
-	# Invent an RFC2838-style name.
-	my $display = $self->get_main_display_name();
-	die if not defined $display;
-	my $munged = $display;
-	for ($munged) {
-	    tr/ _/-/s;
-	    tr/a-zA-Z0-9-//cd;
-	    tr/A-Z/a-z/;
-	}
-	my $new = "$munged.tv-listings.ananova.com";
-
-	# We just hope that the same name was not picked for some
-	# other channel.
-	#
-	$self->set_xmltv_id($new);
-    }
+#     if (not defined $self->{xmltv_id}) {
+# 	# Invent an RFC2838-style name.
+# 	my $display = $self->get_main_display_name();
+# 	die if not defined $display;
+# 	my $munged = $display;
+# 	for ($munged) {
+# 	    tr/ _/-/s;
+# 	    tr/a-zA-Z0-9-//cd;
+# 	    tr/A-Z/a-z/;
+# 	}
+# 	my $new = "$munged.tv-listings.ananova.com";
+#
+# 	# We just hope that the same name was not picked for some
+# 	# other channel.
+# 	#
+# 	$self->set_xmltv_id($new);
+#     }
 
     return $self->{xmltv_id};
 }
@@ -210,10 +210,13 @@ sub guess_type {
 sub add_region {
     my $self = shift;
     my $region = shift;
-    if (not $known_region{$region}++) {
-	$self->carp("unknown region $region");
-    }
-    $self->set_type('terrestrial');
+
+    # FIXME there's one channel, TV3, which is both region and
+    # 'satellite'.  So for now, having a region does not imply type
+    # 'terrestrial'.
+    #
+    #$self->set_type('terrestrial');
+
     ++ $self->{regions}->{$region};
     return $self;
 }
@@ -226,13 +229,6 @@ sub is_region {
     }
 }
 # all_regions() not needed I think.
-sub know_regions {
-    shift; # discard package or object
-    foreach (@_) {
-	$known_region{$_}++
-	  && $self->carp("region $_ given twice to know_regions()");
-    }
-}
 
 sub set_main_display_name {
     my $self = shift;
@@ -277,8 +273,8 @@ sub get_display_names {
     #
     my %used;
     foreach (@{$self->{extra_display_names}}) {
-	die if not defined;
-	die if $used{$_}++;
+	warn if not defined;
+	warn if $used{$_}++;
 	if (defined and ($_ ne $main)) {
 	    push @r, $_;
 	}
@@ -307,21 +303,50 @@ sub get_a_display_name {
 # objects in the case that one Ananova page has several 'variants'.
 #
 sub find_by_ananova_id {
-    my $class = shift;
-    my $id = shift;
+    my $class = shift; warn 'usage' if not defined $class;
+    my $id = shift; warn 'usage' if not defined $id;
     for ($idx_a{$id}) {
 	return () if not defined;
 	return keys %$_;
     }
 }
 sub find_by_xmltv_id {
-    my $class = shift;
-    my $id = shift;
+    my $class = shift; warn 'usage' if not defined $class;
+    my $id = shift; warn 'usage' if not defined $id;
     return $idx_x{$id};
 }
 sub all {
-    my $class = shift;
+    my $class = shift; warn 'usage' if not defined $class;
     return @all;
+}
+sub ananova_id_to_xmltv_id {
+    my $class = shift; warn 'usage' if not defined $class;
+    my $aid = shift; warn 'usage' if not defined $aid;
+    my @os = $class->find_by_ananova_id($aid);
+    return undef if not @os;
+    my %found_xmltv_ids;
+    foreach (@os) { ++ $found_xmltv_ids{$_->get_xmltv_id()} }
+
+    my @keys = keys %found_xmltv_ids;
+    if (@keys == 0) {
+	die;
+    }
+    elsif (@keys == 1) {
+	return $keys[0];
+    }
+    elsif (@keys >= 2) {
+	# FIXME
+	die "several different XMLTV ids for Ananova id $aid";
+    }
+    else { die }
+}
+
+# Debugging.
+sub dump_all {
+    my $class = shift;
+    foreach ($class->all()) {
+	print STDERR $_->stringify(), "\n";
+    }
 }
 
 # Cloning does not copy the ids since they are meant to be unique (for
@@ -341,15 +366,11 @@ sub clone {
 sub stringify {
     my $self = shift;
     my @r;
-    push @r, $self->{xmltv_id} if defined $self->{xmltv_id};
-    if (defined $self->{ananova_ids}) {
-	foreach (sort keys %{$self->{ananova_ids}}) {
-	    push @r, $_;
-	    last; # let's just have the first one eh?
-	}
-    }
-    push @r, $self->{main_display_name}
-      if defined $self->{main_display_name};
+    my $add = sub( $ ) { push @r, defined $_[0] ? $_[0] : '?' };
+    $add->($self->{xmltv_id});
+    $add->((sort keys %{$self->{ananova_ids}})[0]);
+    $add->($self->get_type());
+    $add->($self->get_main_display_name());
     return '[' . join(', ', @r) . ']'
 }
 
