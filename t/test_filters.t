@@ -14,12 +14,29 @@ use Getopt::Long;
 use File::Copy;
 use XMLTV::Usage <<END
 $0: test suite for filter programs
-usage: $0 [--tests-dir DIR] [--cmds-dir DIR] [--verbose]
+usage: $0 [--tests-dir DIR] [--cmds-dir DIR] [--verbose] [--full]
 END
 ;
 
 sub run( $$$$ );
 sub read_file( $ );
+
+my $tests_dir = 't/data';     # directory test files live in
+die "no directory $tests_dir" if not -d $tests_dir;
+my $cmds_dir = 'blib/script'; # directory filter programs live in
+die "no directory $cmds_dir" if not -d $cmds_dir;
+my $verbose = 0;
+
+# Whether to run the full tests, or just a few.
+my $full = 0;
+
+GetOptions('tests-dir=s' => \$tests_dir, 'cmds-dir=s' => \$cmds_dir,
+	   'verbose' => \$verbose, 'full' => \$full)
+  or usage(0);
+
+if (not $full) {
+    warn "running small test suite, use $0 --full for the whole lot\n";
+}
 
 # Commands to run.  For each command and input file we have an
 # 'expected output' file to compare against.  Also each command has an
@@ -33,34 +50,33 @@ my @cmds
   = (
      [ [ 'tv_cat'                                              ], 1 ],
      [ [ 'tv_extractinfo_en'                                   ], 1 ],
-# We assume that most usages of tv_grep are idempotent on the sample
-# files given.  But see BUGS section of manual page.
-     [ [ 'tv_grep', 'a'                                        ], 1 ],
-     [ [ 'tv_grep', '--category', 'b'                          ], 1 ],
-     [ [ 'tv_grep', '-i', '--last-chance', 'c'                 ], 1 ],
-     [ [ 'tv_grep', '--premiere', ''                           ], 1 ],
-     [ [ 'tv_grep', '--new'                                    ], 1 ],
+     # We assume that most usages of tv_grep are idempotent on the sample
+     # files given.  But see BUGS section of manual page.
      [ [ 'tv_grep', '--channel-name', 'd'                      ], 1 ],
-     [ [ 'tv_grep', '--channel-id', 'channel4.com'             ], 1 ],
-     [ [ 'tv_grep', '--on-after', '2002-02-05'                 ], 1 ],
-     [ [ 'tv_grep', '--eval', 'scalar keys %$_ > 5'            ], 0 ],
-     [ [ 'tv_grep', '--category', 'e', '--and', '--title', 'f' ], 1 ],
-     [ [ 'tv_grep', '--category', 'g', '--or', '--title', 'h'  ], 1 ],
-     [ [ 'tv_grep', '-i', '--category', 'i', '--title', 'j'    ], 1 ],
-     [ [ 'tv_grep', '-i', '--category', 'i', '--title', 'h'    ], 1 ],
      [ [ 'tv_sort'                                             ], 1 ],
-     [ [ 'tv_sort', '--by-channel'                             ], 1 ],
      [ [ 'tv_to_latex'                                         ], 0 ],
     );
 
-my $tests_dir = 't/data';     # directory test files live in
-die "no directory $tests_dir" if not -d $tests_dir;
-my $cmds_dir = 'blib/script'; # directory filter programs live in
-die "no directory $cmds_dir" if not -d $cmds_dir;
-my $verbose = 0;
-GetOptions('tests-dir=s' => \$tests_dir, 'cmds-dir=s' => \$cmds_dir,
-	   'verbose' => \$verbose)
-  or usage(0);
+if ($full) {
+    push @cmds,
+      (
+       [ [ 'tv_grep', 'a'                                        ], 1 ],
+       [ [ 'tv_grep', '--category', 'b'                          ], 1 ],
+       [ [ 'tv_grep', '-i', '--last-chance', 'c'                 ], 1 ],
+       [ [ 'tv_grep', '--premiere', ''                           ], 1 ],
+       [ [ 'tv_grep', '--new'                                    ], 1 ],
+       [ [ 'tv_grep', '--channel-id', 'channel4.com'             ], 1 ],
+       [ [ 'tv_grep', '--on-after', '2002-02-05'                 ], 1 ],
+       [ [ 'tv_grep', '--eval', 'scalar keys %$_ > 5'            ], 0 ],
+       [ [ 'tv_grep', '--category', 'e', '--and', '--title', 'f' ], 1 ],
+       [ [ 'tv_grep', '--category', 'g', '--or', '--title', 'h'  ], 1 ],
+       [ [ 'tv_grep', '-i', '--category', 'i', '--title', 'j'    ], 1 ],
+       [ [ 'tv_grep', '-i', '--category', 'i', '--title', 'h'    ], 1 ],
+       [ [ 'tv_sort', '--by-channel'                             ], 1 ],
+      );
+}
+
+# Input files we could use to build test command lines.
 my @inputs = <$tests_dir/*.xml>;
 my @inputs_gz = <$tests_dir/*.xml.gz>; s/\.gz$// foreach @inputs_gz;
 @inputs = sort (@inputs, @inputs_gz);
@@ -75,16 +91,96 @@ foreach (@inputs) {
 # we pick all single files and a handful of pairs.
 #
 my @tests;
-push @tests, [ $_ ] foreach @inputs;
 
-# This code will be enabled soon!
+# The input file empty.xml is special: we particularly like to use it
+# in tests.  Then there are another two files we refer to by name.
 #
-# my $pair_limit = 3; $pair_limit = @inputs if $pair_limit > @inputs;
-# foreach my $i (0 .. $pair_limit - 1) {
-#     foreach my $j (0 .. $pair_limit - 1) {
-# 	unshift @tests, [ $inputs[$i], $inputs[$j] ];
-#     }
-# }
+my $empty_input = 'empty.xml';
+foreach ($empty_input, 'simple.xml', 'x-whatever.xml') {
+    die "file $tests_dir/$_ not found" if not -f "$tests_dir/$_";
+}
+
+# We need to track the encoding of each input file so we don't try to
+# mix them on the same command line (not allowed).
+#
+my %input_encoding;
+foreach (@inputs) {
+    $input_encoding{$_} = ($_ eq 'test_livre.xml') ? 'ISO-8859-1' : 'UTF-8';
+}
+my %all_encodings = reverse %input_encoding;
+
+my @new_inputs;
+foreach (@inputs) {
+    if ($_ eq $empty_input) {
+	unshift @new_inputs, $_;
+    }
+    else {
+	push @new_inputs, $_;
+    }
+}
+@inputs = @new_inputs;
+
+# Add a test to the list.  Arguments are listref of filenames, and
+# optional name for this set of files.
+#
+sub add_test( $;$ ) {
+    my ($files, $name) = @_;
+    $name = join('_', @$files) if not defined $name;
+    my $enc;
+    foreach (@$files) {
+	if (defined $enc and $enc ne $input_encoding{$_}) {
+	    die 'trying to add test with two different encodings';
+	}
+	else {
+	    $enc = $input_encoding{$_};
+	}
+    }
+    push @tests, { inputs => $files, name => $name };
+}
+
+# A quick and effective test for each command is to run it on all the
+# input files at once.  But we have to segregate them by encoding.
+#
+my %used_enc_name;
+foreach my $enc (sort keys %all_encodings) {
+    (my $enc_name = $enc) =~ tr/[A-Za-z0-9]//dc;
+    die "cannot make name for encoding $enc"
+      if $enc_name eq '';
+    die "two encodings go to same name $enc_name"
+      if $used_enc_name{$enc_name}++;
+    my @files = grep { $input_encoding{$_} eq $enc } @inputs;
+    if (@files == 0) {
+	# Shouldn't happen.
+	die "strange, no files for $enc";
+    }
+    elsif (@files == 1) {
+	# No point adding this as it will be run as an individual
+	# test.
+	#
+    }
+    else {
+	add_test(\@files, "all_$enc_name");
+    }
+}
+
+# One important test is two empty files in the middle of the list.
+add_test([ $inputs[1], $empty_input, $empty_input, $inputs[2] ]);
+
+# Another special case we want to run every time.
+add_test([ 'simple.xml', 'x-whatever.xml' ]);
+
+if ($full) {
+    # Test some pairs of files, but not all possible pairs.
+    my $pair_limit = 4; die "too few inputs" if $pair_limit > @inputs;
+    foreach my $i (0 .. $pair_limit - 1) {
+	foreach my $j (0 .. $pair_limit - 1) {
+	    add_test([ $inputs[$i], $inputs[$j] ]);
+	}
+    }
+
+    # Then all the single files.
+    add_test([ $_ ]) foreach @inputs;
+}
 
 # Any other environment needed (relative to $tests_dir)
 $ENV{PERL5LIB} .= ":..";
@@ -102,8 +198,9 @@ my $test_num = 0;
 foreach my $pair (@cmds) {
     my ($cmd, $idem) = @$pair;
     foreach my $test (@tests) {
+	my @test_inputs = @{$test->{inputs}};
 	++ $test_num;
-	my $test_name = join('_', @$cmd, @$test);
+	my $test_name = join('_', @$cmd, $test->{name});
 	$test_name =~ tr/A-Za-z0-9/_/sc;
 	die "two tests munge to $test_name"
 	  if $seen{$test_name}++;
@@ -118,7 +215,7 @@ foreach my $pair (@cmds) {
 	# afterwards.  Keys matter, values do not.
 	#
 	my (%to_gzip, %to_gunzip);
-	foreach (@$test, $expected) {
+	foreach (@test_inputs, $expected) {
 	    my $gz = "$_.gz";
 	    if (not -e and -e $gz) {
 		$to_gunzip{$gz}++ && die "$gz seen twice";
@@ -138,10 +235,10 @@ foreach my $pair (@cmds) {
 	$cmd[0] = "$cmds_dir/$cmd[0]";
 	$cmd[0] =~ s!/!\\!g if $^O eq 'MSWin32';
 	if ($verbose) {
-	    print STDERR "test $test_num: @cmd\n";
+	    print STDERR "test $test_num: @cmd @test_inputs\n";
 	}
 
-	my @in = map { "$tests_dir/$_" } @$test;
+	my @in = map { "$tests_dir/$_" } @test_inputs;
 	my $okay = run(\@cmd, \@in, $out, $err);
 	# assume: if $okay then -e $out.
 
@@ -177,6 +274,10 @@ foreach my $pair (@cmds) {
 
 	if ($idem) {
 	    ++ $test_num;
+	    if ($verbose) {
+		print STDERR "test $test_num: ";
+		print STDERR "check that @cmd is idempotent on this input\n";
+	    }
 	    if ($okay) {
 		die if not -e $out;
 		# Run the command again, on its own output.
@@ -218,7 +319,7 @@ foreach my $pair (@cmds) {
 		}
 	    }
 	    else {
-		warn "skipping idempotence test for @cmd on @$test\n";
+		warn "skipping idempotence test for @cmd on @test_inputs\n";
 		# Do not print 'ok' or 'not ok'.
 	    }
 	}
