@@ -40,6 +40,7 @@ use vars '%extra_constants';
 
      # Directory to install into when making Windows binary dist.
      WINDOWS_DIST    => "xmltv-$VERSION-win32",
+     VERSION         => "$VERSION",
     );
 
 # The following lists of dependencies and files to be installed may
@@ -597,10 +598,14 @@ END
     # Add a target for a Windows distribution.
     $inherited .= q{
 
-xmltv.exe :: $(EXE_FILES) lib/exe_wrap.pl
-	set PERLAPP_OPT=--nologo --force --trim="Convert::EBCDIC;DB_File;Encode;HASH;HTML::FromText;Text::Iconv;Unicode::Map8;v5" --lib $(INST_ARCHLIB) --lib $(INST_LIB)
-	echo $(EXE_FILES) >exe_files.txt
-	perlapp -exe=xmltv.exe -add "$(EXE_FILES)" -bind exe_files.txt lib/exe_wrap.pl
+xmltv.exe :: $(EXE_FILES) lib/exe_wrap.pl lib/exe_opt.pl
+	echo $(EXE_FILES)                             >exe_files.txt
+    perl lib/exe_opt.pl $(VERSION)                >exe_opt.txt
+    echo -lib  $(INST_ARCHLIB) --lib $(INST_LIB) >>exe_opt.txt
+	echo -add  "$(EXE_FILES)"                    >>exe_opt.txt
+	echo -bind exe_files.txt                     >>exe_opt.txt
+	echo -exe  xmltv.exe                         >>exe_opt.txt
+	perlapp @exe_opt.txt lib/exe_wrap.pl
 	$(RM_F) exe_files.txt
 
 windows_dist ::
