@@ -69,6 +69,7 @@ INPUT: foreach my $input (@inputs) {
 	my $channel = $1;
 	++$input{"channel$channel-month$month"};
     }
+    close FH or warn "cannot close $input: $!";
 
     # Make temporary directory and split into it.
     my $dir = tempdir(CLEANUP => 1);
@@ -123,6 +124,7 @@ INPUT: foreach my $input (@inputs) {
 		++$found{$template};
 	    }
 	}
+	close FH or warn "cannot close $f: $!";
 
 	# We don't check that every channel used has a <channel>
 	# element (it might not have been in the input files) but we
