@@ -117,7 +117,7 @@ use constant Have_bar => eval { require Term::ProgressBar; 1 };
 # Function prototypes.
 sub time_tot_str( $ );
 sub time_van_str( $ );
-sub get_channels();
+sub get_channels( $ );
 sub process_summary_page( $$$$ );
 sub parse_dutch_date( $ );
 sub process_details_page( $$$ );
@@ -184,17 +184,19 @@ my $config_file
 if ($mode eq 'configure') {
     XMLTV::Config_file::check_no_overwrite($config_file);
     open(CONF, ">$config_file") or die "cannot write to $config_file: $!";
-    # find list of available channels
+
+    # Get channels, and download what we can from the site.  When
+    # configuring it's useful to download at least something as a
+    # check that the site is reachable etc.
+    #
     my $bar = new Term::ProgressBar('getting list of channels', 1)
       if Have_bar && not $opt_quiet;
-
-    # TODO use $CHANNELS file and check against what's on the site
-    my %channels = get_channels();
+    my %channels = get_channels(1);
     die 'no channels could be found' if (scalar(keys(%channels)) == 0);
     update $bar if Have_bar && not $opt_quiet;
 
     # Ask about each channel.
-    my @chs = sort keys %channels;
+    my @chs = sort { $a <=> $b } keys %channels;
     my @names = map { $channels{$_} } @chs;
     my @qs = map { "add channel $_?" } @names;
     my @want = askManyBooleanQuestions(1, @qs);
@@ -246,8 +248,11 @@ $writer->start
 if ($mode eq 'list-channels') {
     my $bar = new Term::ProgressBar('getting list of channels', 1)
       if Have_bar && not $opt_quiet;
-    # TODO use $CHANNELS file and check against what's on the site
-    my %channels = get_channels();
+
+    # Don't do any page fetches - assume the contents of the channels
+    # file has already been checked enough.
+    #
+    my %channels = get_channels(0);
     die 'no channels could be found' if (scalar(keys(%channels)) == 0);
     update $bar if Have_bar && not $opt_quiet;
 
@@ -263,7 +268,8 @@ if ($mode eq 'list-channels') {
 
 # Not configuring or writing channels, must be grabbing listings.
 die if $mode ne 'grab';
-my (%channels, @channels, $ch_did, $ch_name);
+my %channels = get_channels(0);
+my (@channels, $ch_did, $ch_name);
 my $line_num = 0;
 my $warned_old_format = 0;
 my $bad = 0;
@@ -636,7 +642,7 @@ sub process_details_page( $$$ ) {
 	my ($regel, $text) = @$_;
 	foreach ($regel, $text) {
 	    s/^\s+//; s/\s+$//;
-	    
+	
 	    # Remove dodgy characters.
 	    tr/\221\222/''/;
 	}
@@ -945,43 +951,95 @@ sub time_van_str( $ ) {
 }
 
 
-# get channel listing
-sub get_channels() {
+# Find the available channels.  Because the site doesn't have any easy
+# way to get a list of all channels we need to read the
+# $CHANNELS_FILE.  The site does however have a partial list of
+# channels, and we sanity-check that against the file if the argument
+# to this subroutine is true.
+#
+sub get_channels( $ ) {
+    my $sanity = shift;
     my %channels;
-    my $url = 'http://www.tvgids.nl';
 
-    #All stations are in the select box.
-    #The station ID is the option value
-    my $t = new HTML::TreeBuilder();
-    $t->parse(get_nice($url));
-    my @conts = map { [ $_->content_list() ] }
-      $t->look_down('_tag' => 'select', 'name' => 'station');
-    foreach my $cont (@conts) {
-	my @children =@$cont;
-	if (scalar(@children) == 0) {
-	    warn 'No stations are defined';
-	    next;
-	}
-	foreach my $station_line (@children) {
-	    if ($station_line ne ' ') {
-		#This if statement is to prevent parsing the last
-		#empty element from the list.
-			
-		my $channel_id = $station_line->attr('value');
-		
-		#I am only interested in the normal channels.
-		#tvgids.nl has some pages for the regional stations also
-		#All normal channels have id <0,100>
-		#That is at the moment... Could change in future...
-		if ($channel_id > 0 && $channel_id < 100) {
-		    my $channel_name = $station_line->as_text();
-		    $channels{$channel_id} = $channel_name
-		}
+    if ($sanity) {
+	# Download what we can.
+	my $url = 'http://www.tvgids.nl';
+	#All stations are in the select box.
+	#The station ID is the option value
+	my $t = new HTML::TreeBuilder();
+	$t->parse(get_nice($url));
+	my @conts = map { [ $_->content_list() ] }
+	  $t->look_down('_tag' => 'select', 'name' => 'station');
+	foreach my $cont (@conts) {
+	    my @children =@$cont;
+	    if (scalar(@children) == 0) {
+		warn 'No stations are defined';
+		next;
 	    }
+	    foreach my $station_line (@children) {
+		if ($station_line ne ' ') {
+		    #This if statement is to prevent parsing the last
+		    #empty element from the list.
+			
+		    my $channel_id = $station_line->attr('value');
+		
+		    #I am only interested in the normal channels.
+		    #tvgids.nl has some pages for the regional stations also
+		    #All normal channels have id <0,100>
+		    #That is at the moment... Could change in future...
+		    if ($channel_id > 0 && $channel_id < 100) {
+			my $channel_name = $station_line->as_text();
+			$channels{$channel_id} = $channel_name
+		    }
+		}
 
+	    }
+	}	
+	$t->delete(); undef $t;
+    }
+
+    # Now read the config file and check against any data we already
+    # have.
+    #
+    # TODO commonize this config-file-reading stuff some more.
+    #
+    my $line_num = 0;
+    my (%seen_ch_did, %seen_xmltv_id, %seen_name);
+    foreach (XMLTV::Config_file::read_lines($CHANNELS_FILE, 1)) {
+	++ $line_num;
+	next unless defined;
+	my $where = "$CHANNELS_FILE:$line_num";
+	local $SIG{__DIE__} = sub( $ ) {
+	    die "$where: $_[0]";
+	};
+	local $SIG{__WARN__} = sub( $ ) {
+	    warn "$where: $_[0]";
+	};
+
+	my @fields = split /:/; # strips trailing empty fields
+	die 'wrong number of fields' if @fields != 3;
+	my ($xmltv_id, $ch_did, $name) = @fields;
+	die "site id $ch_did seen twice" if $seen_ch_did{$ch_did}++;
+	die "xmltv id $xmltv_id seen twice" if $seen_xmltv_id{$xmltv_id}++;
+	die "name '$name' used twice" if $seen_name{$name}++;
+
+	# TODO.
+	die "proper xmltv ids like $xmltv_id not handled yet"
+	  if $xmltv_id ne "$ch_did.tvgids.nl";
+
+	for ($channels{$ch_did}) {
+	    if (not defined) {
+		# Okay, the file lists something the site didn't
+		# mention; that's what it is for.
+		#
+		$_ = $name;
+	    }
+	    elsif ($_ ne $name) {
+		warn "channel $ch_did has name '$name' in file, '$_' on site\n";
+	    }
 	}
-    }	
-    $t->delete(); undef $t;
+    }
+
     return %channels;
 }
 
@@ -1009,6 +1067,7 @@ sub get_channels() {
 # into a clump with the last valid programme that appeared before it,
 # or else drop it with a warning.
 #
+my %warned_bad_channel_name;
 sub process_summary_page( $$$$ ) {
     my ($url, $day, $official_day, $ch_name_ref) = @_;
     die if not defined $url; die if ref $url;
@@ -1098,7 +1157,10 @@ sub process_summary_page( $$$$ ) {
 	for ($$ch_name_ref) {
 	    if (not defined) { $_ = $ch }
 	    elsif ($_ ne $ch) {
-		die "expected channel name $_, got $ch";
+		# Most likely the channels file has the wrong name.
+		warn "expected channel name $_, got $ch\n"
+		  unless $warned_bad_channel_name{$_}{$ch}++;
+		$_ = $ch;
 	    }
 	}
 	
