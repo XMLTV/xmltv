@@ -343,7 +343,6 @@ sub getMovieMatches($$$)
 					     'id'=>$arr[4]});
 	}
     }
-    #close(FD);
     #print "MovieMatches on ($match) = ".Dumper($results)."\n";
     return($results);
 }
@@ -420,7 +419,6 @@ sub getMovieIdDetails($$)
 	    warn "lookup of movie (id=$id) resulted in garbage ($_)";
 	}
     }
-    #close(FD);
     if ( !defined($results) ) {
 	# some movies we don't have any details for
 	$results->{noDetails}=1;
