@@ -61,7 +61,12 @@ sub getProviders($$$)
     my ($postalcode, $zipcode, $debug)=@_;
 
     my $ua=ZapListings::RedirPostsUA->new('cookie_jar'=>HTTP::Cookies->new());
-    
+    if ( 0 && ! $ua->passRequirements($debug) ) {
+	print STDERR "version of ".$ua->_agent()." doesn't handle cookies properly\n";
+	print STDERR "upgrade to 5.61 or later and try again\n";
+	return(undef);
+    }
+
     my $code;
     $code=$postalcode if ( defined($postalcode) );
     $code=$zipcode if ( defined($zipcode) );
@@ -128,6 +133,7 @@ sub getProviders($$$)
     if ( !defined($providers) ) {
 	print STDERR "zap2it gave us a page with no service provider options\n";
 	print STDERR "check postal/zip code or www site (maybe their down)\n";
+	print STDERR "(LWP::UserAgent version is ".$ua->_agent().")\n";
 	return(undef);
     }
     return($providers);
@@ -142,6 +148,12 @@ sub getChannelList($$$$)
     $code=$zipcode if ( defined($zipcode) );
 
     my $ua=ZapListings::RedirPostsUA->new('cookie_jar'=>HTTP::Cookies->new());
+    if ( 0 && ! $ua->passRequirements($debug) ) {
+	print STDERR "version of ".$ua->_agent()." doesn't handle cookies properly\n";
+	print STDERR "upgrade to 5.61 or later and try again\n";
+	return(undef);
+    }
+
     my $req=POST('http://tvlistings2.zap2it.com/edit_provider_list.asp?id=form1&name=form1',
 		 [FormName=>"edit_provider_list.asp",
 		  zipCode => "$code", 
@@ -331,10 +343,35 @@ sub dumpPage($)
 ########################################################
 package ZapListings::RedirPostsUA;
 use HTTP::Request::Common;
+
+# include LWP separately to verify minimal requirements on version #
+use LWP 5.62;
 use LWP::UserAgent;
 
 use vars qw(@ISA);
 @ISA = qw(LWP::UserAgent);
+
+#
+# manually check requirements on LWP (libwww-perl) installation
+# leaving this subroutine here in case we need something less
+# strict or more informative then what 'use LWP 5.60' gives us.
+# 
+sub passRequirements($$)
+{
+    my ($self, $debug)=@_;
+    my $haveVersion=$LWP::VERSION;
+
+    print STDERR "requirements check: have $self->_agent(), require 5.61\n" if ( $debug );
+
+    if ( $haveVersion=~/(\d+)\.(\d+)/ ) {
+	if ( $1 < 5 || ($1 == 5 && $2 < 61) ) {
+	    die "getlistings_na: requires libwww-perl version 5.61 or later, (you have $haveVersion)";
+	    return(0);
+	}
+    }
+    # pass
+    return(1);
+}
 
 sub redirect_ok { 1; }
 1;
@@ -502,8 +539,12 @@ sub new
 		  provider => "$self->{ProviderID}",
 		  saveProvider => 'See Listings' ]);
 
+    # initialize cookies
     my $res=&ZapListings::doRequest($ua, $req, $self->{Debug});
-    $res=&ZapListings::doRequest($ua, $req, $self->{Debug});
+    if ( !$res->is_success || $res->content()=~m/your session has timed out/i ) {
+	# again.
+	$res=&ZapListings::doRequest($ua, $req, $self->{Debug});
+    }
 
     bless($self, $type);
     return($self);
@@ -593,14 +634,38 @@ sub scrapehtml($$$)
 
     # declare known languages here so we can more precisely identify
     # them in program details
-    my @knownLanguages=qw(Armenian Arabic Cambodian Cantonese Chinese
-			  Cree English Farsi French Greek Hindi
-			  Inuktitut Inuvialuktun Japanese Korean
-			  Mandarin Spanish Tagalog Ukrainian
-			  Vietnamese);
+    my @knownLanguages=qw(
+			  Arabic
+			  Armenian
+			  Cambodian
+			  Cantonese
+			  Chinese
+			  Cree
+			  English
+			  Farsi
+			  French
+			  German
+			  Greek
+			  Gujarati
+			  Hindi
+			  Inuktitut
+			  Inuvialuktun
+			  Japanese
+			  Korean
+			  Mandarin
+			  Panjabi
+			  Punjabi
+			  Spanish
+			  Tagalog
+			  Tamil
+			  Ukrainian
+			  Urdu
+			  Vietnamese
+			  );
     # FIXME some examples of things we don't handle: 'Hindi, English',
     # 'Urdu, English', 'Japanese; English subtitles',
-    # 'Spanish and English'.
+    # 'Spanish and English' - Ed
+    # - I'm only catching the ones I see as I scrape - Jerry
 
     my $rowNumber=0;
     $html=~s/<TR/<tr/og;
@@ -799,7 +864,7 @@ sub scrapehtml($$$)
 		my $result;
 		my $resultSure;
 		my $success=1;
-		my @okay;
+		my @notsure;
 		my @sure;
 		my @backup;
 		print STDERR "splitting details '$extra'..\n" if ( $self->{Debug} );
@@ -807,8 +872,7 @@ sub scrapehtml($$$)
 		while ( 1 ) {
 		    my $i;
 		    if ( defined($extra) ) {
-			if ( $extra=~m/\)$/o ) {
-			    $extra=~s/\s*(\([^\)]+\))\s*//o;
+			if ( $extra=~s/\s*(\([^\)]+\))\s*$//o ) {
 			    $i=$1;
 			}
 			else {
@@ -827,6 +891,8 @@ sub scrapehtml($$$)
 
 		    print STDERR "checking detail $i..\n" if ( $self->{Debug} );
 
+		    # General page about ratings systems, one at least :)
+		    # http://www.attadog.com/splash/rating.html
 		    #
 		    # www.tvguidelines.org and http://www.fcc.gov/vchip/
 		    if ( $i=~m/^TV(Y)$/oi ||
@@ -872,9 +938,16 @@ sub scrapehtml($$$)
 			push(@sure, $i);
 			next;
 		    }
+		    # we're not sure about years that appear in the
+		    # text unless the entire content of the text is
+		    # found to be valid and "understood" program details
+		    # ( so years that appear in the middle of program descriptions 
+		    #   don't count, only when they appear by themselves or in text
+		    #   like "CC Stereo 1969" for instance).
+		    #
 		    elsif ( $i=~/^\d\d\d\d$/io ) {
 			$result->{year}=$i;
-			push(@okay, $i);
+			push(@notsure, $i);
 			push(@backup, $i);
 			next;
 		    }
@@ -908,7 +981,15 @@ sub scrapehtml($$$)
 			push(@sure, $i);
 			next;
 		    }
-		    # French with English subtitles
+		    # catch commonly imbedded categories
+		    elsif ( $i=~/^\(fiction\)$/io ) {
+			push(@{$prog->{category}}, "Fiction");
+		    }
+		    elsif ( $i=~/^\(drama\)$/io ) {
+			push(@{$prog->{category}}, "Drama");
+		    }
+		    # example "French with English subtitles"
+		    # not handled: "Hindi/Punjabi/Urdu", but I don't know what this means.
 		    elsif ( $i=~/^\(([a-zA-Z]+) with ([a-zA-Z]+) subtitles\)$/io ) {
 			my $lang=$1;
 			my $sub=$2;
@@ -934,6 +1015,7 @@ sub scrapehtml($$$)
 		    #
 		    else {
 			my $localmatch=0;
+
 			# English/French
 			if ( $i=~/^\(([a-zA-Z]+)\/([a-zA-Z]+)\)$/io ) {
 			    my $lang=$1;
@@ -989,11 +1071,15 @@ sub scrapehtml($$$)
 		    $self->setValue(\$prog, $_, $resultSure->{$_});
 		}
 		if ( !$success ) {
-		    if ( @okay || @sure ) {
-			print STDERR "\thtml:'$desc'\n";
-			print STDERR "\tpartial match on details '$original_extra'\n";
-			print STDERR "\tsure about:". join(',', @sure)."\n" if ( @sure );
-			print STDERR "\tmatched   :". join(',', @okay)."\n" if ( @okay );
+		    if ( @notsure ) {
+			if ( $self->{Debug} ) {
+			    print STDERR "\thtml:'$desc'\n" if ( $self->{Debug} );
+			    print STDERR "\tpartial match on details '$original_extra'\n";
+			    print STDERR "\tsure about:". join(',', @sure)."\n" if ( @sure );
+			    print STDERR "\tnot sure about:". join(',', @notsure)."\n" if ( @notsure );
+			}
+			# we piece the original back using space separation so that the ones
+			# we're sure about are removed
 			push(@leftExtras, join(' ', @backup));
 		    }
 		    else {
@@ -1060,6 +1146,12 @@ sub readSchedule($$$$$)
     }
     else {
 	my $ua=ZapListings::RedirPostsUA->new('cookie_jar'=>$self->{cookieJar});
+
+	if ( 0 && ! $ua->passRequirements($self->{Debug}) ) {
+	    print STDERR "version of ".$ua->_agent()." doesn't handle cookies properly\n";
+	    print STDERR "upgrade to 5.61 or later and try again\n";
+	    return(-1);
+	}
     
 	my $req=POST('http://tvlistings2.zap2it.com/listings_redirect.asp',
 		     [ displayType => "Text",
