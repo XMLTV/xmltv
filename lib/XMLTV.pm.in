@@ -1150,6 +1150,10 @@ $Handlers{'episode-num'}->[0] = sub( $ ) {
 $Handlers{'episode-num'}->[1] = sub( $$$ ) {
     my ($w, $e, $v) = @_;
     t 'episode number';
+    if (not ref $v or ref $v ne 'ARRAY') {
+	warn "not writing episode-num whose content is not an array";
+	return;
+    }
     my ($content, $system) = @$v;
     $w->dataElement($e, $content, system => $system);
 };
@@ -1385,6 +1389,10 @@ $Handlers{rating}->[0] = sub( $ ) {
 };
 $Handlers{rating}->[1] = sub( $$$ ) {
     my ($w, $e, $v) = @_;
+    if (not ref $v or ref $v ne 'ARRAY') {
+	warn "not writing rating whose content is not an array";
+	return;
+    }
     my ($rating, $system, $icons) = @$v;
     if (defined $system) {
 	$w->startTag($e, system => $system);
@@ -1429,6 +1437,10 @@ $Handlers{'star-rating'}->[0] = sub( $ ) {
 };
 $Handlers{'star-rating'}->[1] = sub ( $$$ ) {
     my ($w, $e, $v) = @_;
+    if (not ref $v or ref $v ne 'ARRAY') {
+	warn "not writing star-rating whose content is not an array";
+	return;
+    }
     my ($rating, $icons) = @$v;
     $w->startTag($e);
     write_value($w, 'value', $rating);
@@ -1522,6 +1534,10 @@ $Handlers{'with-lang'}->[0] = sub( $ ) {
 };
 $Handlers{'with-lang'}->[1] = sub( $$$ ) {
     my ($w, $e, $v) = @_;
+    if (not ref $v or ref $v ne 'ARRAY') {
+	warn "not writing with-lang whose content is not an array";
+	return;
+    }
     my ($text, $lang) = @$v;
     t 'writing character data: ' . d $text;
     if (not defined $text) {
@@ -1577,6 +1593,10 @@ $Handlers{'with-lang-or-empty'}->[1] = sub( $$$ ) {
 	return;
     }
 
+    if (not ref $v or ref $v ne 'ARRAY') {
+	warn "not writing with-lang-or-empty whose content is not either an array or undef";
+	return;
+    }
     my ($text, $lang) = @$v;
     t 'writing character data: ' . d $text;
     if (defined $lang) {
@@ -1950,10 +1970,8 @@ sub write_channel {
     my %ch = %$ch; # make a copy
     my $id = delete $ch{id};
     die "no 'id' attribute in channel" if not defined $id;
-    $w->startTag('channel', id => $id);
-    call_handlers_write($w, \@XMLTV::Channel_Handlers, \%ch);
-    XMLTV::warn_unknown_keys('channel', \%ch);
-    $w->endTag('channel');
+    write_element_with_handlers($w, 'channel', { id => $id },
+				\@XMLTV::Channel_Handlers, \%ch);
 }
 
 =pod
@@ -1998,17 +2016,13 @@ sub write_programme {
 	$attrs{$name} = $val if defined $val;
     }
     t "beginning 'programme' element";
-    $self->startTag('programme', order_attrs(%attrs));
-    call_handlers_write($self, \@XMLTV::Programme_Handlers, \%p);
-
-    # Special 'debug' keys written as comments.
+    write_element_with_handlers($self, 'programme', \%attrs,
+				\@XMLTV::Programme_Handlers, \%p);
+    # Special 'debug' keys written as comments after the element.
     foreach (grep /^debug/, keys %p) {
 	my $val = delete $p{$_};
  	$self->comment((defined $val) ? "$_: $val" : $_);
     }
-    XMLTV::warn_unknown_keys('programme', \%p);
-    t "ending 'programme' element";
-    $self->endTag('programme');
 }
 
 =pod
@@ -2068,71 +2082,29 @@ sub order_attrs {
 # handlers.  Deletes keys (modifying the hash passed in) as they are
 # written.
 #
+# Requires all mandatory keys be present in the hash - if you're not
+# sure then use check_multiplicity() first.
+#
 sub call_handlers_write( $$$ ) {
     my ($self, $handlers, $input) = @_;
     t 'writing input hash: ' . d $input;
     die if not defined $input;
+
     foreach (@$handlers) {
 	my ($name, $h_name, $multiplicity) = @$_;
 	my $h = $XMLTV::Handlers{$h_name}; die "no handler $h_name" if not $h;
 	my $writer = $h->[1]; die if not defined $writer;
 	t "doing handler for $name$multiplicity";
-	t "do we need to write any $name elements?";
-	if (not exists $input->{$name}) {
-	    t "nope, none there";
-	    next;
-	}
-
-	if (not defined $input->{$name}) {
-	    warn "hash has key $name with value undef\n";
-	    delete $input->{$name};
-	    next;
-	}
 
 	my $val = delete $input->{$name};
 	t 'yes, got value(s): ' . d $val;
 	if ($multiplicity eq '1') {
-	    t 'exactly one element';
-	    if (not defined $val) {
-		warn "missing value for $name in programme hash";
-		next;
-	    }
 	    $writer->($self, $name, $val);
 	}
 	elsif ($multiplicity eq '?') {
-	    t 'maybe one element';
-	    if (defined $val) {
-		$writer->($self, $name, $val);
-	    }
+	    $writer->($self, $name, $val) if defined $val;
 	}
-	elsif ($multiplicity eq '*') {
-	    t 'any number';
-	    if (not defined $val) {
-		warn "missing value for $name in programme hash (expected list)";
-		next;
-	    }
-	    if (ref($val) ne 'ARRAY') {
-		die "expected array of values for $name";
-	    }
-	    foreach (@{$val}) {
-		t 'writing value: ' . d $_;
-		$writer->($self, $name, $_);
-		t 'finished writing multiple values';
-	    }
-	}
-	elsif ($multiplicity eq '+') {
-	    t 'at least one';
-	    if (not defined $val) {
-		warn "missing value for $name in programme hash (expected list)";
-		next;
-	    }
-	    if (ref($val) ne 'ARRAY') {
-		die "expected array of values for $name";
-	    }
-	    if (not @$val) {
-		warn "empty list of $name properties in programme hash";
-		next;
-	    }
+	elsif ($multiplicity eq '*' or $multiplicity eq '+') {
 	    foreach (@{$val}) {
 		t 'writing value: ' . d $_;
 		$writer->($self, $name, $_);
@@ -2144,6 +2116,77 @@ sub call_handlers_write( $$$ ) {
 	}
     }
     t 'leftover keys: ' . d([ sort keys %$input ]);
+}
+
+
+# Private.
+#
+# Warns about missing keys that are supposed to be mandatory.  Returns
+# true iff everything is okay.
+#
+sub check_multiplicity( $$ ) {
+    my ($handlers, $input) = @_;
+    foreach (@$handlers) {
+	my ($name, $h_name, $multiplicity) = @$_;
+	if ($multiplicity eq '1') {
+	    if (not defined $input->{$name}) {
+		warn "hash missing value for $name";
+		return 0;
+	    }
+	}
+	elsif ($multiplicity eq '?') {
+	    # Okay if not present.
+	}
+	elsif ($multiplicity eq '*') {
+	    # Not present, or undef, is treated as empty list.
+	}
+	elsif ($multiplicity eq '+') {
+	    my $val = $input->{$name};
+	    if (not defined $val) {
+		warn "hash missing value for $name (expected list)";
+		return 0;
+	    }
+	    if (ref($val) ne 'ARRAY') {
+		die "hash has bad contents for $name (expected list)";
+		return 0;
+	    }
+
+            my @new_val = grep { defined } @$val;
+            if (@new_val != @$val) {
+                warn "hash had some undef elements in list for $name, removed";
+                @$val = @new_val;
+            }
+
+	    if (not @$val) {
+		warn "hash has empty list of $name properties (expected at least one)";
+		return 0;
+	    }
+	}
+	else {
+	    warn "bad multiplicity specifier: $multiplicity";
+	}
+    }
+    return 1;
+}
+
+
+# Private.
+#
+# Write a complete element with attributes, and subelements written
+# using call_handlers_write().  The advantage over doing it by hand is
+# that if some required keys are missing, nothing is written (rather
+# than an incomplete and invalid element).
+#
+sub write_element_with_handlers( $$$$$ ) {
+    my ($w, $name, $attrs, $handlers, $hash) = @_;
+    if (not check_multiplicity($handlers, $hash)) {
+        warn "keys missing in $name hash, not writing";
+        return;
+    }
+    $w->startTag($name, order_attrs(%$attrs));
+    call_handlers_write($w, $handlers, $hash);
+    XMLTV::warn_unknown_keys($name, $hash);
+    $w->endTag($name);
 }
 
 =pod
