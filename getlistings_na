@@ -285,6 +285,7 @@ use IO;
 use Getopt::Long;
 use ZapListings;
 use Date::Manip;
+use File::Basename;
 
 #
 # How this grabber works:
@@ -367,8 +368,13 @@ sub Usage
     print "       specify listings.xml filename(s) for channel & program info\n";
     print "       <file> may contain Date::Manip::Unix substitutions\n";
     print "       for instance, use --listings \"listings-%d%m%Y.xml\" to separate output by day.\n";
+    print "       similarily, %postalcode, %zipcode, are also substituted from settings\n";
+    print "       current configuration.\n";
     print "       The filename is only re-evaluated when a new days listings is started.\n";
     print "       if no --listings is specified stdout is used\n";
+    print "\n";
+    print "   --output <file>\n";
+    print "       synonym for --listings\n";
     print "\n";
     print "   --days n\n";
    print "       specify number of days to include in output (default 7)\n";
@@ -434,10 +440,6 @@ if ( $configure ) {
     
     my $configfile=$ConfigFile_g;
     if ( defined($opt_config) ) {
-	if ( ! -f $opt_config ) {
-	    print STDERR "$0: specified config file '$opt_config' does not exist, run --configure\n";
-	    exit(1);
-	}
 	$configfile=$opt_config;
     }
 
@@ -660,13 +662,25 @@ if ( $configure ) {
 
 # in grabber mode - yeah !
 
-use vars qw/$opt_help $opt_config $opt_debug $opt_programs $opt_channels $opt_listings $opt_days/;
+use vars qw/$opt_help $opt_config $opt_debug $opt_programs $opt_channels $opt_listings $opt_output $opt_days/;
 
 $opt_debug=0;
 
-if ( ! GetOptions('help', 'config=s', 'debug', 'programs=s', 'channels=s', 'listings=s', 'days=i') ) {
+if ( ! GetOptions('help', 'config=s', 'debug', 'programs=s', 'channels=s', 'listings=s', 'output=s', 'days=i') ) {
     Usage();
     exit(1);
+}
+
+# throw error for invalid use of both --listings and --output
+if ( defined($opt_output) && defined($opt_listings) ) {
+    print STDERR "getlistings_na: only one of --listings or --output can be used at once\n";
+    exit(1);
+}
+
+# implement --output as synonym for --listings
+if ( defined($opt_output) ) {
+    $opt_listings=$opt_output;
+    undef($opt_output);
 }
 
 if ( defined($opt_help) ) {
@@ -683,7 +697,7 @@ if ( defined($opt_programs) || defined($opt_channels) ) {
     exit(1);
 }
 
-# setup defaults
+# set defaults if they didn't appear on command line
 $opt_listings="" if ( !defined($opt_listings) );
 $opt_days=7 if ( !defined($opt_days) );
 
@@ -732,6 +746,33 @@ sub writeListingsXMLFooter($)
 {
     my $writer=shift;
     $writer->endTag('tv');
+}
+
+sub mkpathtofile($$)
+{
+    my ($file, $debug)=@_;
+    my @paths;
+
+    my $path=dirname($file);
+    if ( -d $path ) {
+	return(1);
+    }
+    print STDERR "making path: $path..\n" if ( $debug );
+    while (length($path)!=0 && $path ne "." && $path ne "/" ) {
+	push(@paths, $path);
+	$path=dirname($path);
+    }
+
+    foreach my $dir (@paths) {
+	if ( ! -d $dir ) {
+	    print STDERR "mkdir($dir)\n" if ( $debug > 1 );
+	    mkdir($dir) || return(-1);
+	}
+	else {
+	    print STDERR "$dir exists, not making\n" if ( $debug > 1);
+	}
+    }
+    return(1);
 }
 
 sub grab
@@ -838,11 +879,24 @@ sub grab
     # start time only includes programming grabs, no channel detail grab
     my $startTime=time();
 
+    # do %postalcode and %zipcode substitutions now since they can't change
+    # if they don't appear, we remove them
+    if ( defined($config->{option_postalcode}) ) {
+	$opt_listings=~s/%(postal|zip)code/$config->{option_postalcode}/og;
+    }
+    elsif ( defined($config->{option_zipcode}) ) {
+	$opt_listings=~s/%(postal|zip)code/$config->{option_zipcode}/og;
+    }
+    else {
+	$opt_listings=~s/%(postal|zip)code//og;
+    }
+
     if ( !length($opt_listings) ) {
 	print STDERR "writing listings to stdout\n";
 	$writer_g = new XML::Writer(DATA_MODE => 1, DATA_INDENT => 2 );
     }
     elsif ( UnixDate("now","$opt_listings") eq $opt_listings ) {
+	mkpathtofile($opt_listings, $opt_debug) || die "mkdir $opt_listings:$!";
 	print STDERR "writing listings to $opt_listings\n";
 	$output_g = new IO::File("> $opt_listings") || die "$opt_listings: $!";
 	push(@FilesWeOpened_g, $opt_listings);
@@ -881,6 +935,7 @@ sub grab
 		die "This case should have been caught before here";
 	    }
 	    
+	    mkpathtofile($filename, $opt_debug) || die "mkdir $opt_listings:$!";
 	    print STDERR "writing listings to $filename\n";
 	    $output = new IO::File("> $filename") || die "$filename: $!";
 	    push(@FilesWeOpened_g, $filename);
@@ -1055,6 +1110,7 @@ sub writeOutPrograms($$$$$$)
 	    if ( defined($prog->{qualifiers}->{Language}) ) {
 		if ( defined($prog->{qualifiers}->{Dubbed}) ) {
 		    $writer->dataElement('orig-language', $prog->{qualifiers}->{Language});
+		    $writer->dataElement('language', $prog->{qualifiers}->{Dubbed});
 		}
 		else {
 		    $writer->dataElement('language', $prog->{qualifiers}->{Language});
