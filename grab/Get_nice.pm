@@ -13,6 +13,12 @@
 # XMLTV::Get_nice::get_nice_aux() is the one to cache with
 # XMLTV::Memoize or whatever.
 #
+# If you want to change what function is called to get pages, set
+# $XMLTV::Get_nice::get to a code reference that takes a URL and
+# returns a page.  Perhaps the right thing would be to decouple the
+# delay logic into a separate module, but at the moment fetching web
+# pages is the only use of it.
+#
 
 package XMLTV::Get_nice;
 use base 'Exporter';
@@ -21,6 +27,8 @@ use LWP::Simple qw($ua);
 use XMLTV;
 $ua->agent("xmltv/$XMLTV::VERSION");
 our $Delay = 5; # in seconds
+
+our $get = \&LWP::Simple::get;
 
 sub get_nice( $ ) {
     # This is to ensure scalar context, to work around weirdnesses
@@ -44,7 +52,7 @@ sub get_nice_aux( $ ) {
         sleep $sleep_time if $sleep_time > 0;
     }
 
-    my $r = LWP::Simple::get($url);
+    my $r = $get->($url);
 
     # At the moment download failures seem rare, so the script dies if
     # any page cannot be fetched.  We could later change this routine
