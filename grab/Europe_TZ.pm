@@ -7,6 +7,7 @@
 
 package XMLTV::Europe_TZ;
 use strict;
+use Carp qw(croak);
 use Date::Manip; # no Date_Init(), that can be done by the app
 use XMLTV::TZ qw(gettz tz_to_num);
 
@@ -52,7 +53,7 @@ use base 'Exporter'; use vars '@EXPORT';
 sub parse_eur_date($$) {
     my ($date, $base) = @_;
     my $winter_tz = tz_to_num($base);
-    die "bad timezone $base" if not defined $winter_tz;
+    croak "bad timezone $base" if not defined $winter_tz;
     my $summer_tz = sprintf('%+05d', $winter_tz + 100); # 'one hour'
 
     my $got_tz = gettz($date);
@@ -145,11 +146,12 @@ sub parse_eur_date($$) {
 #
 sub date_to_eur( $$ ) {
     my ($d, $base_tz) = @_;
-    die if (not defined $d) or ($d !~ /\S/);
+    croak 'date_to_eur() expects a Date::Manip object as first argument'
+      if (not defined $d) or ($d !~ /\S/);
 
     my $year = UnixDate($d, '%Y');
     if ((not defined $year) or ($year !~ tr/0-9//)) {
-	die "cannot get year from '$d'";
+	croak "cannot get year from '$d'";
     }
 
     # Find the start and end dates of summer time.
@@ -166,7 +168,7 @@ sub date_to_eur( $$ ) {
     elsif (Date_Cmp($d, $end_dst) < 0) {
 	# During summer time.
 	my $base_tz_num = tz_to_num($base_tz);
-	die "bad timezone $base_tz" if not defined $base_tz_num;
+	croak "bad timezone $base_tz" if not defined $base_tz_num;
 	$use_tz = sprintf('%+05d', $base_tz_num + 100); # one hour
     }
     else {
@@ -189,8 +191,8 @@ sub date_to_eur( $$ ) {
 
 sub utc_offset( $$ ) {
     my ($indate, $basetz) = @_;
-    die "empty date" if not defined $indate;
-    die "empty base TZ" if not defined $basetz;
+    croak "empty date" if not defined $indate;
+    croak "empty base TZ" if not defined $basetz;
     my $d = date_to_eur(parse_eur_date($indate, $basetz), $basetz);
     return UnixDate($d->[0],"%Y%m%d%H%M%S") . " " . $d->[1];
 }
@@ -214,7 +216,7 @@ sub utc_offset( $$ ) {
 #   end time and date of summer time (in UTC)
 #
 sub dst_dates($) {
-    die 'usage: dst_dates(year)' if @_ != 1;
+    croak 'usage: dst_dates(year)' if @_ != 1;
     my $year = shift;
     die "don't know about DST before 1998" if $year < 1998;
 
