@@ -75,9 +75,10 @@ use Getopt::Long;
 use HTML::Entities; # parse entities
 use IO::File;
 use URI;
-use HTML::TableExtract;
+#use HTML::TableExtract;
 use Date::Manip;
-use HTML::LinkExtractor;
+#use HTML::LinkExtractor;
+#use WWW::Mechanize;
 
 use XMLTV;
 use XMLTV::Memoize;
@@ -296,9 +297,12 @@ foreach my $d (0 .. $opt_days - 1) {
 	# Request day when constructing URL since it is represented as
 	# an integere offset from today. Still pass in the computed
 	# date - may need it sometime...
-	my $url = 'http://fredag.dagbladet.no/tv/index.html'
-	  . "?kanal_id=$ch_did&dag=$i&fra_tid=0&til_tid=24";
+	#my $url = 'http://fredag.dagbladet.no/tv/index.html'
+	#  . "?kanal_id=$ch_did&dag=$i&fra_tid=0&til_tid=24";
+	my $url = 'http://www.dagbladet.no/mobil/tv/'
+	  . "liste.html?kanal_id=$ch_did&dag=$i&fra_tid=0&til_tid=24";
 	push @to_get, [ $url, $day, $ch_xid, $ch_did ];
+	
 	my $got = process_listings_page($writer, $ch_xid, $url, $day);
 	warn "no listings for channel $ch_xid on day $d, $url\n"
 	  if $got == 0;
@@ -350,57 +354,55 @@ sub process_listings_page ( $$$$ ){
     my $ts;
     my $row;
     my $listingspage = tidy(get_nice($url));
-    my $tabex = new HTML::TableExtract( depth => 1, count => 5 , keep_html => 1 );
-    $tabex->parse($listingspage);
-    foreach $ts ($tabex->table_states) {
-	# t "Table found at ", join(',', $ts->coords),":\n";
-	foreach $row ($ts->rows) {
-	    #print "\nProcessing row containing:\n@$row[0]\n----";
-	    if (@$row[0] =~ m/<font class=txt size=2><b>/) {
-		#print "\nGrabbing $ch_xmltv_id from $url now!\n";
-		my $newstart = $1 if @$row[0] =~ m!>\n?(\d.\.\d.)(?:</span>|)(?:</b>|)<br>!;
-		die "didn't see start time in @$row[0]" if not defined $newstart;
-		my $newstop = $1 if @$row[0] =~ m/>\n?[(]?(\d.\.\d.)[)]?<\/fon/;
-		die "didn't see stop time in @$row[0]" if not defined $newstop;
-		my $newtitle = $1 if @$row[1] =~ m/2><b>\n(.*)<\/b>/;
-		die "didn't see title in @$row[0]" if not defined $newtitle;
-		$newtitle =~ s!.*>([^<]+)!$1!;
-		
-		my $newdesc = $1 if @$row[1] =~ m/size=1>\n(.*)<br>\n<img/;
-		$newdesc = encode_entities($newdesc) if $newdesc;
-		# OK for desc to be missing.
-		my $rerun = {} if $newtitle =~ s/\([Rr]\)//;
-		my $normalsubs = 1 if $newtitle =~ s/\(t\)//;
-		my $teletextsubs = 1 if $newtitle =~ s/\(ttv\)//;
+    #my $tabex = new HTML::TableExtract( depth => 1, count => 1 , keep_html => 1 );
+    #$tabex->parse($listingspage);
+	#my ($newstart, $newstop, $newtitle, $newdesc, $rerun, $normalsubs, $teletextsubs, $eptotal, $ep, $epall);    
+	my @elements = split(/<hr.*>/, $listingspage);
 
-		my ($eptotal, $ep, $epall);
-		for ($newtitle) {
-		    if (s/\(([0-9]+)\)//) {
-			$eptotal = $1 - 1;
-		    }
-		    elsif (s/\(([0-9]+):([0-9]+)\)//) {
-			($ep, $epall) = ($1 - 1, $2);
-		    }
-		    elsif (s/\(:([0-9]+)\)//) {
-			$eptotal = $1 - 1;
-		    }
-		    s/\s+$//;
-		}
+	foreach my $element (@elements) {
+		my ($newstart, $newstop, $newtitle, $newdesc, $rerun, $normalsubs, $teletextsubs, $eptotal, $ep, $epall);
+		if ($element =~ m/[0-9][0-9]\.[0-9][0-9] - [0-9][0-9]\.[0-9][0-9]/) {
+			($newstart, $newstop) = ($1, $2) if $element =~ m/([0-9][0-9]\.[0-9][0-9]) - ([0-9][0-9]\.[0-9][0-9])/;
+			$newtitle = $1 if $element =~ m!<b>(.*)</b>!;
+			$newdesc = $1 if $element =~ m/<\/b><br>(.*)$/;
+			#$newdesc = encode_entities($newdesc) if $newdesc;
+			
+			$rerun = {} if $newtitle =~ s/\([Rr]\)//;
+			$normalsubs = 1 if $newtitle =~ s/\(t\)//;
+			$teletextsubs = 1 if $newtitle =~ s/\(ttv\)//;
+			#for ($newtitle) { s/^\s+//; s/\s+$//; }
+
+			#my ($eptotal, $ep, $epall);
+			for ($newtitle) {
+		    	if (s/\(([0-9]+)\)//) {
+				$eptotal = $1 - 1;
+		    	}
+		    	elsif (s/\(([0-9]+):([0-9]+)\)//) {
+				($ep, $epall) = ($1 - 1, $2);
+		    	}
+		    	elsif (s/\(:([0-9]+)\)//) {
+				$eptotal = $1 - 1;
+				}
+			}
+		    	#s/\s+$//;
+		
 
 		my $originaltitle = $1
-		  if $newdesc =~ s/^\((.*)\) //;
-		
+		  if $newdesc && $newdesc =~ s/^\((.*)\) //;
+		for ($newtitle) { s/^\s+//; s/\s+$//; }
 		#$newdesc = " " if $newdesc eq "";
 		#print "$newstart - $newstop - $newtitle - $newdesc - Day: $day\n";
 		$newdesc = decode_entities($newdesc) if $newdesc;
+		if ($newdesc) {
 		for ($newdesc) { s/^\s+//; s/\s+$// }
+		}
 		$originaltitle = decode_entities($originaltitle) if $originaltitle;
 		$newstart =~ m/(\d.)\.(\d.)/ or die;
 		my $xmltvstart = utc_offset("$day$1${2}00", $TZ);
 		
 		$newstop =~ m/(\d.)\.(\d.)/ or die;
 		my $xmltvstop = utc_offset("$day$1${2}00", $TZ);
-		
+	
 		my $newxmltvstop;
 		if (Date_Cmp($xmltvstart, $xmltvstop) > 0 ) {
 		    $day = nextday($day);
@@ -412,7 +414,7 @@ sub process_listings_page ( $$$$ ){
 				channel => $ch_xmltv_id);
 		$prog{title} = [ [ $newtitle , $LANG ] , [ $originaltitle , "en" ] ] if $originaltitle;
 		$prog{title} = [ [ $newtitle , $LANG ] ] if not $originaltitle;
-		$prog{desc} = [ [ $newdesc , $LANG ] ] unless $newdesc eq "";
+		$prog{desc} = [ [ $newdesc , $LANG ] ] if $newdesc;
 		push @{$prog{'episode-num'}}, [ " . $ep/$epall . " , "xmltv_ns" ] if $ep;
 		push @{$prog{'episode-num'}}, [ $eptotal , "all-seasons" ] if $eptotal;
 		$prog{subtitles} = [ { type => 'teletext' } ] if $teletextsubs;
@@ -421,22 +423,25 @@ sub process_listings_page ( $$$$ ){
 		
 		$writer->write_programme(\%prog);
 		++$count;
+		}
 	    }
-	}	
-    }
+		
+    
     return $count;
 }
 
 # get channel listing
 sub get_channels {
-    my $page = tidy(get_nice('http://fredag.dagbladet.no/tv/select_channels.html'));
-    my @chanarray = split(/<input/, $page);
-    my %channels;
-    foreach my $item (@chanarray) {
-        # $channels{$channel_id} = $channel_name;
-        $channels{$1} = $2 if $item =~ /value=\"([0-9]+)\".*\">(.*)<\/label>/;
-    }
-    return %channels;
+    ##my $page = tidy(get_nice('http://fredag.dagbladet.no/tv/select_channels.html'));
+    my $page = tidy(get_nice('http://www.dagbladet.no/tv/mobil/index.html'));
+	my @chanarray = split(/<input/, $page);
+	my %channels;
+	foreach my $item (@chanarray) {
+		#print "\nAdding channel from itemtext:\n$item";
+		#print "\nFound: $1 --- $2\n" if $item =~ /value=\"([0-9]+)\".*>.(.*)<br>/;
+		$channels{$1} = $2 if $item =~ /value=\"([0-9]+)\".*>.(.*)<br>/;
+	}
+	return %channels;
 }
 
 sub getchandisplaynames( @ ) {
