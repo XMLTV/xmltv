@@ -92,6 +92,7 @@ my %pm
      'lib/TZ.pm'                  => '$(INST_LIBDIR)/XMLTV/TZ.pm',
      'lib/Clumps.pm'              => '$(INST_LIBDIR)/XMLTV/Clumps.pm',
      'lib/Usage.pm'               => '$(INST_LIBDIR)/XMLTV/Usage.pm',
+     'lib/Date.pm'                => '$(INST_LIBDIR)/XMLTV/Date.pm',
      'lib/Version.pm'             => '$(INST_LIBDIR)/XMLTV/Version.pm',
      'lib/Ask.pm'                 => '$(INST_LIBDIR)/XMLTV/Ask.pm',
      'lib/AskTk.pm'               => '$(INST_LIBDIR)/XMLTV/AskTk.pm',

@@ -10,6 +10,20 @@ use strict;
 use Carp qw(croak);
 use Date::Manip; # no Date_Init(), that can be done by the app
 use XMLTV::TZ qw(gettz tz_to_num);
+use XMLTV::Date;
+
+# Use Log::TraceMessages if installed.
+BEGIN {
+    eval { require Log::TraceMessages };
+    if ($@) {
+	*t = sub {};
+	*d = sub { '' };
+    }
+    else {
+	*t = \&Log::TraceMessages::t;
+	*d = \&Log::TraceMessages::d;
+    }
+}
 
 # Memoize some subroutines if possible.  FIXME commonize to
 # XMLTV::Memoize.  We are memoizing our own routines plus gettz() from
@@ -51,6 +65,7 @@ our @EXPORT = qw(parse_eur_date date_to_eur utc_offset);
 # Returns: parsed date, or undef if error
 #
 sub parse_eur_date($$) {
+#    local $Log::TraceMessages::On = 1;
     my ($date, $base) = @_;
     croak 'usage: parse_eur_date(unparsed date, base timezone)'
       if @_ != 2 or not defined $date or not defined $base;
@@ -59,6 +74,7 @@ sub parse_eur_date($$) {
     my $summer_tz = sprintf('%+05d', $winter_tz + 100); # 'one hour'
 
     my $got_tz = gettz($date);
+#    t "got timezone $got_tz from date $date";
     if (defined $got_tz) {
 	# Need to work out whether the timezone is one of the two
 	# allowable values.
@@ -75,15 +91,17 @@ sub parse_eur_date($$) {
 	#
 
 	# OK, the timezone is there and it looks sane, continue.
-	return ParseDate($date);
+	eval { return parse_date($date) }; return undef;
     }
 
-    # No timezone present, we need to guess.
-    my $dp = ParseDate($date);
-    return undef if not $dp;
+    t 'no timezone present, we need to guess';
+    my $dp;
+    eval { $dp = parse_date($date) }; return undef if $@;
+    t "parsed date string $date into: " . d $dp;
 
     # Start and end of summer time in that year, in UTC
     my $year = UnixDate($dp, '%Y');
+    t "year of date is $year";
     die "cannot convert Date::Manip object $dp to year"
       if not defined $year;
     my ($start_dst, $end_dst) = @{dst_dates($year)};
@@ -132,9 +150,11 @@ sub parse_eur_date($$) {
     }
 
     if ($summer) {
+	t "summer time, converting $dp from $summer_tz to UTC";
 	return Date_ConvTZ($dp, $summer_tz, 'UTC');
     }
     else {
+	t "winter time, converting $dp from $winter_tz to UTC";
 	return Date_ConvTZ($dp, $winter_tz, 'UTC');
     }
 }
@@ -233,14 +253,14 @@ sub dst_dates($) {
     my ($start_dst, $end_dst);
     foreach (1 .. 31) {
 	my $mar = "$year-03-$_" . ' 01:00';
-	my $mar_d = ParseDate($mar) or die "cannot parse $mar";
+	my $mar_d = parse_date($mar);
 	$start_dst = $mar_d if UnixDate($mar_d, "%A") =~ /Sunday/;
 
 	# A time between '00:00' and '01:00' just before the last
 	# Sunday in October is ambiguous.
 	#
 	my $oct = "$year-10-$_" . ' 01:00';
-	my $oct_d = ParseDate($oct) or die "cannot parse $oct";
+	my $oct_d = parse_date($oct);
 	$end_dst = $oct_d if UnixDate($oct_d, "%A") =~ /Sunday/;
     }
     die if not defined $start_dst or not defined $end_dst;
