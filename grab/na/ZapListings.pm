@@ -1311,6 +1311,7 @@ sub readSchedule($$$$$)
     my ($self, $stationid, $station_desc, $day, $month, $year)=@_;
 
     my $content;
+    my $cacheFile;
 
     if ( -f "urldata/$stationid/content-$month-$day-$year.html" &&
 	 open(FD, "< urldata/$stationid/content-$month-$day-$year.html") ) {
@@ -1367,16 +1368,13 @@ sub readSchedule($$$$$)
 	   return(-1);
         }
 	if ( -d "urldata" ) {
-	    my $file="urldata/$stationid/content-$month-$day-$year.html";
-	    if ( ! -f $file ) {
-		print STDERR "cache enabled, writing $file..\n";
-		if ( ! -d "urldata/$stationid" ) {
-		    mkdir("urldata/$stationid", 0775) || warn "failed to create dir urldata/$stationid:$!";
-		}
-		if ( open(FD, "> $file") ) {
-		    print FD $res->content();
-		    close(FD);
-		}
+	    $cacheFile="urldata/$stationid/content-$month-$day-$year.html";
+	    if ( ! -d "urldata/$stationid" ) {
+		mkdir("urldata/$stationid", 0775) || warn "failed to create dir urldata/$stationid:$!";
+	    }
+	    if ( open(FD, "> $cacheFile") ) {
+		print FD $content;
+		close(FD);
 	    }
 	}
     }
@@ -1384,14 +1382,19 @@ sub readSchedule($$$$$)
     if ( $self->{Debug} ) {
 	print STDERR "scraping html for $year-$month-$day on station $stationid: $station_desc\n";
     }
+
     @{$self->{Programs}}=$self->scrapehtml($content, "$year-$month-$day on station $station_desc (id $stationid)");
     if ( scalar(@{$self->{Programs}}) == 0 ) {
-	print STDERR "zap2it page format looks okay, but no programs found (maybe site maintenance)\n";
-	if ( -d "urldata" ) {
-	    my $file="urldata/$stationid/content-$month-$day-$year.html";
-	    unlink($file) if ( -f $file );
-	}
-	return(-1);
+	unlink($cacheFile) if ( defined($cacheFile) );
+
+	print STDERR "zap2it page format looks okay, but no programs found (no available data yet ?)\n";
+	# return un-retry-able
+	return(-2);
+    }
+
+    # emit delayed message so we only see it when we succeed
+    if ( defined($cacheFile) ) {
+	print STDERR "cache enabled, writing $cacheFile..\n";
     }
 
     print STDERR "Day $year-$month-$day schedule for station $station_desc has:".
