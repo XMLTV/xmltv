@@ -38,14 +38,14 @@ my @ch_regexps; # regexps to populate %ch_name with
 # Prepare an OptionAbbrev object with all the long options we expect
 # to find.
 #
-my $oa = new OptionAbbrev(qw(--ignore-case --help
+my $oa = new OptionAbbrev(qw(--ignore-case --help --output
 			     --channel-id --channel-name
 			     --on-after --eval
 			     --and --or));
 my %key_type = %{XMLTV::list_programme_keys()};
 $oa->add(map { "--$_" } keys %key_type);
 
-my ($ignore_case, $regexp, $ended_options, $filename);
+my ($ignore_case, $output, $regexp, $ended_options, $filename);
 while (@ARGV) {
     my $arg = shift @ARGV;
 
@@ -71,6 +71,17 @@ while (@ARGV) {
 
 	if (defined $lo and $lo eq '--help') {
 	    usage(1);
+	}
+
+	if (defined $lo and $lo eq '--output') {
+	    if (defined $output) {
+		die "option --output can be given only once\n";
+	    }
+	    $output = shift @ARGV;
+	    if (not defined $output) {
+		die "option --output requires an argument, a filename\n";
+	    }
+	    next;
 	}
 
 	if ($arg eq '-i' or (defined $lo and $lo eq '--ignore-case')) {
@@ -252,10 +263,11 @@ if (not @prog_conjs and not defined $regexp) {
     usage();
 }
 elsif (not @prog_conjs and defined $regexp) {
+    t "no predicates, but regexp $regexp";
     @prog_conjs = ([ sub { whole_programme_regexp($regexp) } ]);
 }
 elsif (@prog_conjs and not defined $regexp) {
-    # Okay.
+    t 'predicates given, not simple regexp';
 }
 elsif (@prog_conjs and defined $regexp) {
     warn "bad argument $regexp\n";
@@ -317,15 +329,37 @@ else {
 # Filter programmes.
 my @new_progs;
 PROG: foreach (@$progs) {
+    t 'filtering prog: ' . d $_;
     CONJ: foreach my $conj (@prog_conjs) {
+	  t 'testing against all of conjunction: ' . d $conj;
 	  foreach my $test (@$conj) {
-	      next CONJ if not $test->();
+	      t 'testing condition: ' . d $test;
+	      if ($test->()) {
+		  t 'passed, onto next condition in conj (if any)';
+	      }
+	      else {
+		  t 'failed, so failed this conj';
+		  next CONJ;
+	      }
 	  }
+	  t 'passed all tests in conj, finished with prog';
 	  push @new_progs, $_;
 	  next PROG;
       }
+    t 'failed at least one test in all conjs, not keeping';
 }
-XMLTV::write_data([$encoding, $credits, \%new_ch, \@new_progs]);
+
+# All done, write the new programmes and channels.
+t 'finished grepping, writing';
+my %w_args = ();
+if (defined $output) {
+    my $fh = new IO::File ">$output";
+    die "cannot write to $output\n" if not $fh;
+    %w_args = (OUTPUT => $fh);
+}
+XMLTV::write_data([$encoding, $credits, \%new_ch, \@new_progs], %w_args);
+exit(1);
+
 
 # Parameter: if true, write 'help message' rather than 'usage
 # message', ie write to stdout and exit successfully.
@@ -333,7 +367,7 @@ XMLTV::write_data([$encoding, $credits, \%new_ch, \@new_progs]);
 sub usage( ;$ ) {
     my $is_help = shift; $is_help = 0 if not defined $is_help;
     my $msg = <<END
-usage: $0 [--help] [--ignore-case|-i] [EXPR | REGEXP] [file]
+usage: $0 [--help] [--output FILE] [--ignore-case|-i] [EXPR | REGEXP] [file]
 where EXPR may consist of
 (programme content matches)
 END
@@ -452,7 +486,8 @@ sub on_after( $ ) {
 sub whole_programme_regexp( $ ) {
     my $re = shift;
     # Stringify the whole darn thing and match against that.
-    my $tmp = Dumper($_);
+    local $_ = Dumper($_);
+#    t 'testing stringified whole programme: ' . d $_;
     return $ignore_case ? /$re/i : /$re/;
 }
 
