@@ -875,11 +875,12 @@ sub write_with_lang( $$$ ) {
 # Parameters:
 #     reference to list of languages (in Lingua::Preferred format),
 #     reference to list of [language, string] pairs.
-#     (optional) comparison function that returns 1 if
-#       its first argument is better than its second argument, or 0
-#       if equally good, or -1 if first argument worse.
+#     (optional) function that compares two strings of text and
+#       returns 1 if its first argument is better than its second
+#       argument, or 0 if equally good, or -1 if first argument worse.
 #
-# Returns: the best of the strings to use.
+# Returns: [l, s] pair, where s is the best of the strings to use
+# and l is its language.
 #
 # There could be some more fancy scheme where both length and language
 # are combined into some kind of goodness measure, rather than
@@ -904,21 +905,27 @@ sub best_name( $$;$ ) {
 
     my $pref_lang = which_lang($wanted_langs, \@avail_langs);
     my @candidates;
+    my %cand_lang;
     foreach (@pairs) {
 	my ($text, $lang) = @$_;
 	next unless ((not defined $lang)
 		     or (defined $pref_lang and $lang eq $pref_lang));
 	push @candidates, $text;
+
+	# Remember the language of this string.  If we get the same
+	# string twice, once with a language and once without, then
+	# only the first occurrence is remembered.  This is reasonable
+	# and getting the same string twice is pathological anyway.
+	#
+	$cand_lang{$text} = $lang unless exists $cand_lang{$text};
     }
 
     return undef if not @candidates;
-    if (not defined $compare) {
-	return $candidates[0];
-    }
-
     # Some unnecessary comparisons, but who cares.
-    @candidates = sort { $compare->($a, $b) } @candidates;
-    return $candidates[0];
+    @candidates = sort { $compare->($a, $b) } @candidates
+      if defined $compare;
+    my $chosen = $candidates[0];
+    return [ $cand_lang{$chosen}, $chosen ];
 }
 
 
