@@ -295,7 +295,7 @@ foreach my $pair (@cmds) {
 	    my $expected_content = read_file($expected);
 
 	    if ($out_content ne $expected_content) {
-		warn "failure for @cmd, see $base.*\n";
+		warn "failure for @cmd @in, see $base.*\n";
 		print "not ok $test_num\n";
 		$okay = 0;
 		delete $to_unlink{$out}; delete $to_unlink{$err};
