@@ -66,10 +66,14 @@ channels in schedule listing.
 B<--auto-missing-channels [ignore|remove]> Ignore or remove channels
 no longer in schedule listing.
 
-B<--list-providers> Produce a list of providers and thier descriptions
+B<--list-providers> Produce a list of providers and their descriptions
 for the postal/zip code provided in --postalcode or --zipcode arguments.
 This option is here to support gui tools who want to reproduce the
 configure process.
+
+B<--list-channels> Produce a list of channels available. Requires you
+also specify provider/location information via --provider and one of
+--postalcode or --zipcode options.
 
 Interactive mode is entered if some necessary information is not given
 (for example no postal or zip code in the existing configuration file,
@@ -574,6 +578,53 @@ sub mkpathtofile($)
     return(1);
 }
 
+sub writeListingsXMLHeader($)
+{
+    my $writer=shift;
+
+    $writer->xmlDecl("ISO-8859-1");
+    $writer->doctype('tv', undef, 'xmltv.dtd');
+    $writer->startTag('tv',
+		      date                  =>Date::Manip::UnixDate("now","%T on %b %e, %Y"),
+		      'source-info-url'     =>"http://www.zap2it.com",
+		      'source-info-name'    =>"Zap2It",
+		      #'source-data-url'     =>"",
+		      'generator-info-name' =>"$VersionID",
+		      'generator-info-url'  =>$xmltvSourceForgeURL);
+}
+
+sub writeListingsXMLFooter($)
+{
+    my $writer=shift;
+    $writer->endTag('tv');
+}
+
+sub openOutputFileFD($$$$)
+{
+    my ($filename, $gzip_command, $zip_command, $bzip2_command)=@_;
+
+    if ( $filename=~m/\.gz$/o ) {
+        debugMessage("output filter: $gzip_command\n");
+	return(new IO::File("| $gzip_command > $filename"));
+    }
+    elsif ( $filename=~m/\.zip$/o ) {
+        debugMessage("output filter: $zip_command\n");
+	return(new IO::File("| $zip_command > $filename"));
+    }
+    elsif ( $filename=~m/\.bz2$/o ) {
+        debugMessage("output filter: $bzip2_command\n");
+	return(new IO::File("| $bzip2_command > $filename"));
+    }
+    else {
+	return(new IO::File("> $filename"));
+    }
+}
+
+sub closeOutputFileFD($)
+{
+    $_[0]->close() if ( defined($_[0]) );
+}
+
 #
 # How this grabber works:
 
@@ -844,10 +895,19 @@ if ( $configure ) {
 	if ( ! @channels || !defined($channels[0]) ) {
 	    exit(1);
 	}
-	# output list of channels to STDOUT
+	my $config=new myConfig();
 	foreach my $channel (@channels) {
-	    print STDOUT $channel->{description}."\n";
+	    my $station=$channel->{description};
+	    $config->setStationIncluded($station, 1);
+	    $config->setStationTransientFlag($station, 'found', 1);
 	}
+
+	# output list of channels to STDOUT
+	my $writer = new XML::Writer(DATA_MODE => 1, DATA_INDENT => 2 );
+	writeListingsXMLHeader($writer);
+	writeOutChannels($config, $writer);
+	writeListingsXMLFooter($writer);
+	$writer->end();
 	exit(0);
     }
 
@@ -1431,55 +1491,6 @@ if ( $failed ) {
 }
 exit(0);
 
-sub writeListingsXMLHeader($)
-{
-    my $writer=shift;
-
-    $writer->xmlDecl("ISO-8859-1");
-    $writer->doctype('tv', undef, 'xmltv.dtd');
-    $writer->startTag('tv',
-		      date                  =>Date::Manip::UnixDate("now","%T on %b %e, %Y"),
-		      'source-info-url'     =>"http://www.zap2it.com",
-		      'source-info-name'    =>"Zap2It",
-		      #'source-data-url'     =>"",
-		      'generator-info-name' =>"$VersionID",
-		      'generator-info-url'  =>$xmltvSourceForgeURL);
-}
-
-sub writeListingsXMLFooter($)
-{
-    my $writer=shift;
-    $writer->endTag('tv');
-}
-
-sub openOutputFileFD($)
-{
-    my $filename=$_[0];
-
-    if ( $filename=~m/\.gz$/o ) {
-        debugMessage("output filter: $opt_gzip_command\n");
-	return(new IO::File("| $opt_gzip_command > $filename"));
-    }
-    elsif ( $filename=~m/\.zip$/o ) {
-        debugMessage("output filter: $opt_zip_command\n");
-	return(new IO::File("| $opt_zip_command > $filename"));
-    }
-    elsif ( $filename=~m/\.bz2$/o ) {
-        debugMessage("output filter: $opt_bzip2_command\n");
-	return(new IO::File("| $opt_bzip2_command > $filename"));
-    }
-    else {
-	return(new IO::File("> $filename"));
-    }
-}
-
-sub closeOutputFileFD($)
-{
-    if ( defined($_[0]) ) {
-	$_[0]->close() || warn "failed to close file: $!";
-    }
-}
-
 sub grab
 {
     # initalize global XML::Writer if we're writting listings to stdout
@@ -1733,7 +1744,10 @@ sub grab
 	else {
 	    mkpathtofile($listingsDefinition) || die "mkdir $listingsDefinition:$!";
 	    statusMessage("writing listings to $listingsDefinition\n");
-	    $output_g = openOutputFileFD($listingsDefinition) || die "$listingsDefinition: $!";
+	    $output_g = openOutputFileFD($listingsDefinition,
+					 $opt_gzip_command,
+					 $opt_zip_command,
+					 $opt_bzip2_command) || die "$listingsDefinition: $!";
 	    push(@FilesWeOpened_g, $listingsDefinition);
 	    $writer_g = new XML::Writer(OUTPUT=>$output_g,
 					DATA_MODE => 1, DATA_INDENT => 2 );
@@ -1790,7 +1804,10 @@ sub grab
 		    if ( !($dayFilename=~m/%Channel/o) ) {
 			mkpathtofile($dayFilename) || die "mkdir $dayFilename:$!";
 			statusMessage("writing listings to $dayFilename\n");
-			$output = openOutputFileFD($dayFilename) || die "$dayFilename: $!";
+			$output = openOutputFileFD($dayFilename,
+						   $opt_gzip_command,
+						   $opt_zip_command,
+						   $opt_bzip2_command) || die "$dayFilename: $!";
 			$writer = new XML::Writer(OUTPUT=>$output,
 						  DATA_MODE => 1, DATA_INDENT => 2 );
 			writeListingsXMLHeader($writer);
@@ -1917,7 +1934,10 @@ sub grab
 			    else {
 				mkpathtofile($filename) || die "mkdir $filename:$!";
 				statusMessage("writing listings to $filename\n");
-				my $o = openOutputFileFD($filename) || die "$dayFilename: $!";
+				my $o = openOutputFileFD($filename,
+							 $opt_gzip_command,
+							 $opt_zip_command,
+							 $opt_bzip2_command) || die "$dayFilename: $!";
 				my $w = new XML::Writer(OUTPUT=>$o,
 							DATA_MODE => 1, DATA_INDENT => 2 );
 				writeListingsXMLHeader($w);
