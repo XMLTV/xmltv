@@ -239,7 +239,7 @@ my @opt_components
        exes => [ 'grab/na/tv_grab_na' ],
        pm => { 'grab/na/ZapListings.pm' =>
 	       '$(INST_LIBDIR)/XMLTV/ZapListings.pm' },
-       prereqs => { 'HTML::Parser' => 0 } },
+       prereqs => { 'HTML::Parser' => 3.34 } },
 
      { name => 'tv_grab_nz',
        blurb => 'Grabber for New Zealand',
