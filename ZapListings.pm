@@ -1076,10 +1076,11 @@ sub scrapehtml($$$)
 				$found2++ if ( $k eq $sub );
 			    }
 			    
-			    if ( ! $found1 ) {
+			    # only print message if one matched and the other didn't
+			    if ( ! $found1 && $found2 ) {
 				print STDERR "identified possible candidate for new language $lang in $i\n";
 			    }
-			    if ( ! $found2 ) {
+			    if ( ! $found2 && $found1 ) {
 				print STDERR "identified possible candidate for new language $sub in $i\n";
 			    }
 			    if ( $found1 && $found2 ) {
