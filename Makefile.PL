@@ -52,6 +52,7 @@ WriteMakefile
 			'Term::ProgressBar' => 0,
 			'Tie::IxHash' => 0,
 			'Unicode::String' => 0,
+			'Compress::Zlib' => 0,
 		      },
     # No special parameters for 'make clean' or 'make dist'
 );
