@@ -1,0 +1,631 @@
+#!/usr/bin/perl -w
+
+=head1 NAME
+
+tv_grab_dk - Grab TV listings for Denmark.
+
+=head1 SYNOPSIS
+
+tv_grab_dk --help
+
+tv_grab_dk [--config-file FILE] --configure
+
+tv_grab_dk [--config-file FILE] [--output FILE] [--days N]
+           [--offset N] [--quiet]
+
+=head1 DESCRIPTION
+
+Output TV listings for several channels available in Denmark.  The
+data comes from tv.tv2.dk. The grabber relies on parsing HTML so it
+might stop working at any time.
+
+First run B<tv_grab_dk --configure> to choose, which channels you want
+to download. Then running B<tv_grab_dk> with no arguments will output
+listings in XML format to standard output.
+
+B<--configure> Prompt for which channels,
+and write the configuration file.
+
+B<--config-file FILE> Set the name of the configuration file, the
+default is B<~/.xmltv/tv_grab_dk.conf>.  This is the file written by
+B<--configure> and read when grabbing.
+
+B<--output FILE> write to FILE rather than standard output.
+
+B<--days N> grab N days.  The default is one week.
+
+B<--offset N> start N days in the future.  The default is to start
+from today.
+
+B<--quiet> suppress the progress messages normally written to standard
+error.
+
+=head1 SEE ALSO
+
+L<xmltv(5)>.
+
+=head1 AUTHOR
+
+Jesper Skov (jskov@zoftcorp.dk). Originally based on tv_grab_nl by
+Guido Diepen and Ed Avis (ed@membled.com) and tv_grab_fi by Matti
+Airas.
+
+=head1 BUGS
+
+Things in the programme descriptions to handle:
+
+Vaert: Mikael Kamber.
+
+Genudsendelse fra mandag. - convert to <previously-shown>?
+
+Dansk dokumentar. - convert to <country> and <category>, sometimes <date>
+
+=cut
+
+######################################################################
+# initializations
+
+use strict;
+use Getopt::Long;
+use LWP::Simple ();
+use HTML::TreeBuilder;
+use HTML::Entities; # parse entities
+use IO::File;
+use URI;
+
+use Date::Manip;
+
+use XMLTV;
+use XMLTV::Memoize;
+use XMLTV::Ask;
+use XMLTV::Mode;
+use XMLTV::Config_file;
+use XMLTV::Europe_TZ;
+# Todo: perhaps we should internationalize messages and docs?
+use XMLTV::Usage <<END
+$0: get Danish television listings in XMLTV format
+To configure: $0 --configure [--config-file FILE]
+To grab listings: $0 [--config-file FILE] [--output FILE] [--days N]
+        [--offset N] [--quiet]
+END
+  ;
+
+# Use Log::TraceMessages if installed.
+BEGIN {
+    eval { require Log::TraceMessages };
+    if ($@) {
+	*t = sub {};
+	*d = sub { '' };
+    }
+    else {
+	*t = \&Log::TraceMessages::t;
+	*d = \&Log::TraceMessages::d;
+	Log::TraceMessages::check_argv();
+    }
+}
+
+# Use Term::ProgressBar if installed.
+use constant Have_bar => eval { require Term::ProgressBar; 1 };
+
+# Whether zero-length programmes should be included in the output.
+my $WRITE_ZERO_LENGTH = 0;
+
+# default language
+my $LANG = 'dk';
+
+# Winter time in Denmark - summer time is one hour ahead of this.
+my $TZ = '+0100';
+
+sub process_summary_page( $$$ );
+sub process_listings_page( $$$$ );
+
+######################################################################
+# get options
+
+# Get options
+XMLTV::Memoize::check_argv('get_courteous_aux');
+my ($opt_days, $opt_offset, $opt_help, $opt_output,
+    $opt_configure, $opt_config_file, $opt_quiet,
+    $opt_list_channels);
+$opt_days   = 7; # default
+$opt_offset = 0; # default
+GetOptions('days=i'        => \$opt_days,
+	   'offset=i'      => \$opt_offset,
+	   'help'          => \$opt_help,
+	   'configure'     => \$opt_configure,
+	   'config-file=s' => \$opt_config_file,
+	   'output=s'      => \$opt_output,
+	   'quiet'         => \$opt_quiet,
+	   'list-channels' => \$opt_list_channels,
+	  )
+  or usage(0);
+die 'number of days must not be negative'
+  if (defined $opt_days && $opt_days < 0);
+usage(1) if $opt_help;
+
+my $mode = XMLTV::Mode::mode('grab', # default
+			     $opt_configure => 'configure',
+			     $opt_list_channels => 'list-channels',
+			    );
+
+# File that stores which channels to download.
+my $config_file
+  = XMLTV::Config_file::filename($opt_config_file, 'tv_grab_dk', $opt_quiet);
+
+if ($mode eq 'configure') {
+    XMLTV::Config_file::check_no_overwrite($config_file);
+    open(CONF, ">$config_file") or die "cannot write to $config_file: $!";
+    # find list of available channels
+    my $bar = new Term::ProgressBar('getting list of channels', 1)
+      if Have_bar && not $opt_quiet;
+    my %channels = get_channels();
+    die 'no channels could be found' if (scalar(keys(%channels)) == 0);
+    update $bar if Have_bar && not $opt_quiet;
+
+    my $answer;
+    my $answer_all;
+
+    foreach my $ch_did (sort(keys %channels)) {
+	my $ch_name = $channels{$ch_did};
+	if ($answer_all) {
+	    print($answer eq 'yes' ? 'adding' : 'ignoring',
+		  " new channel $ch_name\n");
+	}
+	else {
+	    $answer = askQuestion("add channel $ch_name?", 'yes',
+				'yes', 'no', 'all', 'none');
+	    if ( $answer eq 'all' ) {
+		$answer_all = 1;
+		$answer = 'yes';
+	    }
+	    elsif ( $answer eq 'none' ) {
+		$answer_all = 1;
+		$answer = 'no';
+	    }
+	}
+	
+	if ($answer eq 'yes') {
+	    print CONF "channel $ch_did $ch_name\n";
+	}
+	else {
+	    print CONF "# channel $ch_did $ch_name\n";
+	}
+    }
+    close CONF or warn "cannot close $config_file: $!";
+    print "All done, run with no arguments to grab listings.\n";
+
+    exit();
+}
+
+# Not configuring, we will need to write some output.
+die if $mode ne 'grab' and $mode ne 'list-channels';
+
+# If we are grabbing, check we can read the config file before doing
+# anything else.
+#
+my @config_lines;
+if ($mode eq 'grab') {
+    @config_lines = XMLTV::Config_file::read_lines($config_file);
+}
+
+my %w_args;
+if (defined $opt_output) {
+    my $fh = new IO::File(">$opt_output");
+    die "cannot write to $opt_output: $!" if not defined $fh;
+    $w_args{OUTPUT} = $fh;
+}
+$w_args{encoding} = 'ISO-8859-1';
+my $writer = new XMLTV::Writer(%w_args);
+# TODO: standardize these things between grabbers.
+$writer->start
+  ({ 'source-info-url'     => 'http://tv.tv2.dk/tv',
+     'source-data-url'     => 'http://tv.tv2.dk/tv',
+     'generator-info-name' => 'XMLTV',
+     'generator-info-url'  => 'http://membled.com/work/apps/xmltv/',
+   });
+
+if ($opt_list_channels) {
+    my $bar = new Term::ProgressBar('getting list of channels', 1)
+      if Have_bar && not $opt_quiet;
+    my %channels = get_channels();
+    die 'no channels could be found' if (scalar(keys(%channels)) == 0);
+    update $bar if Have_bar && not $opt_quiet;
+
+    foreach my $ch_did (sort(keys %channels)) {
+	my $ch_name = $channels{$ch_did};
+	my $ch_xid = "$ch_did.tv.tv2.dk";
+	$writer->write_channel({ id => $ch_xid,
+				 'display-name' => [ [ $ch_name ] ] });
+    }
+    $writer->end();
+    exit();
+}
+
+# Not configuring or writing channels, must be grabbing listings.
+die if $mode ne 'grab';
+my (%channels, @channels, $ch_did, $ch_name);
+my $line_num = 1;
+foreach (@config_lines) {
+    ++ $line_num;
+    next if not defined;
+
+    # FIXME channel data should be read from the site, and then the
+    # config file only gives the XMLTV ids that are interesting.
+    #
+    if (/^channel:?\s+(\S+)\s+([^\#]+)/) {
+	$ch_did = $1;
+	$ch_name = $2;
+	$ch_name =~ s/\s*$//;
+	push @channels, $ch_did;
+	$channels{$ch_did} = $ch_name;
+    }
+    else {
+	warn "$config_file:$.: bad line\n";
+    }
+}
+
+
+######################################################################
+# begin main program
+
+my $now = DateCalc(ParseDate('now'), "+ $opt_offset days");
+die if not defined $now;
+
+my @to_get;
+
+# the order in which we fetch the channels matters
+my $today = UnixDate($now, '%Y-%m-%d'); die if not defined $today;
+foreach $ch_did (@channels) {
+    $ch_name = $channels{$ch_did};
+    my $ch_xid = "$ch_did.tv.tv2.dk";
+    $writer->write_channel({ id => $ch_xid,
+			     'display-name' => [ [ $ch_name ] ] });
+    for (my $i = $opt_offset;$i<($opt_offset + $opt_days);$i++) {
+	# Request day when constructing URL since it is represented as
+	# an integere offset from today. Still pass in the computed
+	# date - may need it sometime...
+	my $url = 'http://tv.tv2.dk/tv/listning.php'
+	  . "?KanalID=$ch_did&sektion&Periode=0&Dato=$i";
+	my $day = UnixDate(DateCalc($today, "+ $i days"), '%Y-%m-%d');
+	push @to_get, [ $url, $day, $ch_xid, $ch_did ];
+    }
+}
+
+my %warned_ch_name; # suppress duplicate warnings
+
+my $bar = new Term::ProgressBar('fetching data', scalar @to_get)
+  if Have_bar && not $opt_quiet;
+my @to_get_detailed;
+my $num_detailed = 0;
+foreach (@to_get) {
+	my ($url, $date, $ch_xmltv_id, $ch_tvgids_id) = @$_;
+	process_listings_page($writer, $ch_xmltv_id, $url, $date);
+	update $bar if Have_bar && not $opt_quiet;
+}
+$writer->end();
+
+######################################################################
+# subroutine definitions
+
+# arguments:
+#   XMLTV::Writer object to write to
+#   XMLTV id of channel
+#   URL to fetch
+#   Date::Manip object giving day for programmes in page (at least
+#     until they cross midnight)
+#
+my ($warned_discarding_parts, $commented_episode_num);
+sub process_listings_page ( $$$$ ){
+    my ($writer, $ch_xmltv_id, $url, $day_obj) = @_;
+    my $next_day = 0;
+    my $day = UnixDate($day_obj, '%Q');
+
+    # We make an HTML::TreeBuilder object, get the information
+    # from it and them delete it.
+    #
+    my $t = new HTML::TreeBuilder();
+    $t->parse(get_courteous($url));
+
+    my @elems = $t->look_down(class => 'udsendelse');
+    if (not @elems) {
+	warn "did not see any 'udsendelse' elements, skipping page";
+	next;
+    }
+
+    my $crossed_midnight = 0;
+
+    my @info;
+    for (my $i = 0; $i <= $#elems; $i++) {
+	my $e = $elems[$i];
+	# Process the list of [ heading, data ] pairs.
+	my ($start, $stop, # exactly one
+	    $title, $sub_title, $genre, $date,               #
+	    $episode_num, $actors, $writers, $commentators, #
+	    $director, $previously_shown, $orig_title,      # at most one
+	    $aspect, $colour, $stereo,
+	    @presenter, @url # zero or more
+	    );
+	
+	my $teletext_sub = 0;  # boolean
+
+	# defaults
+	$aspect = "4:3";
+	$colour = "yes";
+	
+	if (defined ($e->look_down(class => "udsendelse-er-vist"))) {
+	    next;
+	}
+
+	if (defined ($_ = $e->look_down(class => "udsendelse-tid"))) {
+	    $start = parse_eur_date("$day " . $_->as_text(), $TZ);
+	} else {
+	    warn "no start time, skipping programme\n";
+	    next;
+	}
+
+	# When looking for the end time, we may also have to bump $day
+	# to the next day
+	if (defined (my $next_e = $elems[$i+1])) {
+	    if (defined ($_ = $next_e->look_down(class => "udsendelse-tid"))) {
+		$stop = parse_eur_date("$day " . $_->as_text(), $TZ);
+
+		if (0 < Date_Cmp($start, $stop)) {
+		    my $err;
+		    $day = nextday($day);
+		    $stop = parse_eur_date("$day " . $_->as_text(), $TZ);
+		}
+	    }
+	}
+	# If the stop time is not set, it's not set.  We don't guess
+	# some arbitrary value.
+	#
+
+	if (defined ($_ = $e->look_down(class => "udsendelse-titel"))) {
+	    $title = $_->as_text();
+	} else {
+	    warn "no title, skipping programme\n";
+	    next;
+	}
+
+	my @desc; # bits of description
+	if (defined (my $d = $e->look_down(class => "udsendelse-beskrivelse",
+					name => "divBeskrivelseLang"))) {
+	    my $line = 0;
+	    foreach $_ ($d->content_list) {
+		$line++;
+
+		if (3 == $line && ref $_) {
+		    $_ = $_->as_text();
+		    if (/\((.+)\)/) {
+			$orig_title = $1;
+		    }
+		    next;
+		}
+
+		next if ref $_;
+		next if $_ eq " ";
+
+		if (s/Vises i 16:9 format.|Vises i bredformat.//) {
+		    $aspect = "16:9";
+		}
+
+		# Description contains more than just textual blurb.
+		if (1 == $line) {
+		    if (/fra (\d\d\d\d)/) {
+			$date = $1;
+		    }
+		} elsif (/^Manuskript:\s*(.*)/) {
+		    my @w = split(/, | og /, $1);
+		    s/[.]$// foreach @w;
+		    push @$writers, @w;
+		    next;
+		} elsif (/^Instruktør:\s*(.*)/) {
+		    $director = $1;
+		    $director =~ s/[.]$//;
+		    next;
+		} elsif (/^Kommentatorer:\s*(.*)/) {
+		    push @$commentators, $1;
+		    next;
+		} elsif (/^Medvirkende:\s*(.*)/) {
+		    my @a = split(/, | og /, $1);
+		    s/[.]$// foreach @a;
+		    push @$actors, @a;
+		    next;
+		}
+
+		s/^\s+//; s/\s+$//;
+		push @desc, $_ if length;
+	    }
+	} else {
+	    if (defined ($_ = $e->look_down(class => "udsendelse-beskrivelse",
+					    name => "divBeskrivelseKort"))) {
+		foreach ($_->content_list) {
+		    next if ref;
+		    s/^\s+//; s/\s+$//;
+		    next if not length;
+		    push @desc, $_;
+		}
+	    }
+	}
+
+	my @symbols = $e->look_down(class => "udsendelse-symboler");
+	
+	foreach my $s (@symbols) {
+	    $_ = $s->as_text();
+	    if (/\(TTV\)/) {
+		$teletext_sub = 1;
+	    } elsif (/\(TH\)/) {
+		$sub_title = 1;
+	    } elsif (/\((\d+)\)/) {
+		$episode_num = $1;
+	    } elsif (/\(G\)/) {
+		$previously_shown = {};
+	    } elsif (/\(S\)/) {
+		$stereo = {};
+	    }
+	}
+
+
+	my @title_data = ([ $title, $LANG]);
+	push @title_data, [ $orig_title ] if defined $orig_title;
+	my ($start_base, $start_tz) = @{date_to_eur($start, $TZ)};
+	my %prog
+	    = (channel  => $ch_xmltv_id,
+	       title    => \@title_data,
+	       start    => UnixDate($start_base, '%q') . " $start_tz",
+	      );
+	if (defined $stop) {
+	    my ($stop_base, $stop_tz) = @{date_to_eur($stop, $TZ)};
+	    $prog{stop} = UnixDate($stop_base, '%q') . " $stop_tz";
+	}
+
+	# Would be better split into paragraphs but the current format
+	# doesn't allow that.
+	#
+	$prog{desc} = [ [ join(' ', @desc), $LANG ] ] if @desc;
+	
+	$prog{video} = { present => 1,
+			 aspect => $aspect,
+			 colour => $colour };
+
+	$prog{audio} = { present => 1,
+			 stereo => "stereo" } if defined $stereo;
+
+	$prog{'sub-title'} = [ [ $sub_title, $LANG ] ] if defined $sub_title;
+	$prog{subtitles} = [ { type => 'teletext' } ] if $teletext_sub;
+
+	if (defined $episode_num) {
+	    $writer->comment(<<END
+Hmm, this is interesting, the site seems to have a total
+episode number - eg episode 119 of Buffy - rather than the
+episode within that series.  The current XMLTV format cannot
+handle this but 'onscreen' is not appropriate either, because
+the screen does not display 'Buffy episode #119'.
+
+We make up a new format description 'all_seasons' which stores the
+episode number since the very first episode in the first season.  But
+like the existing xmltv_ns, it is numbered from zero (so '118').
+END
+		       ) unless $commented_episode_num++;
+	    $prog{'episode-num'} = [ $episode_num - 1, "all_seasons" ];
+	}
+	$prog{date} = $date if defined $date;
+#	$prog{category} = [ [ $genre, $LANG ] ] if defined $genre;
+	$prog{'previously-shown'} = $previously_shown if $previously_shown;
+	
+	my %c;
+
+	if ($actors) {
+	    foreach (@$actors) {
+		if (s/^(.+):\s*//) {
+		    warn "discarding information about the parts played by each actor\n"
+		      unless $warned_discarding_parts++;
+		}
+	    }
+	    $c{actor} = $actors;
+	}
+	$c{writer} = $writers if $writers;
+	$c{commentator} = $commentators if $commentators;
+	$c{director} = [ $director ] if $director;
+	$prog{credits} = \%c if %c;
+
+	$writer->write_programme(\%prog);
+
+    }
+    $t->delete(); undef $t;
+}
+
+# get channel listing
+sub get_channels {
+    my %channels;
+    my $url = 'http://tv.tv2.dk/tv';
+
+    my $t = new HTML::TreeBuilder();
+    $t->parse(get_courteous($url));
+
+
+    # The channels and their IDs are defined in javascript arrays
+    my @elements = $t->look_down("_tag" => "script",
+				 "language" => "JavaScript1.2");
+    if (scalar(@elements) == 1 || !ref($elements[0])) {
+	my @children = $elements[0]->content_list();
+	if (scalar(@children) != 1 || ref($children[0])) {
+	    warn "Illegal channel name";
+	    last;
+	}
+
+	my @lines = split(/\n/, $children[0]);
+
+	while (defined($_ = shift @lines)) {
+	    if (/aryKanalID\[.*Array\((.+)\);/) {
+		my @channel_ids = split(/,/, $1);
+
+		$_ = shift @lines;
+		if (/aryKanalNavn\[.*Array\((.+)\);/) {
+		    my @channel_names = split(/,/, $1);
+		
+		    foreach my $channel_id (@channel_ids) {
+			$channel_id =~ s/\'//g;
+			$channel_id =~ s/^\s*//;
+			$channel_id =~ s/\s*$//;
+
+			next if ($channel_id eq "0");
+
+			if (length($channel_id) == 1) {
+			    $channel_id = "00" . $channel_id;
+			}
+			if (length($channel_id) == 2) {
+			    $channel_id = "0" . $channel_id;
+			}
+
+			my $channel_name = shift @channel_names;
+			$channel_name =~ s/\'//g;
+			$channel_name =~ s/^\s*//;
+			$channel_name =~ s/\s*$//;
+		
+			$channels{$channel_id} = $channel_name;
+		    }
+		}
+	    }
+	}
+    }
+
+    $t->delete(); undef $t;
+    return %channels;
+}
+
+
+sub get_courteous {
+    # This is to ensure scalar context, to work around weirdnesses
+    # with Memoize (I just can't figure out how SCALAR_CACHE and
+    # LIST_CACHE relate to each other, with or without MERGE).
+    #
+    return scalar get_courteous_aux(@_);
+}
+# FIXME replace with LWP::RobotUI.
+sub get_courteous_aux {
+    my $url = shift;
+    my $r = LWP::Simple::get($url);
+    
+    # At the moment download failures seem rare, so the script dies if
+    # any page cannot be fetched.  We could later change this routine
+    # to return undef on failure.  But dying here makes sure that a
+    # failed page fetch doesn't get stored in XMLTV::Memoize's cache.
+    #
+    die "could not fetch $url, aborting\n" if not defined $r;
+    
+    # Be nice to the server.  Technically we don't need to do this
+    # after the very last fetch, but sleeping every time is simpler.
+    #
+    sleep(rand 5);
+    
+    return $r;
+}
+
+# Bump a YYYYMMDD date by one.
+sub nextday {
+    my $d = shift;
+    my $p = ParseDate($d);
+    my $n = DateCalc($p, '+ 1 day');
+    return UnixDate($n, '%Q');
+}
