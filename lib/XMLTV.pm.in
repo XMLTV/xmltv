@@ -128,12 +128,19 @@ BEGIN {
     }
 }
 
-# Handlers and multiplicity for different subelements of channel.
+# Attributes and subelements of channel.  Each subelement additionally
+# needs a handler defined.  Multiplicity is given for both, but for
+# attributes the only allowable values are '1' and '?'.
 #
-# The ordering of this list gives the order in which these elements
-# must appear in the DTD.  In fact, this just duplicates information
-# in the DTD and adds details of what handlers to call.
+# Ordering of attributes is not really important, but we keep the same
+# order as they are given in the DTD so that output looks nice.
 #
+# The ordering of the subelements list gives the order in which these
+# elements must appear in the DTD.  In fact, these lists just
+# duplicate information in the DTD and add details of what handlers
+# to call.
+#
+use vars '@Channel_Attributes'; @Channel_Attributes = ([ 'id', '1' ]);
 use vars '@Channel_Handlers'; @Channel_Handlers =
   (
    [ 'display-name', 'with-lang', '+' ],
@@ -142,6 +149,17 @@ use vars '@Channel_Handlers'; @Channel_Handlers =
   );
 
 # Same for <programme> elements.
+use vars '@Programme_Attributes'; @Programme_Attributes =
+  (
+   [ 'start',     '1' ],
+   [ 'stop',      '?' ],
+   [ 'pdc-start', '?' ],
+   [ 'vps-start', '?' ],
+   [ 'showview',  '?' ],
+   [ 'videoplus', '?' ],
+   [ 'channel',   '1' ],
+   [ 'clumpidx',  '?' ],
+  );
 use vars '@Programme_Handlers'; @Programme_Handlers =
   (
    [ 'title',            'with-lang',          '+' ],
@@ -784,10 +802,16 @@ sub best_name( $$;$ ) {
 =item list_channel_keys(), list_programme_keys()
 
 Some users of this module may wish to enquire at runtime about which
-keys a programme or channel can contain.  This subroutine returns a
-hash mapping key to handler name and multiplicity.  This lets you know
-what data types can be expected under each key.  See L<"DATA
-STRUCTURE"> for details on what a handler is.
+keys a programme or channel hash can contain.  The data in the hash
+comes from the attributes and subelements of the corresponding element
+in the XML.  The values of attributes are simply stored as strings,
+while subelements are processed with a handler which may return a
+complex data structure.  These subroutines returns a hash mapping key
+to handler name and multiplicity.  This lets you know what data types
+can be expected under each key.  For keys which come from attributes
+rather than subelements, the handler is set to 'scalar', just as for
+subelements which give a simple string.  See L<"DATA STRUCTURE"> for
+details on what the different handler names mean.
 
 It is not possible to find out which keys are mandatory and which
 optional, only a list of all those which might possibly be present.
@@ -797,17 +821,30 @@ subelements.
 
 =cut
 # Private.
-sub list_keys( $ ) {
+sub list_keys( $$ ) {
     my %r;
+
+    # Attributes.
+    foreach (@{shift()}) {
+	my ($k, $mult) = @$_;
+	$r{$k} = [ 'scalar', $mult ];
+    }
+
+    # Subelements.
     foreach (@{shift()}) {
 	my ($k, $h_name, $mult) = @$_;
 	$r{$k} = [ $h_name, $mult ];
     }
+
     return \%r;
 }
 # Public.
-sub list_channel_keys() { list_keys(\@Channel_Handlers) }
-sub list_programme_keys() { list_keys(\@Programme_Handlers) }
+sub list_channel_keys() {
+    list_keys(\@Channel_Attributes, \@Channel_Handlers);
+}
+sub list_programme_keys() {
+    list_keys(\@Programme_Attributes, \@Programme_Handlers);
+}
 
 =pod
 
@@ -902,11 +939,15 @@ For completeness, we describe more precisely how channels and
 programmes are represented in Perl.  Each element of the channels list
 is a hashref corresponding to one <channel> element, and likewise for
 programmes.  The possible keys of a channel (programme) hash are the
-names of attributes or subelements of <channel> (<programme>).  The
-values for attributes are not processed in any way.  But for
-subelements, there is further processing needed to turn the XML
-content of a subelement into Perl data.  What is done depends on what
-type of data is stored under that subelement.  Also, if a certain
+names of attributes or subelements of <channel> (<programme>).
+
+The values for attributes are not processed in any way; an attribute
+C<fred="jim"> in the XML will become a hash element with key C<'fred'>,
+value C<'jim'>.
+
+But for subelements, there is further processing needed to turn the
+XML content of a subelement into Perl data.  What is done depends on
+what type of data is stored under that subelement.  Also, if a certain
 element can appear several times then the hash key for that element
 points to a list of values rather than just one.
 
@@ -1566,8 +1607,7 @@ sub node_to_programme( $ ) {
 	    warn "programme missing '$_' attribute\n";
 	}
     }
-    my @known_attrs = qw(start stop pdc-start vps-start showview
-			 videoplus channel clumpidx);
+    my @known_attrs = map { $_->[0] } @Programme_Attributes;
     my %ka; ++$ka{$_} foreach @known_attrs;
     foreach (keys %programme) {
 	unless ($ka{$_}) {
@@ -1894,19 +1934,23 @@ sub write_programme {
     # the programme is broadcast.  After taking those out of the hash,
     # we can use the handlers to output individual details.
     #
-    my $start = delete $p{start};
-    if (not defined $start) {
-	warn "programme missing start time, skipping";
-	return;
-    }
-    # Just output dates as strings (see comment at read_date()).
-    my %attrs = (start => $start);
-    if (defined(my $val = delete $p{stop})) {
-	$attrs{stop} = $val;
-    }
-    foreach (qw(channel clumpidx)) {
-	my $val = delete $p{$_};
-	$attrs{$_} = $val if defined $val;
+    my %attrs;
+    die if not @XMLTV::Programme_Attributes;
+    foreach (@XMLTV::Programme_Attributes) {
+	my ($name, $mult) = @$_;
+	t "looking for key $name";
+	my $val = delete $p{$name};
+	if ($mult eq '?') {
+	    # No need to check anything.
+	}
+	elsif ($mult eq '1') {
+	    if (not defined $val) {
+		warn "programme hash missing $name key, skipping";
+		return;
+	    }
+	}
+	else { die "bad multiplicity for attribute: $mult" }
+	$attrs{$name} = $val if defined $val;
     }
     t "beginning 'programme' element";
     $self->startTag('programme', order_attrs(%attrs));
@@ -1961,9 +2005,8 @@ sub end {
 sub order_attrs {
     die "expected even number of elements, from a hash"
       if @_ % 2;
-    # This is copied from the ATTRLISTs for programme and tv.
-    my @a = (qw(start stop pdc-start vps-start showview videoplus
-		channel clumpidx),
+    my @a = ((map { $_->[0] } (@XMLTV::Channel_Attributes,
+			       @XMLTV::Programme_Attributes)),
 	     qw(date source-info-url source-info-name source-data-url
 		generator-info-name generator-info-url));
 
