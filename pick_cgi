@@ -91,6 +91,7 @@ use Lingua::Preferred qw<which_lang>;
 use Log::TraceMessages qw<t d>; Log::TraceMessages::check_argv();
 $Log::TraceMessages::CGI = 1;
 use Lingua::EN::Numbers::Ordinate;
+use XML::DOM;
 
 ########
 # Configuration
@@ -133,9 +134,16 @@ sub print_date_for($;$);
 sub get_text($);
 sub get_text1($);
 sub clumpidx_to_english($);
+sub read_programmes();
+sub download_xml();
 
 # Keep the taint checking happy (the Cwd module runs pwd(1))
 $ENV{PATH} = '/bin:/usr/bin';
+
+if (url_param('download')) {
+    download_xml();
+    exit();
+}
 
 # Newer versions of CGI.pm have support for <meta http-equiv> stuff.
 # But for the moment, we'll keep compatibility with older ones.
@@ -163,12 +171,7 @@ print <<END
 END
 ;
 
-# FIXME: what if we read one XML file to display the form, and then it
-# has changed by the time the user submits the form?
-# 
-my $xml = XMLin($LISTINGS, forcearray => 1);
-t 'read xml: ' . d($xml);
-my @programmes = @{$xml->{programme}};
+my @programmes = read_programmes();
 
 # %wanted
 # 
@@ -225,12 +228,20 @@ elsif (defined $skip and not defined $next) {
 elsif (not defined $skip and not defined $next) {
     # Initial page, corresponding to skip=0.
     if (-e $TOWATCH) {
-	print p("The output file $TOWATCH already exists - "
-		. 'refusing to overwrite it');
-	print end_html();
-	exit();
+	if (-M _ < -M $LISTINGS) {
+	    print p <<END
+The output file $TOWATCH already exists and is newer than $LISTINGS - 
+refusing to overwrite it.
+END
+  ;
+	    print end_html();
+	    exit();
+	}
+	else {
+	    unlink $TOWATCH or die "cannot unlink $TOWATCH: $!";
+	}
     }
-
+ 
     # Should really have file locking here
     open(TOWATCH, ">>$TOWATCH") 
       or die "cannot append to $TOWATCH: $!";
@@ -350,11 +361,15 @@ END
     close TOWATCH;
     print p(strong("List of programme numbers to watch added to $TOWATCH"));
 
+    my $url = url(-relative => 1);
     if ($next >= @programmes) {
-	print p('Finished.');
+	print p <<END
+Finished choosing listings.  You can now download
+<a href="$url?download=1">an XML file of the programmes to watch</a>.
+END
+  ;
     }
     else {
-	my $url = url(-relative => 1);
 	print a({ href => "$url?skip=$next" }, "Next page");
     }
     print end_html();
@@ -403,7 +418,8 @@ sub display_form($) {
 	my ($start, $stop, $channel) = @h{qw(start stop channel)};
 	$stop = '' if not defined $stop;
 	my $title     = get_text($h{title});
-	$title .= " (@{$h{date}})" if defined $h{date};
+	my $display_title = $title;
+	$display_title .= " (@{$h{date}})" if defined $h{date};
 	my $category  = get_text($h{category})  if $h{category};
 	my $sub_title = get_text($h{'sub-title'}) if $h{'sub-title'};
 	my $desc      = get_text($h{desc})      if $h{desc};
@@ -417,7 +433,7 @@ sub display_form($) {
 
 	print "<tr>\n";
 	print "<td>\n";
-	print "<strong>$title</strong>\n";
+	print "<strong>$display_title</strong>\n";
 	print "<span style='category'><i>", ucfirst($category),
 	      "</i></span>\n"
 		if defined $category;
@@ -643,4 +659,57 @@ sub clumpidx_to_english($) {
     return join('; ', @r);
 }
 
-	
+
+# read_programmes()
+# 
+# Read the listings file and return a list of programme details.
+# 
+# FIXME: what if we read one XML file to display the form, and then it
+# has changed by the time the user submits the form?
+# 
+sub read_programmes() {
+    die 'usage: read_programmes()' if @_;
+    @{XMLin($LISTINGS, forcearray => 1)->{programme}}
+}
+
+
+# download_xml()
+# 
+# After all the programmes have been picked, convert the 'towatch'
+# file (which is really just a list of numbers) to an XML document for
+# the user to download.
+# 
+sub download_xml() {
+    die 'usage: download_xml()' if @_;
+    print header({ expires => 'now',
+		   'Content-Type' => 'text/xml; charset=UTF-8' });
+    
+    # Find programme numbers to keep
+    my %nums;
+    open(TOWATCH, $TOWATCH) or die "cannot open $TOWATCH: $!";
+    while (<TOWATCH>) {
+	s/\#.*//;
+	s/^\s*//; s/\s*$//;
+	next if $_ eq '';
+	m!^\Q$LISTINGS\E/(\d+)$! or die "$TOWATCH:$.: bad line $_";
+	$nums{$1}++ && die "$TOWATCH:$.: already seen number $1";
+    }
+
+    # We read the original XML file and use DOM to weed out the
+    # <programme> elements.
+    # 
+    my $p = new XML::DOM::Parser;
+    my $doc = $p->parsefile($LISTINGS);
+    my $nodes = $doc->getElementsByTagName('programme');
+    my $n = $nodes->getLength();
+
+    for (my $i = 0; $i < $n; $i++) {
+	my $node = $nodes->item($i);
+	unless ($nums{$i}) {
+	    # This subelement wasn't chosen
+	    $doc->getDocumentElement()->removeChild($node);
+	}
+    }
+
+    $doc->printToFileHandle(\*STDOUT);
+}
