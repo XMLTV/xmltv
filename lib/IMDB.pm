@@ -890,7 +890,7 @@ sub applyFound($$$)
 		my $name=$idInfo->{title};
 		my $found=0;
 		for my $v (@{$prog->{title}}) {
-		    if ( $v->[0]=~m/^$name$/i ) {
+		    if ( lc($v->[0]) eq lc($name) ) {
 			$found=1;
 		    }
 		    else {
@@ -971,7 +971,7 @@ sub applyFound($$$)
 		    for my $name (@{$prog->{credits}->{director}}) {
 			my $found=0;
 			for(@list) {
-			    if ( m/^$name$/i ) {
+			    if ( lc eq lc($name) ) {
 				$found=1;
 			    }
 			}
@@ -1005,7 +1005,7 @@ sub applyFound($$$)
 		for my $name (@{$prog->{credits}->{actor}}) {
 		    my $found=0;
 		    for(@list) {
-			if ( m/^$name$/i ) {
+			if ( lc eq lc($name) ) {
 			    $found=1;
 			}
 		    }
@@ -1077,7 +1077,7 @@ sub applyFound($$$)
 		my $found=0;
 		#print "checking category $value->[0] with $mycategory\n";
 		for my $c (@categories) {
-		    if ( $c->[0]=~m/^$value->[0]$/i ) {
+		    if ( lc($c->[0]) eq lc($value->[0]) ) {
 			$found=1;
 		    }
 		}
