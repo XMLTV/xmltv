@@ -54,15 +54,16 @@ sub init( $ ) {
         # Ask the XMLTV::GUI module for the graphics type we will use  
         my $gui_type = XMLTV::GUI::get_gui_type($opt_gui);
         
-        if($gui_type =~ /^term/) {        
+        if ($gui_type =~ /^term/) {        
                 $real_class = 'XMLTV::Ask::Term';
-        } elsif($gui_type eq 'tk') {
+        } elsif ($gui_type eq 'tk') {
                 $real_class = 'XMLTV::Ask::Tk';
-        } elsif($gui_type eq 'gdialog') {
-                $real_class = 'XMLTV::Ask::GDialog';
         } else {
                 die "Unknown gui type: '$gui_type'.";
         }
+        
+        # Initialise the ProgressBar module
+        XMLTV::ProgressBar::init($opt_gui);
 }
 
 1;

@@ -226,7 +226,7 @@ sub _ask_choices( $$$@ ) {
         
         MainLoop();
 
-        if( $allowedMany ) {
+        if ($allowedMany) {
                 my @choices;
                 my @choice_numbers = @cursel;
 

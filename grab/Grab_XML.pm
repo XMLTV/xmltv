@@ -6,6 +6,7 @@ use Date::Manip;
 use XMLTV;
 use XMLTV::Usage;
 use XMLTV::Memoize;
+use XMLTV::ProgressBar;
 use XMLTV::Ask;
 use XMLTV::TZ qw(parse_local_date);
 use XMLTV::Get_nice qw();
@@ -24,9 +25,6 @@ BEGIN {
 	Log::TraceMessages::check_argv();
     }
 }
-
-# Use Term::ProgressBar if installed.
-use constant Have_bar => eval { require Term::ProgressBar; 1 };
 
 =pod
 
@@ -275,8 +273,8 @@ sub go( $ ) {
 	warn "couldn't get any listings from the site for today or later\n";
     }
 
-    my $bar = new Term::ProgressBar('downloading listings', scalar @to_get)
-      if Have_bar && not $opt_quiet;
+    my $bar = new XMLTV::ProgressBar('downloading listings', scalar @to_get)
+      if not $opt_quiet;
     my @listingses;
     foreach my $url (@to_get) {
 	my $xml;
@@ -311,8 +309,9 @@ sub go( $ ) {
 	}
 
 	push @listingses, XMLTV::parse($xml);
-	update $bar if Have_bar && not $opt_quiet;
+	update $bar if not $opt_quiet;
     }
+    $bar->finish();
     my %w_args = ();
     if (defined $opt_output) {
 	my $fh = new IO::File ">$opt_output";
@@ -390,3 +389,4 @@ L<perl(1)>, L<XMLTV(3)>.
 
 =cut
 1;
+

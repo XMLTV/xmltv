@@ -54,7 +54,7 @@ Activates configure mode,  If a config file already exists the values are used a
 =item --gui OPTION
 
 Use this option to enable a graphical interface to be used.
-OPTION may be 'Tk' or 'GDialog', or left blank for the best available choice.
+OPTION may be 'Tk', or left blank for the best available choice.
 Additional allowed values of OPTION are 'Term' for normal terminal output
 (default) and 'TermNoProgressBar' to disable the use of Term::ProgressBar.
 
@@ -296,11 +296,11 @@ use SOAP::Lite;
 use File::Temp qw(tempfile);
 use Getopt::Long;
 use XML::Twig 3.10;
-use constant Have_bar => eval { require Term::ProgressBar; 1 };
 
 use XMLTV;
 use XMLTV::Ask;
 use XMLTV::Config_file;
+use XMLTV::ProgressBar;
 use XMLTV::Version '$Id$ ';
 use XMLTV::Usage <<END
 $0: get lists from Zap2IT's DataDirect service in XMLTV format
@@ -598,7 +598,7 @@ else
 #
 # Fetch data
 # 
-    print STDERR "Fetching from DataDirect\n"  unless $opt_quiet;
+    my $bar = new XMLTV::ProgressBar( 'Fetching from DataDirect', 1 );
     print STDERR "    dd_data is in $dd_data_name\n" if $DEBUG || $opt_dd_data;   
 
     sub SOAP::Transport::HTTP::Client::get_basic_credentials
@@ -636,7 +636,9 @@ else
     $dd_data_size= -s $dd_data;
     die 'ERROR: got empty result from SOAP call' if $dd_data_size == 0;
     $time = int(time() - $time);
-    printf STDERR "    Fetched %d k/bytes in %d seconds\n",$dd_data_size/1024,$time  unless $opt_quiet;
+    printf STDERR "    Fetched %d k/bytes in %d seconds\n",$dd_data_size/1024,$time;
+    $bar->update();
+    $bar->finish();
 } # get data
 
 #
@@ -777,8 +779,7 @@ $twig=XML::Twig->new(
 
 unless ($opt_quiet)
 {
-    if (Have_bar) { $bar = new Term::ProgressBar('loading data',$dd_data_size+1) }
-    else          { print STDERR "loading data "; }
+    $bar = new XMLTV::ProgressBar('loading data',$dd_data_size+1);
 }
 seek($dd_data,0,0);  #rewind
 eval { $twig->parse( $dd_data ) };
@@ -796,7 +797,7 @@ if ($@) {
 }
 
 $bar->update($dd_data_size+1) if $bar;
-print STDERR "\n" unless ($opt_quiet || $bar );
+$bar->finish() if $bar;
 
 $twig=undef;  # destroy twig (just in case)
 
@@ -854,7 +855,6 @@ if ($opt_list_lineups)
 if ($opt_configure)
 {
     my %chan_found=();
-    my $key;
     $dd_lineup=$old_lineups{$dd_lineup} if exists $old_lineups{$dd_lineup};
     $dd_lineup=(sort keys %lineups)[0]  unless exists $lineups{$dd_lineup};
     if (! $opt_auto_config)
@@ -878,46 +878,71 @@ the DataDirect web site, but you can omit channels here as well.
 Do you want to skip some channels?",0);
 
     print "\n";
-    
-    foreach (@{$lineups{$dd_lineup}{map}})
+
+    # If the user expressed a default preference
+    if ($opt_auto_config)
     {
-       unless ($station{$_->{station}}{callSign})
-       {
-           print STDERR "WARNING: $_->{channel} has no callsign. Skipping\n";
-           next;
-       }
-       my $res='yes';
-       my $key=sprintf("%s %s",$_->{channel},$station{$_->{station}}{callSign});
-       $chan_found{$key}=1;
-       if ($opt_auto_config)
-       {
-            if (exists $chan_config{$key})
+        # Either add all the channels
+        if ($opt_auto_config eq 'add')
+        {
+            foreach (@{$lineups{$dd_lineup}{map}})
             {
+                unless ($station{$_->{station}}{callSign})
+                {
+                    print STDERR "Warning $_->{channel} has no callsign. Skipping\n";
+                    next;
+                }
+                my $key1=sprintf("%s %s",$_->{channel}, 
+                    $station{$_->{station}}{callSign});
+                print STDERR "Adding new channel: $key1\n";
+                $chan_config{$key1}=1;
             }
-            elsif ($opt_auto_config eq 'add')
-            {
-                print STDERR "Adding new channel: $key\n";
-                $chan_config{$key}=1;
+        }
+        # or ignore them all
+        else
+        {
+            foreach (@{$lineups{$dd_lineup}{map}})
+            {  
+                my $key2=sprintf("%s %s",$_->{channel}, 
+                    $station{$_->{station}}{callSign});
+                print STDERR "Ignoring new channel: (see docs about bandwidth issues) $key2\n";
+                $chan_config{$key2}=0;
             }
-            else
-            {
-                print STDERR "Ignoring new channel: (see docs about bandwidth issues) $key\n";
-                $chan_config{$key}=0;
-            }
-       }
-       else
-       {
-            $res='no' if exists $chan_config{$key} and ! $chan_config{$key};
-            $res = askQuestion("Add channel $key?",$res,qw(yes no all none ));
-            $chan_config{$key}=1       if $res=~/^[ya]/i;
-            $chan_config{$key}=0       if $res=~/^[n]/i;
-            $opt_auto_config='add'     if $res=~/^all/i;
-            $opt_auto_config='ign'     if $res=~/^none/i;
-       } # ask question (or --auto-new )
-
-       print CONF ( $chan_config{$key} ? '' : 'not ' ), "channel: $key\n";
-    } # channel loop
-
+        }
+    }
+    else  # There was no default for channels, so we ask the user
+    {
+        # Construct the questions
+        my @questions;
+        foreach (@{$lineups{$dd_lineup}{map}})
+        {  
+            my $key3=sprintf("%s %s",$_->{channel}, 
+                $station{$_->{station}}{callSign});
+            
+            push @questions, ["Add channel $key3?"];
+        }
+        # Ask the questions
+        my @answers = ask_many_boolean( 1, @questions );
+        # Save the answers
+        my $i=0;
+        foreach (@{$lineups{$dd_lineup}{map}})
+        {  
+            my $key4=sprintf("%s %s",$_->{channel}, 
+                $station{$_->{station}}{callSign});
+            
+            $chan_config{$key4} = $answers[$i];
+            $i++;
+        }
+    }
+    
+    # Write the choices out to the config file
+    foreach (@{$lineups{$dd_lineup}{map}})
+    {  
+        my $key5=sprintf("%s %s",$_->{channel}, 
+            $station{$_->{station}}{callSign});
+        print CONF ( $chan_config{$key5} ? '' : 'not ' ), "channel: $key5\n";
+    }
+    
     foreach (sort keys %chan_config)
     {
         next if $chan_found{$_};
@@ -1344,13 +1369,12 @@ unless ($opt_list_channels)
     seek($dd_data,0,0);  #rewind
     unless ($opt_quiet)
     {
-        if (Have_bar) { $bar = new Term::ProgressBar('Writing schedule',$dd_data_size+1) }
-        else          { print STDERR "Writing schedule"; }
+        $bar = new XMLTV::ProgressBar('Writing schedule',$dd_data_size+1);
     }
     my $time=time();
     $twig->parse( $dd_data );
-    print STDERR "\n" unless ($opt_quiet || $bar );
     $bar->update($dd_data_size+1) if $bar;
+    $bar->finish() if $bar;
 
     $writer->end();
 

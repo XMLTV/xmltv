@@ -15,6 +15,9 @@
 print '-nologo
 -force
 -add="XMLTV::Ask::Term;XMLTV::Ask::Tk"
+-add="XMLTV::ProgressBar::Term;XMLTV::ProgressBar::Tk;XMLTV::ProgressBar::None;"
+-add="XMLTV::GUI"
+-add="Tk::ProgressBar"
 -bind=libexpat.dll[file=\perl\site\lib\auto\XML\Parser\Expat\libexpat.dll,extract]
 -bind=libxml2.dll[file=\perl\bin\libxml2.dll,extract]
 -trim="Convert::EBCDIC;DB_File;Encode;HASH;HTML::FromText;Text::Iconv;Unicode::Map8;v5;URI/urn::isbn.pm;URI/urn::oid.pm;PerlIO/gzip.pm;HTML::FormatText"

@@ -52,7 +52,7 @@ sub get_gui_type( $ ) {
     
     # If the user passed in a --gui option, work on that basis, otherwise use
     # the environment variable
-    if(defined $opt_gui) {
+    if (defined $opt_gui) {
         return _get_specified_gui_type($opt_gui);
     } else {
         return _get_specified_gui_type($ENV{XMLTV_GUI});   
@@ -66,20 +66,20 @@ sub _get_specified_gui_type( $ ) {
     
     # If we haven't got windows, or we were asked for terminal, we do
     # terminal stylee.
-    if(     !_check_for_windowing_env()
+    if (    !_check_for_windowing_env()
             or !defined($spec_gui)
             or $spec_gui =~ /^term/i) {
            
         # Check whether we at least have the terminal progress bar
-        if(defined($spec_gui) && $spec_gui =~ /^termnoprogressbar$/i
+        if (defined($spec_gui) && $spec_gui =~ /^termnoprogressbar$/i
                 or !eval{ require Term::ProgressBar }) {
             return 'term';
         } else {
             return 'term+progressbar';      
         }
     # Now try Tk first
-    } elsif( $spec_gui eq '' or  $spec_gui =~ /^tk$/i or $spec_gui eq '1' ) {
-        if( _check_for_tk() ) {
+    } elsif ( $spec_gui eq '' or  $spec_gui =~ /^tk$/i or $spec_gui eq '1' ) {
+        if ( _check_for_tk() ) {
             return 'tk';
         } else {
             warn "The Tk gui library is unavailable.  Reverting to terminal";
@@ -96,14 +96,6 @@ sub _get_specified_gui_type( $ ) {
 sub _check_for_windowing_env() {
     return defined($ENV{DISPLAY}) || $^O eq 'MSWin32';
 }
-
-#sub _check_for_gdialog() {
-#    # Run gdialog and ask for its version to check it exists.    
-#    `gdialog --version 2>&1`;
-#    
-#    # It exists if the return value was zero.
-#    return ($?==0);
-#}
 
 sub _check_for_tk() {
     return eval{ require Tk && require Tk::ProgressBar };
