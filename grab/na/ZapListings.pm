@@ -1,401 +1,9 @@
 # $Id$
 
-package XMLTV::ZapListings;
-
-use strict;
-
-use HTTP::Cookies;
-use HTTP::Request::Common;
-
-sub doRequest($$$$)
-{
-    my ($ua, $req, $debug)=@_;
-
-    if ( $debug ) {
-      main::statusMessage("==== req ====\n".$req->as_string());
-    }
-
-    my $cookie_jar=$ua->cookie_jar();
-    if ( defined($cookie_jar) ) {
-	if ( $debug ) {
-	    main::statusMessage("==== request cookies ====\n".$cookie_jar->as_string()."\n");
-	    main::statusMessage("==== sending request ====\n");
-	}
-    }
-
-    my $res = $ua->request($req);
-    if ( $debug ) {
-	main::statusMessage("==== got response ====\n");
-    }
-
-    $cookie_jar=$ua->cookie_jar();
-    if ( defined($cookie_jar) ) {
-	if ( $debug ) {
-	    main::statusMessage("==== response cookies ====\n", $cookie_jar->as_string(), "\n");
-	}
-    }
-
-    if ( $debug ) {
-	main::statusMessage("==== status: ", $res->status_line, " ====\n");
-    }
-
-    if ( $debug ) {
-	if ($res->is_success) {
-	    main::statusMessage("==== success ====\n");
-	}
-	elsif ($res->is_info) {
-	    main::statusMessage("==== what's an info response? ====\n");
-	}
-	else {
-	    main::statusMessage("==== bad code ".$res->code().":".HTTP::Status::status_message($res->code())."\n");
-	}
-	#main::statusMessage("".$res->headers->as_string(), "\n");
-	#dumpPage($res->content());
-	#main::statusMessage("".$res->content(), "\n");
-    }
-    return($res);
-}
-
-sub getProviders($$$)
-{
-    my ($postalcode, $zipcode, $debug)=@_;
-
-    my $ua=XMLTV::ZapListings::RedirPostsUA->new('cookie_jar'=>HTTP::Cookies->new());
-    if ( 0 && ! $ua->passRequirements($debug) ) {
-	main::errorMessage("version of ".$ua->_agent()." doesn't handle cookies properly\n");
-	main::errorMessage("upgrade to 5.61 or later and try again\n");
-	return(undef);
-    }
-
-    my $code;
-    $code=$postalcode if ( defined($postalcode) );
-    $code=$zipcode if ( defined($zipcode) );
-
-    my $req=GET("http://tvlistings.zap2it.com/register.asp?id=form1&name=form1&zipcode=$code");
-
-    # actually attempt twice since first time in, we get a cookie that
-    # works for the second request
-    my $res=&doRequest($ua, $req, $debug);
-
-    # looks like some requests require two identical calls since
-    # the zap2it server gives us a cookie that works with the second
-    # attempt after the first fails
-    if ( !$res->is_success || $res->content()=~m/your session has timed out/i ) {
-	# again.
-	$res=&doRequest($ua, $req, $debug);
-    }
-
-    if ( !$res->is_success ) {
-	main::errorMessage("zap2it failed to give us a page: ".$res->code().":".
-			 HTTP::Status::status_message($res->code())."\n");
-	main::errorMessage("check postal/zip code or www site (maybe they're down)\n");
-	return(undef);
-    }
-
-    my $content=$res->content();
-    if ( $debug ) {
-	open(FD, "> providers.html") || die "providers.html:$!";
-	print FD $content;
-	close(FD);
-    }
-
-    if ( $content=~m/(We do not have information for the zip code[^\.]+)/i ) {
-	main::errorMessage("zap2it says:\"$1\"\ninvalid postal/zip code\n");
-	return(undef);
-    }
-
-    if ( $debug ) {
-	if ( !$content=~m/<Input type="hidden" name="FormName" value="edit_provider_list.asp">/ ) {
-	    main::errorMessage("Warning: form may have changed(1)\n");
-	}
-	if ( !$content=~m/<input type="submit" value="See Listings" name="saveProvider">/ ) {
-	    main::errorMessage("Warning: form may have changed(2)\n");
-	}
-	if ( !$content=~m/<input type="hidden" name="zipCode" value="$code">/ ) {
-	    main::errorMessage("Warning: form may have changed(3)\n");
-	}
-	if ( !$content=~m/<input type="hidden" name="ziptype" value="new">/ ) {
-	    main::errorMessage("Warning: form may have changed(4)\n");
-	}
-	if ( !$content=~m/<input type=submit value="Confirm Channel Lineup" name="preview">/ ) {
-	    main::errorMessage("Warning: form may have changed(5)\n");
-	}
-    }
-
-    my @providers;
-    while ( $content=~s/<SELECT(.*)(?=<\/SELECT>)//os ) {
-        my $options=$1;
-        while ( $options=~s/<OPTION value="(\d+)">([^<]+)<\/OPTION>//os ) {
-	    my $p;
-	    $p->{id}=$1;
-	    $p->{description}=$2;
-            #main::debugMessage("provider $1 ($2)\n";
-	    push(@providers, $p);
-        }
-    }
-    if ( !@providers ) {
-	main::errorMessage("zap2it gave us a page with no service provider options\n");
-	main::errorMessage("check postal/zip code or www site (maybe they're down)\n");
-	main::errorMessage("(LWP::UserAgent version is ".$ua->_agent().")\n");
-	return(undef);
-    }
-    return(@providers);
-}
-
-sub getChannelList($$$$)
-{
-    my ($postalcode, $zipcode, $provider, $debug)=@_;
-
-    my $code;
-    $code=$postalcode if ( defined($postalcode) );
-    $code=$zipcode if ( defined($zipcode) );
-
-    my $ua=XMLTV::ZapListings::RedirPostsUA->new('cookie_jar'=>HTTP::Cookies->new());
-    if ( 0 && ! $ua->passRequirements($debug) ) {
-	main::errorMessage("version of ".$ua->_agent()." doesn't handle cookies properly\n");
-	main::errorMessage("upgrade to 5.61 or later and try again\n");
-	return(undef);
-    }
-
-    my $req=POST('http://tvlistings.zap2it.com/edit_provider_list.asp?id=form1&name=form1',
-		 [FormName=>"edit_provider_list.asp",
-		  zipCode => "$code", 
-		  provider => "$provider", 
-		  saveProvider => 'See Listings' ]);
-
-    my $res=&doRequest($ua, $req, $debug);
-    if ( !$res->is_success || $res->content()=~m/your session has timed out/i ) {
-	# again.
-	$res=&doRequest($ua, $req, $debug);
-    }
-
-    $req=GET('http://tvlistings.zap2it.com/listings_redirect.asp?spp=0');
-    $res=&doRequest($ua, $req, $debug);
-
-    # looks like some requests require two identical calls since
-    # the zap2it server gives us a cookie that works with the second
-    # attempt after the first fails
-    if ( !$res->is_success || $res->content()=~m/your session has timed out/i ) {
-	# again.
-	$res=&doRequest($ua, $req, $debug);
-    }
-
-    if ( !$res->is_success ) {
-	main::errorMessage("zap2it failed to give us a page: ".$res->code().":".
-			 HTTP::Status::status_message($res->code())."\n");
-	main::errorMessage("check postal/zip code or www site (maybe they're down)\n");
-	return(undef);
-    }
-
-    my $content=$res->content();
-    if ( 0 && $content=~m/>(We are sorry, [^<]*)/ig ) {
-	my $err=$1;
-	$err=~s/\n/ /og;
-	$err=~s/\s+/ /og;
-	$err=~s/^\s+//og;
-	$err=~s/\s+$//og;
-	main::errorMessage("ERROR: $err\n");
-	exit(1);
-    }
-    #$content=~s/>\s*</>\n</g;
-
-    # Probably this is not needed?  I think that calling dumpPage() if
-    # an error occurs is probably better.  -- epa
-    # 
-    if ( $debug ) {
-	open(FD, "> channels.html") || die "channels.html: $!";
-	print FD $content;
-	close(FD);
-    }
-
-    my @channels;
-
-    my $rowNumber=0;
-    my $html=$content;
-    $html=~s/<TR/<tr/og;
-    $html=~s/<\/TR/<\/tr/og;
-
-    for my $row (split(/<tr/, $html)) {
-	# nuke everything leading up to first >
-	# which amounts to html attributes of <tr used in split
-	$row=~s/^[^>]*>//so;
-	$row=~s/<\/tr>.*//so;
-
-	$rowNumber++;
-
-	# remove space from leading space (and newlines) on every line of html
-	$row=~s/[\r\n]+\s*//og;
-
-	my $result=new XMLTV::ZapListings::ScrapeRow()->parse($row);
-
-	my $desc=$result->summarize();
-	next if ( !$desc );
-
-	my $nchannel;
-
-	if ( $desc=~m;^<td><img><br><font><b><a><text>([^<]+)</text><br><nobr><text>([^<]+)</text></nobr></a></b></font></td>;o ){
-	    $nchannel->{number}=$1;
-	    $nchannel->{letters}=$2;
-
-	    # img for icon
-	    my $ref=$result->getSRC(2);
-	    if ( !defined($ref) ) {
-		main::errorMessage("row decode on item 2 failed on '$desc'\n");
-		dumpPage($content);
-		return(undef);
-	    }
-	    else {
-		#main::errorMessage("got channel icon $ref\n");
-		$nchannel->{icon}=$ref;
-	    }
-
-	    # <a> gives url that contains station_num
-	    $ref=$result->getHREF(6);
-	    if ( !defined($ref) ) {
-		main::errorMessage("row decode on item 6 failed on '$desc'\n");
-		dumpPage($content);
-		return(undef);
-	    }
-
-	    if ( $ref=~m;listings_redirect.asp\?station_num=(\d+);o ) {
-		$nchannel->{stationid}=$1;
-	    }
-	    else {
-		main::errorMessage("row decode on item 6 href failed on '$desc'\n");
-		dumpPage($content);
-		return(undef);
-	    }
-	}
-	elsif ( $desc=~m;^<td><font><b><a><text>([^<]+)</text><br><nobr><text>([^<]+)</text></nobr></a></b></font></td>;o ) {
-	    $nchannel->{number}=$1;
-	    $nchannel->{letters}=$2;
-
-	    # <a> gives url that contains station_num
-	    my $ref=$result->getHREF(4);
-	    if ( !defined($ref) ) {
-		main::errorMessage("row decode on item 4 failed on '$desc'\n");
-		dumpPage($content);
-		return(undef);
-	    }
-	    if ( $ref=~m;listings_redirect.asp\?station_num=(\d+);o ) {
-		$nchannel->{stationid}=$1;
-	    }
-	    else {
-		main::errorMessage("row decode on item 4 href failed on '$desc'\n");
-		dumpPage($content);
-		return(undef);
-	    }
-	}
-	else {
-	    # ignored
-	}
-
-	if ( defined($nchannel) ) {
-	    push(@channels, $nchannel);
-	}
-    }
-
-    if ( ! @channels ) {
-	main::errorMessage("zap2it gave us a page with no channels\n");
-	dumpPage($content);
-	return(undef);
-    }
-
-    foreach my $channel (@channels) {
-	# default is channel is in listing
-	if ( defined($channel->{number}) && defined($channel->{letters}) ) {
-	    $channel->{description}="$channel->{number} $channel->{letters}"; 
-	}
-	else {
-	    $channel->{description}.="$channel->{number}" if ( defined($channel->{number}) );
-	    $channel->{description}.="$channel->{letters}" if ( defined($channel->{letters}) );
-	}
-	$channel->{station}=$channel->{description};
-    }
-
-    return(@channels);
-}
-
-# Write an offending HTML page to a file for debugging.
-my $dumpPage_counter;
-sub dumpPage($)
-{
-    my $content = shift;
-    $dumpPage_counter = 0 if not defined $dumpPage_counter;
-    $dumpPage_counter++;
-    my $filename = "ZapListings.dump.$dumpPage_counter";
-    local *OUT;
-    if (open (OUT, ">$filename")) {
-	main::errorMessage("dumping HTML page to $filename\n");
-	print OUT $content
-	  or warn "cannot dump HTML page to $filename: $!";
-	close OUT or warn "cannot close $filename: $!";
-    }
-    else {
-	warn "cannot dump HTML page to $filename: $!";
-    }
-}
-
-1;
-
-
-########################################################
 #
-# little LWP::UserAgent that accepts redirects
+# Special thanks to Stephen Bain for helping me play catch-up with
+# zap2it site changes.
 #
-########################################################
-package XMLTV::ZapListings::RedirPostsUA;
-use HTTP::Request::Common;
-
-# include LWP separately to verify minimal requirements on version #
-use LWP 5.62;
-use LWP::UserAgent;
-
-use vars qw(@ISA);
-@ISA = qw(LWP::UserAgent);
-
-#
-# manually check requirements on LWP (libwww-perl) installation
-# leaving this subroutine here in case we need something less
-# strict or more informative then what 'use LWP 5.60' gives us.
-# 
-sub passRequirements($$)
-{
-    my ($self, $debug)=@_;
-    my $haveVersion=$LWP::VERSION;
-
-  main::debugMessage("requirements check: have $self->_agent(), require 5.61\n");
-
-    if ( $haveVersion=~/(\d+)\.(\d+)/ ) {
-	if ( $1 < 5 || ($1 == 5 && $2 < 61) ) {
-	    die "$0: requires libwww-perl version 5.61 or later, (you have $haveVersion)";
-	    return(0);
-	}
-    }
-    # pass
-    return(1);
-}
-
-#
-# add env_proxy flag to constructed UserAgent.
-#
-sub new
-{
-    my $proto = shift;
-    my $class = ref($proto) || $proto;
-    my $self = $class->SUPER::new(@_, env_proxy => 1,
-				  timeout => 180);
-    bless ($self, $class);
-    #$self->agent('Mozilla/5.0');
-    return $self;
-}
-
-sub redirect_ok { 1; }
-1;
-
-########################################################
-# END
-########################################################
 
 package XMLTV::ZapListings::ScrapeRow;
 
@@ -524,6 +132,482 @@ sub getHREF($$)
 
 1;
 
+package XMLTV::ZapListings;
+
+use strict;
+
+use HTTP::Cookies;
+use HTTP::Request::Common;
+
+sub new
+{
+    my ($type) = shift;
+    my $self={ @_ };            # remaining args become attributes
+
+    my $code;
+    $code=$self->{PostalCode} if ( defined($self->{PostalCode}) );
+    $code=$self->{ZipCode} if ( defined($self->{ZipCode}) );
+
+    if ( !defined($code) ) {
+      main::errorMessage("ZapListings::new requires PostalCode or ZipCode defined\n");
+	exit(1);
+    }
+    $self->{GeoCode}=$code;
+    $self->{Debug}=0 if ( !defined($self->{Debug}) );
+    $self->{httpHost}=getHttpHost();
+
+    $self->{cookieJar}=HTTP::Cookies->new();
+
+    $self->{ua}=XMLTV::ZapListings::RedirPostsUA->new('cookie_jar'=>$self->{cookieJar});
+    if ( 0 && ! $self->{ua}->passRequirements($self->{Debug}) ) {
+	main::errorMessage("version of ".$self->{ua}->_agent()." doesn't handle cookies properly\n");
+	main::errorMessage("upgrade to 5.61 or later and try again\n");
+	return(undef);
+    }
+
+    bless($self, $type);
+
+    $self->setupSession();
+
+    return($self);
+}
+
+sub getHttpHost()
+{
+    return("tvlistings2.zap2it.com");
+}
+
+# request the initial page so that the ASPSESSION* cookie is set.
+sub setupSession($)
+{
+    my $self=shift;
+    my ($ua, $code, $httphost) = @_;
+
+    # some of the pages seem to require these cookies to be set
+    $self->{ua}->cookie_jar->set_cookie(0,'bhCookie','1','/',$self->{httpHost},undef,0,0,10000,0);
+    $self->{ua}->cookie_jar->set_cookie(0,'popunder','yes','/',$self->{httpHost},undef,0,0,10000,0);
+
+    my $req = GET("http://$self->{httpHost}/partnerinfo.asp?URL=/index.asp&zipcode=$self->{GeoCode}");
+
+    # Redirections are disabled while requesting this page, as the required
+    # cookie will be send in the first response.
+    my $x = $self->{ua}->requests_redirectable();
+    $self->{ua}->requests_redirectable([]);
+
+    $self->{ua}->request($req);
+
+    $self->{ua}->requests_redirectable($x);
+}
+
+sub getUserAgent($)
+{
+    my $self=shift;
+    return($self->{ua});
+}
+
+sub getCookieJar($)
+{
+    my $self=shift;
+    return($self->{cookieJar});
+}
+
+sub doRequest($$$$)
+{
+    my ($ua, $req, $debug)=@_;
+
+    if ( $debug ) {
+      main::statusMessage("==== req ====\n".$req->as_string());
+    }
+
+    my $cookie_jar=$ua->cookie_jar();
+    if ( defined($cookie_jar) ) {
+	if ( $debug ) {
+	    main::statusMessage("==== request cookies ====\n".$cookie_jar->as_string()."\n");
+	    main::statusMessage("==== sending request ====\n");
+	}
+    }
+
+    my $res = $ua->request($req);
+    if ( $debug ) {
+	main::statusMessage("==== got response ====\n");
+    }
+
+    $cookie_jar=$ua->cookie_jar();
+    if ( defined($cookie_jar) ) {
+	if ( $debug ) {
+	    main::statusMessage("==== response cookies ====\n", $cookie_jar->as_string(), "\n");
+	}
+    }
+
+    if ( $debug ) {
+	main::statusMessage("==== status: ", $res->status_line, " ====\n");
+    }
+
+    if ( $debug ) {
+	if ($res->is_success) {
+	    main::statusMessage("==== success ====\n");
+	}
+	elsif ($res->is_info) {
+	    main::statusMessage("==== what's an info response? ====\n");
+	}
+	else {
+	    main::statusMessage("==== bad code ".$res->code().":".HTTP::Status::status_message($res->code())."\n");
+	}
+	#main::statusMessage("".$res->headers->as_string(), "\n");
+	#dumpPage($res->content());
+	#main::statusMessage("".$res->content(), "\n");
+    }
+    return($res);
+}
+
+sub getProviders($)
+{
+    my ($self)=@_;
+
+    my $debug=$self->{Debug};
+
+    my $req=GET("http://$self->{httpHost}/system.asp?partner_id=national&zipcode=$self->{GeoCode}");
+
+    # actually attempt twice since first time in, we get a cookie that
+    # works for the second request
+    my $res=&doRequest($self->{ua}, $req, $debug);
+
+    # looks like some requests require two identical calls since
+    # the zap2it server gives us a cookie that works with the second
+    # attempt after the first fails
+    if ( !$res->is_success || $res->content()=~m/your session has timed out/i ) {
+	# again.
+	$res=&doRequest($self->{ua}, $req, $debug);
+    }
+
+    if ( !$res->is_success ) {
+	main::errorMessage("zap2it failed to give us a page: ".$res->code().":".
+			 HTTP::Status::status_message($res->code())."\n");
+	main::errorMessage("check postal/zip code or www site (maybe they're down)\n");
+	return(undef);
+    }
+
+    my $content=$res->content();
+    if ( $debug ) {
+	open(FD, "> providers.html") || die "providers.html:$!";
+	print FD $content;
+	close(FD);
+    }
+
+    if ( $content=~m/(We do not have information for the zip code[^\.]+)/i ) {
+	main::errorMessage("zap2it says:\"$1\"\ninvalid postal/zip code\n");
+	return(undef);
+    }
+
+    if ( $debug ) {
+	if ( !$content=~m/<Input type="hidden" name="FormName" value="edit_provider_list.asp">/ ) {
+	    main::errorMessage("Warning: form may have changed(1)\n");
+	}
+	if ( !$content=~m/<input type="submit" value="See Listings" name="saveProvider">/ ) {
+	    main::errorMessage("Warning: form may have changed(2)\n");
+	}
+	if ( !$content=~m/<input type="hidden" name="zipCode" value="$self->{GeoCode}">/ ) {
+	    main::errorMessage("Warning: form may have changed(3)\n");
+	}
+	if ( !$content=~m/<input type="hidden" name="ziptype" value="new">/ ) {
+	    main::errorMessage("Warning: form may have changed(4)\n");
+	}
+	if ( !$content=~m/<input type=submit value="Confirm Channel Lineup" name="preview">/ ) {
+	    main::errorMessage("Warning: form may have changed(5)\n");
+	}
+    }
+
+    my @providers;
+    while ( $content=~s/<SELECT(.*)(?=<\/SELECT>)//ios ) {
+        my $options=$1;
+        while ( $options=~s/<OPTION value="(\d+)">([^<]+)<\/OPTION>//ios ) {
+	    my $p;
+	    $p->{id}=$1;
+	    $p->{description}=$2;
+            #main::debugMessage("provider $1 ($2)\n";
+	    push(@providers, $p);
+        }
+    }
+    if ( !@providers ) {
+	main::errorMessage("zap2it gave us a page with no service provider options\n");
+	main::errorMessage("check postal/zip code or www site (maybe they're down)\n");
+	main::errorMessage("(LWP::UserAgent version is ".$self->{ua}->_agent().")\n");
+	return(undef);
+    }
+    return(@providers);
+}
+
+sub getChannelList($$$)
+{
+    my ($self, $provider)=@_;
+
+    my $debug=$self->{Debug};
+
+    my $req = POST("http://$self->{httpHost}/system.asp?partner_id=national&zipcode=$self->{GeoCode}",
+		   [btnPreviewYes=>'YES',
+		    provider=>"$provider",
+		    FormName=>'system.asp']);
+
+
+    my $res=&doRequest($self->{ua}, $req, $debug);
+    if ( !$res->is_success || $res->content()=~m/your session has timed out/i ) {
+	# again.
+	$res=&doRequest($self->{ua}, $req, $debug);
+    }
+
+    $req=GET("http://$self->{httpHost}/listings_redirect.asp\?spp=0");
+    $res=&doRequest($self->{ua}, $req, $debug);
+
+    # looks like some requests require two identical calls since
+    # the zap2it server gives us a cookie that works with the second
+    # attempt after the first fails
+    if ( !$res->is_success || $res->content()=~m/your session has timed out/i ) {
+	# again.
+	$res=&doRequest($self->{ua}, $req, $debug);
+    }
+
+    if ( !$res->is_success ) {
+	main::errorMessage("zap2it failed to give us a page: ".$res->code().":".
+			 HTTP::Status::status_message($res->code())."\n");
+	main::errorMessage("check postal/zip code or www site (maybe they're down)\n");
+	return(undef);
+    }
+
+    my $content=$res->content();
+    if ( 0 && $content=~m/>(We are sorry, [^<]*)/ig ) {
+	my $err=$1;
+	$err=~s/\n/ /og;
+	$err=~s/\s+/ /og;
+	$err=~s/^\s+//og;
+	$err=~s/\s+$//og;
+	main::errorMessage("ERROR: $err\n");
+	exit(1);
+    }
+    #$content=~s/>\s*</>\n</g;
+
+    # Probably this is not needed?  I think that calling dumpPage() if
+    # an error occurs is probably better.  -- epa
+    # 
+    if ( $debug ) {
+	open(FD, "> channels.html") || die "channels.html: $!";
+	print FD $content;
+	close(FD);
+    }
+
+    my @channels;
+
+    my $rowNumber=0;
+    my $html=$content;
+    $html=~s/<TR/<tr/og;
+    $html=~s/<\/TR/<\/tr/og;
+
+    for my $row (split(/<tr/, $html)) {
+	# nuke everything leading up to first >
+	# which amounts to html attributes of <tr used in split
+	$row=~s/^[^>]*>//so;
+	$row=~s/<\/tr>.*//so;
+
+	$rowNumber++;
+
+	# remove space from leading space (and newlines) on every line of html
+	$row=~s/[\r\n]+\s*//og;
+
+	my $result=new XMLTV::ZapListings::ScrapeRow()->parse($row);
+
+	my $desc=$result->summarize();
+	next if ( !$desc );
+
+	my $nchannel;
+
+	if ( $desc=~m;^<td><img><br><font><b><a><text>([^<]+)</text><br><nobr><text>([^<]+)</text></nobr></a></b></font></td>;o ||
+	     $desc=~m;^<td><img><br><b><a><font><text>([^<]+)</text><br><nobr><text>([^<]+)</text></nobr></a></b></font></td>;o ){
+	    $nchannel->{number}=$1;
+	    $nchannel->{letters}=$2;
+
+	    # img for icon
+	    my $ref=$result->getSRC(2);
+	    if ( !defined($ref) ) {
+		main::errorMessage("row decode on item 2 failed on '$desc'\n");
+		dumpPage($content);
+		return(undef);
+	    }
+	    else {
+		#main::errorMessage("got channel icon $ref\n");
+		$nchannel->{icon}=$ref;
+	    }
+
+	    # <a> gives url that contains station_num
+	    my $offset=0;
+	    if ( $desc=~m;^<td><img><br><font><b><a>;o ) {
+		$offset=6;
+	    }
+	    elsif ( $desc=~m;^<td><img><br><b><a>;o ) {
+		$offset=5;
+	    }
+	    else {
+	      main::errorMessage("coding error finding <a> in $desc\n");
+		return(undef);
+	    }
+	    $ref=$result->getHREF($offset);
+	    if ( !defined($ref) ) {
+		main::errorMessage("row decode on item $offset failed on '$desc'\n");
+		dumpPage($content);
+		return(undef);
+	    }
+
+	    if ( $ref=~m;listings_redirect.asp\?station_num=(\d+);o ) {
+		$nchannel->{stationid}=$1;
+	    }
+	    else {
+		main::errorMessage("row decode on item 6 href failed on '$desc'\n");
+		dumpPage($content);
+		return(undef);
+	    }
+	}
+	elsif ( $desc=~m;^<td><font><b><a><text>([^<]+)</text><br><nobr><text>([^<]+)</text></nobr></a></b></font></td>;o ||
+		$desc=~m;^<td><b><a><font><text>([^<]+)</text><br><nobr><text>([^<]+)</text></nobr></a></b></font></td>;o ) {
+	    $nchannel->{number}=$1;
+	    $nchannel->{letters}=$2;
+
+	    # <a> gives url that contains station_num
+	    my $offset;
+	    if ( $desc=~m;^<td><font><b><a>;o ) {
+		$offset=4;
+	    }
+	    elsif ( $desc=~m;^<td><b><a>;o ) {
+		$offset=3;
+	    }
+	    else {
+	      main::errorMessage("coding error finding <a> in $desc\n");
+		return(undef);
+	    }
+	    my $ref=$result->getHREF($offset);
+	    if ( !defined($ref) ) {
+		main::errorMessage("row decode on item $offset failed on '$desc'\n");
+		dumpPage($content);
+		return(undef);
+	    }
+	    if ( $ref=~m;listings_redirect.asp\?station_num=(\d+);o ) {
+		$nchannel->{stationid}=$1;
+	    }
+	    else {
+		main::errorMessage("row decode on item $offset href failed on '$desc'\n");
+		dumpPage($content);
+		return(undef);
+	    }
+	}
+	else {
+	    # ignored
+	}
+
+	if ( defined($nchannel) ) {
+	    push(@channels, $nchannel);
+	}
+    }
+
+    if ( ! @channels ) {
+	main::errorMessage("zap2it gave us a page with no channels\n");
+	dumpPage($content);
+	return(undef);
+    }
+
+    foreach my $channel (@channels) {
+	# default is channel is in listing
+	if ( defined($channel->{number}) && defined($channel->{letters}) ) {
+	    $channel->{description}="$channel->{number} $channel->{letters}"; 
+	}
+	else {
+	    $channel->{description}.="$channel->{number}" if ( defined($channel->{number}) );
+	    $channel->{description}.="$channel->{letters}" if ( defined($channel->{letters}) );
+	}
+	$channel->{station}=$channel->{description};
+    }
+
+    return(@channels);
+}
+
+# Write an offending HTML page to a file for debugging.
+my $dumpPage_counter;
+
+sub dumpPage($)
+{
+    my $content = shift;
+    $dumpPage_counter = 0 if not defined $dumpPage_counter;
+    $dumpPage_counter++;
+    my $filename = "ZapListings.dump.$dumpPage_counter";
+    local *OUT;
+    if (open (OUT, ">$filename")) {
+	main::errorMessage("dumping HTML page to $filename\n");
+	print OUT $content
+	  or warn "cannot dump HTML page to $filename: $!";
+	close OUT or warn "cannot close $filename: $!";
+    }
+    else {
+	warn "cannot dump HTML page to $filename: $!";
+    }
+}
+
+1;
+
+
+########################################################
+#
+# little LWP::UserAgent that accepts redirects
+#
+########################################################
+package XMLTV::ZapListings::RedirPostsUA;
+use HTTP::Request::Common;
+
+# include LWP separately to verify minimal requirements on version #
+use LWP 5.62;
+use LWP::UserAgent;
+
+use vars qw(@ISA);
+@ISA = qw(LWP::UserAgent);
+
+#
+# manually check requirements on LWP (libwww-perl) installation
+# leaving this subroutine here in case we need something less
+# strict or more informative then what 'use LWP 5.60' gives us.
+# 
+sub passRequirements($$)
+{
+    my ($self, $debug)=@_;
+    my $haveVersion=$LWP::VERSION;
+
+  main::debugMessage("requirements check: have $self->_agent(), require 5.61\n");
+
+    if ( $haveVersion=~/(\d+)\.(\d+)/ ) {
+	if ( $1 < 5 || ($1 == 5 && $2 < 61) ) {
+	    die "$0: requires libwww-perl version 5.61 or later, (you have $haveVersion)";
+	    return(0);
+	}
+    }
+    # pass
+    return(1);
+}
+
+#
+# add env_proxy flag to constructed UserAgent.
+#
+sub new
+{
+    my $proto = shift;
+    my $class = ref($proto) || $proto;
+    my $self = $class->SUPER::new(@_, env_proxy => 1,
+				  timeout => 180);
+    bless ($self, $class);
+    #$self->agent('Mozilla/5.0');
+    return $self;
+}
+
+sub redirect_ok { 1; }
+1;
+
+########################################################
+# END
+########################################################
+
 package XMLTV::ZapListings::Scraper;
 
 use HTTP::Request::Common;
@@ -538,6 +622,11 @@ sub new
 	die "no PostalCode or ZipCode specified in create";
     }
 
+    # create own own ZapListings handle each time
+    $self->{zl}=new XMLTV::ZapListings('PostalCode'=>$self->{PostalCode},
+				       'ZipCode' => $self->{ZipCode},
+				       'Debug' => $self->{Debug});
+
     # since I know we don't care, lets pretend there's only one code :)
     if ( defined($self->{PostalCode}) ) {
 	$self->{ZipCode}=$self->{PostalCode};
@@ -546,25 +635,28 @@ sub new
 
     die "no ProviderID specified in create" if ( ! defined($self->{ProviderID}) );
 
-    $self->{cookieJar}=HTTP::Cookies->new();
+    $self->{httphost}=XMLTV::ZapListings::getHttpHost();
 
-    my $ua=XMLTV::ZapListings::RedirPostsUA->new('cookie_jar'=>$self->{cookieJar});
+    my $req = POST("http://$self->{httphost}/system.asp?partner_id=national&zipcode=$self->{ZipCode}",
+		   [btnPreviewYes=>'YES',
+		    provider=>"$self->{ProviderID}",
+		    FormName=>'system.asp']);
 
-    my $req=POST('http://tvlistings.zap2it.com/edit_provider_list.asp?id=form1&name=form1',
-		 [FormName=>"edit_provider_list.asp",
-		  zipCode => "$self->{ZipCode}", 
-		  provider => "$self->{ProviderID}",
-		  saveProvider => 'See Listings' ]);
-
-    # initialize cookies
-    my $res=&XMLTV::ZapListings::doRequest($ua, $req, $self->{Debug});
+    # initialize listings cookies
+    my $res=&XMLTV::ZapListings::doRequest($self->{zl}->getUserAgent(), $req, $self->{Debug});
     if ( !$res->is_success || $res->content()=~m/your session has timed out/i ) {
 	# again.
-	$res=&XMLTV::ZapListings::doRequest($ua, $req, $self->{Debug});
+	$res=&XMLTV::ZapListings::doRequest($self->{zl}->getUserAgent(), $req, $self->{Debug});
     }
 
     bless($self, $type);
     return($self);
+}
+
+sub getCookieJar($)
+{
+    my $self=shift;
+    return($self->{zl}->getCookieJar());
 }
 
 use HTML::Entities qw(decode_entities);
@@ -761,7 +853,8 @@ sub scrapehtml($$$)
  	}
 	main::debugMessage("ROW: $rowNumber: $desc\n") if ( $self->{Debug} );
 
-	if ( $desc=~s;^<td><b><text>([0-9]+):([0-9][0-9]) ([AP]M)</text></b></td><td></td>;;io ) {
+	if ( $desc=~s;^<td><b><text>([0-9]+):([0-9][0-9]) ([AP]M)</text></b></td><td></td>;;io ||
+	     $desc=~s;^<td><font><b><text>([0-9]+):([0-9][0-9]) ([AP]M)</text></b></font></td><td></td>;;io ) {
 	    my $posted_start_hour=scalar($1);
 	    my $posted_start_min=scalar($2);
 	    my $pm=($3=~m/^p/io); #PM
@@ -1320,7 +1413,7 @@ sub readSchedule($$$$$)
 	$/=$s;
     }
     else {
-	my $ua=XMLTV::ZapListings::RedirPostsUA->new('cookie_jar'=>$self->{cookieJar});
+	my $ua=XMLTV::ZapListings::RedirPostsUA->new('cookie_jar'=>$self->getCookieJar());
 
 	if ( 0 && ! $ua->passRequirements($self->{Debug}) ) {
 	    main::errorMessage("version of ".$ua->_agent()." doesn't handle cookies properly\n");
@@ -1328,7 +1421,7 @@ sub readSchedule($$$$$)
 	    return(-1);
 	}
 
-	my $req=POST('http://tvlistings.zap2it.com/listings_redirect.asp',
+	my $req=POST("http://$self->{httphost}/listings_redirect.asp\?partner_id=national",
 		     [ displayType => "Text",
 		       duration => "1",
 		       startDay => "$month/$day/$year",
