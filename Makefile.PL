@@ -4,7 +4,8 @@ use Config;
 use File::Basename ();
 use strict;
 
-use vars '$VERSION'; $VERSION = '0.5';
+use vars '$VERSION';
+$VERSION = '0.5.1';
 
 use vars '%extra_constants';
 %extra_constants
