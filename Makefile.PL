@@ -105,7 +105,6 @@ my @opt_components
 shows you are interested in, and then tv_check alerts you to
 unexpected extra episodes or schedule changes.',
        exes => [ 'choose/tv_check/tv_check' ],
-       pm => {},
        docs => [ qw(choose/tv_check/README.tv_check
 		    choose/tv_check/tv_check_doc.html
 		    choose/tv_check/tv_check_doc.jpg
@@ -126,18 +125,19 @@ It is a CGI program which runs through a web server and web browser, or
 with the lynxcgi mode of the lynx web browser.  You need to install it
 by hand; this Makefile.PL will only check that the necessary libraries
 are present.",
-       exes => [],
-       pm => {},
-       docs => [],
        prereqs => { 'CGI' => 0 } },
 
      { name => 'tv_grab_na',
-       blurb => "Tv_grab_na is the listings grabber for North America.",
+       blurb => 'Tv_grab_na is the listings grabber for North America.',
        exes => [ 'grab/na/tv_grab_na' ],
        pm => { 'grab/na/ZapListings.pm' =>
 	       '$(INST_LIBDIR)/XMLTV/ZapListings.pm' },
-       docs => [],
        prereqs => { 'HTML::Parser' => 0 } },
+
+     { name => 'tv_grab_sn',
+       blurb => 'Tv_grab_sn is the listings grabber for Sweden and Norway.',
+       exes => [ 'grab/sn/tv_grab_sn' ],
+       prereqs => { 'HTML::TableExtract' => 0 } },
     );
 
 foreach my $info (@opt_components) {
@@ -175,10 +175,10 @@ foreach my $info (@opt_components) {
     }
 
     if (XMLTV::Ask::askBooleanQuestion("Do you wish to install $name?", $default)) {
-	push @exes, @{$info->{exes}};
-	push @docs, @{$info->{docs}};
-	%pm = (%pm, %{$info->{pm}});
-	%prereqs = (%prereqs, %{$info->{prereqs}});
+	push @exes, @{$info->{exes}}               if $info->{exes};
+	push @docs, @{$info->{docs}}               if $info->{docs};
+	%pm = (%pm, %{$info->{pm}})                if $info->{pm};
+	%prereqs = (%prereqs, %{$info->{prereqs}}) if $info->{prereqs};
     }
     print STDERR "\n";
 }
