@@ -18,7 +18,7 @@ $SIG{__WARN__} = sub {
     for (my $msg = shift) {
 	$_ = "warning: something's wrong" if not defined;
 	warn $_
-	  unless /Argument .+ isn't numeric in numeric lt .+MakeMaker.pm/;
+	  unless /Argument .+ isn.t numeric in numeric lt .+MakeMaker.pm/;
     }
 };
 
