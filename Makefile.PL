@@ -69,18 +69,30 @@ if ($^O =~ /linux/i) {
     open(FH, 'perl -MDate::Manip -e 0 2>&1 |') or die "cannot open pipe from perl: $!";
     while (<FH>) {
 	if (/^Malformed UTF-8 character/) {
-	    die
-	      "Your installed Date::Manip module is producing errors like: $_
+	    for ($ENV{LC_ALL}) {
+		if (defined and s/\.UTF-?8//) {
+		    die
+"Your installed Date::Manip module is producing errors like: $_
 
-This is a known bug with Red Hat Linux 8.0, see
+This is a known bug with UTF-8 locales, most commonly seen on Red Hat
+Linux 8.0. See
 <http://bugzilla.redhat.com/bugzilla/show_bug.cgi?id=74884>.
 
-Unless Red Hat have released a fixed version of their perl-DateManip
-package, you need to get the latest Date::Manip from CPAN and install
-it manually.
+Until Date::Manip is fixed to work with UTF-8, you need to change your
+LC_ALL environment variable to turn off the UTF-8 locale.
 
-If you're seeing this message but not running Red Hat Linux, please
-contact the xmltv maintainer.\n";
+Try setting LC_ALL to $_ and running the Makefile.PL again.  If that
+doesn't work, please contact the XMLTV maintainer.
+";
+		}
+		else {
+		    die
+"Date::Manip producing errors like '$_', but locale is not UTF-8.  Try
+setting LC_ALL=en_US and running the Makefile.PL again; also report
+this message to the XMLTV maintainer.
+";
+		}
+	    }
 	}
     }
     close FH;			# ignore exit status
