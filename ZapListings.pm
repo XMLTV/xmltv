@@ -367,7 +367,7 @@ sub passRequirements($$)
 
     if ( $haveVersion=~/(\d+)\.(\d+)/ ) {
 	if ( $1 < 5 || ($1 == 5 && $2 < 61) ) {
-	    die "getlistings_na: requires libwww-perl version 5.61 or later, (you have $haveVersion)";
+	    die "$0: requires libwww-perl version 5.61 or later, (you have $haveVersion)";
 	    return(0);
 	}
     }
