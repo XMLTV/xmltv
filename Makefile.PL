@@ -702,17 +702,9 @@ windows_dist ::
 	            | perl -pe 's/Date::Manip[(]3[)]/date_formats.txt/g' \
 	            >$(PREFIX)/doc/man/`basename $$i .1`.txt; \
         done
-	set -e; for i in $(INSTALLMAN3DIR)/*; do \
-	        b=`basename $$i .1`; \
-	        if test "$$b" = '*'; then \
-	                echo cannot find manpages in $(INSTALLMAN1DIR) >&2; \
-	                exit 1; \
-	        fi; \
-	        echo Converting $$i to plain text; \
-	        troff -mandoc -Tascii $$i | grotty -buo \
-	            | perl -pe 's/Date::Manip[(]3[)]/date_formats.txt/g' \
-	            >$(PREFIX)/doc/man/`basename $$i .1`.txt; \
-	done
+	# Don't bother converting section 3 manual pages, they are not
+	# needed for those who don't have source code.
+	#
 	set -e; \
 	out=$(PREFIX)/doc/man/date_formats.txt; \
 	echo Extracting part of Date::Manip manual page into $$out; \
@@ -882,10 +874,10 @@ sub MY::makefile {
 sub MY::manifypods {
     package MY;
     for (my $inherited = shift->SUPER::manifypods(@_)) {
-	foreach my $s (qw(Grab_XML Europe_TZ Config_file Get_nice Mode)) {
-	    s!\$\(INSTALLMAN3DIR\)/grab::$s[.]\$\(MAN3EXT\)!"\$(INSTALLMAN3DIR)/XMLTV::$s.\$(MAN3EXT)"!;
+	foreach my $s (qw(Grab_XML Europe_TZ Config_file Get_nice Mode Summarize)) {
+	    s!\$\(INST_MAN3DIR\)/(?:grab::|)$s[.]\$\(MAN3EXT\)!"\$(INST_MAN3DIR)/XMLTV::$s.\$(MAN3EXT)"!;
+	    s!\$\(INSTALLMAN3DIR\)/$s.\$\(MAN3EXT\)!"\$(INSTALLMAN3DIR)/XMLTV::$s.\$(MAN3EXT)"!;
 	}
-	s!\$\(INSTALLMAN3DIR\)/Summarize.\$\(MAN3EXT\)!"\$(INSTALLMAN3DIR)/XMLTV::Summarize.\$(MAN3EXT)"!;
 	return $_;
     }
 }
