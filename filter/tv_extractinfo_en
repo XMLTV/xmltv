@@ -578,6 +578,8 @@ sub special_multipart( $ ) {
     #
     my $within_time_period = sub {
 	my $t = shift;
+	t("checking whether $t is in time period $p_start.."
+	  . (defined $p_stop ? $p_stop : ''));
 	if (Date_Cmp($t, $p_start) < 0) {
 	    # Before start of programme, that makes no sense.
 	    return 0;
@@ -608,19 +610,33 @@ sub special_multipart( $ ) {
 	return $tmp;
     };
 
+    # Assume that the timezone for every time listed in the
+    # description is the same as the timezone for the programme's
+    # start.  FIXME will fail when timezone changes partway through.
+    #
+    my $tz = gettz($p->{start});
+    if (defined $tz) { t "using timezone $tz for interpreting times" }
+    else { t "interpreting times with no timezone (ie UTC)" }
+
     my ($best_interp, $best_count);
   INTERP: foreach my $interp ($as_24h, $as_12h_am, $as_12h_pm) {
 	t 'testing an interpretation of times';
 	my $count = 0;
 	my $prev;
 	foreach (@words) {
+	    t "testing word $_";
 	    my $i = $interp->($_);
-	    next if not defined $i;
-	    die "bad 24h returned time: $i" unless $i =~ /^\d?\d:\d\d$/;
+	    if (not defined $i) {
+		t "doesn't parse to a time with this interp.";
+		next;
+	    }
+	    warn "bad 24h returned time: $i" unless $i =~ /^\d?\d:\d\d$/;
 	    t "found a time that interprets: $i";
 	    my $t = Date_SetTime($day, $i);
 	    die if not defined $t;
 	    t "taken as day $day, gets time $t";
+	    $t = Date_ConvTZ($t, $tz, 'UTC') if defined $tz;
+	    t "after converting to UTC, $t";
 	    if (not $within_time_period->($t)) {
 		# Obviously wrong.  One bad time is enough to abandon
 		# this whole interpretation and try another.
@@ -673,13 +689,20 @@ sub special_multipart( $ ) {
 	my $time = delete $_->{time};
 	my $start = Date_SetTime($day, $time);
 	die if not defined $start;
+	$start = Date_ConvTZ($start, $tz, 'UTC') if defined $tz;
 	die "subprogramme starts before main one" if Date_Cmp($start, $p->{start}) < 0;
 	if (defined $p->{stop}) {
 	    die "subprogramme starts after main one stops" if Date_Cmp($p->{stop}, $start) < 0;
 	}
-	$_->{start} = ud($start);
-	if ($_->{start} eq '2002020512:30:00') {
-	    die "subprogramme starts at 2002020512:30:00 (ud'd from $start), main at $p->{start}";
+
+	# Now we store the time in the official 'start' key.  But
+	# convert back to the original timezone to look nice.
+	#
+	if (defined $tz) {
+	    $_->{start} = ud(Date_ConvTZ($start, 'UTC', $tz)) . " $tz";
+	}
+	else {
+	    $_->{start} = ud($start);
 	}
 
 	die if not defined $_->{main_title};
@@ -714,8 +737,6 @@ sub special_multipart( $ ) {
     # necessary.
     #
     my $first_sub_start = $progs[0]->{start};
-    die "first subprog $progs[0]->{title}->[0]->[0] starts at 2002020512:30:00"
-      if $first_sub_start eq '2002020512:30:00';
     my $cmp = Date_Cmp(pd($first_sub_start), $p_start);
     if ($cmp < 0) {
 	# Should have caught this already.
@@ -725,8 +746,6 @@ sub special_multipart( $ ) {
 	# Okay.
     }
     elsif ($cmp > 0) {
-	die "first subprog $progs[0]->{title}->[0]->[0] starts at 2002020512:30:00"
-	  if $first_sub_start eq '2002020512:30:00';
 	my $dummy = { title   => $p->{title},
 		      channel => $p->{channel},
 		      start   => $p->{start},
