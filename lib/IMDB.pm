@@ -1804,6 +1804,8 @@ sub invokeStage($$)
 		    $nkey=~s/\"(\s*\()/$1/o; #"
 		    $nkey.=" (tv_series)";
 		}
+		# how rude, some entries have (TV) appearing more than once.
+		$nkey=~s/\(TV\)\s*\(TV\)$/(TV)/o;
 		
 		$nkey=~s/\(mini\) \(tv_series\)$/(tv_mini_series)/o;
 		$nkey=~s/\(mini\)$/(tv-mini-series)/o;
