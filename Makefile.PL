@@ -28,15 +28,7 @@ $SIG{__WARN__} = sub {
 #
 unless ($ExtUtils::MakeMaker::VERSION >= 6.21) {
     if (not grep /^PREFIX=/, @ARGV) {
-	my $dir = '/usr/local';
-	if (-d $dir) {
-	    my $arg = 'PREFIX=/usr/local';
-	    push @ARGV, $arg;
-	    warn "assuming $arg\n";
-	}
-	else {
-	    warn "You may want to explicitly give PREFIX to work around MakeMaker bugs.\n";
-	}
+	warn "You may want to explicitly give PREFIX to work around MakeMaker bugs.\n";
     }
 }
 
