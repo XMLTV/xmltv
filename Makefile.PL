@@ -145,7 +145,7 @@ END
 	die "no $_ in: $inherited" if not defined $targets->{$_};
 	my @t = @{$targets->{$_}}; # make a copy
 	shift @t if $t[0] =~ /^\s*\@echo\b/;
-	$t[0] =~ s/\@\$\(MOD_INSTALL\)/\$(PERL) -I. -MUninstall -e 'uninstall(\@ARGV)'/
+	$t[0] =~ s/\@\$\(MOD_INSTALL\)/\$(PERL) -I. -MUninstall -e "uninstall(\@ARGV)"/
 	  or die "first command of target $_ isn't \@\$\(MOD_INSTALL\)";
 	(my $new_target = $_) =~ s/install$/uninstall/ or die;
 	foreach ("\n\n$new_target ::\n", @t) {
