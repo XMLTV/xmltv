@@ -4,6 +4,7 @@ use ExtUtils::MakeMaker;
 use Config;
 use File::Basename ();
 use File::Find;
+use Getopt::Long qw(:config pass_through);
 use strict;
 
 sub test_module( $$ );
@@ -21,6 +22,14 @@ such as 5.6.1 or 5.8.0.
 END
   ;
 }
+
+# A couple of undocumented options to help with building the Windows
+# distribution even on hosts that don't have all the necessary
+# modules.
+#
+my $opt_nodeps = 0;
+my $opt_yes = 0;
+GetOptions('nodeps' => \$opt_nodeps, 'yes' => \$opt_yes);
 
 our $VERSION;
 $VERSION = '0.5.16';
@@ -139,7 +148,13 @@ my %recommended
 
 # And Log::TraceMessages is 'suggested' but we don't warn about that.
 
-do 'lib/Ask.pm' or die 'could not load lib/Ask.pm, aborting';
+if ($opt_yes) {
+    *ask = sub { print "$_[0] yes\n"; 1 };
+}
+else {
+    do 'lib/Ask.pm' or die 'could not load lib/Ask.pm, aborting';
+    *ask = \&XMLTV::Ask::askBooleanQuestion;
+}
 
 # Weird shit happens when you change things like PREFIX without
 # rebuilding everything explicitly.
@@ -152,7 +167,7 @@ before generating a new Makefile.
 
 END
   ;
-    if (! XMLTV::Ask::askBooleanQuestion("Do you wish to continue anyway?", 0)) {
+    if (! ask("Do you wish to continue anyway?", 0)) {
 	exit(1);
     }
 }
@@ -165,7 +180,7 @@ my @opt_components
   = ({ name => 'tv_grab_de',
        blurb => 'Grabber for Germany and Austria',
        exes => [ 'grab/de/tv_grab_de' ],
-     },       
+     },
 
      { name => 'tv_grab_uk',
        blurb => 'Grabber for Britain',
@@ -337,17 +352,19 @@ foreach my $info (@opt_components) {
 foreach my $info (@opt_components) {
     my $missing = $info->{missing};
     my $s = "$info->{blurb} ($info->{name})";
+
+    # Guess a default value for {install} based on whether
+    # prerequisites were found.
+    #
+    $info->{install} = $opt_yes || not $info->{missing};
+
     print STDERR ($s, ' ' x (1 + $width - length $s),
-		  $missing ? '[no]' : '[yes]',
+		  $info->{install} ? '[yes]' : '[no]',
 		  "\n");
 }
 print STDERR "\n";
-if (XMLTV::Ask::askBooleanQuestion('Do you want to proceed with this configuration?', 1)) {
-    foreach (@opt_components) {
-	$_->{install} = not $_->{missing};
-    }
-}
-else {
+if (not ask('Do you want to proceed with this configuration?', 1)) {
+    # Need to set {install} for each component by prompting.
     foreach my $info (@opt_components) {
 	my $missing = $info->{missing};
 	my $name = $info->{name};
@@ -376,7 +393,7 @@ else {
 	else { die }
 	
 	$info->{install} =
-	  XMLTV::Ask::askBooleanQuestion($msg, not $missing);
+	  ask($msg, not $missing);
     }
 }
 
@@ -503,7 +520,9 @@ foreach my $p ((sort keys %prereqs), (sort keys %recommended)) {
     }
     else { die }
 }
-die "Required modules missing, not writing Makefile\n" if $err;
+if ($err and not $opt_nodeps) {
+    die "Required modules missing, not writing Makefile\n";
+}
 
 WriteMakefile
   (
