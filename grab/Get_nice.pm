@@ -1,6 +1,6 @@
 # Library to wrap LWP::Simple to put in a random delay between
-# requests.  We really should be using LWP::RobotUI but this is better
-# than nothing.
+# requests and to set User-Agent.  We really should be using
+# LWP::RobotUI but this is better than nothing.
 #
 # If you're sure your app doesn't need a random delay (because it is
 # fetching from a site designed for that purpose) then set
