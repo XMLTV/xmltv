@@ -141,6 +141,7 @@ sub askQuestion( $$@ )
 	    #
 	    print STDERR "$_: $options[$_]\n" foreach 0 .. $#options;
 	    my $res = ask('choose one: ');
+	    return undef if not defined $res;
 	    # No default.
 
 	    foreach (0 .. $#options) {
