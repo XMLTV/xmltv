@@ -67,12 +67,10 @@ foreach my $cmd (@cmds) {
 	  if $seen{$test_name}++;
 
 	my $in       = "$tests_dir/$test";
-	my $expected = "$tests_dir/$test_name.expected";
-	my $out      = "$tests_dir/$test_name.out";
-	my $diff     = "$tests_dir/$test_name.diff";
-
-
-	my $err      = "$tests_dir/$test_name.err";
+	my $base     = "$tests_dir/$test_name";
+	my $expected = "$base.expected";
+	my $out      = "$base.out";
+	my $err      = "$base.err";
 
 	my @cmd = (@$cmd, $in, '--output', $out);
 	$cmd[0] = "$cmds_dir/$cmd[0]";
@@ -108,13 +106,18 @@ foreach my $cmd (@cmds) {
 	}
 
 	if (-e $expected) {
-	    if (system("diff -u $expected $out >$diff")) {
-		warn "failure for @cmd, see $diff\n";
+	    open(OUT, $out) or die "cannot open $out: $!";
+	    open(EXPECTED, $expected) or die "cannot open $expected: $!";
+	    local $/ = undef;
+	    my $out_content = <OUT>;
+	    my $expected_content = <EXPECTED>;
+
+	    if ($out_content ne $expected_content) {
+		warn "failure for @cmd, see $base.*\n";
 		print "not ok $test_num\n";
 	    }
 	    else {
 		print "ok $test_num\n";
-		unlink $diff or warn "cannot unlink $diff: $!";
 		unlink $out or warn "cannot unlink $out: $!";
 		unlink $err or warn "cannot unlink $err: $!";
 	    }
@@ -126,7 +129,6 @@ foreach my $cmd (@cmds) {
 	    warn "creating $expected\n";
 	    rename($out, $expected)
 	      or die "cannot rename $out to $expected: $!";
-	    unlink $diff or warn "cannot unlink $diff: $!";
 	    unlink $err or warn "cannot unlink $err: $!";
 	}
     }
