@@ -90,6 +90,7 @@ use File::Copy;
 use Lingua::Preferred qw<which_lang>;
 use Log::TraceMessages qw<t d>; Log::TraceMessages::check_argv();
 $Log::TraceMessages::CGI = 1;
+use Lingua::EN::Numbers::Ordinate;
 
 ########
 # Configuration
@@ -131,6 +132,7 @@ sub display_form($);
 sub print_date_for($;$);                                                 
 sub get_text($);
 sub get_text1($);
+sub clumpidx_to_english($);
 
 # Keep the taint checking happy (the Cwd module runs pwd(1))
 $ENV{PATH} = '/bin:/usr/bin';
@@ -142,11 +144,21 @@ print header({ expires => 'now',
 	       'Content-Type' => 'text/html; charset=UTF-8' });
 
 print <<END
-<!DOCTYPE HTML PUBLIC "-//IETF//DTD HTML//EN">
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN"
+	      "http://www.w3.org/TR/html4/loose.dtd">
 <html>
   <head>
     <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
     <title>TV listings</title>
+    <!-- I should be grateful if someone could tell me how to get
+      left-aligned text and right-aligned text *on the same line*.
+      I am trying to do that with 'category' but I cannot make it
+      work. -->
+    <style type="text/css"> <!--
+        .job { font-weight: bolder }
+        .category { float: right; font-style: italic }
+        .clumpidx { font-weight: bolder }
+    --> </style>
   </head>
 END
 ;
@@ -391,7 +403,9 @@ sub display_form($) {
 	my ($start, $stop, $channel) = @h{qw(start stop channel)};
 	$stop = '' if not defined $stop;
 	my $title     = get_text($h{title});
-	my $sub_title = get_text($h{sub_title}) if $h{sub_title};
+	$title .= " (@{$h{date}})" if defined $h{date};
+	my $category  = get_text($h{category})  if $h{category};
+	my $sub_title = get_text($h{'sub-title'}) if $h{'sub-title'};
 	my $desc      = get_text($h{desc})      if $h{desc};
 	
 	if (defined $prev) {
@@ -404,8 +418,41 @@ sub display_form($) {
 	print "<tr>\n";
 	print "<td>\n";
 	print "<strong>$title</strong>\n";
-	print "<em>$sub_title</em>\n" if defined $sub_title;
+	print "<span style='category'><i>", ucfirst($category),
+	      "</i></span>\n"
+		if defined $category;
+	print "<br><em>$sub_title</em>\n" if defined $sub_title;
 	print "<p>\n$desc\n</p>\n" if defined $desc;
+	if ($h{credits}) {
+	    # Gather up the data structure from XML::Simple into a
+	    # single hash mapping job to person.
+	    # 
+	    my %credits;
+	    foreach my $h (@{$h{credits}}) {
+		foreach my $job (sort keys %$h) {
+		    foreach my $person (@{$h->{$job}}) {
+			push @{$credits{$job}}, $person;
+		    }
+		}
+	    }
+	    
+	    print "<table class='credits'>\n";
+	    foreach (sort keys %credits) {
+		print '<tr>';
+		print td({ class => 'job' }, ucfirst($_));
+		print join('</tr><tr><td></td>',
+			   map { td({ class => 'person' }, $_) }
+			   @{$credits{$_}} );
+		print "</tr>\n";
+	    }
+	    print "</table>\n";
+	}
+	
+	if (defined $h{clumpidx}) {
+	    print "<span class='clumpidx'>",
+	    clumpidx_to_english($h{clumpidx}), "</span><br>\n";
+	}
+	t d \%h;
 	print "</td>\n";
 	
 	my $default;
@@ -559,3 +606,41 @@ sub get_text1($) {
     }
     die;
 }
+
+
+# clumpidx_to_english()
+# 
+# Convert a series-episode-part number like '2/3 . 4/10 . 0/2' to an
+# English description like '3rd series of 3; 5th episode of 10; 1st
+# part of 2'.
+# 
+sub clumpidx_to_english($) {
+    local $_ = shift;
+    s/\s+//g;
+    my @bits = split /\./;
+    unshift @bits, undef until @bits >= 3;
+    my ($series, $episode, $part) = @bits;
+    
+    sub of($$) {
+	my $name = shift;
+	local $_ = shift;
+	if (m!^(\d+)/(\d+)$!) {
+	    return ordinate($1 + 1) . " $name of $2";
+	}
+	elsif (m!^\d+$!) {
+	    return ordinate($_ + 1);
+	}
+	else {
+	    die "bad number-of-number $_";
+	}
+    }
+
+    my @r;
+    push @r, of('series', $series) if defined $series;
+    push @r, of('episode', $part) if defined $episode;
+    push @r, of('part', $part) if defined $part;
+
+    return join('; ', @r);
+}
+
+	
