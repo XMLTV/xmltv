@@ -653,6 +653,7 @@ sub scrapehtml($$$)
 			  Inuktitut
 			  Inuvialuktun
 			  Italian
+			  Iranian
 			  Japanese
 			  Korean
 			  Mandarin
@@ -999,7 +1000,7 @@ sub scrapehtml($$$)
 		    elsif ( $i=~/^\(fiction\)$/io ) {
 			push(@{$prog->{category}}, "Fiction");
 		    }
-		    elsif ( $i=~/^\(drama\)$/io ) {
+		    elsif ( $i=~/^\(drama\)$/io || $i=~/^\(dramma\)$/io ) { # dramma is french :)
 			push(@{$prog->{category}}, "Drama");
 		    }
 
@@ -1036,10 +1037,11 @@ sub scrapehtml($$$)
 
 			# 'English/French'
 			# 'Hindi, English'
+			# 'Hindi-English'
 			# 'Hindi and English'
 			# 'Hindi with English'
 			# not handled: "Hindi/Punjabi/Urdu", but I don't know what this means.
-			if ( $i=~/^\(([a-zA-Z]+)\s*[\/,]+\s*([a-zA-Z]+)\)$/io ||
+			if ( $i=~/^\(([a-zA-Z]+)\s*[\/,\-]+\s*([a-zA-Z]+)\)$/io ||
 			     $i=~/^\(([a-zA-Z]+)\s+and\s+([a-zA-Z]+)\)$/io ||
 			     $i=~/^\(([a-zA-Z]+)\s+with\s+([a-zA-Z]+)\)$/io ) {
 			    my $lang=$1;
