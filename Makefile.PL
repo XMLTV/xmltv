@@ -241,11 +241,6 @@ my @opt_components
 	       '$(INST_LIBDIR)/XMLTV/ZapListings.pm' },
        prereqs => { 'HTML::Parser' => 0 } },
 
-     { name => 'tv_grab_sn',
-       blurb => 'Grabber for Sweden and Norway',
-       exes => [ 'grab/sn/tv_grab_sn' ],
-       prereqs => { 'HTML::TableExtract' => '1.08' } },
-
      { name => 'tv_grab_nz',
        blurb => 'Grabber for New Zealand',
        exes => [ 'grab/nz/tv_grab_nz' ],
