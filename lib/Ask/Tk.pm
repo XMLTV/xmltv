@@ -33,7 +33,7 @@ my $mid_bottom_frame;
 sub ask( $$$ ) {
         shift;
         my $question = shift;
-        my $show = shift; $show = "" if not defined $show;
+        my $show = shift;
 
         my $textbox;
         
@@ -57,8 +57,13 @@ sub ask( $$$ ) {
 			  -command => sub {$ans = $textbox->get(); $main_window->destroy;},
 			  -width    => 10
 			 )->pack(-padx => 2, -pady => 4);
-             
-        $textbox = $middle_frame->Entry(-show => $show)->pack();
+        
+        if (defined $show) {
+            $textbox = $middle_frame->Entry(-show => $show)->pack();
+        }
+        else {
+            $textbox = $middle_frame->Entry()->pack();
+        }
         MainLoop();
 	
         return $ans;
