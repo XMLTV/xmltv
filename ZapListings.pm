@@ -648,13 +648,20 @@ sub scrapehtml($$$)
 			  Greek
 			  Gujarati
 			  Hindi
+			  Hmong
+			  Hungarian
 			  Inuktitut
 			  Inuvialuktun
+			  Italian
 			  Japanese
 			  Korean
 			  Mandarin
 			  Panjabi
+			  Polish
+			  Portuguese
 			  Punjabi
+			  Romanian
+			  Russian
 			  Spanish
 			  Tagalog
 			  Tamil
@@ -662,10 +669,6 @@ sub scrapehtml($$$)
 			  Urdu
 			  Vietnamese
 			  );
-    # FIXME some examples of things we don't handle: 'Hindi, English',
-    # 'Urdu, English', 'Japanese; English subtitles',
-    # 'Spanish and English' - Ed
-    # - I'm only catching the ones I see as I scrape - Jerry
 
     my $rowNumber=0;
     $html=~s/<TR/<tr/og;
@@ -951,6 +954,12 @@ sub scrapehtml($$$)
 			push(@backup, $i);
 			next;
 		    }
+		    elsif ( $i=~/\((\d\d\d\d)\)/io ) {
+			$resultSure->{year}=$i;
+			push(@sure, $i);
+			push(@backup, $i);
+			next;
+		    }
 		    elsif ( $i=~/^CC$/io ) {
 			$resultSure->{qualifiers}->{ClosedCaptioned}++;
 			push(@sure, $i);
@@ -981,6 +990,11 @@ sub scrapehtml($$$)
 			push(@sure, $i);
 			next;
 		    }
+		    elsif ( $i=~/^\(animated\)$/io ) {
+			$resultSure->{qualifiers}->{Animated}++;
+			push(@sure, $i);
+			next;
+		    }
 		    # catch commonly imbedded categories
 		    elsif ( $i=~/^\(fiction\)$/io ) {
 			push(@{$prog->{category}}, "Fiction");
@@ -988,9 +1002,13 @@ sub scrapehtml($$$)
 		    elsif ( $i=~/^\(drama\)$/io ) {
 			push(@{$prog->{category}}, "Drama");
 		    }
+
 		    # example "French with English subtitles"
-		    # not handled: "Hindi/Punjabi/Urdu", but I don't know what this means.
-		    elsif ( $i=~/^\(([a-zA-Z]+) with ([a-zA-Z]+) subtitles\)$/io ) {
+		    # example "French and English subtitles"
+		    # example "Japanese; English subtitles"
+		    elsif ( $i=~/^\(([a-zA-Z]+)\s+with\s+([a-zA-Z]+) subtitles\)$/io ||
+			    $i=~/^\(([a-zA-Z]+)\s+and\s+([a-zA-Z]+) subtitles\)$/io ||
+			    $i=~/^\(([a-zA-Z]+)\s*[;,\/]*\s*([a-zA-Z]+) subtitles\)$/io) {
 			my $lang=$1;
 			my $sub=$2;
 
@@ -1002,10 +1020,10 @@ sub scrapehtml($$$)
 			}
 
 			if ( ! $found1 ) {
-			    print STDERR "identified possible candidate for new language $lang in ($lang with $sub subtitles)\n";
+			    print STDERR "identified possible candidate for new language $lang in $i\n";
 			}
 			if ( ! $found2 ) {
-			    print STDERR "identified possible candidate for new language $sub in ($lang with $sub subtitles)\n";
+			    print STDERR "identified possible candidate for new language $sub in $i\n";
 			}
 			$resultSure->{qualifiers}->{Language}=$lang;
 			$resultSure->{qualifiers}->{Subtitles}->{Language}=$sub;
@@ -1016,8 +1034,14 @@ sub scrapehtml($$$)
 		    else {
 			my $localmatch=0;
 
-			# English/French
-			if ( $i=~/^\(([a-zA-Z]+)\/([a-zA-Z]+)\)$/io ) {
+			# 'English/French'
+			# 'Hindi, English'
+			# 'Hindi and English'
+			# 'Hindi with English'
+			# not handled: "Hindi/Punjabi/Urdu", but I don't know what this means.
+			if ( $i=~/^\(([a-zA-Z]+)\s*[\/,]+\s*([a-zA-Z]+)\)$/io ||
+			     $i=~/^\(([a-zA-Z]+)\s+and\s+([a-zA-Z]+)\)$/io ||
+			     $i=~/^\(([a-zA-Z]+)\s+with\s+([a-zA-Z]+)\)$/io ) {
 			    my $lang=$1;
 			    my $sub=$2;
 			    
@@ -1029,14 +1053,14 @@ sub scrapehtml($$$)
 			    }
 			    
 			    if ( ! $found1 ) {
-				print STDERR "identified possible candidate for new language $lang in ($lang/$sub)\n";
+				print STDERR "identified possible candidate for new language $lang in $i\n";
 			    }
 			    if ( ! $found2 ) {
-				print STDERR "identified possible candidate for new language $sub in ($lang/$sub)\n";
+				print STDERR "identified possible candidate for new language $sub in $i\n";
 			    }
 			    if ( $found1 && $found2 ) {
 				$resultSure->{qualifiers}->{Language}=$lang;
-				$resultSure->{qualifiers}->{Subtitles}->{Language}=$sub;
+				$resultSure->{qualifiers}->{Dubbed}=$sub;
 				$localmatch++;
 			    }
 			}
@@ -1136,8 +1160,9 @@ sub readSchedule($$$$$)
 
     my $content;
 
-    if ( -f "urldata/content-$station-$month-$day-$year.html" &&
-	 open(FD, "< urldata/content-$station-$month-$day-$year.html") ) {
+    if ( -f "urldata/$station/content-$month-$day-$year.html" &&
+	 open(FD, "< urldata/$station/content-$month-$day-$year.html") ) {
+	print STDERR "cache enabled, reading urldata/$station/content-$month-$day-$year.html..\n";
 	my $s=$/;
 	undef($/);
 	$content=<FD>;
@@ -1189,9 +1214,17 @@ sub readSchedule($$$$$)
 	   return(-1);
         }
 	if ( -d "urldata" ) {
-	    open(FD, "> urldata/content-$station-$month-$day-$year.html");
-	    print FD $res->content();
-	    close(FD);
+	    my $file="urldata/$station/content-$month-$day-$year.html";
+	    if ( ! -f $file ) {
+		print STDERR "cache enabled, writing $file..\n";
+		if ( ! -d "urldata/$station" ) {
+		    mkdir("urldata/$station") || warn "failed to create dir urldata/$station:$!";
+		}
+		if ( open(FD, "> $file") ) {
+		    print FD $res->content();
+		    close(FD);
+		}
+	    }
 	}
     }
 
