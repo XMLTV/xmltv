@@ -312,73 +312,70 @@ if (not $opt_slow) {
     foreach (@to_get) {
 	my ($url, $day, $ch_xmltv_id, $ch_tvgids_id) = @$_;
 	die if not defined $day;
-	my @l;
-	foreach (process_summary_page($url, $day, $day)) {
-	    t 'got tuple: ' . d $_;
-	    my ($start, $stop, $title, $url) = @$_;
-	    my %h = (channel => $ch_xmltv_id,
-		     title => [ [ $title, $LANG ] ],
-		    );
-	    if (defined $start) {
-		for (date_to_eur($start, $TZ)) {
-		    $h{start} = UnixDate($_->[0], '%q') . " $_->[1]";
-		}
-	    }
-	    if (defined $stop) {
-		for (date_to_eur($stop, $TZ)) {
-		    $h{stop} = UnixDate($_->[0], '%q') . " $_->[1]";
-		}
-	    }
-	    push @l, \%h;
-	    t 'added hash: ' . d \%h;
-	}
-	t 'list of hashes: ' . d \@l;
 
 	# Try to do something with the programmes that have no start
 	# time.  Put them into a clump with the preceding valid
 	# programme.
 	#
-	my $clump;
+	my $clump; # [ start, stop, programmes ].  stop may be undef.
 	my @clumps;
-	foreach (@l) {
-	    t 'doing hash: ' . d $_;
-	    if (not defined $_->{start}) {
+	foreach (process_summary_page($url, $day, $day)) {
+	    my ($start, $stop, $title, $url) = @$_;
+
+	    # Start and stop are common to a whole clump, but these
+	    # two are given individually for each programme.
+	    #
+	    my $details = [ $title, $url ];
+
+	    if (not defined $start) {
 		if (not $clump) {
-		    warn "programme $_->{title} at beginning of page has no start time, dropping\n";
+		    warn "programme '$title' at beginning of page has no start time, dropping\n";
 		    next;
 		}
-		my $last_clump_stop = $clump->[0]->{stop};
-		if (defined $last_clump_stop) {
-		    t 'found programme with no start time, make it start at stop of last clump';
-		    $_->{start} = $last_clump_stop;
+		t 'found programme with no start time';
+
+		if (defined $clump->[1]) {
+		    t 'make it start at stop of last clump';
+		    die if not defined $clump->[0];
 		    push @clumps, $clump;
-		    $clump = [ $_ ];
+		    $clump = [ $clump->[1], $stop, [ $details ] ];
+		    die if not defined $clump->[0];
 		}
 		else {
-		    t 'found programme with no start time, and clump has no stop, add to clump';
-		    push @$clump, $_;
+		    t 'current clump has no stop, add to clump';
+		    push @{$clump->[2]}, $details;
+		    t 'maybe set stop of current clump';
+		    $clump->[1] = $stop;
 		}
 	    }
 	    else {
-		push @clumps, $clump if $clump;
-		$clump = [ $_ ];
+		t 'programme has start time, make new clump';
+		if ($clump) {
+		    die if not defined $clump->[0];
+		    push @clumps, $clump;
+		}
+		$clump = [ $start, $stop, [ $details ] ];
 		t 'started a new clump, now: ' . d $clump;
+		die if not defined $clump->[0];
 	    }
 	}
-	push @clumps, $clump if $clump;
+	if ($clump) {
+	    die if not defined $clump->[0];
+	    push @clumps, $clump;
+	}
 	t '\@clumps=' . d \@clumps;
 
 	# Now add the clumpidx attributes.
 	foreach (@clumps) {
-	    my $l = @$_;
-	    if ($l == 1) {
+	    my ($start, $stop, $l) = @$_;
+	    die if not defined $start;
+	    if (@$l == 1) {
 		# Common case, no clumpidx needed.
 	    }
-	    elsif ($l > 1) {
-		foreach my $i (0 .. $#$_) {
-		    for ($_->[$i]) {
-			$_->{clumpidx} = "$i/$l";
-		    }
+	    elsif (@$l > 1) {
+		foreach my $i (0 .. $#$l) {
+		    # Add clumpidx as last thing in list.
+		    push @{$l->[$i]}, "$i/" . scalar @$l;
 		}
 	    }
 	    else { die }
@@ -387,7 +384,26 @@ if (not $opt_slow) {
 
 	# Finally write programmes.
 	foreach (@clumps) {
-	    $writer->write_programme($_) foreach @$_;
+	    my ($start, $stop, $l) = @$_;
+	    die if not defined $start;
+	    foreach (@$l) {
+		my ($title, $url, $clumpidx) = @$_;
+		my %h = (channel => $ch_xmltv_id,
+			 title => [ [ $title, $LANG ] ],
+			);
+		for (date_to_eur($start, $TZ)) {
+		    $h{start} = UnixDate($_->[0], '%q') . " $_->[1]";
+		}
+		if (defined $stop) {
+		    for (date_to_eur($stop, $TZ)) {
+			$h{stop} = UnixDate($_->[0], '%q') . " $_->[1]";
+		    }
+		}
+		
+		$h{url} = [ $url ] if defined $url;
+		$h{clumpidx} = $clumpidx if defined $clumpidx;
+		$writer->write_programme(\%h);
+	    }
 	}
 
 	update $bar if Have_bar and not $opt_quiet;
