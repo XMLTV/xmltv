@@ -12,38 +12,7 @@
 # Feel free to contact me with comments, contributions,
 # and the like. jerry@matilda.com 
 #
-#
-# $Log$
-# Revision 1.7  2001/11/12 17:23:17  jveldhuis
-# 'Repeat' in details now comes out as 'previously-shown' attr of program
-# fixed some STDERR status messages
-#
-# Revision 1.6  2001/11/11 22:29:36  jveldhuis
-# messages go to stderr, both status and debugging.
-# error messages or warnings try and include html that caused
-# failure.
-#
-# acknowledges program detail 'AO' although I don't know what it
-# means exactly. Maybe adults only, but not part of any standard,
-# so we scrape and ignore.
-#
-# how print STDERR message for each station page scraped to
-# get more feed back to user something is happening.
-#
-# Revision 1.5  2001/11/11 17:49:22  epaepa
-# Fixed a couple of syntax errors (don't know whether I caused them last
-# time).
-#
-# Revision 1.4  2001/11/11 16:44:19  epaepa
-# Whoops, just realized that the last changelog message would itself get
-# keyword-expanded, causing no end of confusion.  I had to perform some
-# emergency censorship of funny dollar signs.
-#
-# Revision 1.3  2001/11/11 16:41:05  epaepa
-# Rearranged (or added) comments at the start of each file, so the
-# description is near the top and the changelog near the bottom.  Added
-# Log: lines to get an automatically updated changelog from now on; I
-# hope it works.
+# See release notes and/or cvs logs entries for module history
 #
 #
 
