@@ -22,19 +22,35 @@ B<--quiet> disable all status messages (that normally appear on stderr).
 
 B<--stats> force output of grab stats (stats output disabled in --quiet mode).
 
-Warning, only programmes date fields in the form of 4 digit years qualify
-for movie look ups. Look ups are case insensitive, when a case mismatch occurs,
-the titleE<39>s case, as defined by imdb.com will be used.
+All programs are checked against imdb.com data.
 
-All programs that donE<39>t have a E<39>dateE<39> field are now looked up as being
-possible tv series. In the case of an exact match, we donE<39>t update the
-E<39>dateE<39> field, and only update the E<39>directorE<39> field if only one is listed
-with imdb.com
+For the purposes of tv_imdb, an "exact" match is defined as a case
+insensitive match gainst imdb.com data (which may or may not include the
+transformation of '&' to 'and' and vise-versa.
 
-Currently inserts actors (in billing order), directors (in name order),
-category (based on imdb.com categorized match), url (to www.imdb.com for
-program) and updates date entries and titles to be exact matches of
-what we found on imdb.com site.
+If the program includes a 4 digit E<39>dateE<39> field the following is
+matches are attempted, the first succeeding match is used:
+B<1.> an "exact" title/year match against movie titles is done
+B<2.> an "exact" title match against tv series (and tv mini series)
+B<3.> an "exact" title match against movie titles with production dates
+within 2 years of the E<39>dateE<39> value.
+
+If the program does not include a 4 digit E<39>dateE<39> field the following
+is matches are attempted, the first succeeding match is used:
+B<1.> an "exact" title match against tv series (and tv mini series)
+
+When a match is found in the imdb.com data the following is applied:
+B<1.> the E<39>titleE<39> field is set to match exactly the title from the
+imdb.com data. This includes modification of the case to match and any
+transformations mentioned above.
+B<2.> if the match is a movie, the E<39>dateE<39> field is set to imdb.com
+4 digit year of production.
+B<3.> the type of match found (Movie, TV Movie, Video Movie, TV Series,
+or TV Mini Series) is placed in the E<39>categoriesE<39> field.
+B<4.> the url to the www.imdb.com page is added
+B<5.> the director is added if the match was a movie or if only one director
+is listed in the imdb.com data (because some tv series have > 30 directors)
+B<6.> the top 3 billing actors are added.
 
 =head1 HOWTO
 In order to use tv_imdb, you need:
@@ -45,17 +61,18 @@ need about 1/2 GB of free space),
 B<2.> run E<39>tv_imdb --imdbdir <dir> --prepStage allE<39>, it will fail,
 giving you a list of files you need to download from imdb.com.
 
-B<3.> download the list files (what imdb.com calls their E<39>plain textE<39> interface)n
-(see http://www.imdb.com/interfaces for locations etc).
+B<3.> download the list files (what imdb.com calls their E<39>plain textE<39>
+interface) (see http://www.imdb.com/interfaces for locations etc).
 
-B<4.> rerun tv_imdb with --prepStage all. This stage sucks a bit of memeory, but
-you can run each prepStage separately by running --preStage with each of the
+B<4.> rerun tv_imdb with --prepStage all. This stage sucks a bit of memeory,
+but you can run each prepStage separately by running --preStage with each of the
 stages (see --help for details).
 
 Once you have the database loaded try
 E<39>cat tv.xml | tv_imdb --imdbdir <dir> > tv1.xmlE<39>.
 
 Feel free to report any problems with these steps to xmltv-devel@lists.sf.net.
+
 =head1 BUGS
 
 For now, tv_imdb uses a system call to look(1) to search the tv_imdb
@@ -71,8 +88,8 @@ adding the top 3.
 
 Needs some more controls for fine tuning "close" matches. For instance,
 currently it looks like the tv_grab_na grabber only has date entries for
-movies, but the imdb.com data contains tv series and tv mini series
-information so its possible to get the wrong data to be inserted. In this
+movies, but the imdb.com data contains made for video movies as well as
+as real movies, ot is itE<39>s possible to get the wrong data to be inserted. In this
 case we may want to say "ignore tv series" and "ignore tv mini series".
 Along with this, weE<39>d want to define what a "close" match is. For instance
 does a movie by the same title with a date out by 1 year or 2 years considered
@@ -85,6 +102,8 @@ could expand to include "country of origin", "description", "writer" and
 
 Heh, if the XMLTV.dtd supported it, we could even include urls to head
 shots of the actors :)
+
+Would be nice if xmltv as a whole supported gzip'd and bzip2 files.
 
 =head1 SEE ALSO
 
@@ -159,7 +178,8 @@ if ( defined($opt_prepStage) ) {
 
 my $imdb=new XMLTV::IMDB('imdbDir' => $opt_imdbDir,
 			 'verbose' => !$opt_quiet,
-			 'cacheLookups' => 1);
+			 'cacheLookups' => 1,
+			 'cacheLookupSize' => 1000);
 
 #$imdb->{verbose}++;
 
@@ -177,9 +197,7 @@ if (defined $opt_output) {
     %w_args = (OUTPUT => $fh);
 }
 
-my $numberOfFilesProcessed=0;
 my $numberOfSeenChannels=0;
-my $numberOfSeenPrograms=0;
 
 my $w;
 
@@ -190,7 +208,6 @@ sub encoding_cb( $ ) {
 
 sub credits_cb( $ ) {
     $w->start(shift);
-    $numberOfFilesProcessed++;
 }
 
 my %seen_ch;
@@ -213,27 +230,16 @@ sub channel_cb( $ ) {
 
 sub programme_cb( $ ) {
     my $prog=shift;
-    my $title=$prog->{title}->[0]->[0];
     
-    $numberOfSeenPrograms++;
+    my $nprog=$imdb->augmentProgram($prog);
+    if ( $nprog ) {
+	$prog=$nprog;
+    }
 
     # we only add movie information to programmes
     # that have a 'date' element defined (since we need
     # a year to work with when verifing we got the correct
     # hit in the imdb data)
-    if ( defined($prog->{date}) &&
-	 $prog->{date}=~m/^\d\d\d\d$/o ) {
-	my $nprog=$imdb->addMovieInfo($prog, $title, $prog->{date});
-	if ( defined($nprog) ) {
-	    $prog=$nprog;
-	}
-    }
-    else {
-	my $nprog=$imdb->addTVSeriesInfo($prog, $title);
-	if ( defined($nprog) ) {
-	    $prog=$nprog;
-	}
-    }
     $w->write_programme($prog);
 }
 
@@ -245,6 +251,6 @@ XMLTV::parsefiles_callback(\&encoding_cb, \&credits_cb,
 $w->end();
 
 if ( $opt_stats ) {
-    print STDERR $imdb->getStatsLines($numberOfFilesProcessed, $numberOfSeenChannels, $numberOfSeenPrograms);
+    print STDERR $imdb->getStatsLines($numberOfSeenChannels);
 }
 exit(0);
