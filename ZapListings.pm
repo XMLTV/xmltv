@@ -156,7 +156,11 @@ sub getChannelList($$$$)
 		  saveProvider => 'See Listings' ]);
 
     my $res=&doRequest($ua, $req, $cookieJar, $debug);
-    #$res=&doRequest($ua, $req, $cookieJar, $debug);
+    $res=&doRequest($ua, $req, $cookieJar, $debug);
+
+    if ( !$res->is_success || $res->content()=~m/your session has timed out/i ) {
+	# again.
+    }
     
     $req=POST('http://tvlistings2.zap2it.com/listings_redirect.asp?spp=0', [ ]);
     $res=&doRequest($ua, $req, $cookieJar, $debug);
@@ -196,26 +200,113 @@ sub getChannelList($$$$)
 	close(FD);
     }
 
-    my $channels;
-    my @lines=reverse(split(/\n/, $content));
-    while (@lines) {
-	my $l=pop(@lines);
-	if ( $l=~m;<a href="listings_redirect.asp\?station_num=(\d+)">([A-Z0-9-]+)<br><nobr>(\w+)</nobr></a>;o ) {
-	    my $station=$1;
-	    my $number=$2;
-	    my $letters=$3;;
-	    if ( !defined($channels->{$station}) ) {
-		push(@{$channels->{$station}}, $number);
-		push(@{$channels->{$station}}, $letters);
+    my @channels;
+
+    my $rowNumber=0;
+    my $html=$content;
+    $html=~s/<TR/<tr/og;
+    $html=~s/<\/TR/<\/tr/og;
+
+    for my $row (split(qw/<tr/, $html)) {
+	# nuke everything leading up to first >
+	# which amounts to html attributes of <tr used in split
+	$row=~s/^[^>]*>//so;
+	$row=~s/<\/tr>.*//so;
+
+	$rowNumber++;
+	
+	# remove space from leading space (and newlines) on every line of html
+	$row=~s/[\r\n]+\s*//og;
+
+	my $result=new ZapListings::ScrapeRow()->parse($row);
+	
+	my $desc=$result->summarize();
+	next if ( !$desc );
+
+	my $nchannel;
+
+	if ( $desc=~m;^<td><img><br><font><b><a><text>([^<]+)</text><br><nobr><text>([^<]+)</text></nobr></a></b></font></td>;o ){
+	    $nchannel->{number}=$1;
+	    $nchannel->{letters}=$2;
+
+	    # img for icon
+	    my $ref=$result->getSRC(2);
+	    if ( !defined($ref) ) {
+		print STDERR "row decode on item 2 failed on '$desc'\n";
+		dumpPage($content);
+		return(undef);
+	    }
+	    else {
+		#print "got channel icon $ref\n";
+		$nchannel->{icon}=$ref;
+	    }
+
+	    # <a> gives url that contains station_num
+	    $ref=$result->getHREF(6);
+	    if ( !defined($ref) ) {
+		print STDERR "row decode on item 6 failed on '$desc'\n";
+		dumpPage($content);
+		return(undef);
+	    }
+
+	    if ( $ref=~m;listings_redirect.asp\?station_num=(\d+);o ) {
+		$nchannel->{station}=$1;
+	    }
+	    else {
+		print STDERR "row decode on item 6 href failed on '$desc'\n";
+		dumpPage($content);
+		return(undef);
 	    }
 	}
+	elsif ( $desc=~m;^<td><font><b><a><text>([^<]+)</text><br><nobr><text>([^<]+)</text></nobr></a></b></font></td>;o ) {
+	    $nchannel->{number}=$1;
+	    $nchannel->{letters}=$2;
+
+	    # <a> gives url that contains station_num
+	    my $ref=$result->getHREF(4);
+	    if ( !defined($ref) ) {
+		print STDERR "row decode on item 4 failed on '$desc'\n";
+		dumpPage($content);
+		return(undef);
+	    }
+	    if ( $ref=~m;listings_redirect.asp\?station_num=(\d+);o ) {
+		$nchannel->{station}=$1;
+	    }
+	    else {
+		print STDERR "row decode on item 4 href failed on '$desc'\n";
+		dumpPage($content);
+		return(undef);
+	    }
+	}
+	else {
+	    # ignored
+	}
+
+	if ( defined($nchannel) ) {
+	    push(@channels, $nchannel);
+	}
     }
-    if ( !defined($channels) ) {
+
+    if ( ! @channels ) {
 	print STDERR "zap2it gave us a page with no channels\n";
 	dumpPage($content);
 	return(undef);
     }
-    return($channels);
+
+    foreach my $channel (@channels) {
+	my $station=$channel->{station};
+	    
+	# default is channel is in listing
+	if ( defined($channel->{number}) && defined($channel->{letters}) ) {
+	    $channel->{description}="$channel->{number} $channel->{letters}"; 
+	}
+	else {
+	    $channel->{description}.="$channel->{number}" if ( defined($channel->{number}) );
+	    $channel->{description}.="$channel->{letters}" if ( defined($channel->{letters}) );
+	}
+    }
+
+    return(@channels);
 }
 
 # Write an offending HTML page to a file for debugging.
@@ -338,7 +429,7 @@ sub summarize($)
 	#delete($self->{Cell});
     }
     
-    my @arr=reverse();
+    #my @arr=reverse();
     my $desc="";
     foreach my $thing (@{$self->{Row}}) {
 	if ( $thing->{starttag} ) {
@@ -352,6 +443,37 @@ sub summarize($)
 	}
     }
     return($desc);
+}
+
+sub getSRC($$)
+{
+    my ($self, $index)=@_;
+
+    my @arr=@{$self->{Row}};
+    my $thing=$arr[$index-1];
+
+    #print STDERR "item $index : ".ZapListings::Scraper::dumpMe($thing)."\n";
+    if ( $thing->{starttag}=~m/img/io ) {
+	return($thing->{attr}->{src}) if ( defined($thing->{attr}->{src}) );
+	return($thing->{attr}->{SRC}) if ( defined($thing->{attr}->{SRC}) );
+    }
+    return(undef);
+}
+
+sub getHREF($$)
+{
+    my ($self, $index)=@_;
+
+    my @arr=@{$self->{Row}};
+    my $thing=$arr[$index-1];
+
+    #print STDERR "item $index : ".ZapListings::Scraper::dumpMe($thing)."\n";
+    if ( $thing->{starttag}=~m/a/io) {
+	return($thing->{attr}->{href}) if ( defined($thing->{attr}->{href}) );
+	return($thing->{attr}->{HREF}) if ( defined($thing->{attr}->{HREF}) );
+    }
+	       
+    return(undef);
 }
 
 1;
