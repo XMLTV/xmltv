@@ -1187,7 +1187,7 @@ sub write_programme {
 
     call_handlers_write($self, \@Handlers, \%p);
     foreach (keys %p) {
-	warn "unknown key $_ in programme hash" unless /^_/;
+	warn "unknown key '$_' in programme hash" unless /^_/;
     }
     t "ending 'programme' element";
     $self->endTag('programme');
@@ -1253,8 +1253,14 @@ sub call_handlers_write( $$$ ) {
 	my ($name, $reader, $writer, $multiplicity) = @$_;
 	t "doing handler for $name$multiplicity";
 	t "do we need to write any $name elements?";
+	if (not exists $input->{$name}) {
+	    t "nope, none there";
+	    next;
+	}
+
 	if (not defined $input->{$name}) {
-	    t "nope, not defined";
+	    warn "hash has key $name with value undef\n";
+	    delete $input->{$name};
 	    next;
 	}
 
