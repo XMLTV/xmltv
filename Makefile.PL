@@ -56,7 +56,7 @@ my %pm
 # Modules required to install.
 my %prereqs
   = (
-     'LWP' => 0,
+     'LWP' => 5.65,
      'XML::Twig' => 3.08,
      'Date::Manip' => 5.4,
      'XML::Writer' => 0,
