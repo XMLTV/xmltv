@@ -165,7 +165,7 @@ are present.",
      { name => 'tv_grab_sn',
        blurb => 'Tv_grab_sn is the listings grabber for Sweden and Norway.',
        exes => [ 'grab/sn/tv_grab_sn' ],
-       prereqs => { 'HTML::TableExtract' => 0 } },
+       prereqs => { 'HTML::TableExtract' => '1.08' } },
     );
 
 foreach my $info (@opt_components) {
