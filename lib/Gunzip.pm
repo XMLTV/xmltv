@@ -59,6 +59,14 @@ sub gunzip( $ ) { return $gunzip_f->(shift) }
 
 # Implementations of gunzip_open().
 #
+sub perlio_gunzip_open( $ ) {
+    my $fname = shift;
+    # Use PerlIO::gzip.
+    local *FH;
+    open FH, '<:gzip', $fname
+      or die "cannot open $fname via PerlIO::gzip: $!";
+    return *FH;
+}
 sub zlib_gunzip_open( $ ) {
     my $fname = shift;
     # Use the XMLTV::Zlib_handle package defined later in this file.
@@ -83,15 +91,29 @@ sub gunzip_open( $ ) { return $gunzip_open_f->(shift) }
 # is available.
 #
 BEGIN {
-    eval { require Compress::Zlib };
-    if ($@) {
+    eval { require Compress::Zlib }; my $have_zlib = not $@;
+    eval { require PerlIO::gzip }; my $have_perlio = not $@;
+
+    if (not $have_zlib and not $have_perlio) {
 	$gunzip_f = \&external_gunzip;
 	$gunzip_open_f = \&external_gunzip_open;
     }
-    else {
+    elsif (not $have_zlib and $have_perlio) {
+	# Could gunzip by writing to a file and reading that with
+	# PerlIO, but won't bother yet.
+	#
+	$gunzip_f = \&external_gunzip;
+	$gunzip_open_f = \&perlio_gunzip_open;
+    }
+    elsif ($have_zlib and not $have_perlio) {
 	$gunzip_f = \&zlib_gunzip;
 	$gunzip_open_f = \&zlib_gunzip_open;
     }
+    elsif ($have_zlib and $have_perlio) {
+	$gunzip_f = \&zlib_gunzip;
+	$gunzip_open_f = \&perlio_gunzip_open;
+    }
+    else { die }
 }
 
 
