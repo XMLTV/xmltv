@@ -226,6 +226,8 @@ are present.",
      { name => 'tv_grab_nz',
        blurb => 'Tv_grab_nz is the listings grabber for New Zealand.',
        exes => [ 'grab/nz/tv_grab_nz' ],
+       pl_files => { 'grab/nz/tv_grab_nz.PL' => 'grab/nz/tv_grab_nz' },
+       share_files => { 'grab/nz/episode_names' => 'tv_grab_nz/episode_names' },
        prereqs => {},
        special_prereqs =>
        [ [ sub {
@@ -674,6 +676,7 @@ sub MY::clean {
     $inherited .= "\n\t-rm -f grab/uk/tv_grab_uk\n";
     $inherited .= "\n\t-rm -f grab/uk_rt/tv_grab_uk_rt\n";
     $inherited .= "\n\t-rm -f grab/it/tv_grab_it\n";
+    $inherited .= "\n\t-rm -f grab/nz/tv_grab_nz\n";
     $inherited .= "\n\t-rm -f lib/XMLTV.pm\n";
     return $inherited;
 }
@@ -691,6 +694,8 @@ sub MY::processPL {
       or die "no grab/uk_rt/tv_grab_uk_rt in: $inherited";
     $inherited =~ s!^(\s*grab/it/tv_grab_it\s+::\s.+)!$1 grab/it/tv_grab_it.in!m
       or die "no grab/it/tv_grab_it in: $inherited";
+    $inherited =~ s!^(\s*grab/nz/tv_grab_nz\s+::\s.+)!$1 grab/nz/tv_grab_nz.in!m
+      or die "no grab/nz/tv_grab_nz in: $inherited";
     $inherited =~ s!^(\s*lib/XMLTV\.pm\s+::\s.+)!$1 lib/XMLTV.pm.in!m
       or die "no lib/XMLTV.pm in: $inherited";
 
@@ -706,6 +711,9 @@ sub MY::processPL {
     $inherited =~ s{(grab/it/tv_grab_it.PL grab/it/tv_grab_it)\s*$}
       {$1 $::extra_constants{INSTALLSHARE}}m
 	or die "no call to tv_grab_it.PL in: $inherited";
+    $inherited =~ s{(grab/nz/tv_grab_nz.PL grab/nz/tv_grab_nz)\s*$}
+      {$1 $::extra_constants{INSTALLSHARE}}m
+	or die "no call to tv_grab_nz.PL in: $inherited";
 
     return $inherited;
 }

@@ -1,6 +1,6 @@
 # Fragment of Perl code included from some .PL files.  Read $in,
-# change lines defining '$SHARE_DIR' and write to the file given
-# on the command line.
+# change lines defining '$SHARE_DIR' or 'SHARE_DIR' and write to the
+# file given on the command line.
 #
 use IO::File;
 use strict;
@@ -11,7 +11,12 @@ my $out_fh = new IO::File "> $out" or die "cannot write to $out: $!";
 my $in_fh = new IO::File "< $in" or die "cannot read $in: $!";
 my $seen = 0;
 while (<$in_fh>) {
+    # Perl
     s/^my \$SHARE_DIR =.*/my \$SHARE_DIR='$share_dir'; \# by $0/ && $seen++;
+
+    # Python
+    s/^SHARE_DIR\s*=\s*None$/SHARE_DIR='$share_dir' \# by $0/ && $seen++;
+
     print $out_fh $_;
 }
 if ($seen == 0) {
