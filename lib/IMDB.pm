@@ -1021,7 +1021,7 @@ sub new
 	my $baseUrl = 'ftp://ftp.fu-berlin.de/pub/misc/movies/database/';
 	foreach ( sort keys %missingListFiles ) {
 	    my $url = "$baseUrl/$_.list.gz";
-	    my $filename = $missingListFiles{$_};
+	    my $filename = delete $missingListFiles{$_};
 	    my $partial = "$filename.partial";
 	    if (-e $partial) {
 		if (not -s _) {
@@ -1075,6 +1075,7 @@ END
     if ( %missingListFiles ) {
 	print STDERR "tv_imdb: requires you to download the above files from ftp.imdb.com\n";
 	print STDERR "         see http://www.imdb.com/interfaces for details\n";
+        print STDERR "         or try the --download option\n";
 	return(undef);
     }
 
