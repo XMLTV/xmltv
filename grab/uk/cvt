@@ -1,0 +1,166 @@
+#!/vol/linux/apps/bin/perl
+use warnings;
+use strict;
+use LWP::Simple;
+use XML::Simple;
+use Log::TraceMessages qw(t d);
+use XMLTV::Memoize; XMLTV::Memoize::check_argv('get');
+use Tie::IxHash;
+
+#$Log::TraceMessages::On = 1;
+my %old_aid_to_dn;
+my $oa = get('http://www.ananova.com/tv_listings/_tv_raw.php?show[]=allchannels');
+die if not defined $oa;
+my %keep_dig = ('BBC1' => 1, 'BBC2' => 1, 'TCM' => 1);
+foreach (split /\n/, $oa) {
+    s/\#.*//;
+    s/^\s+//; s/\s+$//;
+    next if not length;
+    /^(\S+)=(.+)$/ or die "$.:bad line $_";
+    my ($aid, $dn) = ($1, $2);
+    die "Old aid $aid seen twice" if defined $old_aid_to_dn{$aid};
+
+    # Fixup display name - some have changed a little.
+    for ($dn) {
+	t 'original: ' . d $_;
+	s/Moviemax/Movie Max/;
+	s/\+1$/ (Plus 1)/ || s/Plus 1/(Plus 1)/;
+	s/Wales \(Digital\)/(Wales Digital)/;
+	s/- Widescreen/Widescreen/;
+	s/Fox Kids(?! Network)/Fox Kids Network/;
+	s/^Yorkshire$/YTV/;
+	foreach my $r ('West Country', 'Central') {
+	    s/^$r$/Carlton-$r/;
+	}
+	s/^North East$/Tyne Tees/;
+	foreach my $r (qw(Ulster Carlton-Central Scottish Carlton
+			  Channel Carlton-Westcountry Meridian
+			  Grampian Anglia Granada YTV),
+		       'Tyne Tees', 'Border South', 'Border North',
+		       'HTV Wales', 'HTV West') {
+	    if (/^$r$/i) {
+		$_ = "ITV1 ($r)";
+	    }
+	}
+	s/East Anglia/East/;
+	foreach my $p ('Northern Ireland', 'North West', 'South West',
+		       'East Midlands', 'North East', 'South East',
+		       qw(West Wales Ireland London North East Midlands Scotland South)) {
+	    s/$p$/($p)/i && last;
+	}
+	s/UK Gold 2/UK Gold (2)/;
+	s/RTE 1/RTE1/;
+	s/(Adults Only \d)/ITV Select ($1)/;
+	s/Border$/ITV1 (Border South)/;
+	s/Border \(Scottish viewers\)/ITV1 (Border North)/;
+	s/\(Ireland\)/(Northern Ireland)/;
+	s/Studio/The Studio/;
+	foreach my $c ('Disney', 'ITV Sport') {
+	    s/^$c(?!\s*\w)$/$c Channel/;
+	}
+	foreach my $c ('Health', 'History') {
+	    s/^(The )?$c Channel/$c/;
+	}
+	s/^(\w+) Channel$/The $1 Channel/; s/^The Fantasy/Fantasy/;
+	s/^Box$/The Box/;
+	s/(Scotland|Ireland) \(Digital\)/($1 Digital)/;
+	s/&/and/;
+	s/News Channel/News/;
+	s/(British Eurosport)/Eurosport ($1)/;
+	s/ \(Welsh Channel 4\)//;
+	if (/^(.+) \(Digital\)/) {
+	    s/ \(Digital\)// unless $keep_dig{$1};
+	}
+	s/Replay/(Replay)/;
+	s/The Playboy Channel/Playboy TV/;
+	s/Digtital/Digital/;
+	s/Sci-Fi \(\w+\)/Sci-fi/;
+	s/ZEE/Zee/;
+	s/ITV2/ITV Dig (ITV2)/;
+	s/London Live/London 94.9FM/;
+	s/Film on Four/FilmFour/;
+	s/Easy$/Easy Listening/;
+	s/World Service/BBC World Service/;
+	s/- ITV Digital/(ITV Digital)/;
+	s/Radio 5$/Radio 5 Live/;
+	foreach my $v (qw(Extreme World)) {
+	    s/FilmFour $v/FilmFour ($v)/;
+	}
+	s/Asia\.net/Asianet/;
+	s/ Television$//;
+	t 'munged: ' . $_;
+    }
+
+    $old_aid_to_dn{$aid} = $dn;
+}
+
+my %dn_to_new_aid;
+my $na = get('http://www.ananova.com/tv_listings/_xmltv.php?show[]=allchannels');
+die if not defined $na;
+my $r = XMLin($na); die if not defined $r;
+my $chs = $r->{channel};
+foreach my $aid (keys %$chs) {
+    my $dn = $chs->{$aid}->{'display-name'}->{content};
+    die if not defined $dn;
+    warn "Display name $dn seen twice\n" if defined $dn_to_new_aid{$dn};
+    $dn_to_new_aid{$dn} = $aid;
+}
+
+#$Log::TraceMessages::On = 1;
+t 'old page: ' . d \%old_aid_to_dn;
+t 'new page: ' . d \%dn_to_new_aid;
+
+my %old_aid_to_new_aid;
+my %used_new_aid;
+foreach my $old_aid (keys %old_aid_to_dn) {
+    my $dn = $old_aid_to_dn{$old_aid};
+    if (not exists $dn_to_new_aid{$dn}) {
+	warn "Old: $dn ($old_aid)\n";
+    }
+    else {
+	for ($dn_to_new_aid{$dn}) {
+	    die if not defined;
+	    $old_aid_to_new_aid{$old_aid} = $_;
+	    $used_new_aid{$_}++;
+	}
+    }
+}
+foreach (keys %dn_to_new_aid) {
+    my $aid = $dn_to_new_aid{$_}; die if not defined $aid;
+    unless ($used_new_aid{$aid}) {
+	warn "Unused: $_ ($aid)\n";
+    }
+}
+
+t 'old to new aid mapping: ' . d \%old_aid_to_new_aid;
+open(OLD, 'channel_ids') or die;
+while (<OLD>) {
+    s/\#.*//;
+    s/^\s+//; s/\s+$//;
+    next if not length;
+    my @fields = split /:/;
+    die "$.:wrong number of fields" if @fields < 2 or @fields > 3;
+    my ($xmltv_id, $old_ananova_ids, $extra_dn) = @fields;
+    my %new_aids; tie %new_aids, 'Tie::IxHash';
+    my $failed = 0;
+    foreach (split /,/, $old_ananova_ids) {
+	my $new = $old_aid_to_new_aid{$_};
+	if (not defined $new) {
+	    $new = $_;
+	    $failed = 1;
+	}
+	++ $new_aids{$new};
+    }
+    if (not $failed) {
+	print "$xmltv_id:", join(',', keys %new_aids), ':';
+	print $extra_dn if defined $extra_dn;
+	print "\n";
+    }
+    else {
+	print STDERR "could not convert all aids for line: ";
+	print STDERR "$xmltv_id:", join(',', keys %new_aids), ':';
+	print STDERR $extra_dn if defined $extra_dn;
+	print STDERR "\n";
+    }
+}
+
