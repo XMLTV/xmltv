@@ -1308,136 +1308,66 @@ sub get_data_eurosport
 #
 ##########################################
 
-# Return the URL of the page for the date.
-sub get_url_by_date_mtve
-{
-    my( $date ) = @_;
 
-    return "http://www.nordic.mtve.com/television/schedule.asp?date=".$today."&show_date=" . $date;
-}
-
-# Download and return HTML.
 sub get_html_mtve
 {
-    my( $url ) = @_;
+    my( $id, $date ) = @_;
 
+    $date =~ s/(\d{4})(\d{2})(\d{2})/$1-$2-$3/;
+
+    my $url = "http://www.mtve.com/article.php?ArticleId=4728&date=$date&week=This";
     return ( URI->new( $url ), my_get( $url ) );
 }
 
-# The programme table parser.
-sub get_programmes_mtve
+sub get_data_mtve
 {
-    my( $channel, $date, $base, $html ) = @_;
+    my( $w, $channel, $date, $id ) = @_;
+
+    my( $base, $html ) = get_html_mtve( $id, $date );
+    if( not defined( $html ) )
+    {
+        warning( "Failed to fetch html for $channel on $date." );
+        return;
+    }
 
     my $doc = parse_xml( $html );
     if( not defined( $doc ) )
     {
-        return undef;
+        warning( "Failed to parse html for $channel on $date." );
+        return;
     }
-    
-    my $ns = $doc->find("//tr[\@bgcolor='']/parent::table/tr/td/node()");
-    
-    if( $ns->size() == 0 )
+
+    my $ns = $doc->find( "//table[.//\@id='primary-content']/tr[count(td)=3]" );
+
+    if( $ns->size() <= 2 )
     {
-        return undef;
+        warning "No data available for $channel on $date.";
+        return;
     }
 
     my @programmes = ();
 
-    my $starttime = "";
-    my $title = "";
-    my $progurl = "";
-
-    my $progdate = $date;
-    my $nextdate = $progdate;
+    my $lasttime = "0000";
 
     foreach my $node ($ns->get_nodelist)
     {
-	my $nstr = $node->textContent;
-	my $nodename = $node->nodeName;
-	if (defined $nodename and $nodename eq "div" and
-	    $nstr =~ /^([0-9][0-9]):([0-9][0-9])\s/)
-	{
-	    my $nextstart = "$1$2";
-	    if (($nextstart cmp $starttime) == -1) {
-		$nextdate = increase_date($nextdate, 1);
-	    }
+        my $starttime = norm($node->findvalue( "td[1]" ));
+        next if $starttime eq "";
+        
+        my $title = norm($node->findvalue( "td[3]/b" ));
+        my $url = $node->findvalue( 'td[3]//a[1]/@href' );
+        my $desc = norm($node->findvalue( "td[3]/text()" ));
 
-	    if ($title =~ /\S/) {
-		# Ok, we have a programme.
-		#  LOCAL_TZ should be alright for MTVE Nordic.
-		my %prog = (
-			    channel => $channel,
-			    start   => utc_offset( "$progdate$starttime", LOCAL_TZ ),
-			    stop    => utc_offset( "$nextdate$nextstart", LOCAL_TZ ),
-			    title   => [ [norm($title), "en" ] ],
-			    );
-		$prog{url} = [URI->new($progurl)->abs($base)] if $progurl =~ /\S/;
-		
-		push @programmes, \%prog;
-	    }
-	    
-	    $starttime = $nextstart;
-	    $progdate = $nextdate;
-	    $title = "";
-	    $progurl = "";
-	} else {
-	    $title = $nstr;
-	    $title =~ s/^\s*//;
+        my %d = (
+                 channel => $channel,
+                 start   => utc_offset( "$date$starttime", LOCAL_TZ ),
+                 title   => [ [ $title, 'en' ] ],
+                 );
+        
+        $d{desc} = [ [ $desc, 'en' ] ] if $desc =~ /\S/;
+        $d{url} = [URI->new($url)->abs($base)] if $url =~ /\S/;
 
-	    if ($nodename eq "a") {
-		my $attributelist = $node->attributes;
-		my $href = $attributelist->getNamedItem("href");
-		if (defined $href) {
-		    $progurl = $href->textContent;
-		}
-	    }
-	}
-    }
-    # The table seems to always end at midnight.
-    my $nextstart = "0000";
-    if (($nextstart cmp $starttime) == -1) {
-	$nextdate = increase_date($nextdate, 1);
-    }
-
-    if ($title =~ /\S/) {
-	# Ok, we have a programme.
-	my %prog = (
-		    channel => $channel,
-		    start   => utc_offset( "$progdate$starttime", LOCAL_TZ ),
-		    stop    => utc_offset( "$nextdate$nextstart", LOCAL_TZ ),
-		    title   => [ [norm($title), LANG ] ],
-		    );
-	$prog{url} = [URI->new($progurl)->abs($base)] if $progurl =~ /\S/;
-
-	push @programmes, \%prog;
-    }
-
-    return \@programmes;
-}
-
-# Find the right page, parse the table on the page and output the
-# result.
-sub get_data_mtve
-{
-    my( $w, $channel, $date ) = @_;
-    
-    my $html = get_html_mtve(get_url_by_date_mtve($date));
-    unless (defined $html) {
-        warning( "Failed to fetch html for $channel on $date." );
-	return;
-    }
-
-    my $programmes = get_programmes_mtve($channel, $date, "http://www.nordic.mtve.com/", $html);
-
-    unless (defined $programmes) {
-        warning( "Failed to parse html for $channel on $date." );
-	return;
-    }
-
-    foreach my $prog (@$programmes)
-    {
-        $w->write_programme( $prog );
+        $w->write_programme( \%d );
     }
 }
 
