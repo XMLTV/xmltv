@@ -23,6 +23,7 @@ use XMLTV;
 use XMLTV::UK_TZ;
 use XMLTV::Ananova_Channel;
 use XMLTV::Memoize;
+use XMLTV::Ask;
 
 # Prototype declarations
 sub get_copyright( $ );
@@ -35,16 +36,19 @@ sub date_programmes( $$ );
 sub add_clumpidx( $ );
 sub get_channel_pkgs();
 sub init_channels();
-sub write_channels( $ );
+sub write_channels( $$$$$ );
 sub wanted_by_region( $ );
 sub get_pages( $$ );
+sub configure();
+sub grab( @ );
 
 # Check options.  First do the undocumented --cache option (to cache
 # get(), which retrieves web pages), then the normal ones.
 #
 my $using_cache = XMLTV::Memoize::check_argv('get');
-my ($opt_days, $opt_help, $opt_output, $opt_share);
+my ($opt_days, $opt_help, $opt_output, $opt_share, $opt_configure);
 GetOptions('days=i' => \$opt_days, 'help' => \$opt_help,
+	   'configure' => \$opt_configure,
 	   'output=s' => \$opt_output, 'share=s' => \$opt_share);
 die 'number of days must not be negative'
   if (defined $opt_days && $opt_days < 0);
@@ -52,13 +56,13 @@ if ($opt_help) {
     print <<END
 $0: get UK television listings in XMLTV format
 
-The options available depend on what data is at the server.  Run with
-no arguments to get a usage message and a default set of listings (7
-days, London region).  It will write the listings to stdout, so
-redirect it to a file.
+FIXME
 END
   ;
     exit(1);
+}
+if ($opt_configure) {
+    print STDERR "Going to configure channels to download, please wait\n";
 }
 
 # share/ directory for storing channel mapping files.  This next line
@@ -78,6 +82,16 @@ my $OUR_SHARE_DIR = (defined $SHARE_DIR) ? "$SHARE_DIR/tv_grab_uk" : '.';
 # program.
 #
 my $A = 'http://www.ananova.com/tv_listings/_tv_raw.php';
+
+# File that stores which channels to download.
+my $CONFIG_FILE;
+if (defined($ENV{HOME})) {
+    $CONFIG_FILE = "$ENV{HOME}/.xmltv/tv_grab_uk";
+}
+else {
+    # $HOME not set, use current directory.
+    $CONFIG_FILE = 'tv_grab_uk';
+}
 
 # On Windows Date::Manip can have trouble finding the local timezone.
 # Since the output listings shouldn't depend on the local timezone
@@ -119,403 +133,430 @@ else {
 
 # Download the three index pages now.
 my $index_pages = get_pages('getting list of channels', [ qw(regions channels dir) ]);
-my $copyright = get_copyright($index_pages->{regions}->{content});
 
-# Set up an XMLTV::Writer; print copyright and start of
-# document.  Ananova's data is in Latin-1.
+# Set up the global channels and regions data.  This is needed for
+# both configuration and grabbing.
 #
-my %w_args = ();
-if (defined $opt_output) {
-    my $fh = new IO::File ">$opt_output";
-    die "cannot write to $opt_output\n" if not $fh;
-    %w_args = (OUTPUT => $fh);
-}
-my $writer = new XMLTV::Writer(encoding => 'ISO-8859-1', %w_args);
-$writer->comment($copyright);
-$writer->start({ 'source-info-url'     =>
-	  'http://www.ananova.com/tv_listings/_tv_full_listings.html',
-	         'source-info-name'    => 'Ananova',
-	         'source-data-url'     => $A,
-	         'generator-info-name' => 'XMLTV/0.4.3',
-	         'generator-info-url'  =>
-	  'http://www.doc.ic.ac.uk/~epa98/work/apps/xmltv/',
-	       });
-
 my $regions = get_regions($index_pages->{regions}->{content},
 			  $index_pages->{regions}->{url});
-#t 'regions: ' . d $regions;
-
+my %region_display = reverse %$regions;
+my %type_display;
+$type_display{$_} = $_ foreach qw(radio satellite);
 init_channels();
 read_channels_page($index_pages->{channels}->{content});
 
-# Hardcoded channel packages.  It is planned to move these to separate
-# files, but I didn't have time to reorganize the directory structure
-# before the 0.4 release.
-#
+# Predefined channel packages for ease of configuration.
 my %channel_pkgs = get_channel_pkgs();
 
-# We've set the type of 'radio' and 'satellite' channels.  Now deal
-# with the terrestrial channels, which have a region set.  We should
-# find that every channel fits into radio, xor satellite, xor one
-# particular region.
-#
-# We end up with a list of [ day, type, channel, filename ], where
-# type is one of 'radio', 'satellite', or a region code.
-#
-my @files;
-
-my %seen_ch;
-foreach (get_dir($index_pages->{dir}->{content},
-		 $index_pages->{dir}->{url})) {
-#    local $Log::TraceMessages::On = 1;
-    my ($orig, $day, $ananova_id, $region) = @$_;
-    t 'got line from dir: orig=' . d($orig) . ', day=' . d($day) . ', ananova_id=' . d($ananova_id) . ', region=' . d($region);
-    my $ch = XMLTV::Ananova_Channel->find_by_ananova_id($ananova_id);
-    t 'found channel by Ananova id: ' . d $ch;
-    if (not defined $ch) {
-	t 'creating a new channel and adding id';
-	$ch = new XMLTV::Ananova_Channel();
-	$ch->add_ananova_id($ananova_id);
+if ($opt_configure) {
+    configure();
+} else {
+    my %g_args = ();
+    if (defined $opt_output) {
+	my $fh = new IO::File ">$opt_output";
+	die "cannot write to $opt_output\n" if not $fh;
+	%g_args = (OUTPUT => $fh);
     }
-    $seen_ch{$ch}++; # no dup check, since multiple days
-
-    # If channel not seen before, assume terrestrial.
-    my $type = $ch->get_type();
-    $type = 'terrestrial' if not defined $type;
-    my $has_region = (defined $region);
-
-    if ($type eq 'terrestrial') {
-	if ($has_region) {
-	    $ch->add_region($region);
-	    push @files, [ $day, $region, $ananova_id, $orig ];
-	}
-	else {
-	    # Probably an old file which is still lying around in dir.
-	    # We don't bother with these.
-	    #
-	    $type = 'duff';
-	}
-    }
-    elsif ($type eq 'satellite' or $type eq 'radio') {
-	if ($has_region) {
-	    warn 'channel ' . $ch->stringify() . " was seen as $type but also region $region";
-	}
-	else {
-	    push @files, [ $day, $type, $ananova_id, $orig ];
-	}
-    }
-    elsif ($type eq 'duff') {
-	# Ignore.
-    }
-    else { die "bad type $type" }
-    $ch->set_type($type);
-}
-t 'files: ' . d \@files;
-
-# Check that there are no redundant entries in the channel data.
-foreach (XMLTV::Ananova_Channel->all()) {
-    unless ($seen_ch{$_}) {
-	warn "channels data mentions channel $_, but not used\n";
-	$_->set_type('duff');
-    }
+    grab(%g_args);
 }
 
-# Now work out which of @files we actually want to download.  We can
-# pick channels in three ways: by type ('radio', 'satellite'), by
-# Ananova region ('15', '2' with display names like 'Carlton', 'Tyne
-# Tees') and individually by XMLTV id.
-#
-my (%wanted_type, %wanted_region, %wanted_xmltv_id);
-my $want_all;
-my %type_display;
-$type_display{$_} = $_ foreach qw(radio satellite);
-my %region_display = reverse %$regions;
-if (defined $ARGV[0] and $ARGV[0] eq 'ALL') {
-    $want_all = 1;
-}
-else {
-#    local $Log::TraceMessages::On = 1;
-    foreach my $arg (@ARGV) {
-	t "working out arg $arg";
-	my $larg = lc $arg;
-	t "lowercase version is $larg";
-	my $t;
 
-	# See whether the argument matches a type.  We look for an
-	# exact match and if not that then a regexp match.
-	#
-	foreach (sort keys %type_display) {
-	    my $ldn = lc $type_display{$_};
-	    if ($ldn eq $larg) {
-		$t = $_;
-		last;
-	    }
-	    elsif (not defined $t and index($ldn, $larg) != -1) {
-		$t = $_;
-	    }
-	}
-	if (defined $t) {
-	    print STDERR "getting channel type $type_display{$t}\n";
-	    $wanted_type{$t}++
-	      && warn "channel type $type_display{$t} mentioned twice\n";
-	    next;
-	}
+# Ask the user which channels to download, and write $CONFIG_FILE.
+sub configure() {
+    warn "FIXME overwriting existing $CONFIG_FILE\n";
 
-	# Or a terrestrial region.
-	foreach (sort keys %region_display) {
-	    my $ldn = lc $region_display{$_};
-	    if ($ldn eq $larg) {
-		$t = $_;
-		last;
-	    }
-	    elsif (not defined $t and index($ldn, $larg) != -1) {
-		$t = $_;
-	    }
-	}
-	if (defined $t) {
-	    print STDERR "getting terrestrial region $region_display{$t}\n";
-	    $wanted_region{$t}++
-	      && warn "terrestrial region $region_display{$t} mentioned twice\n";
-	    next;
-	}
-	
-	# Nothing so far, but maybe it matches a channel package.
-	foreach (sort keys %channel_pkgs) {
-	    # Exact match only since they're computery names.
-	    if ($_ eq $arg) {
-		$t = $_;
-		last;
+    # Need to ask:
+    #
+    # - Do you get terrestrial TV and if so what region?
+    # - Do you have satellite?
+    # - Do you have radio?  (incl. with Sky Digital)
+    # - If satellite, prompt for channel packages.
+    #
+    my $terr = askBooleanQuestion
+      ('Do you get terrestrial analogue television?', 1);
+    if ($terr) {
+	my $region_dn = askQuestion
+	  ('Which terrestrial region?', sort keys %$regions);
+	my $aid;
+	foreach (keys %$regions) {
+	    if ($_ eq $region_dn) {
+		$aid = $regions->{$_};
 	    }
 	}
-	if (defined $t) {
-	    print STDERR "getting channel package $t\n";
-	    foreach (@{$channel_pkgs{$t}}) {
-		t "setting wanted XMLTV id $_";
-		++ $wanted_xmltv_id{$_};
-	    }
-	    next;
-	}
-
-	# Finally, perhaps it matches the name of a channel.
-	my $found_dn;
-	t 'seeing whether argument matches channel name';
-	foreach (XMLTV::Ananova_Channel->all()) {
-	    next if $_->get_type() eq 'duff';
-	    my $dn = $_->get_a_display_name();
-	    next if not defined $dn;
-	    t "checking non-duff channel with dn $dn: " .  d $_;
-	    my $ldn = lc $dn;
-	    t "comparing lowercase dn $ldn with lowercase arg $larg";
-
-	    if ($ldn eq $larg) {
-		t "lowercase displayname $ldn equals argument";
-		my $xmltv_id = $_->get_xmltv_id();
-		if (not defined $xmltv_id) {
-		    warn "sorry, cannot select channel $dn, need to add XMLTV id in code\n";
-		}
-		else {
-		    $t = $xmltv_id;
-		    $found_dn = $dn;
-		    last;
-		}
-	    }
-	    elsif (not defined $t and index($ldn, $larg) != -1) {
-		t "best match so far is $larg as substring of $ldn";
-		my $xmltv_id = $_->get_xmltv_id();
-		if (not defined $xmltv_id) {
-		    warn "sorry, cannot select channel $dn, need to add XMLTV id in code\n";
-		}
-		else {
-		    $t = $xmltv_id;
-		    $found_dn = $dn;
-		}
-	    }
-	    else {
-		t "no match, continue";
-	    }
-	}
-	if (defined $t) {
-	    print STDERR "getting channel $found_dn\n";
-	    $wanted_xmltv_id{$t}++
-	      && warn "channel with XMLTV id $t already chosen";
-	    next;
-	}
-	
-	if (not defined $t) {
-	    warn "'$arg' does not match any known channel type, package or channel\n";
-	    usage();
-	}
+	die if not defined $aid;
+	print "chose region $region_dn, $aid\n";
     }
-    if (not keys %wanted_type
-	and not keys %wanted_region
-	and not keys %wanted_xmltv_id) {
-	if (not @ARGV) {
-	# Fall back on default region 'carlton'.
-	    my $chosen;
-	    foreach (sort keys %region_display) {
-		if ($region_display{$_} =~ /\Qcarlton\E/i) {
-		    print STDERR "getting terrestrial region $region_display{$_}\n";
-		    $wanted_region{$_}++;
-		    $chosen = $_;
-		    last;
-		}
-	    }
-	    if (defined $chosen) {
-		warn "no channel types, packages or channels given, assuming $region_display{$chosen}\n";
-		usage();
+    exit();
+}
+
+# Grab listings and write them in XML.  Arguments are to be passed to
+# XMLTV::Writer.
+#
+sub grab( @ ) {
+    my %args = @_;
+    my $copyright = get_copyright($index_pages->{regions}->{content});
+
+    # Set up an XMLTV::Writer; print copyright and start of
+    # document.  Ananova's data is in Latin-1.
+    #
+    my $writer = new XMLTV::Writer(encoding => 'ISO-8859-1', %args);
+    $writer->comment($copyright);
+    $writer->start({ 'source-info-url'     =>
+		     'http://www.ananova.com/tv_listings/_tv_full_listings.html',
+		     'source-info-name'    => 'Ananova',
+		     'source-data-url'     => $A,
+		     'generator-info-name' => 'XMLTV/0.5', # FIXME
+		     'generator-info-url'  =>
+		     'http://www.doc.ic.ac.uk/~epa98/work/apps/xmltv/',
+	       });
+
+    # We've set the type of 'radio' and 'satellite' channels.  Now deal
+    # with the terrestrial channels, which have a region set.  We should
+    # find that every channel fits into radio, xor satellite, xor one
+    # particular region.
+    #
+    # We end up with a list of [ day, type, channel, filename ], where
+    # type is one of 'radio', 'satellite', or a region code.
+    #
+    my @files;
+
+    my %seen_ch;
+    foreach (get_dir($index_pages->{dir}->{content},
+		     $index_pages->{dir}->{url})) {
+	#    local $Log::TraceMessages::On = 1;
+	my ($orig, $day, $ananova_id, $region) = @$_;
+	t 'got line from dir: orig=' . d($orig) . ', day=' . d($day) . ', ananova_id=' . d($ananova_id) . ', region=' . d($region);
+	my $ch = XMLTV::Ananova_Channel->find_by_ananova_id($ananova_id);
+	t 'found channel by Ananova id: ' . d $ch;
+	if (not defined $ch) {
+	    t 'creating a new channel and adding id';
+	    $ch = new XMLTV::Ananova_Channel();
+	    $ch->add_ananova_id($ananova_id);
+	}
+	$seen_ch{$ch}++;	# no dup check, since multiple days
+
+	# If channel not seen before, assume terrestrial.
+	my $type = $ch->get_type();
+	$type = 'terrestrial' if not defined $type;
+	my $has_region = (defined $region);
+
+	if ($type eq 'terrestrial') {
+	    if ($has_region) {
+		$ch->add_region($region);
+		push @files, [ $day, $region, $ananova_id, $orig ];
 	    } else {
-		warn "no channel types, packages or channels given and default 'carlton' not found, "
-		  . "giving up\n";
-		usage();
-		exit(1);
-	    }
-	}
-	else {
-	    warn "nothing to download\n";
-	    # But we'll let it print an empty file anyway...
-	}
-    }
-}
-
-# There used to be a warning that if you chose 'satellite' you'd need
-# to also pick a terrestrial region to get channels like BBC1.  This
-# is no longer the case since Ananova now has listings for BBC1
-# Digital and so on.  Besides, with the new channel packages
-# 'satellite' will probably not be used much.
-#
-
-# Filter out the files we want to download - those with the correct
-# channel type, region or channel id.
-#
-my @new_files;
-t 'deciding which files to download';
-my %used_xmltv_id;
-foreach (@files) {
-#    local $Log::TraceMessages::On = 1;
-    t 'looking at file: ' . d $_;
-    if (defined $opt_days and $opt_days < $_->[0]) {
-	t 'outside the --days range';
-	next;
-    }
-
-    if ($want_all) {
-	t 'want all files, so want this one';
-	push @new_files, $_;
-	next;
-    }
-
-    my $tor = $_->[1];
-    t "type or region: $tor";
-    if ($wanted_type{$tor} or $wanted_region{$tor}) {
-	t 'want this type or region';
-	push @new_files, $_;
-	next;
-    }
-
-    my $ch = XMLTV::Ananova_Channel->find_by_ananova_id($_->[2]);
-    t 'looked up by Ananova id: ' . d $ch;
-    if (defined $ch) {
-	my $xmltv_id = $ch->get_xmltv_id();
-	t 'channel has XMLTV id: ' . d $xmltv_id;
-	if (defined $xmltv_id) {
-	    if ($wanted_xmltv_id{$xmltv_id}) {
-		t 'this id is wanted';
-
-		# But the same id may be available as two different
-		# files.  We want only the first Ananova set of pages
-		# for this channel.
+		# Probably an old file which is still lying around in dir.
+		# We don't bother with these.
 		#
-		if ($ch->get_first_ananova_id() eq $_->[2]) {
-		    t 'is first Ananova id, adding';
-		    push @new_files, $_;
-		    $used_xmltv_id{$xmltv_id}++;
-		    next;
+		$type = 'duff';
+	    }
+	} elsif ($type eq 'satellite' or $type eq 'radio') {
+	    if ($has_region) {
+		warn 'channel ' . $ch->stringify() . " was seen as $type but also region $region";
+	    } else {
+		push @files, [ $day, $type, $ananova_id, $orig ];
+	    }
+	} elsif ($type eq 'duff') {
+	    # Ignore.
+	} else {
+	    die "bad type $type";
+	}
+	$ch->set_type($type);
+    }
+    t 'files: ' . d \@files;
+
+    # Check that there are no redundant entries in the channel data.
+    foreach (XMLTV::Ananova_Channel->all()) {
+	unless ($seen_ch{$_}) {
+	    warn "channels data mentions channel $_, but not used\n";
+	    $_->set_type('duff');
+	}
+    }
+
+    # Now work out which of @files we actually want to download.  We can
+    # pick channels in three ways: by type ('radio', 'satellite'), by
+    # Ananova region ('15', '2' with display names like 'Carlton', 'Tyne
+    # Tees') and individually by XMLTV id.
+    #
+    my (%wanted_type, %wanted_region, %wanted_xmltv_id);
+    my $want_all;
+    if (defined $ARGV[0] and $ARGV[0] eq 'ALL') {
+	$want_all = 1;
+    } else {
+	#    local $Log::TraceMessages::On = 1;
+	foreach my $arg (@ARGV) {
+	    t "working out arg $arg";
+	    my $larg = lc $arg;
+	    t "lowercase version is $larg";
+	    my $t;
+
+	    # See whether the argument matches a type.  We look for an
+	    # exact match and if not that then a regexp match.
+	    #
+	    foreach (sort keys %type_display) {
+		my $ldn = lc $type_display{$_};
+		if ($ldn eq $larg) {
+		    $t = $_;
+		    last;
+		} elsif (not defined $t and index($ldn, $larg) != -1) {
+		    $t = $_;
 		}
-		else {
-		    t 'a secondary Ananova page for this channel, not adding';
+	    }
+	    if (defined $t) {
+		print STDERR "getting channel type $type_display{$t}\n";
+		$wanted_type{$t}++
+		  && warn "channel type $type_display{$t} mentioned twice\n";
+		next;
+	    }
+
+	    # Or a terrestrial region.
+	    foreach (sort keys %region_display) {
+		my $ldn = lc $region_display{$_};
+		if ($ldn eq $larg) {
+		    $t = $_;
+		    last;
+		} elsif (not defined $t and index($ldn, $larg) != -1) {
+		    $t = $_;
+		}
+	    }
+	    if (defined $t) {
+		print STDERR "getting terrestrial region $region_display{$t}\n";
+		$wanted_region{$t}++
+		  && warn "terrestrial region $region_display{$t} mentioned twice\n";
+		next;
+	    }
+	
+	    # Nothing so far, but maybe it matches a channel package.
+	    foreach (sort keys %channel_pkgs) {
+		# Exact match only since they're computery names.
+		if ($_ eq $arg) {
+		    $t = $_;
+		    last;
+		}
+	    }
+	    if (defined $t) {
+		print STDERR "getting channel package $t\n";
+		foreach (@{$channel_pkgs{$t}}) {
+		    t "setting wanted XMLTV id $_";
+		    ++ $wanted_xmltv_id{$_};
+		}
+		next;
+	    }
+
+	    # Finally, perhaps it matches the name of a channel.
+	    my $found_dn;
+	    t 'seeing whether argument matches channel name';
+	    foreach (XMLTV::Ananova_Channel->all()) {
+		next if $_->get_type() eq 'duff';
+		my $dn = $_->get_a_display_name();
+		next if not defined $dn;
+		t "checking non-duff channel with dn $dn: " .  d $_;
+		my $ldn = lc $dn;
+		t "comparing lowercase dn $ldn with lowercase arg $larg";
+
+		if ($ldn eq $larg) {
+		    t "lowercase displayname $ldn equals argument";
+		    my $xmltv_id = $_->get_xmltv_id();
+		    if (not defined $xmltv_id) {
+			warn "sorry, cannot select channel $dn, need to add XMLTV id in code\n";
+		    } else {
+			$t = $xmltv_id;
+			$found_dn = $dn;
+			last;
+		    }
+		} elsif (not defined $t and index($ldn, $larg) != -1) {
+		    t "best match so far is $larg as substring of $ldn";
+		    my $xmltv_id = $_->get_xmltv_id();
+		    if (not defined $xmltv_id) {
+			warn "sorry, cannot select channel $dn, need to add XMLTV id in code\n";
+		    } else {
+			$t = $xmltv_id;
+			$found_dn = $dn;
+		    }
+		} else {
+		    t "no match, continue";
+		}
+	    }
+	    if (defined $t) {
+		print STDERR "getting channel $found_dn\n";
+		$wanted_xmltv_id{$t}++
+		  && warn "channel with XMLTV id $t already chosen";
+		next;
+	    }
+	
+	    if (not defined $t) {
+		warn "'$arg' does not match any known channel type, package or channel\n";
+		usage();
+	    }
+	}
+	if (not keys %wanted_type
+	    and not keys %wanted_region
+	    and not keys %wanted_xmltv_id) {
+	    if (not @ARGV) {
+		# Fall back on default region 'carlton'.
+		my $chosen;
+		foreach (sort keys %region_display) {
+		    if ($region_display{$_} =~ /\Qcarlton\E/i) {
+			print STDERR "getting terrestrial region $region_display{$_}\n";
+			$wanted_region{$_}++;
+			$chosen = $_;
+			last;
+		    }
+		}
+		if (defined $chosen) {
+		    warn "no channel types, packages or channels given, assuming $region_display{$chosen}\n";
+		    usage();
+		} else {
+		    warn "no channel types, packages or channels given and default 'carlton' not found, "
+		      . "giving up\n";
+		    usage();
+		    exit(1);
+		}
+	    } else {
+		warn "nothing to download\n";
+		# But we'll let it print an empty file anyway...
+	    }
+	}
+    }
+
+    # There used to be a warning that if you chose 'satellite' you'd need
+    # to also pick a terrestrial region to get channels like BBC1.  This
+    # is no longer the case since Ananova now has listings for BBC1
+    # Digital and so on.  Besides, with the new channel packages
+    # 'satellite' will probably not be used much.
+    #
+
+    # Filter out the files we want to download - those with the correct
+    # channel type, region or channel id.
+    #
+    my @new_files;
+    t 'deciding which files to download';
+    my %used_xmltv_id;
+    foreach (@files) {
+	#    local $Log::TraceMessages::On = 1;
+	t 'looking at file: ' . d $_;
+	if (defined $opt_days and $opt_days < $_->[0]) {
+	    t 'outside the --days range';
+	    next;
+	}
+
+	if ($want_all) {
+	    t 'want all files, so want this one';
+	    push @new_files, $_;
+	    next;
+	}
+
+	my $tor = $_->[1];
+	t "type or region: $tor";
+	if ($wanted_type{$tor} or $wanted_region{$tor}) {
+	    t 'want this type or region';
+	    push @new_files, $_;
+	    next;
+	}
+
+	my $ch = XMLTV::Ananova_Channel->find_by_ananova_id($_->[2]);
+	t 'looked up by Ananova id: ' . d $ch;
+	if (defined $ch) {
+	    my $xmltv_id = $ch->get_xmltv_id();
+	    t 'channel has XMLTV id: ' . d $xmltv_id;
+	    if (defined $xmltv_id) {
+		if ($wanted_xmltv_id{$xmltv_id}) {
+		    t 'this id is wanted';
+
+		    # But the same id may be available as two different
+		    # files.  We want only the first Ananova set of pages
+		    # for this channel.
+		    #
+		    if ($ch->get_first_ananova_id() eq $_->[2]) {
+			t 'is first Ananova id, adding';
+			push @new_files, $_;
+			$used_xmltv_id{$xmltv_id}++;
+			next;
+		    } else {
+			t 'a secondary Ananova page for this channel, not adding';
+		    }
 		}
 	    }
 	}
     }
-}
-@files = @new_files;
-t 'checking that every wanted XMLTV id was found';
-foreach (sort keys %wanted_xmltv_id) {
-    next if $used_xmltv_id{$_};
-    my $ch = XMLTV::Ananova_Channel->find_by_xmltv_id($_);
-    die if not defined $ch;
-    warn 'channel ' . $ch->stringify() . ' not found on site';
-}
+    @files = @new_files;
+    t 'checking that every wanted XMLTV id was found';
+    foreach (sort keys %wanted_xmltv_id) {
+	next if $used_xmltv_id{$_};
+	my $ch = XMLTV::Ananova_Channel->find_by_xmltv_id($_);
+	die if not defined $ch;
+	warn 'channel ' . $ch->stringify() . ' not found on site';
+    }
 
-# We want to get them in day order, so that we can get the first day's
-# listings first.  This is becuase we need to get a complete day to
-# get the complete channel information, which must be written out
-# before any programmes.
-#
-# We download all the files at once, then process them one by one.
-#
-my $got = get_pages('downloading listings', [ map { $_->[3] } @files ]);
-my $bar = new Term::ProgressBar('parsing', scalar @files);
-my $first_day;
-my $wrote_channels = 0;
-my @progs_todo;
-foreach (sort { $a->[0] <=> $b->[0] } @files) {
-    my ($day, $type, $ananova_id, $filename) = @$_;
-    t "getting file for day $day, type $type, Ananova id $ananova_id, filename $filename";
-    die if defined $opt_days and $day > $opt_days;
-    $first_day = $day if not defined $first_day;
-
-    # Work out the actual day this number corresponds to: 1 is
-    # today.
+    # We want to get them in day order, so that we can get the first day's
+    # listings first.  This is becuase we need to get a complete day to
+    # get the complete channel information, which must be written out
+    # before any programmes.
     #
-    my $day_offset = $day-1;
-    t 'day offset: ' . d $day_offset;
-    my $day_date = DateCalc($today, "+ $day_offset days");
-    die if not defined $day_date;
-
-    # Get a list of programmes from this filename, fix the dates and
-    # add clumpidxes.
+    # We download all the files at once, then process them one by one.
     #
-    my $ch = XMLTV::Ananova_Channel->find_by_ananova_id($ananova_id);
-    die if not defined $ch;
-    my $g = $got->{$filename};
-    my $progs = read_file($day_date, $ch, $g->{content}, $filename, $g->{url});
-    date_programmes($progs, $day_date);
-    add_clumpidx($progs);
+    my $got = get_pages('downloading listings', [ map { $_->[3] } @files ]);
+    my $bar = new Term::ProgressBar('parsing', scalar @files);
+    my $first_day;
+    my $wrote_channels = 0;
+    my @progs_todo;
+    foreach (sort { $a->[0] <=> $b->[0] } @files) {
+	my ($day, $type, $ananova_id, $filename) = @$_;
+	t "getting file for day $day, type $type, Ananova id $ananova_id, filename $filename";
+	die if defined $opt_days and $day > $opt_days;
+	$first_day = $day if not defined $first_day;
 
-    # Check to see if we have to write channels data first.
-    if (not $wrote_channels) {
-	if ($day != $first_day) {
-	    # Must have done a whole day's listings, channels are ready to
-	    # write.
-	    #
-	    write_channels($writer);
-	    $wrote_channels = 1;
+	# Work out the actual day this number corresponds to: 1 is
+	# today.
+	#
+	my $day_offset = $day-1;
+	t 'day offset: ' . d $day_offset;
+	my $day_date = DateCalc($today, "+ $day_offset days");
+	die if not defined $day_date;
+
+	# Get a list of programmes from this filename, fix the dates and
+	# add clumpidxes.
+	#
+	my $ch = XMLTV::Ananova_Channel->find_by_ananova_id($ananova_id);
+	die if not defined $ch;
+	my $g = $got->{$filename};
+	my $progs = read_file($day_date, $ch, $g->{content}, $filename, $g->{url});
+	date_programmes($progs, $day_date);
+	add_clumpidx($progs);
+
+	# Check to see if we have to write channels data first.
+	if (not $wrote_channels) {
+	    if ($day != $first_day) {
+		# Must have done a whole day's listings, channels are ready to
+		# write.
+		#
+		write_channels($writer, $want_all, \%wanted_type, \%wanted_xmltv_id, \%wanted_region);
+		$wrote_channels = 1;
+	    }
 	}
+
+	push @progs_todo, @$progs;
+	if ($wrote_channels) {
+	    t 'channels have been written before, write programmes';
+	    $writer->write_programme($_) foreach @progs_todo;
+	    @progs_todo = ();
+	}
+
+	update $bar;
     }
 
-    push @progs_todo, @$progs;
-    if ($wrote_channels) {
-	t 'channels have been written before, write programmes';
+    # In case we never got to the second day, make sure the pending stuff
+    # is written.
+    #
+    if (not $wrote_channels) {
+	write_channels($writer, $want_all, \%wanted_type, \%wanted_xmltv_id, \%wanted_region);
 	$writer->write_programme($_) foreach @progs_todo;
-	@progs_todo = ();
+	$wrote_channels = 1; @progs_todo = ();
     }
 
-    update $bar;
+    # Finish.
+    $writer->end();
 }
-
-# In case we never got to the second day, make sure the pending stuff
-# is written.
-#
-if (not $wrote_channels) {
-    write_channels($writer);
-    $writer->write_programme($_) foreach @progs_todo;
-    $wrote_channels = 1; @progs_todo = ();
-}
-
-# Finish.
-$writer->end();
-exit();
 
 
 # Extract the copyright message from the comment at the start of every
@@ -1412,11 +1453,21 @@ END
 # never found out what the definitive display name was.  Fortunately,
 # writing out channels that weren't used is pointless anyway :-).
 #
-# Parameter: XMLTV::Writer to use
+# Parameters:
+#     XMLTV::Writer to use
+#     whether all channels are wanted
+#     ref to hash mapping channel type to wanted
+#     ref to hash mapping xmltv id to wanted
+#     ref to hash mapping region to wanted
+# FIXME should pass this 'channel wanted' info better
 #
-sub write_channels( $ ) {
+sub write_channels( $$$$$ ) {
 #    local $Log::TraceMessages::On = 1;
     my $writer = shift;
+    my $want_all = shift;
+    use vars '%wanted_type'; local *wanted_type = shift;
+    use vars '%wanted_xmltv_id'; local *wanted_xmltv_id = shift;
+    use vars '%wanted_region'; local *wanted_region = shift;
     my @wanted;
     foreach (XMLTV::Ananova_Channel->all()) {
 	t 'is this channel wanted? : ' . d $_;
