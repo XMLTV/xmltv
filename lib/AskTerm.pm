@@ -67,6 +67,10 @@ sub askQuestion( $$@ )
     croak "default $default not in options"
       if not grep { $_ eq $default } @options;
 
+    # Check no duplicates (required for later processing, maybe).
+    my %seen;
+    foreach (@options) { die "duplicate option $_" if $seen{$_}++ }
+
     my $options_size = length("@options");
     t "size of options: $options_size";
     my $all_digits = not ((my $tmp = join('', @options)) =~ tr/0-9//c);
@@ -100,6 +104,23 @@ sub askQuestion( $$@ )
 	print STDERR "$question\n";
 	my $optnum = 0;
 	my (%num_to_choice, %choice_to_num);
+
+	# If any of the option strings happen to be numbers, and
+	# within the range of option numbers, arrange it so they're
+	# with the matching number.
+	#
+	my (@numbers, @others);
+	foreach (@options) {
+	    if (/^\d+$/ && $_ < @options) { push @numbers, $_ }
+	    else { push @others, $_ }
+	}
+	@options = ();
+	foreach (sort { $a <=> $b } @numbers) {
+	    push @options, splice @others, 0, $_ - @options;
+	    push @options, $_;
+	}
+	push @options, @others;
+
 	foreach (@options) {
 	    print STDERR "$optnum: $_\n";
 	    $num_to_choice{$optnum} = $_;
