@@ -277,27 +277,6 @@ my @opt_components
        grab_need_share => [ 'na_icons' ],
      },
 
-     { name => 'tv_grab_nz',
-       blurb => 'Grabber for New Zealand',
-       exes => [ 'grab/nz/tv_grab_nz' ],
-       pl_files => { 'grab/nz/tv_grab_nz.PL' => 'grab/nz/tv_grab_nz' },
-       share_files => { 'grab/nz/episode_names' => 'tv_grab_nz/episode_names' },
-       to_clean => [ 'grab/nz/tv_grab_nz' ],
-       deps => [ 'grab/nz/tv_grab_nz' => [ 'grab/nz/tv_grab_nz.in' ] ],
-       grab_need_share => [ 'nz' ],
-       prereqs => {},
-       special_prereqs =>
-       [ [ sub {
-	       # This command line should work on Unix and NT, I hope.
-	       my $p = `python -c "import sys; print sys.hexversion" 2>&1`;
-	       for ($p) {
-		   s/^\s+//; s/\s+$//;
-		   return $_ if /^\d+$/;
-		   return undef;
-	       }
-	   },
-	   'Python', '17105648', '1.5.2' ] ] },
-
      { name => 'tv_grab_fi',
        blurb => 'Grabber for Finland',
        exes => [ 'grab/fi/tv_grab_fi' ],
