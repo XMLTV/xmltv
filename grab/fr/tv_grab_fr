@@ -1,5 +1,8 @@
 #!/usr/bin/perl -w
 
+eval 'exec /usr/bin/perl -w -S $0 ${1+"$@"}'
+    if 0; # not running under some shell
+
 =head1 NAME
 
 tv_grab_fr - Grab TV listings for France.
@@ -55,7 +58,9 @@ L<xmltv(5)>
 =head1 AUTHOR
 
 Sylvain Fabre, centraladmin@lahiette.com
-with a patch from rancois Gouget, fgouget@free.fr
+with some patches from :
+  - Francois Gouget, fgouget@free.fr
+  - Niel Markwick, nielm@bigfoot.com
 
 =cut
 
@@ -89,7 +94,7 @@ use threads;
 use threads::shared;
 
 # Force the infamous delay value to 0
-$XMLTV::Get_nice::Delay = 0;
+$XMLTV::Get_nice::Delay = 1;
 
 #***************************************************************************
 # Main declarations
@@ -101,7 +106,7 @@ my $ROOT_URL  = "http://telepoche.guidetele.com/";
 my $LANG = "fr";
 my $MAX_STARS = 4;
 my $MAX_RETRY = 5;
-my $VERSION   = "130205-01";
+my $VERSION   = "270205-01";
 
 # Temporary avoid XML warnings (to be investigated)
 no warnings;
@@ -218,7 +223,9 @@ sub debug_print( $ ) {
 # Get a page using this agent.
 sub get_page( $ ) {
     my $url = shift;
-    # For Memoize's sake make extra sure of scalar context
+    # For Memoize s sake make extra sure of scalar context
+    #return scalar get_page_aux($url);
+    #return get_nice($url);
     return scalar get_page_aux($url);
 }
 
@@ -229,9 +236,15 @@ sub get_page_aux {
     my $url = shift;
     my $retry = $MAX_RETRY;
     my $got;
+    my $sleep = 0;
 
 GET:
+    # Sleep 1 second after 1 pass
+    sleep $sleep;
+    $sleep = 1;
+    # Call the get_nice API
     eval { $got = get_nice($url) };
+    # Then check the return string of the get_nice function
     goto GET if $@ and $@ =~ /could not fetch/ and --$retry;
 
     die "Can\'t download $url !!! Check you internet connection." if $retry == 0;
@@ -247,6 +260,7 @@ sub xmlencoding {
 }
 
 my $warned_bad_chars;
+my $warned_unicode_chars;
 sub tidy {
     # clean bad characters from HTML
     for (my $s = shift) {
@@ -254,16 +268,30 @@ sub tidy {
         tr/\222/''/;
         s/\234/oe/g;
         s/&#8722;/ /g;
-	s/&#8217;/'/g;
+	
+	# Remove nasty caracters, thanks to nielm
+	s/&ldquo;|&rdquo;|&\#8219;|&\#8220;|&\#x201[89];/&quot/g;
+        s/&lsquo;|&rsquo;|&\#8217;|&\#8218;|&\#x201[cdCD];/\'/g;
+	s/&\#8230;|&\#x202[4-7];/.../g;
+	s/&\#821[0123];|&\#x201[2-5];/-/g;
+        s/&OElig;/OE/g;
+        s/&oelig;/oe/g;
 
+	
+	if ( s/(&\#[0-9]{4,};)//g ) {
+	    print STDERR "removing unknown UNICODE characters: '$1'\n" unless $warned_unicode_chars++;
+	}
+	if ( s/(&\#x[0-9a-zA-Z]{3,};)//g ) {
+	    print STDERR "removing unknown UNICODE characters: '$1'\n" unless $warned_unicode_chars++;
+	}
+	     
         # Not strictly a bad character but it does get in the way.
         s/&nbsp;/ /g;
-	s/&rsquo;/'/g;
         tr/\240/ /;
 	tr/\t/ /;
 
 	if (s/([^\012\015\040-\176\240-\377])//g) {
-	    debug_print "removing bad characters: '$1'" unless $warned_bad_chars++;
+	    print STDERR "removing bad characters: '$1'" unless $warned_bad_chars++;
 	}
 
         return $_;
@@ -632,6 +660,8 @@ sub process_channel_grid_page( $$$$ ) {
 	    for ($showview) { s/^\s+//; s/\s+$// }
 	    $prog{showview} = $showview;
 	  }
+	  
+	  # Variables needed for the detailed information parsing
 	  my ($idesc, $tdesc, $imgdesc);
 	  # Now get program description if the longlisting option is set
 	  if ( $opt_slow && $progTree->attr('class') eq 'fiche' ) {
@@ -640,10 +670,11 @@ sub process_channel_grid_page( $$$$ ) {
 	    $id =~ /fiche\('(\d+)'\)/
 	      or die "expected fiche(x), got: $id";
 	    $id = $1;
+	    debug_print("Calling sheet URL : " . $SHEET_URL . $id . "\n");
 	    my $tfic = HTML::TreeBuilder->new;
 	    $tfic->parse(tidy(get_page($SHEET_URL . $id)));
 	    $tfic->eof;
-
+	    
 	    # This page's title tag contains the program title without
 	    # the sub-title. Use it to separate the two.
 	    my $ttitle;
@@ -654,16 +685,38 @@ sub process_channel_grid_page( $$$$ ) {
 		$prog{'sub-title'} = [ [ $title ] ];
 	      }
 	    }
+	    # Get the duration and the year
+	    my ($length, $hour, $min, $year);
+	    if ( $tdesc = $tfic->look_down('_tag', 'td', 'width', '250', 'class', 'txt') ) {
+	      $length = $tdesc->as_text();
+	      if ( $length =~ s/ Durée : (\d+)h(\d+) AM - (\d+)// ) {
+		$hour = $1; $min = $2; $year = $3;
+		# guidetele.com si full of bugs ...
+		$hour = $hour - 12 if ($hour >= 12);
+		$prog{'length'} = ($hour * 3600) + ($min * 60);
+		$prog{'date'}   = $year;
+	      }
+	    }
 
-	    debug_print("Calling sheet URL : " . $SHEET_URL . $id . "\n");
+	    # Now get descriptions, summary, advices, actors and director
 	    my ($resume, $histoire, $avis);
-	    my ($nextIsResume,$nextIsHistory,$nextIsAvis) = (0,0,0);
+	    my ($nextIsResume,$nextIsHistory,$nextIsAvis,$nextIsDirector) = (0,0,0,0);
+	    my (@director, @actor);
 	    if ( $tdesc = $tfic->look_down('_tag', 'td', 'width', '396') ) {
+	      # Detect actors 
+	      foreach my $actorcell ($tdesc->look_down('_tag', 'td', 'class', 'disActeur') ) {
+		push @actor, tidy($actorcell->as_text());
+	      }
 	      my @children = $tdesc->content_list();
 	      foreach my $desc (@children)  {
 		# Remove leading and trailing spaces
 		$desc =~ s/^ ://;
 		$desc =~ s/ $//;
+		if ($nextIsDirector == 1 ) {
+		  push @director, tidy($desc);
+		  $nextIsDirector = 0;
+		  debug_print "FOUND DIRECTOR : " . tidy($desc) . " - $title - $id\n";
+		}
 		if ($nextIsResume == 1) {
 		  warn "RESUME seen twice\n" if defined $resume;
 		  $resume = tidy($desc);
@@ -686,6 +739,7 @@ sub process_channel_grid_page( $$$$ ) {
 		  $nextIsResume = 1 if ( $desc->as_text() eq "RESUME" );
 		  $nextIsHistory = 1 if  ( $desc->as_text() eq "HISTOIRE" );
 		  $nextIsAvis = 1 if  ( $desc->as_text() eq "AVIS" );
+		  $nextIsDirector = 1 if ($desc->as_text eq "Réalisateur" );
 		}
 	      }
 	    }
@@ -698,9 +752,9 @@ sub process_channel_grid_page( $$$$ ) {
 	  # Add AVIS to the main description, or make a new desc
 	    # for it if there are none.
 	    #
-	    if (defined $avis) {
+	    if (defined $avis and length($avis) ) {
 	      if ($prog{desc}) {
-		$prog{desc}->[0]->[0] .= $avis;
+		$prog{desc}->[0]->[0] .= "\nCritique : " . $avis;
 	      }
 	      else {
 		push @{$prog{desc}}, [ $avis, $LANG ];
@@ -714,6 +768,9 @@ sub process_channel_grid_page( $$$$ ) {
 		}
 	      }
 	    }
+	    # Now push the credits section, if exists
+	    $prog{credits}{director } = \@director if @director;
+	    $prog{credits}{actor}     = \@actor if @actor;
 	  } else {
 	    # The text for the <a> tag contains the title without the
 	    # sub-title so we can use that to separate the two. However
@@ -732,6 +789,7 @@ sub process_channel_grid_page( $$$$ ) {
 	      $prog{'sub-title'} = [ [ $title ] ];
 	    }
 	  }
+
 	  if ( !$results{$prog{start}.$chid} ) {
 	    $results{$prog{start}.$chid} = "1";
 	    $writer->write_programme(\%prog);
