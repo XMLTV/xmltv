@@ -227,6 +227,10 @@ sub get_display_names {
     }
     return @r;
 }
+sub remove_extra_display_names {
+    my $self = shift;
+    delete $self->{extra_display_names};
+}
 sub get_main_display_name {
     my $self = shift;
     # Okay to return undef.
