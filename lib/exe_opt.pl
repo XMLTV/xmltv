@@ -19,7 +19,7 @@ print '-nologo
 -info FileDescription="EXE bundle of XMLTV tools to manage TV Listings"
 -info InternalName=xmltv.exe
 -info OriginalFilename=xmltv.exe
--info ProductName=xmlTV
+-info ProductName=xmltv
 -info LegalCopyright="GNU General Public License http://www.gnu.org/licenses/gpl.txt"
 ';
 
