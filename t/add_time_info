@@ -1,0 +1,81 @@
+#!/usr/bin/perl -w
+#
+# add_time_info
+#
+# Quick kludge for testing output from two different grabbers.
+# Sometimes one listings source will be more informative than another
+# about the timing of programmes.  Whereas the old source gave two
+# programmes sharing a clump from 11:00 to 12:00, the new one tells
+# you that one runs from 11:00 to 11:35 and the second from 11:35 to
+# 12:00.  So the new listings source gives more information, but when
+# diffing the results there will be a discrepancy and seeming 'error'.
+# The answer is to patch up the old results where they agree with, but
+# are less detailed than, the new.
+#
+# Usage: reads 'less detailed' listings from stdin and 'more detailed'
+# given as a filename argument, outputs fixed-up version of 'less
+# detailed' to stdout.
+#
+
+use strict;
+use XMLTV;
+# Use 'old' to mean the listings read from stdin, 'new' for those
+# given as an argument.  Just as a shorthand.
+#
+my $old_data = XMLTV::parsefile('-');
+my $new_data = XMLTV::parsefile(shift @ARGV);
+
+my %interested;
+foreach (@{$old_data->[3]}) {
+    next unless defined $_->{clumpidx};
+    push @{$interested{$_->{channel}}->{$_->{start}}}, $_;
+}
+
+my %new;
+foreach (@{$new_data->[3]}) {
+    push @{$new{$_->{channel}}->{$_->{start}}}, $_;
+}
+
+foreach my $ch (keys %interested) {
+    my $s = $interested{$ch};
+    my $n = $new{$ch};
+    START: foreach my $start (keys %$s) {
+	my @to_replace = @{$s->{$start}};
+	die "funny clump size" if @to_replace < 2;
+	my $r = $n->{$start};
+	die "no programmes to replace with at $start on $ch"
+	  if not defined $r;
+	die if ref $r ne 'ARRAY';
+	my @replacement = @$r;
+	die "no programmes to replace with at $start on $ch"
+	  if not @replacement;
+	my $i = 0;
+      REPLACE:
+	die "too many programmes to replace with" if @replacement > @to_replace;
+	foreach (@replacement) {
+	    my $old = $to_replace[$i];
+	    foreach my $key (qw(start stop clumpidx)) {
+		if (exists $_->{$key}) {
+		    $old->{$key} = $_->{$key};
+		}
+		else {
+		    delete $old->{$key};
+		}
+	    }
+	    ++ $i;
+	}
+	if ($i > @to_replace) {
+	    next START;
+	}
+	my $follow_on_start = $replacement[-1]->{stop};
+	die "can't find follow-on replacement: no stop time in prev"
+	  if not defined $follow_on_start;
+	my $follow_on = $n->{$follow_on_start};
+	die "can't find follow-on replacement: none at $follow_on_start"
+	  if not defined $follow_on;
+	@replacement = @$follow_on;
+	goto REPLACE;
+    }
+}
+XMLTV::write_data($old_data);
+
