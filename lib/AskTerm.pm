@@ -48,6 +48,23 @@ sub ask( $ )
     }
 }
 
+# Check for exact match, then for substring matching.
+sub match( $@ ) {
+    my ($choice, @options) = @_;
+    foreach (@options) {
+	return $_ if $_ eq $choice;
+    }
+    my @poss;
+    foreach (@options) {
+	push @poss, $_ if /\Q$choice\E/i;
+    }
+    if (@poss == 1) {
+	# Unambiguous substring match.
+	return $poss[0];
+    }
+    return undef;
+}
+
 # Ask a question where the answer is one of a set of alternatives.
 #
 # Parameters:
@@ -82,20 +99,9 @@ sub askQuestion( $$@ )
 	    my $res=ask($str);
 	    return undef if not defined $res;
 	    return $default if $res eq '';
-
-	    # Check for exact match, then for substring matching.
-	    foreach (@options) {
-		return $_ if $_ eq $res;
+	    for (match($res, @options)) {
+		return $_ if defined;
 	    }
-	    my @poss;
-	    foreach (@options) {
-		push @poss, $_ if /\Q$res\E/i;
-	    }
-	    if (@poss == 1) {
-		# Unambiguous substring match.
-		return $poss[0];
-	    }
-
 	    print STDERR "invalid response, please choose one of ".join(',', @options)."\n\n";
 	}
     }
