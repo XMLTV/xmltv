@@ -1,118 +1,24 @@
-#!/usr/bin/perl -w
-
-=pod
-
-=head1 NAME
-
-tv_grab_uk_rt - Grab TV listings for the United Kingdom, from an
-alternative source.
-
-=head1 SYNOPSIS
-
-tv_grab_uk_rt --help
-
-tv_grab_uk_rt [--config-file FILE] --configure [--gui OPTION]
-
-tv_grab_uk_rt [--config-file FILE] [--output FILE] [--quiet]
-              [--days N] [--offset N]
-              [--slow [--limit-details HH:MM-HH:MM] --get-categories]
-
-=head1 DESCRIPTION
-
-Output TV and radio listings in XMLTV format for many stations
-available in Britain.  The data comes from the Radio Times website.
-
-=head1 USAGE
-
-First you must run B<tv_grab_uk_rt --configure> to choose which
-stations you want to receive.  Then running B<tv_grab_uk_rt> with no
-arguments will get about a fortnightE<39>s listings for the stations
-you chose.
-
-B<--configure> Prompt for which stations to download and write the
-configuration file.
-
-B<--config-file FILE> Set the name of the configuration file, the
-default is B<~/.xmltv/tv_grab_uk_rt.conf>.  This is the file written by
-B<--configure> and read when grabbing.
-
-B<--gui OPTION> Use this option to enable a graphical interface to be used.
-OPTION may be 'Tk', or left blank for the best available choice.
-Additional allowed values of OPTION are 'Term' for normal terminal output
-(default) and 'TermNoProgressBar' to disable the use of Term::ProgressBar.
-
-B<--output FILE> When grabbing, write output to FILE rather than
-standard output.
-
-B<--days N> When grabbing, grab N days rather than as many as
-possible.
-
-B<--offset N> Start grabbing at today + N.  N may be negative.
-
-B<--slow> Fetch additional details for each programme.  This requires
-one extra web page fetch per programme, so use with care.
-
-B<--limit-details HH:MM-HH:MM> (use with --slow) Limit the additional
-details fetched for programmes by checking that the start time falls
-within the specified time range, which must be specified in 24-hour
-clock, eg: 16:00-02:00. This can significantly reduce the number of
-web page fetches.
-
-B<--get-categories> (use with --slow) Attempt to find out the category
-each program is in. This requires another web page get per category
-per day, so it can really slow down the grab.
-
-B<--quiet> suppress the progress messages normally written to standard
-error.
-
-B<--help> print a help message and exit.
-
-=head1 SEE ALSO
-
-L<xmltv(5)>, L<tv_grab_uk(1)>, L<http://www.radiotimes.beeb.com/>
-
-=head1 AUTHOR
-
-Ed Avis, ed@membled.com
-
-=head1 BUGS
-
-The website parsing isnE<39>t perfect and there will often be warning
-messages about bits of HTML that arenE<39>t understood.  Some of the
-details provided by the site have to be thrown away because they
-cannot be accommodated in the XMLTV format; again, warning messages
-are printed.
-
-Rather than the all-or-nothing --slow mode, it would be better to
-fetch the details only for those programmes that are interesting, in
-some kind of two-pass grabbing.
-
-There is code to find out the 'categories' given for each programme,
-but that involves even more page fetches so it is disabled at present.
-
-=cut
-
+#!/usr/bin/perl
+use warnings;
 use strict;
-use XMLTV::Version '$Id$ ';
-use IO::Socket;
-use Date::Manip;
 use Getopt::Long;
-require HTML::Entities;
-use XMLTV;
-use XMLTV::Memoize;
-use XMLTV::ProgressBar;
-use XMLTV::Ask;
-use XMLTV::DST;
+use Date::Manip; Date_Init('TZ=+0000');
+use XMLTV::Version '$Id$ ';
 use XMLTV::Config_file;
 use XMLTV::Get_nice;
-use XMLTV::Date qw(parse_date);
+use XMLTV::Ask;
+use XMLTV::Memoize; XMLTV::Memoize::check_argv 'get_nice';
+use XMLTV::DST;
 use XMLTV::Usage <<END
 To configure: $0 --configure [--config-file FILE]
-To grab listings: $0 [--config-file FILE] [--output FILE] [--days N]
-    [--offset N] [--quiet] 
-    [--slow [--limit-details HH:MM-HH:MM] --get-categories]
+To grab listings: $0 [--config-file FILE] [--output FILE] [--quiet]
+List channels only: $0 --list-channels [--output FILE] [--quiet]
 END
   ;
+$XMLTV::Get_nice::Delay = 0; # since this is intended for grabbing
+my $channel_list_uri = 'http://xmltv.radiotimes.com/xmltv/channels.dat';
+
+sub configure();
 
 # Use Log::TraceMessages if installed.
 BEGIN {
@@ -128,113 +34,23 @@ BEGIN {
     }
 }
 
-sub get_url( $ );
-sub get_programmes( $$$$$ );
-sub get_programme_details( $$$$$ );
-sub do_cast( $$ );
-sub rt_date( $$$ );
-sub get_channels();
-sub get_categories();
-sub get_available_dates();
-sub get_progs_in_cat( $$$ );
-sub rt_to_xmltv( $ );
-sub xmltv_to_rt( $ );
-sub grab( $$ );
-sub configure();
-sub test_get_details($);
+# Use Term::ProgressBar if installed.
+use constant Have_bar => eval { require Term::ProgressBar; 1 };
 
-# GLOBAL CONSTANTS
-my $TIME_INTERVAL = 120;
-my $LANG = 'en';
-my $DOMAIN = 'radiotimes.com';
-my $BASE_URL = "http://www.$DOMAIN";
-my $TV_CHANNELS_URL = ( $BASE_URL
- 		     ."/PersonalisationServlet?"
- 		     ."event=3&channelType=1&includeUnchosenChannels=true"
- 		     ."&jspLocation=/jsp/select_channels.jsp"
- 		     ."&rtError=/jsp/error.jsp"
- 		     ."&jspError=/jsp/register.jsp"
- 		     ."&next_page=tv_select" );
-my $RADIO_CHANNELS_URL = ( $BASE_URL
-		     ."/PersonalisationServlet?"
-		     ."event=3&channelType=2&includeUnchosenChannels=true"
-		     ."&jspLocation=/jsp/select_channels_radio.jsp"
-		     ."&rtError=/jsp/mesg.jsp");
-
-
-#statistics
-my $numwebgets=0;
-my $kbwebgets=0;
-my $starttime=time();
-
-# We try to strip away Javascript to just get URLs.  This is a list of
-# known Javascript functions foo such that foo('url') can be changed
-# to just url.  Other functions may be removed also, but you get a
-# warning :-).
-#
-# TODO integrate this with later blanket javascript: cleaning.
-#
-my %known_js = (exitpopup      => 1,
-		refreshOpener  => 1,
-		refreshOpener2 => 1,
-	       );
-
-# Check options.  First do the undocumented --cache option, then the
-# normal ones.
-#
-my $using_cache
-  = XMLTV::Memoize::check_argv('XMLTV::Get_nice::get_nice_aux');
-my ($opt_days,
-    $opt_help,
-    $opt_output,
-    $opt_share,
-    $opt_configure,
-    $opt_config_file,
-    $opt_gui,
-    $opt_offset,
-    $opt_quiet,
-    $opt_slow,
-    $opt_detailtimerange,
-    $opt_detailstarttime,
-    $opt_detailstoptime,
-    $opt_get_categories,
-   );
-# No default for $opt_days, we determine it from the site.
-$opt_offset = 0; # default today
-$opt_quiet  = 0; # default
-$opt_slow   = 0; # default
-GetOptions('days=i'        => \$opt_days,
-	   'help'          => \$opt_help,
-	   'configure'     => \$opt_configure,
-	   'config-file=s' => \$opt_config_file,
-       'gui:s'         => \$opt_gui,
-	   'output=s'      => \$opt_output,
-	   'share=s'       => \$opt_share, # also undocumented
-           'offset=i'      => \$opt_offset,
-	   'quiet'         => \$opt_quiet,
-	   'slow'          => \$opt_slow,
-	   'limit-details=s' => \$opt_detailtimerange,
-	   'get-categories' => \$opt_get_categories,
+GetOptions('help'          => \ my $opt_help,
+	   'configure'     => \ my $opt_configure,
+	   'config-file=s' => \ my $opt_config_file,
+	   'output=s'      => \ my $opt_output,
+	   'share=s'       => \ my $opt_share, # also undocumented
+	   'quiet'         => \ my $opt_quiet,
+	   'list-channels' => \ my $opt_list_channels,
+	   'days'          => undef, # ignored
+	   'offset'        => undef, # ignored
 	  )
   or usage(0);
-die 'number of days must not be negative'
-  if (defined $opt_days && $opt_days < 0);
 if ($opt_help) {
     usage(1);
 }
-die "--limit-details makes no sense without --slow\n"
-  if defined $opt_detailtimerange and not $opt_slow;
-
-XMLTV::Ask::init($opt_gui);
-
-# Date::Manip has a bug where 'now' will be wrong if you change the
-# timezone.  It won't be correctly converted from the system timezone
-# to the new one.  So we call parse_date('today midnight') _before_
-# Date_Init().
-#
-my $today = DateCalc(parse_date('today midnight'), "$opt_offset days");
-my $now = parse_date('now');
-Date_Init('TZ=+0000');
 
 # share/ directory for storing channel mapping files.  This next line
 # is altered by processing through tv_grab_uk_rt.PL.  But we can use
@@ -248,6 +64,14 @@ my $SHARE_DIR = undef;
 $SHARE_DIR = $opt_share if defined $opt_share;
 my $OUR_SHARE_DIR = (defined $SHARE_DIR) ? "$SHARE_DIR/tv_grab_uk_rt" : '.';
 (my $CHANNEL_NAMES_FILE = "$OUR_SHARE_DIR/channel_ids") =~ tr!/!/!s;
+
+# Stuff for the root <tv> element.
+my %tv_credits = ( # 'source-info-url'     => "todo",
+		   'source-info-name'    => 'Radio Times',
+		   'generator-info-name' => 'XMLTV',
+		   'generator-info-url'  =>
+		   'http://membled.com/work/apps/xmltv/',
+		 );
 
 # Tables to convert between Radio Times and XMLTV ids of channels.
 # The way to access these is through the routines rt_to_xmltv() and
@@ -275,1559 +99,81 @@ foreach (XMLTV::Config_file::read_lines($CHANNEL_NAMES_FILE, 1)) {
     $extra_dn{$xmltv_id} = $extra_dn if defined $extra_dn;
 }
 
+say <<END
+All data is the copyright of the Radio Times website
+<http://www.radiotimes.com> and the use of this data is restricted to
+personal use only.
+END
+;
+
+# Whatever we're doing, we need the channel list.
+my $bar = Term::ProgressBar->new({ name => 'finding channels',
+				   count => 1 })
+  if Have_bar and not $opt_quiet;
+my $channel_list = get_nice $channel_list_uri;
+my (%channels, %seen_rt_id, %seen_name);
+foreach (split /\n/, $channel_list) {
+    chomp;
+    /^(\d+)\|(.+)/ or die "bad line in channel list: $_";
+    my ($rt_id, $name) = ($1, $2);
+    $seen_rt_id{$rt_id}++ && die "channel with RT id $rt_id seen twice";
+    $seen_name{$name}++ && die "channel named '$name' seen twice";
+    my $xmltv_id = $rt_to_xmltv{$rt_id};
+    if (not defined $xmltv_id) {
+	warn "RT id $rt_id ($name) not known in channel ids file\n";
+	$xmltv_id = "C$rt_id.radiotimes.com";
+    }
+    my @names = ([ $name ]);
+    for ($extra_dn{$xmltv_id}) { push @names, [ $_ ] if defined }
+    $channels{$xmltv_id} = { id => $xmltv_id,
+			     rt_id => $rt_id,
+			     'display-name' => \@names };
+}
+update $bar if $bar;
+foreach (keys %xmltv_to_rt) {
+    warn "channel $_ (RT id $xmltv_to_rt{$_}) mentioned in channel ids file but not on site"
+      if not exists $channels{$_};
+}
+
+my %g_args = ();
+if (defined $opt_output) {
+    my $fh = new IO::File ">$opt_output";
+    die "cannot write to $opt_output\n" if not $fh;
+    %g_args = (OUTPUT => $fh);
+}
+
+if ($opt_list_channels) {
+    die "--list-channels can't be given with --configure\n"
+      if $opt_configure;
+    my $writer = new XMLTV::Writer(%g_args, encoding => 'ISO-8859-1');
+    $writer->start(\%tv_credits);
+    foreach (sort keys %channels) {
+	delete $channels{$_}{rt_id};
+	$writer->write_channel($channels{$_});
+    }
+    $writer->end;
+    exit;
+}
+
 # File that stores which channels to download.
 my $config_file
   = XMLTV::Config_file::filename($opt_config_file, 'tv_grab_uk_rt', $opt_quiet);
 
 if ($opt_configure) {
     configure();
+    exit;
 }
-else {
-    my %g_args = ();
-    if (defined $opt_output) {
-	my $fh = new IO::File ">$opt_output";
-	die "cannot write to $opt_output\n" if not $fh;
-	%g_args = (OUTPUT => $fh);
-    }
-    grab(\%g_args, [ XMLTV::Config_file::read_lines($config_file) ]);
-}
-
-# Display stats
-printf (STDERR "Accessed %d web pages, downloaded %d Kb, duration %d secs\n",$numwebgets,$kbwebgets,time()-$starttime) unless $opt_quiet;
-exit();
-
-# Grab listings and write them in XML.  Parameters:
-#
-# ref to hash of arguments to be passed to XMLTV::Writer (but encoding
-#   is always ISO-8859-1),
-# ref to list of lines from config file.
-#
-sub grab( $$ ) {
-    my ($w_args, $config_lines) = @_;
-    my $writer = new XMLTV::Writer(%$w_args, encoding => 'ISO-8859-1');
-    my %write_channels;	# to be written as <channel> elements
-
-    # FIXME turn into progress bar.
-    print STDERR "finding channels:\t" unless $opt_quiet;
-    my %channels = get_channels();
-    print STDERR "got ". (scalar keys %channels) . " done.\n" unless $opt_quiet;
-
-    if ( $opt_slow ) {
-	if ( $opt_detailtimerange )
-	{
-	    if ( $opt_detailtimerange =~ m/[012][0-9]:[0-5][0-9]-[012][0-9]:[0-5][0-9]/ ) {
-		( $opt_detailstarttime,$opt_detailstoptime) = split('-',$opt_detailtimerange);
-		# It is allowed for stop < start, you can have a time
-		# range spanning midnight.
-		#
-	    } else {
-		die "Invalid argument to --limit-details: $opt_detailtimerange (should be HH:MM-HH:MM)";
-	    }
-	    t "time range =  $opt_detailstarttime - $opt_detailstoptime";
-	} else {
-	    print  ( STDERR  <<END
-
-WARNING --slow mode requires a great number of page requests (1 per
-program -- on average 40 pages -- 800Kb per channel per day). 
-This can be reduced by only getting details for programmes that start
-within a certain time range using the --limit-details command line
-argument, eg: 
-    tv_grab_uk_rt --slow --limit-details 17:00-02:00
-
-END
-		     ) unless $opt_quiet;
-	}
-	if ( $opt_get_categories ) {
-	    print  ( STDERR  <<END
-WARNING --get-categories makes --slow mode even slower (it makes
-another 35 page requests per day)!
-
-END
-                    )  unless $opt_quiet;
-
-        }
-    }
-    # Read the configuration file.  At present the lines must be one
-    # of two forms:
-    #
-    # channel <xmltv id>
-    # ALL
-    #
-    my $line_num = 1;
-    foreach (@$config_lines) {
-	++ $line_num;
-	next if not defined;
-	my $where = "$config_file:$line_num";
-
-	if ($_ eq 'ALL') {
-	    %write_channels = %channels;
-	}
-	elsif (/^channel\s+(.+)/) {
-	    my $xmltv_id = $1;
-	    if (not defined $channels{$xmltv_id}) {
-		warn "$where: no channel with XMLTV id $xmltv_id, skipping\n";
-		next;
-	    }
-	    $write_channels{$xmltv_id} = $channels{$xmltv_id};
-	}
-	else { die "$where: bad line\n" }
-    }
-
-    # FIXME turn this into progress bar.
-    print STDERR "getting dates for which listings available:\t"
-      unless $opt_quiet;
-    my @available_dates = get_available_dates();
-    t 'available dates: ' . d \@available_dates;
-    die 'apparently, there are no days of listings on the site'
-      if not @available_dates;
-    print STDERR "got " . scalar @available_dates . " done.\n" unless $opt_quiet;
-
-
-    my $is_available = sub( $ ) {
-	my $d = shift;
-	foreach (@available_dates) {
-	    return 1 if not Date_Cmp($d, $_);
-	}
-	return 0;
-    };
-
-    my @dates_to_get;
-    for (my $d = $today; $is_available->($d); $d = DateCalc($d, '+ 1 day')) {
-	push @dates_to_get, $d;
-    }
-    die "listings for today ($today) not available" if not @dates_to_get;
-    my $first_day = $dates_to_get[0];
-    my $last_day = $dates_to_get[-1];
-    foreach (@available_dates) {
-	if (Date_Cmp($last_day, $_) < 0) {
-	    warn "strangely, day $_ is available but there are gaps before it";
-	}
-    }
-
-    if (defined $opt_days) {
-	if ($opt_days > @dates_to_get) {
-	    warn 'only ' . (scalar @dates_to_get)
-	      . ' days of consecutive listings available';
-	}
-	else {
-	    @dates_to_get = @dates_to_get[0 .. $opt_days - 1];
-	}
-    }
-    my $days = @dates_to_get > 1 ? 'days' : 'day';
-    my $bar = new XMLTV::ProgressBar('getting ' . (scalar @dates_to_get)
-        . " $days of listings", 1)
-	unless $opt_quiet;
-    t 'getting dates:' . d \@dates_to_get;
-
-    $writer->start({ 'source-info-url'     => "$BASE_URL/",
-		     'source-info-name'    => 'Radio Times',
-		     'generator-info-name' => 'XMLTV',
-		     'generator-info-url'  =>
-		     'http://membled.com/work/apps/xmltv/',
-		   });
-
-    my %categories;
-    if ($opt_get_categories) {
-	# Find all the categories.  FIXME turn into progress bar.
-	print STDERR "getting category names:\t" unless $opt_quiet;
-	%categories = get_categories();
-        print STDERR "got ". (scalar keys %categories) . " done.\n" unless $opt_quiet;
-    }
-
-    # Find all the programes on the channels
-    my %prog_to_cat;
-    my %seen_prog;
-
-    # get the listings for each date
-    my @programmes;
-    my %latest;
-    foreach my $date (@dates_to_get) {
-	# Create the time string according to the TIME_INTERVAL
-	my $mns = 0;
-
-	my $base_day = UnixDate($date, '%Q');
-	t "comparing $base_day with " . UnixDate($now, '%Q');
-	if ($base_day eq UnixDate($now, '%Q')) {
-	    # Don't bother downloading programmes that have already
-	    # happened.  This happens only for today ($now), we assume
-	    # offset is not negative.
-	    #
-	    t "bumping from $base_day enough minutes to almost reach $now";
-	    for (;;) {
-		my $new_mns = $mns + $TIME_INTERVAL;
-		my $new_date = DateCalc($base_day, "+ $new_mns minutes");
-		if (Date_Cmp($new_date, $now) > 0) {
-		    # No, adding those extra minutes would take us
-		    # past now.
-		    #
-		    last;
-		}
-		$mns = $new_mns;
-	    }
-	}
-
-	while ($mns < 24 * 60) {
-	    my $time = DateCalc($date, "+ $mns minutes");
-	    $mns += $TIME_INTERVAL;
-	    my $timeend = DateCalc($date, "+ $mns minutes");
-
-	    # first find all the new programmes for this time slot
-	    my @new_programmes;
-
-      CHAN: foreach my $chan (sort keys %write_channels) {
-		# Assume the user's preferred language is the same as
-		# the RT site... this language-selection charade is a
-		# bit pointless I admit.
-		#
-		my $dn = $write_channels{$chan}->{'display-name'};
-		my $name = XMLTV::best_name([ $LANG ], $dn)->[0];
-		$name = $chan if not defined $name;
-		
-		# Skip channels which already downloaded this time slot
-		
-		if (not $latest{$chan}) { $latest{$chan} = 0 }
-		if ($latest{$chan} >= UnixDate($timeend, '%q')) {
-			#print STDERR 'time ', UnixDate($time, '%q'), ", channel $name:\tSkipping\n"
-		 	#  unless $opt_quiet;
-			next CHAN;
-		}
-		
-		# FIXME turn into progress bar.
-		print STDERR 'time ', UnixDate($time, '%q'), ", channel $name:\t"
-		  unless $opt_quiet;
-		my @new_channel_programmes =
-		  get_programmes($chan, $time, \%prog_to_cat,
-				 \%categories, \%channels);
-
-
-		# if first timeslot
-		if ( $mns eq $TIME_INTERVAL 
-		     && $date eq $first_day) {
-		    # we need to take care of any programs that start
-		    # before midnight of the previous day.
-		    #
-		    # this occurs if program starts before midnight,
-		    # and flows into current timeslot.
-		    #
-		    # this will only be the case for the 'first' timeslot
-		    # as the program will then  be 'seen' and never
-		    # re-got -- provided we updated the %latest hash
-		    #
-		    # we make the assumption that any prog starting
-		    # after midday is actually starting yesterday
-		    #
-		    # Normally we discard such a programme because we
-		    # would have grabbed it the previous day; however
-		    # if today is the first day then we keep it.
-		    #
-		    my $midday = DateCalc($date, "+ 12 hours");
-		    foreach (@new_channel_programmes) {
-			if (Date_Cmp($_->{start}, $midday) > 0 &&
-			    Date_Cmp($_->{start}, $_->{stop}) > 0) {
-			    # Programme starts after midday; 
-			    # and stops before it. since we
-			    # stop going through the list as soon as
-			    # we find the first programme starting in
-			    # the morning, we can assume this is a
-			    # leftover from the previous day.
-			    t "today is first day, keeping yesterday's programme " . d $_;
-			    $_->{start} = utc_offset(DateCalc($_->{start}, "- 24 hours") . " UTC",
-						     '+0000');
-			}
-			else {
-			    t 'seen a programme starting this morning: ' . d $_;
-			    last;
-			}
-		    }
-		}
-		
-		
-		# check for programs that end after midnight,
-		# update date of those that traverse midnight
-		# bounday and throw away the rest -- after all
-		# they start 'tomorrow', not 'today'
-		
-		my $midnight = DateCalc($date, "+ 24 hours");
-		my $past_midnight =undef;
-		foreach (@new_channel_programmes) {
-		    if (Date_Cmp($_->{start},$midnight) <0 
-			&& Date_Cmp($_->{start}, $_->{stop}) > 0 ) {
-			# starts before midnight, but stop<start!
-			# This must be a program that ends tomorrow
-			$_->{stop} = utc_offset(DateCalc($_->{stop}, "+ 24 hours") . ' UTC',
-						'+0000');
-			t "updated stop time to tomorrow " . d \$_;
-			$past_midnight=1;
-		    } else {
-			# not crossing midnight boundary --
-			# could be from today, or tomorrow...
-			if ( $past_midnight ) {
-			    # must be tomorrow!
-			    $_->{stop} = utc_offset(DateCalc($_->{stop}, "+ 24 hours") . ' UTC',
-						    '+0000');
-			    $_->{start} = utc_offset(DateCalc($_->{start}, "+ 24 hours") . ' UTC',
-						     '+0000');
-			}
-		    }	
-		}  
-		
-		# now got a reasonable programme list,
-		# check for already seen progID's
-		# and get details if necessary.
-
-		foreach (@new_channel_programmes) {
-		    # update 'latest' hash
-		    my $lasttime = UnixDate($_->{stop}, '%q');
-		    if ($latest{$chan} < $lasttime) {
-			$latest{$chan} = $lasttime;
-		    }
-
-		    die unless $_->{_progID};
-
-		    # have we already handled this prog?
-		    if ( not $seen_prog{$chan}->{$_->{_progID}} ) {
-			$seen_prog{$chan}->{$_->{_progID}}++;
-
-			# see if we need to get details for this program
-			if ( test_get_details($_) ) {
-			    # get details for this prog
-			    
-			    my $progs = get_programme_details( $chan, 
-							       $_->{_progID}, 
-							       \%prog_to_cat,
-							       \%categories, 
-							       \%channels);
-
-			    #t "get_programme_details returned " . d $progs;
-			    if (not $progs) {
-				warn "could not get details for programme $_->{_progID} on channel $chan\n";
-				# add summary only
-				push @new_programmes, $_;
-			    } elsif (not @$progs) {
-				warn "strange, $_->{_progID} on channel $chan seems to be empty";
-				# add summary only
-				push @new_programmes, $_;
-			    } else {
-				print STDERR "@" unless $opt_quiet;
-				push @new_programmes, @$progs;
-			    }
-			} else {
-			    # don't get details for this program
-			    push @new_programmes, $_;
-			}
-		    } # if not already seen 
-		} # for each new programme
-		print STDERR "\n" unless $opt_quiet;
-		
-	    }
-
-	    # Next find all the programes in each category (if there are new progs
-	    # FIXME we dont need to check all channels only those with new progs
-	    # FIXME we also need to check if there are more than 100 results and
-	    # search over less channels
-	    #
-	    if (@new_programmes) {
-		if ($opt_get_categories) {
-		    t "searching categories";
-		    %prog_to_cat = get_progs_in_cat([ sort keys %write_channels ], 
-						    $time, 
-						    \%categories);
-		    # Set the category for each new programme
-		    foreach my $new_prog (@new_programmes) {
-			# can only be sure of categories for listed programmes, 
-			# followons do not have a _progID, and may be a different
-			# type to their parent.
-			# so only get categs for non-clumped and 0'th clump
-			if ( not defined $new_prog->{clumpidx} 
-			     or $new_prog->{clumpidx} =~ m/0\/[0-9]/ ) {
-			    my $channelId = $new_prog->{_chanID};
-			    my $programmeId = $new_prog->{_progID};
-			    if (!defined($channelId) or !defined($programmeId)) {
-				warn "Cannot add categories for prog: \"$new_prog->{title}[0][0]\" at \"$new_prog->{start}\"";
-				warn "  --> got undefined programmeId\n" if ( !defined($programmeId));
-				warn "  --> got undefined channelId\n" if (!defined($channelId));
-				t  d $new_prog;
-			    } elsif (exists($prog_to_cat{"$channelId$programmeId"})) {
-				my $cat_ID = $prog_to_cat{"$channelId$programmeId"};
-				my $cat = $categories{$cat_ID};
-				if (defined $cat) {
-				    push @{$new_prog->{category}}, [ $cat ];
-				}
-				else {
-				    warn "unknown category id $cat\n";
-				}
-			    }
-			}
-		    }
-		    t "done adding categories to programmes";
-
-		}
-	    }
-
-	    # push the new channels into the completlist
-	    push (@programmes, @new_programmes);
-	}
-    }
-
-    # write out the xml
-    # write out the channels
-    $writer->write_channels(\%write_channels);
-
-    foreach (@programmes) {
-	foreach my $k (keys %$_) {
-	    die "undef $_->{$k}" if not defined $_->{$k};
-	}
-	$writer->write_programme($_);
-    }
-    $writer->end();
-    $bar->finish();
-}
-
-
-# Function to get a url.  This also seems like a sensible place to do
-# HTML-demoronizing.
-#
-my $warned_bad_chars;
-sub get_url( $ ) {
-    my $url = shift;
-    for (my $tmp = get_nice($url)) {
-	die "cannot get $url" if not defined;
-	$numwebgets++; #update stats
-	$kbwebgets+= (length $_)/1024;
-	tr/\222\222\226/''-/;
-	tr/\010//d;
-	tr/\t/ /;
-	if (s/([^\012\015\040-\176\240-\377]+)//g) {
-	    warn "removing bad characters: '$1'"
-	      unless $warned_bad_chars++;
-	}
-
-	return $_;
-    }
-}
-
-
-# Function to find all the programmes on a channel (at a given date +
-# time).
-#
-# Parameters:
-#   XMLTV id of channel
-#   Date::Manip object giving date and time
-#   prog_to_cat hash (see elsewhere for details)
-#   categories hash
-#   channels hash
-#
-# Returns: list of programmes
-#
-# I think this relies on the page returning exactly $TIME_INTERVAL
-# worth of listings.
-#
-
-sub get_programmes( $$$$$ ) {
-    my $channel_xid = shift;
-    my $time = shift;
-    my $prog_to_cat = shift;
-    my $categories = shift;
-    my $channels = shift;
-    my $day = UnixDate($time, '%Q'); die if not $day;
-    my $channelId = xmltv_to_rt($channel_xid);
-
-    my @p;
-
-    my $url = "$BASE_URL/ListingsServlet?event=4&";
-    $url .= 'jspGridLocation=%2Fjsp%2Ftv_listings_grid.jsp&';
-    $url .= 'jspListLocation=%2Fjsp%2Ftv_listings_single.jsp&';
-    $url .= 'jspError=%2Fjsp%2Ferror.jsp&';
-    $url .= 'searchDate=' . UnixDate($time, '%d/%m/%Y') . '&';
-    $url .= 'searchTime=' . UnixDate($time, '%R') . '&';
-    $url .= 'channels=' . $channelId;
-
-    # FIXME commonize this
-    local $SIG{__WARN__} = sub {
-	warn "$url: $_[0]";
-    };
-    local $SIG{__DIE__} = sub {
-	die "$url: $_[0]";
-    };
-
-    my $data;
-    eval {
-	$data = get_url($url);
-
-	# This check is mostly for the benefit of those using --cache.
-	die 'strange, get_url() not supposed to return undef'
-	  if not defined $data;
-    };
-    if ($@) {
-	warn "could not get $url\n";
-	my $from_time = UnixDate($time, '%q');
-	my $to_time = UnixDate(DateCalc($time, "+ $TIME_INTERVAL seconds"), '%q');
-	warn "not fetching any programmes for channel $channel_xid "
-	  . "between $from_time and $to_time\n";
-	return ();
-    }
-    $data =~ tr/\n//d;
-    print STDERR '#' unless $opt_quiet;
-
-    my @results = ($data =~ /<!-- start of a result -->.*?<!-- end of a result -->/ig);
-    if (not @results) {	
-	if ($data =~ /There are no programmes available/) {
-	    # Assume that this is because nothing is showing on that
-	    # channel, not because the site is missing some data.
-	    #
-	}
-	else {
-	    warn "$url: no results found in HTML\n";
-	}
-	return ();
-    }
-
-    foreach (@results) {
-	m/programmeId=([0-9]+)/ or die "$url: cannot find programmeId= in $_";
-	my $programmeId = $1;
-
-	# The title attribute can be malformed (" characters).
-	/ title="([^>]+)">/ or die "$url: cannot find title= in $_";
-
-	my $link_title = $1;
-	my ($start, $stop);
-	for ($link_title) {
-	    # example:
-	    # $link_title="Gazon Maudit (French Twist)  (10:00pm-11:50pm)"
-	    s/\s+\(\s*([0-9:. apm]+)\s*-\s*([0-9:. apm]+)\s*\)\s*$//i
-		or die "expected to see '(start-stop)' times in title: $_";
-	    ($start, $stop) = ($1, $2);
-	    foreach ($start, $stop) {
-		$_ = utc_offset("$day $_", '+0000');
-	    }
-	}
-	
-	$url = "$BASE_URL/ListingsServlet?event=10&";
-	$url .= "channelId=$channelId&";
-	$url .= "programmeId=$programmeId&";
-	$url .= 'jspLocation=/jsp/prog_details.jsp';
-	push @p, { channel => $channel_xid,
-		   start => $start,
-		   stop => $stop,
-		   title => [ [ $link_title, $LANG ] ],
-		   url => [ $url ],
-		   _progID => $programmeId,
-		   _chanID => $channelId,
-	       };
-	print STDERR '#' unless $opt_quiet;
-    }
-    
-    return @p;
-}
-
-# Function to parse the HTML and get all the info we need
-#
-# Parameters:
-#   XMLTV id of channel
-#   RT id of programme
-#   hash mapping 'channelidprogrammeid' to RT category id
-#   hash of categories
-#   hash of channels
-#
-# Returns a listref of programmes: normally with just one element, but
-# can be more when two programmes share a timeslot.  (The clumpidxes
-# will be set.)
-#
-my %warned_ch_mismatch; # eliminate duplicate warnings
-my %warned_windowschars;
-my %warned_unicodechars;
-sub get_programme_details( $$$$$ ) {
-#    local $Log::TraceMessages::On = 1;
-    my $channel_xid = shift;
-    my $channelId = xmltv_to_rt($channel_xid);
-    my $programmeId = shift;
-    our %prog_to_cat; local *prog_to_cat = shift;
-    our %categories; local *categories = shift;
-    our %channels; local *channels = shift;
-
-    # %p is the main programme we will return.
-    my %p;
-    $p{channel} = $channel_xid;
-    $p{_chanID} = $channelId;
-    $p{_progID} = $programmeId;
-
-    # @followons are small extra programmes sharing its slot.  Things
-    # like news bulletins which come in the middle of a film are also
-    # counted as 'after' it, for simplicity.
-    #
-    my @followons;
-
-    if ($opt_get_categories) {
-	my $cat_ID = $prog_to_cat{"$channelId$programmeId"};
-	if ($cat_ID and exists($categories{$cat_ID})) {
-	    my $cat = $categories{$cat_ID};
-	    push @{$p{category}}, [ $cat ];
-	}
-    }
-
-    my $detail_url = "$BASE_URL/ListingsServlet?event=10&";
-    $detail_url .= "channelId=$channelId&";
-    $detail_url .= "programmeId=$programmeId&";
-    $detail_url .= 'jspLocation=/jsp/prog_details.jsp';
-    my $prog_details_string;
-    eval {
-	$prog_details_string = get_url($detail_url);
-	die 'strange, get_url() not supposed to return undef'
-	    if not defined $prog_details_string;
-    };
-    if ($@) {
-	warn "cannot get $detail_url\n";
-	return undef;
-    }
-
-    # FIXME commonize this
-    local $SIG{__WARN__} = sub {
-	warn "$detail_url: $_[0]";
-    };
-    local $SIG{__DIE__} = sub {
-	die "$detail_url: $_[0]";
-    };
-
-    $prog_details_string  =~ tr/\r//d;
-    if (not $prog_details_string  =~ m{</script>\s*(<table .*?)<!-- end main table -->}s) {
-	warn "cannot find main table in content of $detail_url, skipping\n";
-	return undef;
-    }
-    my $prog_details = $1;
-
-    for ($prog_details) {
-	my $C = '<!-- -->'; # used to stop strings running together
-
-	# Remove scripting.
-	s{<script>[^<]*</script>}{$C}g;
-	
- 	# Turn hyperlinks with only 'alt' text into ones with content.
- 	s!<a href="(.+?)"[^>]*alt="(.+?)"[^>]*></a>!<a href="$1">$2</a>!g;
-	
-	# Remove javascript around hyperlink urls
-	s!<a href="javascript:.*?\('([^']*)'\)"!<a href="$1"!g;
-
- 	# Remove hyperlinks within the RT site (keep only external
- 	# ones).  Hmm, sometimes Related Features might be relative
- 	# links, and we might want to keep those.  Hasn't happened so
- 	# far though.
- 	#
- 	s{<a href="\W.+?"[^>]*>([^<]*)</a>}{$C$1$C}g;
-
- 	# Replace <a> elements with just the URL and link text.
- 	s{<a href="(.+?)"[^>]*>([^<]*)</a>}{$C$1$C$2$C}g;
- 	t 'after href munging: ' . d $_;
-
-        # Look for the *** stars ratings
-        s{<img src="($BASE_URL/images/key/stars_([1-5]).gif)"[^>]*>}
-	  {$C Star Rating:$C$2$C$1$C}g;
-
-	# Now we're ready to strip all markup.  We use pipe characters
-	# as a delimiter between bits of text.  So first, check there
-	# aren't any in there already.
-	#
-	tr/|//d;
-	
-	# Replace comments and HTML tags with pipes.
-	s/<!--.*?-->/\|/g;
-	s/<[ ]*[^0-9][^>]*?>/\|/g;
-	
-	# decode any HTML special chars (&amp; &nbsp;)
-	HTML::Entities::decode_entities($_);
-	# note &nbsp; -> \240 
-	tr/\240/ /;
-
-	# get rid of known Windows encoded characters
-	# silly windows characters to simple quotes
-	tr/\221\222\223\224\226\227/\'\'\"\"\-\-/;
-	tr/\010//d;
-
-	# replace invalid windows chars oe ligatures
-	s/\234/oe/g;
-	s/\214/OE/g;
-	# replace windows' "..." character
-	s/\205/.../g;
-
-	# HTML::Entities::decode_entities does not handle numeric unicode
-	# punctuation in in XHTML
-	# ie &#8214 -> unicode:2012 = "-"
-	# see  http://www.unicode.org/charts/PDF/U2000.pdf
-	s/&\#82(09|1[0123])/-/g; # 8209-8213 = 2011->2015
-
-	{
-	    my @unicodechars = m/&\#[0-9]+;/g;
-	    if ( @unicodechars ) {
-		foreach ( @unicodechars ) {
-		    warn "stripping unknown unicode character (" . $_ . ") from input" unless $warned_windowschars{$_}++;
-		}
-		s/&\#[0-9]+;/\?/g;
-	    }
-	}
-	{
-	    my @windowschars = m/[\200-\237]/g;
-	    if (  @windowschars ) {
-		foreach ( m/[\200-\237]/g ) {
-		    warn "stripping invalid windows character (" . ord($_) . " - $_) from input: $_" unless $warned_windowschars{ord($_)}++;
-		}
-		s/[\200-\237]/\?/g;
-	    }
-	}
-	
-
-	# Tidy up the pipes and whitespace.  Hey, ASCII art!
-        s/\s+/ /g;
-	s/\s+\|/\|/g;
-	s/\|\s+/\|/g;
-	tr/|/|/s;
-	s/^\|//;
-	s/\|$//;
-	
-#	local $Log::TraceMessages::On = 1;
-	t 'after barification: ' . d $_;
-    }
-
-    my @bits = split /\|/, $prog_details;
-    if (not @bits) {
-        warn 'no programme details found in HTML';
-        return undef;
-    }
-
-    my $title = shift @bits;
-    if (@bits and $bits[0] eq 'Star Rating:') {
-	shift @bits;
-        $p{'star-rating'} = [ shift(@bits) . '/5' ] ;
-	shift @bits;
-    }
-    my $sub_title;
-    if (@bits and $bits[0] ne 'Channel:') {
-	$sub_title = shift @bits;
-    }
-
-    # The title might give us a hint about the timezone, or we might
-    # have to guess.
-    #
-    my $tz;
-    if ($title =~ s/^\((UTC|GMT|BST|[+-]0000|[+]0100)\)\s*//) {
-	$tz = $1;
-    }
-
-    $p{title} = [ [ $title, $LANG ] ];
-
-    my ($channel_name, $date, $times, $cert, $sub_title_1, $desc,
-	$director, $filmed_in, $cast);
-    # Map heading to [ where to put it, multiplicity ].
-    my %fields = (Channel       => [ \$channel_name, '1' ],
-		  Date          => [ \$date,         '1' ],
-		  Time          => [ \$times,        '1' ],
-		  Certificate   => [ \$cert,         '?' ],
-		  Episode       => [ \$sub_title_1,  '?' ],
-		  Review        => [ \$desc,         '?' ], # hmm
-		  'Directed by' => [ \$director,     '?' ],
-		  'Filmed in'   => [ \$filmed_in,    '?' ],
-		 );
-    FIELD: foreach my $f (sort keys %fields) {
-	  my ($var, $mult) = @{$fields{$f}};
-	  for (my $i = 0; $i < @bits; $i++) {
-	      die if not defined $bits[$i];
-	      if ($bits[$i] =~ /^$f:? *$/) {
-		  my $val = $bits[$i + 1];
-		  if (not defined $val) {
-		      warn "found $f: but nothing after it";
-		      return undef;
-		  }
-		  $$var = $val;
-		  splice @bits, $i, 2;
-		  next FIELD;
-	      }
-	  }
-
-	  if ($mult eq '1') {
-	      # Mandatory item, and we didn't find it.
-	      warn "could not find $f: in programme details";
-	      return undef;
-	  }
-	  elsif ($mult eq '?') {
-	      # No worry.
-	  }
-	  else {
-	      die "bad multiplicity specifier $mult";
-	  }
-      }
-
-    # Check the channel name found matches the channel we thought.
-    my $ch = $channels{$channel_xid};
-    die "no channel data for $channel_xid" if not defined $ch;
-    my $dn = $ch->{'display-name'}->[0]->[0];
-    die "no display name for $channel_xid" if not defined $dn;
-    # Normalize a channel name.
-    my $ncn = sub( $ ) {
-	local $_ = shift;
-	s/\bOne\b/1/g;
-	return $_;
-    };
-    if ($ncn->($dn) ne $ncn->($channel_name)) {
-	warn "channel name '$channel_name' for programme doesn't match $dn"
-	  unless $warned_ch_mismatch{$channel_name}{$dn}++;
-    }
-
-    my ($start, $start_tz);
-    my ($stop, $stop_tz);
-    if ($times =~ /^(.*) to (.*)$/) {
-	my $pair;
-	t "start time $1, calling rt_date()";
-	if (not defined ($pair = rt_date($date, $1, $tz))) {
-	    warn "cannot parse date $date with start time $1";
-	    return undef;
-	}
-	($start, $start_tz) = @$pair;
-	t "got date $start with tz $start_tz";
-
-	t "stop time $2, calling rt_date()";
-	if (not defined ($pair = rt_date($date, $2, $tz))) {
-	    warn "cannot parse date $date with start time $1";
-	    return undef;
-	}
-	($stop, $stop_tz) = @$pair;
-	t "got date $stop with tz $stop_tz";
-    }
-    else {
-	warn "bad Time value $times";
-	return undef;
-    }
-    # Some programmes have thir stop time on the next day.  (This test
-    # may break when the timezones change.)
-    #
-    if (Date_Cmp($start, $stop) > 0) {
-	$stop = utc_offset(DateCalc($stop, '+ 1 day') . ' UTC', '+0000');
-	die if not defined $stop;
-    }
-    $p{start} = UnixDate($start, "%q $start_tz");
-    $p{stop} = UnixDate($stop, "%q $stop_tz");
-
-    if (defined $cert) {
-	warn "already seen certificate" if defined $p{rating};
-	for ($cert) {
-	    if (not s/^\[(.+)\]$/$1/) {
-		warn "bad certificate text: $_";
-	    }
-	    else {
-		push @{$p{rating}}, [ $_, 'BBFC' ];
-	    }
-	}
-    }
-
-    if (not defined $sub_title and not defined $sub_title_1) {
-	# No secondary title.
-    }
-    elsif (not defined $sub_title and defined $sub_title_1) {
-	$p{'sub-title'} = [ [ $sub_title_1, $LANG ] ];
-    }
-    elsif (defined $sub_title and not defined $sub_title_1) {
-	$p{'sub-title'} = [ [ $sub_title, $LANG ] ];
-    }
-    elsif (defined $sub_title and defined $sub_title_1) {
-        if ($sub_title eq $sub_title_1) {
-	    $p{'sub-title'} = [ [ $sub_title, $LANG ] ];
-	}
-	else {
-	    warn "two sub-titles: $sub_title, $sub_title_1";
-	    $p{'sub-title'} = [ [ $sub_title, $LANG ],
-				[ $sub_title_1, $LANG ] ];
-	}
-    }
-    else { die }
-
-    if (defined $desc) {
-	$p{'desc'} = [ [ $desc, $LANG ] ];
-    }
-    if (defined $director) {
-	push @{$p{credits}{director}}, $director;
-    }
-    if (defined $filmed_in) {
-	warn "already seen filmed-in date" if defined $p{date};
-	if ($filmed_in !~ /^\d+$/) {
-	    warn "bad filmed-in value '$filmed_in'\n";
-	}
-	else {
-	    $p{date} = $filmed_in;
-	}
-    }
-
-    if (defined $cast) {
-	if ($cast =~ /(?:\.){5}/) {
-	    # The style giving part.....actor.  There used to be code
-	    # for this, but it seems the website has stopped producing
-	    # it.
-	    #
-	    warn "discarding cast $cast";
-	}
-	else {
-	    $p{credits}->{actor} = [ split /,\s*/, $cast ];
-	}
-    }
-
-    my ($options,$subtitles,$widescreen,$repeat,$black_and_white,
-	$episode,$review);
-  BIT: while (@bits) {
-	my $bit = shift @bits;
-	if ($bit eq 'Cast List') {
-	    # Some of the following bits are a cast list.
-	    t 'calling do_cast()';
-	    do_cast(\%p, \@bits);
-	    t 'after do_cast(), remaining bits: ' . d \@bits;
-	}
-	elsif ($bit =~ /^Related [wW]ebsites$/
-	       or $bit =~ /^Related [fF]eatures$/) {
-	    t 'calling do_link()';
-	    do_link(\%p, \@bits);
-	    t 'after do_link(), remaining bits: ' . d \@bits;
-	}
-	elsif ($bit =~ /^javascript:/) {
-	    t 'javascript: link with no preceding text, pushing back';
-	    t 'calling do_link()';
-	    unshift @bits, $bit;
-	    do_link(\%p, \@bits);
-	    t 'after do_link(), remaining bits: ' . d \@bits;
-	}
-	elsif ($bit eq 'Add to my diary') {
-	    my $url = shift @bits;
-	    if (not defined $url) {
-		warn "strange, no URL in 'Add to my diary'";
-	    }
-	    elsif ($url !~ /^javascript:/) {
-		warn "strange, add to diary URL not javascript";
-	    }
-	}
-	else {
-	    t "unknown bit $bit, try do_misc()";
-	    push @followons, do_misc(\%p, $bit);
-	}
-    }
-
-    foreach (keys %p) {
-	die "undef $_" if not defined $p{$_};
-    }
-
-    if (@followons) {
-	my $num = 1 + @followons;
-	my $i = 0;
-	foreach (\%p, @followons) {
-	    $_->{clumpidx} = "$i/$num";
-	    ++ $i;
-	}
-    }
-    return [ \%p, @followons ];
-}
-# Process a single bit, probably containing flags like 'Repeat'.
-# Warns about unknown stuff.
-#
-# Parameters:
-#   programme (will be modified)
-#   bit of text (will be modified)
-#
-# Also returns any follow-on programmes which are found.
-#
-my $warned_deaf_signed;
-my $warned_audio_described;
-my $warned_discarding_updated_listing;
-my $warned_extradesc;
-my $warned_see_also;
-sub do_misc( $$ ) {
-    our %p; local *p = shift;
-    local $_ = shift;
-    my @r;
-    while (length) {
-	if (s/^Subtitled,?\s*//) {
-	    warn 'seen subtitling twice' if defined $p{subtitles};
-	    $p{subtitles} = [ { type => 'teletext' } ];
-	}
-	elsif (s/^Widescreen,?\s*//) {
-	    warn 'seen widescreen twice' if defined $p{_widescreen};
-	    # FIXME I think this can be handled under <video>.
-	    $p{_widescreen} = 'yes';
-	}
-	elsif (s/^Repeat,?\s*//) {
-	    warn 'seen repeat twice' if defined $p{'previously-shown'};
-	    $p{'previously-shown'} = {};
-	}
-	elsif (s/^(Black (?:and|&) White),?\s*//) {
-	    warn 'seen black-and-white twice' if defined $p{video}{colour};
-	    $p{video}{present} = 1;
-	    $p{video}{colour} = 0;
-	}
-	elsif (s/^(?:Followed by|Including) ([^,]+),?\s*//) {
-	    push @r, { channel => $p{channel},
-		       title   => [ [ $1, $LANG ] ],
-		       start   => $p{start},
-		       stop    => $p{stop},
-		     };
-	    # The caller must add the clumpidx later.
-	}
-        elsif (s/^(Deaf[- ][Ss]igned),?\s*//) {
-            # Nowhere else to put this and its useful info, so add to description
-            $p{desc}->[0]->[0] .= " ($1)";
-	    warn "adding deaf-signed information to description\n"
-	        unless $warned_deaf_signed++;	  
-        }
-        elsif (s/^(Audio-described)\s*//) {
-            # Nowhere else to put this and its useful info, so add to description
-            $p{desc}->[0]->[0] .= " ($1)";
-	    warn "adding Audio-described information to description\n"
-	        unless $warned_audio_described++;
-        }
-	elsif (s/^TV Movie,?\s*//) {
-	    push @{$p{category}}, [ 'TV movie', 'en' ];
-	}
-	elsif (s/^Subsequent programmes may run late or change,?\s*//) {
-	    # Cannot be stored in current format.
-	    warn "programmes after $p{start} on $p{channel} may run late or change\n";
-	}
-	elsif (s/^(Hosted by .+[.])//
-	       or s/^([^.]+ present .+[.])//
-	       or s/^([^.]+ tomorrow.*[.])//
-	       or s/^(Coverage .+[.])//
-	       or s/^(Written by .+[.])//) {
-	    # Don't try to parse this, add it to the main description
-	    # and let a filter such as tv_extractinfo_en do it.
-	    #
-	    $p{desc}->[0]->[0] .= " $1";
-	}
-	elsif (s/^Updated listing,?\s*//) {
-	    # We don't have anywhere to store this information, and
-	    # perhaps never will.
-	    #
-	    warn "discarding 'updated listing'\n"
-	      unless $warned_discarding_updated_listing++;
-	}
-#       Nielm: multi paragraph descriptions can cause
-#       multiple description tags...
-#	elsif (length >= 100) {
-#	    # Probably an extra description.
-#	    push @{$p{desc}}, [ $_, $LANG ];
-#	    last;
-#	}
-	elsif (s/^Remind me by text\s*//) {
-	    # Just ignore
-	}
- 	elsif (/at (\d\d:\d\d)/) {
- 	    warn "adding 'see also' text to description: '$_'" unless $warned_see_also++;
- 	    $p{desc}->[0]->[0] .= " $_";
- 	    last;
- 	}
-	else {
-	    die if not length;
-	    warn "unknown remnant bit (adding to description): '$_'" unless $warned_extradesc++;
-	    $p{desc}->[0]->[0] .= " $_";
-	    last;
-	}
-    }
-    return @r;
-}
-# Process a list of bits and store them in the {credits} part of a
-# programme hash.
-#
-# Parameters:
-#   (ref to) programme hash to modify,
-#   (ref to) list of 'bits' of text, also modified
-#
-# This routine removes elements from the front of the list, as much as
-# looks like a cast list.
-#
-my $warned_discarding_parts;
-sub do_cast( $$ ) {
-    my $prog = shift;
-    our @bits; local *bits = shift;
-    t 'got cast list bits: ' . d \@bits;
-
-    # Magic string that the site uses between part name and actor.
-    my $DOTS = '.....';
-
-    my $has_dots = 0;
-    foreach (@bits) {
-	if ($_ eq $DOTS) {
-	    $has_dots = 1;
-	    last;
-	}
-    }
-
-    if ($has_dots) {
-	# Gives the name of the part and of the actor with
-	# the magic $DOTS string as a separator.
-	my (@parts, @actors);
-
-	CAST: while (@bits && (scalar @bits ) >= 3 ) {
-	    my ($part,$dots,$actor) = @bits[0,1,2];
-	    t "\@bits[0,1,2] = ($part , $dots , $actor)";
-	    if ( $part =~/\w/ &&
-		 $dots eq $DOTS &&
-		 $actor =~ /\w/ )
-	    {
-		push @parts, $part;
-		push @actors, $actor;
-
-		shift @bits;shift @bits; shift @bits;
-	    }
-	    else
-	    {
-		# not valid cast list entry -- assume end of cast
-		last CAST;
-	    }
-	}
-
-	while (@parts) {
-	    my $p = shift @parts;
-	    my $a = shift @actors;
-	    warn "discarding information about the parts played by each actor\n"
-	      unless $warned_discarding_parts++;
-	    push @{$prog->{credits}->{actor}}, $a;
-	}
-    }
-    else {
-	t 'just a list of actors';
-	for (shift @bits) {
-	    if (not defined) {
-		warn "nothing in cast list";
-		return;
-	    }
-	    else {
-		while (length) {
-		    if (s/^([^,]+),?\s*//) {
-			push @{$prog->{credits}->{actor}}, $1;
-		    }
-		    else {
-			warn "weird bit in comma-separated cast list: $_";
-			last;
-		    }
-		}
-	    }
-	}
-    }
-}
-# Process a hyperlink from the bits of text.  This means remove the
-# first three bits.
-#
-# Parameters:
-#   (ref to) programme hash to modify,
-#   (ref to) list of 'bits' of text, also modified
-#
-my ($warned_discarding_link_text, $warned_discarding_link_description);
-sub do_link( $$ ) {
-    my $prog = shift;
-    our @bits; local *bits = shift;
-    t 'got link bits: ' . d \@bits;
-
-    # Modify the list in-place.
-    my $url       = shift @bits;
-    my $link_text = shift @bits;
-    my $desc      = shift @bits;
-    t "link data: \$url=$url, \$link_text=$link_text, \$desc=$desc";
-
-    if (not defined $url) {
-	warn "strange, no URL after 'Related Websites'";
-	return;
-    }
-    # Remove moronic use of Javascript.
-    for ($url) {
-	if (s/^javascript://) {
-	    if (s/^(\w+)\('(.+?)'\);$/$2/) {
-		warn "unknown Javascript function $1"
-		  if not $known_js{$1}++;
-	    }
-	    else {
-		warn "unknown Javascript statement $url";
-	    }
-	}
-	else {
-	    # I don't think this code will ever execute, alas.
-	    warn "Hooray!  A non-Javascript link!\n";
-	}
-	# Not sure how spaces get in there, but they do.
-	s/^\s+//; s/\s+$//;
-	# (Could warn about all non-URL characters.)
-    }
-    push @{$prog->{url}}, $url;
-    if (not defined $link_text) {
-	warn "strange, no link text after 'Related Websites'";
-    }
-    else {
-	# Damned if you do, and damned if you don't :-).
-	warn "discarding link text, just storing URL\n"
-	  unless $warned_discarding_link_text++;
-    }
-    if (not defined $desc) {
-	warn "strange, no description after 'Related Websites'";
-    }
-    else {
-	warn "discarding link description, just storing URL\n"
-	  unless $warned_discarding_link_description++;
-    }
-    t 'finished doing link, remaining bits: ' . d \@bits;
-    # And what if there was more than one related site?
-}
-
-# Parse a date from the RT site.  This involves guessing the timezone,
-# unless we already know it.
-#
-# Parameters:
-#   base day (string)
-#   time (hh:mm)
-#   timezone, or undef
-#
-# Returns ref to list of:
-#   Date::Manip object
-#   timezone of date (string)
-#
-# or returns undef if date parsing failed.
-#
-sub rt_date( $$$ ) {
-    my ($date, $time, $tz) = @_;
-    t 'rt_date() ENTRY';
-    t '$date=' . d $date;
-    t '$time=' . d $time;
-    t '$tz=' . d $tz;
-
-    my $parsed;
-    if (not defined $tz) {
-	t "time $time, must guess tz";
-	eval { $parsed = parse_local_date("$date $time", '+0000') };
-	t 'parse_local_date() returned: ' . d $parsed;
-    }
-    else {
-	t "time $time, known timezone $tz";
-	eval { $parsed = parse_date("$date $time $tz") };
-	t 'parse_date() returned: ' . d $parsed;
-    }
-    return undef if not defined $parsed;
-    my $r = date_to_local($parsed, '+0000');
-    t 'returning result of date_to_local(), ' . d $r;
-    return $r;
-}
-
-# Function which will locate all the available channels and return a hash
-# with channelId as the key and a channel description.
-#
-sub get_channels() {
-#    local $Log::TraceMessages::On = 0;
-    # RT website has additional sets of channels available to 
-    # registered users. 
-    #
-    # There is no authentication made on user-id, so we just pass 2 dummy 
-    # values in the cookies to get this channel listing for registered users
-
-    use LWP::Simple qw($ua);
-    use HTTP::Cookies;
-    # Debug cookies by uncommenting this line
-    # use LWP::Debug qw(+);
-    my $cookie_jar = HTTP::Cookies->new;
-    $cookie_jar->set_cookie
-        (0, "LOG_ID", "999999999", "/", $DOMAIN, 
-         80, 1, 0, 9999999, 0);
-    $cookie_jar->set_cookie
-        (0, "RADIOTIMES_USER_ID", "999999999", "/", $DOMAIN, 
-         80, 1, 0, 9999999, 0);
-    $ua->cookie_jar($cookie_jar);
-    
-    my $data;
-    my $channel_string;
-    my @channels;
-
-    eval {
-	$data =  get_url($TV_CHANNELS_URL);    
-	die 'strange, get_url() not supposed to return undef'
-	  if not defined $data;
-    };
-    if ($@) {
-	die "could not get channels page $TV_CHANNELS_URL - aborting\n";
-    }
-    $data =~ tr/\n\r/\n/ds;
-    t 'got channels page: ' . d $data;
-    $data =~ s/\n//g;
-    $data =~ /<form +name=\"all_channels\"[^>]*?>(.*?)<\/form>/i
-	or die "cannot find channel string in HTML $data";
-    $channel_string = $1;
-    t 'got string of channels: ' . d $channel_string;
-    $channel_string =~ s/\s+/ /g;
-    @channels = ($channel_string =~ 
-		    /<a href=\"javascript:spawn_window\(\'http:\/\/www.$DOMAIN\/[^>]*\/jsp\/channel_details.jsp[^>]*>[^<]*<\/a>/igo);
-
-    eval {
-	$data =  get_url($RADIO_CHANNELS_URL);    
-	die 'strange, get_url() not supposed to return undef'
-	  if not defined $data;
-    };
-    if ($@) {
-	die "could not get channels page $RADIO_CHANNELS_URL - aborting\n";
-    }
-    
-    
-    $data =~ tr/\n\r/\n/ds;
-    t 'got channels page: ' . d $data;
-    $data =~ s/\n//g;
-    $data =~ /<form +name=\"all_channels\"[^>]*?>(.*?)<\/form>/i
-	or die "cannot find channel string in HTML $data";
-    $channel_string = $1;
-    t 'got string of channels: ' . d $channel_string;
-    $channel_string =~ s/\s+/ /g;
-    @channels = (@channels,$channel_string =~ 
-		    /<a href=\"javascript:spawn_window\(\'http:\/\/www.$DOMAIN\/[^>]*\/jsp\/channel_details.jsp[^>]*>[^<]*<\/a>/igo);
-
-    # clear cookie jar
-    $cookie_jar->clear();
-    
-    
-    t 'channels in string: ' . d @channels;
-    warn "no channels found in $channel_string" if not @channels;
-    my %c;
-
-    foreach (@channels) {
-	t 'doing channel string: ' . d $_;
-	m/&channelId=([0-9]+)&/ or die "cannot find numeric channel id in $_";
-	my $channelId = $1;
-	t 'got numeric id: ' . d $channelId;
-	m/>(.*)<\/a>/ or die "cannot find channel description in $_";
-	my $channelDesc = $1;
-	for ($channelDesc) {
-	    s/^\s+//; s/\s+$//;
-	}
-	t 'got description: ' . d $channelDesc;
-	my $chanID_to_output = rt_to_xmltv($channelId);
-	t 'XMLTV id to use: ' . d $chanID_to_output;
-	die if not defined $chanID_to_output;
-	die if not defined $channelId;
-
-	# warn about new channel ID's
-	if ($chanID_to_output eq "$channelId.$DOMAIN" )
-	{
-	    warn "$DOMAIN Channel $channelDesc ID $channelId not found in channel_ids file";
-	}
-
-	my @dns = ([ $channelDesc, $LANG ]);
-	my $extra_dn = $extra_dn{$chanID_to_output};
-	push @dns, [ $extra_dn ] if defined $extra_dn;
-	my $ch = { 'display-name' => \@dns,
-		   'id' => $chanID_to_output };
-	t 'channel object: ' . d $ch;
-	$c{$chanID_to_output} = $ch;
-	t "added to channels hash under key $chanID_to_output";
-    }
-
-    t 'returning hash: ' . d \%c;
-    return %c;
-}
-
-# Function which will locate all the available categories and return a hash
-# with categoryId as the key and a category description
-sub get_categories() {
-    my $url = "$BASE_URL/jsp/listings_search.jsp";
-    my $data;
-    eval {
-	$data = get_url($url);
-	die 'strange, get_url() not supposed to return undef'
-	  if not defined $data;
-    };
-    if ($@) {
-	warn "could not get categories page $url, not grabbing category data\n";
-	return ();
-    }
-    $data =~ s/\n//g;
-    $data =~ /<select name="genres"[^>]*?>(.*?)<\/select>/
-      or die "cannot find category in HTML $data";
-    my $category_string = $1;
-    $category_string =~ s/\s+/ /g;
-    my @categories =
-      ($category_string =~ /<option value="[0-9]+">[^<]*/ig);
-    warn "cannot find categories in $category_string" if not @categories;
-    my %c;
-
-    foreach (@categories) {
-	m/"([0-9]*)"/
-	  or die "cannot find number in category $_";
-	my $categoryId = $1;
-	m/>(.*)/
-	  or die "cannot find description in category $_";
-	my $categoryDesc = $1;
-	my $cast;
-
-	$c{$categoryId} = $categoryDesc;
-    }
-
-    return %c;
-}
-
-# Function which will locate all the available dates and return a list
-# of Date::Manip objects, one for each day.
-#
-# (I was tempted to make this a hash (so you could say $available{$d}
-# to see if a day exists) but string equality is a bit dirty for
-# comparing two Date::Manip objects.  There needs to be a tied hash
-# class which can use a specified equality operation.)
-#
-sub get_available_dates() {
-#    local $Log::TraceMessages::On = 0;
-    my @r;
-    my $url = "$BASE_URL/jsp/listings_search.jsp";
-    my $data;
-    eval {
-	$data = get_url($url);
-	die 'strange, get_url() not supposed to return undef'
-	  if not defined $data;
-    };
-    if ($@) {
-	die "could not get $url, so cannot find available dates, aborting\n";
-    }
-
-    $data =~ s/\n//g;
-    $data =~ /<select name="searchDate"[^>]*?>(.*?)<\/select>/
-      or die "cannot find searchDate string in HTML $data";
-    local $_ = $1;
-    s/&nbsp;/ /g;
-    s/\s+/ /g;
-    s/^\s*//;
-    t 'date string: ' . d $_;
-    while (length) {
-	if (not s!<option value="(\d\d)/(\d\d)/(\d{4})" ?(?:selected)?>([^<]+)!!) {
-	    warn "remnant junk in date string: $_";
-	    return @r;
-	}
-
-	my $val = "$1/$2/$3";
-	my $text = $4;
-
-	my $date_from_val = "$3-$2-$1";
-	my $parsed_val = parse_date($date_from_val);
-
-	# Paranoia, or 'use all the information'.
-	$text =~ s/\s+$//;
-	die if not defined $text;
-	my $tmp;
-	eval { $tmp = parse_date($text) };
-	if (defined $tmp) {
-	    warn "dates '$val' ($date_from_val, $parsed_val) and '$text' ($tmp) from same option differ"
-	      if Date_Cmp($parsed_val, $tmp);
-	}
-	else {
-	    warn "cannot parse option text $text";
-	}
-
-	push @r, $parsed_val;
-    }
-    return @r;
-}
-
-
-# Function which will locate all the programes in a category
-# (at a given date and time)
-# will return a hash with "chanIDProgID" as the key
-#
-# Parameters:
-#   (reference to) list of XMLTV ids of channels to search
-#   Date::Manip object giving date and time
-#   (reference to) hash of categories
-#
-# I think this searches $TIME_INTERVAL time starting from the time
-# given.
-#
-sub get_progs_in_cat( $$$ ) {
-#    local $Log::TraceMessages::On = 1;
-    my @channels_to_search = map { xmltv_to_rt($_) } @{shift()};
-    my $time = shift;
-    our %categories; local *categories = shift;
-
-    my %cats;
-    my $url;
-
-    # This has been tested for 40 channels with no problems...
-    # But we may need to split channels-to-search into smaller 
-    # slices if user has a LOT of channels... 
-    
-    # FIXME: chould be a progress bar with scalar(keys %categories) increments
-    print STDERR 'time ', UnixDate($time, '%q'), ", getting categories:\t"
-	if not $opt_quiet;
-
-    # For each category find all the programmes in that category
-    foreach my $category (keys %categories) {
-	$url = "$BASE_URL/ListingsServlet?event=7&";
-	$url .= 'jspGridLocation=%2Fjsp%2Ftv_listings_grid.jsp&';
-	$url .= 'jspListLocation=%2Fjsp%2Ftv_listings_list.jsp&';
-	$url .= 'jspError=%2Fjsp%2Ferror.jsp&';
-	$url .= 'channels=' . join(',', @channels_to_search) . '&';
-	$url .= "genres=$category&";
-	$url .= 'searchDate=' . UnixDate($time, '%d/%m/%Y') . '&';
-	$url .= 'searchTime=' . UnixDate($time, '%R');
-	my $data;
-	eval {
-	    $data = get_url($url);
-	    die 'strange, get_url() not supposed to return undef'
-	      if not defined $data;
-	};
-	if ($@) {
-	    warn "could not get $url, so cannot get data on category $category\n";
-	    next;
-	}
-	$data =~ s/\n//g;
-
-	my @results = ($data =~ /<!-- start of a result -->.*?<!-- end of a result -->/ig);
- 	if (not @results) {
- 	    unless ($data =~ /There are no programmes available/) {
- 	        warn "$url: cannot find results in data";
-             }
- 	}
-	foreach (@results) {
-	    /channelId=([0-9]+)/
-	      or warn "$url: cannot find channelId= in $_";
-	    my $channelId = $1;
-
-	    /programmeId=([0-9]+)/
-	      or warn "$url: cannot find programmeId= in $_";
-	    my $programmeId = $1;
-
-	    if ( defined $channelId && defined $programmeId ) {
-		$cats{"$channelId$programmeId"} = $category ;
-	    }
-	}
-
-	# FIXME progress bar
-	print STDERR "#" 	if ( not $opt_quiet );
-    }
-    # FIXME progress bar
-    print STDERR " done\n"    if ( not $opt_quiet );
-    return %cats;
-}
-
-sub rt_to_xmltv( $ ) {
-    my $n = shift;
-    if (not defined $rt_to_xmltv{$n}) {
-	my $new = "$n.$DOMAIN";
-	die "channel id $new already exists" if defined $xmltv_to_rt{$new};
-	$rt_to_xmltv{$n} = $new;
-	$xmltv_to_rt{$new} = $n;
-    }
-    return $rt_to_xmltv{$n};
-}
-sub xmltv_to_rt( $ ) {
-    my $x = shift;
-    for ($xmltv_to_rt{$x}) {
-	die "no RT id known for $x" if not defined;
-	return $_;
-    }
-}
-
 
 # Ask the user which channels to download, and write $config_file.
 #
 # Uses global %channels hash.
 #
-# FIXME commonize the whole damn configure routine with tv_grab_uk!
+# FIXME commonize with other grabbers.
 #
 sub configure() {
 #    local $Log::TraceMessages::On = 1;
 
     XMLTV::Config_file::check_no_overwrite($config_file);
-
-    my $bar = new XMLTV::ProgressBar('finding channels', 1)
-	  if not $opt_quiet;
-    my %channels = get_channels();
-    $bar->finish();
 
     # FIXME need to make directory
     open(CONF, ">$config_file") or die "cannot write to $config_file: $!";
@@ -1881,7 +227,7 @@ END
 	}
 	elsif (@poss == 1) {
 	    my $ch = $poss[0];
-	    if (ask_boolean('Add channel ' .
+	    if (askBooleanQuestion('Add channel ' .
 				   $ch->{'display-name'}->[0]->[0] . '?', 1)) {
 		my $xmltv_id = $ch->{id};
 		unless ($chose_ch{$xmltv_id}++) {
@@ -1899,7 +245,7 @@ END
 	    }
 	    my $none_option = 'None of the above are what I wanted';
 	    die 'silly channel name' if exists $dn_to_ch{$none_option};
-	    my $r = ask_choice('Which channel to add?',
+	    my $r = askQuestion('Which channel to add?',
 				$poss[0]->{'display-name'}->[0]->[0],
 				(sort keys %dn_to_ch), $none_option);
 	    # treat EOF as same as none-option
@@ -1922,49 +268,119 @@ END
     exit();
 }
 
-
-# function to see if detailed information should be retrieved for this 
-# programme. 
-# argument is (ref to) XMLTV programme hash.
-# returns 1 or undef
-sub test_get_details($) {
-    my $p = shift;
-    die unless $p;
-    die unless $p->{start}; # sanity check
-
-    if ( $opt_slow ) {
-	# slow mode
-	if ( $opt_detailtimerange ) {
-	    # detailtimerange set -- check start time
-	    my $start_hhmm=UnixDate($p->{start},"%H:%M");
-
-	    if ( $opt_detailstarttime lt $opt_detailstoptime ) {
-		# normal time range
-		if ( $start_hhmm ge $opt_detailstarttime 
-		     && $start_hhmm lt $opt_detailstoptime ) {
-		    # matched start time to detail time range
-		    return 1;
-		}
-	    } else {
-		# inverted time range: 17:00-02:00 or similar
-		if ( ( $start_hhmm ge $opt_detailstarttime 
-		       && $start_hhmm le "24:00" ) 
-		     || ( $start_hhmm ge "00:00" 
-			  && $start_hhmm lt $opt_detailstoptime )
-		     ) {
-		    # matched start time to detail time range
-		    return 1;
-		} 
-	    }
-	    # fall through! both if statements above were false!
-	    # slow mode, detailtimerange set, but start time did not match
-	    return undef;
-	} else {
-	    # slow detailtimerange not set
-	    return 1;
-	}
-    } else {
-	# fast mode
-	return undef;
+# Grabbing.  Start by reading config file.
+my @wanted_chs;
+my $n = 0;
+foreach (XMLTV::Config_file::read_lines $config_file) {
+    ++$n;
+    next if not defined;
+    /^\s*channel\s+(\S+)\s*$/ or die "$config_file: $n: bad line $_\n";
+    my $id = $1;
+    if (not exists $channels{$id}) {
+	warn "channel $id mentioned in $config_file but not on site\n";
+	next;
     }
-}		
+    push @wanted_chs, $id;
+}
+#@wanted_chs = sort keys %channels;
+
+my $writer = new XMLTV::Writer(%g_args, encoding => 'ISO-8859-1');
+$writer->start(\%tv_credits);
+foreach (@wanted_chs) {
+    my %h = %{$channels{$_}};
+    delete $h{rt_id};
+    $writer->write_channel(\%h);
+}
+
+$bar = Term::ProgressBar->new({ name => 'grabbing', count => scalar @wanted_chs })
+  if Have_bar and not $opt_quiet;
+my %warned_wrong_num_fields; # give that warning once per channel file
+foreach my $ch (@wanted_chs) {
+    my $c = $channels{$ch};
+    my $rt_id = $channels{$ch}->{rt_id}; die if not defined $rt_id;
+    my $uri = "http://xmltv.radiotimes.com/xmltv/$rt_id.dat";
+    local $SIG{__DIE__} = sub { die "$uri: $_[0]" };
+    local $SIG{__WARN__} = sub { warn "$uri: $_[0]" };
+    my $page = get_nice $uri;
+    $page =~ tr/\207\211/\347\311/; # bad characters
+    foreach (split /\n/, $page) {
+	my @fields = split /\~/;
+	if (@fields != 23) {
+	    warn "wrong number of fields in line:\n$_\n"
+	      unless $warned_wrong_num_fields{$ch}++;
+	    next;
+	}
+	foreach (@fields) { s/^\s+//; s/\s+$//; undef $_ if not length }
+	my ($title, $sub_title, $episode, $year, $director, $cast,
+	    $premiere, $film, $repeat, $subtitles, $widescreen,
+	    $new_series, $deaf_signed, $black_and_white, $star_rating,
+	    $certificate, $genre, $desc, $choice, $date, $start, $stop,
+	    $duration_mins) = @fields;
+	foreach ($premiere, $film, $repeat, $subtitles, $widescreen,
+		 $new_series, $deaf_signed, $black_and_white, $choice) {
+	    die "true/false value not defined" if not defined;
+	    if ($_ eq 'true') { $_ = 1 }
+	    elsif ($_ eq 'false') { $_ = 0 }
+	    else { die "bad true/false value $_" }
+	}
+
+	warn "ignoring sub-title $sub_title since episode also given\n"
+	  if defined $sub_title and defined $episode;
+	$sub_title = $episode if defined $episode;
+
+	warn("missing title in: $_"), next if not defined $title;
+	my %p = (channel => $ch, title => [ [ $title ] ]);
+	for ($sub_title) { $p{'sub-title'} = [ [ $_ ] ] if defined }
+	for ($year) { $p{date} = $_ if defined }
+	for ($director) { $p{credits}{director} = [ $_ ] if defined }
+	if (defined $cast) {
+	    my @cast;
+	    if ($cast =~ tr/|//) {
+		@cast = split /\|/, $cast;
+		# Each bit is in the format 'part*actor' and it seems that
+		# even when part is 'director' that is the name of a
+		# character.
+		#
+		foreach (@cast) {
+		    s/^.*[*]// or warn "bad bit of cast list: $_";
+		}
+	    }
+	    else {
+		@cast = split /,/, $cast;
+	    }
+	    foreach (@cast) { s/^\s+//; s/\s+$// }
+	    $p{credits}{actor} = \@cast;
+	}
+	$p{premiere} = [ '' ] if $premiere;
+	push @{$p{category}}, [ 'film', 'en' ] if $film;
+	$p{'previously-shown'} = {} if $repeat;
+	$p{subtitles} = [ { type => 'teletext' } ] if $subtitles;
+	$p{video}{aspect} = '16:9' if $widescreen;
+	$p{new} = 1 if $new_series;
+	# $deaf_signed ignored for now
+	$p{video}{colour} = 0 if $black_and_white;
+	$p{'star-rating'} = [ "$star_rating/5" ] if defined $star_rating;
+	$p{rating} = [ [ $certificate, 'BBFC' ] ] if defined $certificate;
+	push @{$p{category}}, [ $genre, 'en' ] if defined $genre;
+	$p{desc} = [ [ $desc, 'en' ] ] if defined $desc;
+	# $choice ignored for now
+
+	# Date, start and stop time.
+	my ($yyyy, $mm, $dd);
+	for ($date) {
+	    die "missing date in $_" if not defined;
+	    m!(\d\d)/(\d\d)/(\d{4})$! or die "bad date $_";
+	    ($dd, $mm, $yyyy) = ($1, $2, $3);
+	}
+	$p{start} = utc_offset "$yyyy$mm$dd$start", 'UTC';
+	$p{stop} = utc_offset "$yyyy$mm$dd$stop", 'UTC';
+	if (Date_Cmp($p{start}, $p{stop}) > 0) {
+	    $p{stop} = DateCalc($p{stop}, '+ 1 day');
+	}
+	# Ignore $duration_mins since it may not be reliable.
+
+	$writer->write_programme(\%p);
+    }
+    update $bar if $bar;
+}
+$writer->end;
