@@ -5,15 +5,7 @@ use LWP::Simple qw();
 use Date::Manip;
 use XMLTV;
 use XMLTV::Usage;
-
-# Memoize a function from LWP::Simple (_not_ our own get() method but
-# the thing it calls).  I can't persuade Memoize to do this without
-# temporarily switching back to package main.
-#
-{
-    package main;
-    use XMLTV::Memoize; XMLTV::Memoize::check_argv('LWP::Simple::get');
-}
+use XMLTV::Memoize;
 
 # Use Log::TraceMessages if installed.
 BEGIN {
@@ -160,10 +152,14 @@ sub get( $$ ) {
 
 The main program.  Parse command line options, fetch and write data.
 
+Most of the options are fairly self-explanatory but this routine also
+calls the XMLTV::Memoize module to look for a B<--cache> argument.
+The functions memoized are those given by the C<cachables()> method.
+
 =cut
 sub go( $ ) {
     my $pkg = shift;
-    # Get options.
+    XMLTV::Memoize::check_argv($pkg->cachables());
     my ($opt_days,
 	$opt_help,
 	$opt_output,
@@ -214,7 +210,8 @@ sub go( $ ) {
     if (defined $days_left and $days_left > 0) {
 	warn "couldn't get all of $opt_days days, only "
 	  . ($opt_days - $days_left) . "\n";
-    } elsif (not @to_get) {
+    }
+    elsif (not @to_get) {
 	warn "couldn't get any listings from the site for today or later\n";
     }
 
@@ -252,6 +249,20 @@ sub go( $ ) {
 	%w_args = (OUTPUT => $fh);
     }
     XMLTV::write_data(XMLTV::cat(@listingses), %w_args);
+}
+
+=item XMLTV::Grab_XML->cachables()
+
+Returns a list of names of functions which could reasonably be
+memoized between runs.  This will normally be whatever function
+fetches the web pages - you memoize that to save on repeated
+downloads.  A subclass might want to add things to this list
+if it has its own way of fetching web pages.
+
+=cut
+sub cachables( $ ) {
+    my $pkg = shift;
+    return ('LWP::Simple::get');
 }
 
 =pod
