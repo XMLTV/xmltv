@@ -363,7 +363,7 @@ sub human_date( $ ) {
     # produce a human readable date string
     # Usage human_date($seconds_since_epoch)
     #
-    my $date = shift;
+    my $date = shift; die if not defined $date;
     my ($year,$month,$day,$hour,$minute,$second)
       = (localtime($date))[5,4,3,2,1,0];
     $year += 1900;
@@ -403,7 +403,7 @@ sub get_programmes( $$$$ ) {
     my $data = get_url($url);
     $data =~ tr/\n//d;
 
-    my @results = ($data =~ m/<!-- start of a result -->.*?<!-- end of a result -->/ig);
+    my @results = ($data =~ /<!-- start of a result -->.*?<!-- end of a result -->/ig);
     warn 'no results found in HTML' if not @results;
 
     # print STDERR "$channelId $searchDate $searchTime\n";
@@ -431,6 +431,7 @@ sub get_programmes( $$$$ ) {
 #   hash of categories
 #
 sub get_programme_details( $$$$ ) {
+#    local $Log::TraceMessages::On = 1;
     my $channelId = shift;
     my $programmeId = shift;
     use vars '%prog_to_cat'; local *prog_to_cat = shift;
@@ -451,29 +452,39 @@ sub get_programme_details( $$$$ ) {
     $url .= "programmeId=$programmeId&";
     $url .= 'jspLocation=/jsp/prog_details.jsp';
     my $prog_details_string = get_url($url);
-    $prog_details_string  =~ s/\n//g;
-    $prog_details_string  =~ m/\/\/-->(.*?)<!-- end main table -->/
-      or die "cannot find /-->.*<!-- end main table/ in $_";
+    $prog_details_string  =~ tr/\r//d;
+    t 'whole page: ' . d $prog_details_string;
+    $prog_details_string  =~ m{</script>\s*(<table .*?)<!-- end main table -->}s
+      or die "cannot main table in HTML $_";
     my $prog_details = $1;
-    #chop off anything before //-->
-    $prog_details =~ s/.*\/\/-->//;
-    #get rid of the tag which messes things up
-    $prog_details =~ s/<!--.*?-->/\|/g;
-    # replace html tags with pipes
-    $prog_details =~ s/<[ ]*[^0-9][^>]*?>/\|/g;
-    #replace multiple spaces
-    $prog_details =~ s/\s+/ /g;
-    #replace pipe followed by space
-    $prog_details =~ s/\|\s/\|/g;
-    #replace multiple pipes
-    $prog_details =~ s/\|+/\|/g;
-    $prog_details =~ s/&nbsp;//g;
+    t 'programme details from page: ' . d $prog_details;
+
+    for ($prog_details) {
+	# We use pipe characters as a delimiter between bits of text.  So
+	# first, check there aren't any in there already.
+	#
+	tr/|//d;
+	
+	# Replace comments and HTML tags with pipes.
+	s/<!--.*?-->/\|/g;
+	s/<[ ]*[^0-9][^>]*?>/\|/g;
+	
+	# Tidy up the pipes and whitespace.  Hey, ASCII art!
+	$_ = "|$_|";
+	s/&nbsp;/ /g;
+        s/\s+/ /g;
+	s/\s+\|/\|/g;
+	s/\|\s+/\|/g;
+	tr/|/|/s;
+	
+	t 'after barification: ' . d $_;
+    }
 
     # chop of related features or related websites
     $prog_details =~ s/Related Features\|.*//;
     $prog_details =~ s/Related Websites\|.*//;
 
-    $prog_details =~ m/ \|(.*?)\|Channel:/
+    $prog_details =~ /\|(.*?)\|Channel:/
       or die "cannot find title in HTML $prog_details";
     my $title = $1;
     my $sub_title;
@@ -485,23 +496,25 @@ sub get_programme_details( $$$$ ) {
     }
     $p{title} = [ [ $title, $LANG ] ];
 
-    $prog_details =~ m/Channel:\|(.*?)\|/
+    $prog_details =~ /Channel:\|(.*?)\|/
       or die "cannot find channel name in HTML $prog_details";
     my $channel_name = $1;
 
-    $prog_details =~ m/Date:\|.*? ([0-9]*? .*?)\|/
+    $prog_details =~ /Date:\|([^|]+)\|/
       or die "cannot find date in HTML $prog_details";
-    my $date = $1;
+    my $date = $1; die if not defined $date;
 
-    $prog_details =~ m/Time:\|([0-9,a,m,p,:]*) to ([0-9,a,m,p,:]*)/
+    $prog_details =~ /Time:\|([0-9,a,m,p,:]*) to ([0-9,a,m,p,:]*)/
       or die "cannot find time in HTML $prog_details";
-    my $start_time = $1;
-    my $stop_time = $2;
+    my $start_time = $1; die if not defined $start_time;
+    my $stop_time = $2; die if not defined $stop_time;
     my $start = UnixDate(ParseDate("$date $start_time"), '%s');
+    die if not defined $start;
     my $stop = UnixDate(ParseDate("$date $stop_time"), '%s');
+    die if not defined $stop;
 
     # Some programmes have thir stop time on the next day
-    if (($start_time =~ m/pm$/) and ($stop_time =~ m/am$/)) {
+    if (($start_time =~ /pm$/) and ($stop_time =~ /am$/)) {
 	$stop += 86400;
     }
 
@@ -517,7 +530,7 @@ sub get_programme_details( $$$$ ) {
     my ($options,$subtitles,$widescreen,$repeat,$black_and_white,
 	$certificate,$episode,$review,$director,$filmed_in,$cast);
 
-    if ($prog_details =~ m/(.*?)\|/) {
+    if ($prog_details =~ /(.*?)\|/) {
 	# FIXME warn about options other than these.
 	$options = $1;
 	if ($options eq 'Review') {
@@ -552,19 +565,19 @@ sub get_programme_details( $$$$ ) {
 	$prog_details =~ s/$options\|//;
     }
 
-    if ($prog_details =~ m/Certificate:\|\[(.*?)\]\|/) {
+    if ($prog_details =~ /Certificate:\|\[(.*?)\]\|/) {
 	$certificate = $1;
 	$p{_certificate} = $1;
     }
 
     # episode corresponds to badly named 'sub -title'
-    if ($prog_details =~ m/Episode\|(.*?)\|/) {
+    if ($prog_details =~ /Episode\|(.*?)\|/) {
 	$episode = $1;
 	$p{'sub-title'} = [ [ $1, $LANG ] ];
     }
 
     # Review corresponds to description
-    if ($prog_details =~ m/Review\|(.*?)\|/) {
+    if ($prog_details =~ /Review\|(.*?)\|/) {
 	$review = $1;
 	for ($review) {
 	    s/^\s+//; s/\s+$//;
@@ -578,18 +591,18 @@ sub get_programme_details( $$$$ ) {
     $prog_details =~ s/.*Episode\|(.*?)\|//;
     $prog_details =~ s/.*Review\|(.*?)\|//;
 
-    if ($prog_details =~ m/Directed by:\|(.*?)\|/) {
+    if ($prog_details =~ /Directed by:\|(.*?)\|/) {
 	$director = $1;
 	push @{$p{credits}{director}}, $1;
     }
-    if ($prog_details =~ m/Filmed in:\|(.*?)\|/) {
+    if ($prog_details =~ /Filmed in:\|(.*?)\|/) {
 	$filmed_in = $1;$p{'_filmed_in'} = $1;
     }
-    if ($prog_details =~ m/Cast List\|(.*)/) {
+    if ($prog_details =~ /Cast List\|(.*)/) {
 	$cast = $1;
 	$cast =~ s/\s*\|$//;
 
-	if ($cast =~ m/\|\.\.\.\.\.\|/) {
+	if ($cast =~ /\|\.\.\.\.\.\|/) {
 	    $cast =~ s/(\|\.\.\.\.\.)+/\@/;
 	    #$cast =~ s/\@+/\@/g;
 	    my @splitter = split /\@\|/, $cast;
@@ -613,7 +626,7 @@ sub get_programme_details( $$$$ ) {
 
 	my @cast_list = split /\|/, $cast;
 	foreach (@cast_list) {
-	    m/^([^,]*),([^,]*)$/;
+	    /^([^,]*),([^,]*)$/;
 	    my $name = $1;
 	    my $role = $2;
 
@@ -651,12 +664,12 @@ sub get_channels() {
     $data =~ tr/\n\r/\n/ds;
     t 'got channels page: ' . d $data;
     $data =~ s/\n//g;
-    $data =~ m/<select name="channels"[^>]*?>(.*?)<\/select>/
+    $data =~ /<select name="channels"[^>]*?>(.*?)<\/select>/
       or die "cannot find channel string in HTML $data";
     my $channel_string = $1;
     t 'got string of channels: ' . d $channel_string;
     $channel_string =~ s/\s+/ /g;
-    my @channels = ($channel_string =~ m/<option value="[0-9]+" >[^<]*/ig);
+    my @channels = ($channel_string =~ /<option value="[0-9]+" >[^<]*/ig);
     t 'channels in string: ' . d @channels;
     warn "no channels found in $channel_string" if not @channels;
     my %c;
@@ -692,12 +705,12 @@ sub get_channels() {
 sub get_categories() {
     my $data = get_url("$BASE_URL/jsp/listings_search.jsp");
     $data =~ s/\n//g;
-    $data =~ m/<select name="genres"[^>]*?>(.*?)<\/select>/
+    $data =~ /<select name="genres"[^>]*?>(.*?)<\/select>/
       or die "cannot find category in HTML $data";
     my $category_string = $1;
     $category_string =~ s/\s+/ /g;
     my @categories =
-      ($category_string =~ m/<option value="[0-9]+">[^<]*/ig);
+      ($category_string =~ /<option value="[0-9]+">[^<]*/ig);
     warn "cannot find categories in $category_string" if not @categories;
     my %c;
 
@@ -729,7 +742,7 @@ sub get_available_dates() {
     my @r;
     my $data = get_url("$BASE_URL/jsp/listings_search.jsp");
     $data =~ s/\n//g;
-    $data =~ m/<select name="searchDate"[^>]*?>(.*?)<\/select>/
+    $data =~ /<select name="searchDate"[^>]*?>(.*?)<\/select>/
       or die "cannot find searchDate string in HTML $data";
     local $_ = $1;
     s/&nbsp;/ /g;
@@ -795,18 +808,18 @@ sub get_progs_in_cat( $$$ ) {
 	my $data = get_url($url);
 	$data =~ s/\n//g;
 
-	my @results = ($data =~ m/<!-- start of a result -->.*?<!-- end of a result -->/ig);
+	my @results = ($data =~ /<!-- start of a result -->.*?<!-- end of a result -->/ig);
 	warn "cannot find results in $data" if not @results;
 
 	#print STDERR "$category $searchDate $searchTime\n";
 
 	foreach (@results) {
 
-	    m/channelId=([0-9]+)/
+	    /channelId=([0-9]+)/
 	      or die "cannot find channelId= in $_";
 	    my $channelId = $1;
 
-	    m/programmeId=([0-9]+)/
+	    /programmeId=([0-9]+)/
 	      or die "cannot find programmeId= in $_";
 	    my $programmeId = $1;
 
