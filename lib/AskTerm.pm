@@ -128,23 +128,27 @@ sub askQuestion( $$@ )
 	push @options, @others;
 
 	foreach (@options) {
-	    print STDERR "$optnum: $_\n";
 	    $num_to_choice{$optnum} = $_;
 	    $choice_to_num{$_} = $optnum;
 	    ++ $optnum;
 	}
 	$optnum--;
 	my $r=undef;
-	my $default_num = $choice_to_num{$default};
-	die if not defined $default_num;
-	until (defined $r) {
-	    $r = askQuestion('Select one:',
-			     $default_num, 0 .. $optnum);
-	    return undef if not defined $r;
-	    for ($num_to_choice{$r}) { return $_ if defined }
-	    print STDERR "invalid response, please choose one of "
-	      .0 .. $optnum."\n\n";
-	    undef $r;
+      ASK: for (;;) {
+	    # Present a numbered list of options, but accept either
+	    # numbers or the option names.
+	    #
+	    print STDERR "$_: $options[$_]\n" foreach 0 .. $#options;
+	    my $res = ask('choose one: ');
+	    # No default.
+
+	    foreach (0 .. $#options) {
+		return $num_to_choice{$_} if $res eq $_;
+	    }
+	    for (match($res, @options)) {
+		return $_ if defined;
+	    }
+	    print STDERR "invalid response, please choose one of the following:\n\n";
 	}
     }
 }
