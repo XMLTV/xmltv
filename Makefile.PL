@@ -53,22 +53,6 @@ WriteMakefile
     # No special parameters for 'make clean' or 'make dist'
 );
 
-# What happens when we say 'make test'.  We want to pass command line
-# options to so we can't use MakeMaker's default.
-#
-# Hopefully this mess can go away soon - it's needed only because the
-# layout of the Perlish tarball is different from that of the CVS
-# checkout, which is where test_filters normally runs.
-#
-sub MY::test
-{
-    q(
-test: all
-	PERL5LIB=$(PERL5LIB):blib/lib:../blib/lib $(FULLPERL) t/test_filters.t \
-	  --tests-dir t/data --cmds-dir ../../filter
-);
-}
-
 
 # Try to hack in support for 'ordinary' documentation going in
 # /usr/share/doc/.
