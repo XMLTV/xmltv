@@ -135,12 +135,14 @@ $writer->start({ 'source-info-url'     =>
 my $regions = get_regions(); update $bar;
 #t 'regions: ' . d $regions;
 
-# $ch_types maps channel id to type, $ch_pretty maps it to pretty
-# name.  However, the pretty names in the channel file are not
-# definitive; they're used to print progress messages, but the name
-# in the listings file itself takes precedence.
+# $ch_types maps Ananova channel id to type, $ch_pretty maps it to
+# pretty name.  However, the pretty names in the channel file are not
+# definitive; they're used to print progress messages, but the name in
+# the listings file itself takes precedence.
 #
 my ($ch_types, $ch_pretty) = get_ch_types(); update $bar;
+t '$ch_types=' . d $ch_types;
+t '$ch_pretty=' . d $ch_pretty;
 my %ch_pretty_definitive; # whether the name in $ch_pretty is defin.
 
 # Maps Ananova id to output channel id.
@@ -601,7 +603,7 @@ END
 #   channel id, used to check pretty name in file
 #   'filename'
 #
-# Uses global $ch_pretty hashref.
+# Uses global $ch_types and $ch_pretty hashrefs.
 #
 # Returns: reference to list of programme details, or undef if error.
 # These won't have proper start and stop times; instead they have a
@@ -610,7 +612,7 @@ END
 # included, you should add that to each programme (probably in RFC2838
 # style) afterwards.
 #
-my %warned_shorter; # cut down on duplicate warnings
+my (%warned_shorter, $warned_wrong_date); # cut down on duplicate warnings
 sub get_file($$$) {
     my ($date_expected, $ch, $file) = @_;
     my $url =  "$A?show=$file";
@@ -677,8 +679,15 @@ sub get_file($$$) {
 
     # But does it match what we expect?
     if (UnixDate($dp, '%Q') ne UnixDate($date_expected, '%Q')) {
-	warn "date from page $url (" . UnixDate($dp, '%Q') . ") is wrong (probably an old file)\n";
-	return undef;
+	if ($opt_cache) {
+	    unless ($warned_wrong_date++) {
+		warn "since cache is in use, ignoring wrong date in pages (eg $url)\n";
+	    }
+	}
+	else {
+	    warn "date from page $url (" . UnixDate($dp, '%Q') . ") is wrong (probably an old file)\n";
+	    return undef;
+	}
     }
 
     # Check the channel name is as expected (if we know what the
@@ -919,13 +928,36 @@ sub get_file($$$) {
 	    $p{subtitles} = [ { type => 'teletext' } ];
 	}
 	
+	# Check 'type' of channel to decide whether video and audio
+	# elements need be present.  If $p{video}{present} is false,
+	# that means there's definitely no picture; if it's undefined
+	# then we don't know yet.
+	#
+	my $ch_type = $ch_types->{$ch};
+	if (not defined $ch_type) {
+	    die "no channel type for channel $ch";
+	}
+
+	if ($ch_type =~ /^\d/) {
+	    # Terrestrial television.  We can't infer anything from
+	    # that, because occasionally programmes are broadcast with
+	    # no picture or no sound.
+	    #
+	}
+	elsif ($ch_type eq 'satellite') {
+	    # Similar.
+	}
+	elsif ($ch_type eq 'radio') {
+	    $p{video}{present} = 0;
+	    $p{audio}{present} = 1;
+	}
+	else { die "bad type $ch_type for channel $ch" }
+
 	# Black and white - in other words, not colour.
 	if ($bw) {
-	    # Might as well explicitly set 'present' to true, since we
-	    # have just found out that it definitely has a picture.
-	    #
-	    # FIXME radio programmes should set present = false.
-	    #
+	    if (defined $p{video}{present} and not $p{video}{present}) {
+		warn "black-and-white flag set for a programme with no picture";
+	    }
 	    $p{video}{present} = 1;
 	    $p{video}{colour} = 0;
 	}
@@ -934,20 +966,22 @@ sub get_file($$$) {
 	if (not $stereo and not $mono) {
 	    # Just don't set any of the flags.
 	}
-	elsif (not $stereo and $mono) {
-	    # As for video above, we now definitely know the programme
-	    # has sound.
-	    #
-	    $p{audio}{present} = 1;
-	    $p{audio}{stereo} = 'mono';
-	}
-	elsif ($stereo and not $mono) {
-	    $p{audio}{present} = 1;
-	    $p{audio}{stereo} = 'stereo';
-	}
 	else {
-	    warn "line in page $url has both stereo and mono: $_";
+	    if (defined $p{audio}{present} and not $p{audio}{present}) {
+		warn "stereo information set for a programme with no sound";
+	    }
 	    $p{audio}{present} = 1;
+
+	    if (not $stereo and $mono) {
+		$p{audio}{stereo} = 'mono';
+	    }
+	    elsif ($stereo and not $mono) {
+		$p{audio}{stereo} = 'stereo';
+	    }
+	    elsif ($stereo and $mono) {
+		warn "line in page $url has both stereo and mono: $_";
+	    }
+	    else { die }
 	}
 
 	# Repeat or new.  I don't know whether these are necessarily
