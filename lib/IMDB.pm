@@ -377,6 +377,12 @@ sub getMovieMatches($$$)
 	    #$arr[0]=~s/%(?:([0-9a-fA-F]{2})|u([0-9a-fA-F]{4}))/defined($1)? chr hex($1) : utf8_chr(hex($2))/oge;
 	    #$self->debug("close:$arr[1] ($arr[2]) qualifier=$arr[3] id=$arr[4]");
 	    my $title=$arr[1];
+
+	    if ( $title=~m/^\"/o && $title=~m/\"\s*\(/o ) { #"
+		$title=~s/^\"//o; #"
+		$title=~s/\"(\s*\()/$1/o; #"
+	    }
+
 	    if ( $title=~s/\s+\((\d\d\d\d|\?\?\?\?)\)$//o ) {
 	    }
 	    elsif ( $title=~s/\s+\((\d\d\d\d|\?\?\?\?)\/[IVX]+\)$//o ) {
@@ -2002,8 +2008,6 @@ sub invokeStage($$)
 		# change double-quotes around title to be (made-for-tv) suffix instead 
 		if ( $dbkey=~m/^\"/o && #"
 		     $dbkey=~m/\"\s*\(/o ) { #"
-		    #$nkey=~s/^\"//o; # "
-		    #$nkey=~s/\"(\s*\()/$1/o; #"
 		    $dbkey.=" (tv_series)";
 		}
 		# how rude, some entries have (TV) appearing more than once.
@@ -2021,6 +2025,12 @@ sub invokeStage($$)
 		}
 		my $year;
 		my $title=$dbkey;
+
+		if ( $title=~m/^\"/o && $title=~m/\"\s*\(/o ) { #"
+		    $title=~s/^\"//o; #"
+		    $title=~s/\"(\s*\()/$1/o; #"
+		}
+
 		if ( $title=~s/\s+\((\d\d\d\d|\?\?\?\?)\)$//o ) {
 		    $year=$1;
 		}
