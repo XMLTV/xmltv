@@ -454,286 +454,44 @@ my (%warned_regel, $warned_discarding_parts); # suppress duplicate warnings
 # (at the moment).
 #
 sub write_details( $$$$$ ) {
+#    local $Log::TraceMessages::On = 1;
     t 'write_details() ENTRY';
     my ($writer, $ch_xmltv_id, $urls, $master_url, $bar) = @_;
     t '$ch_xmltv_id=' . d $ch_xmltv_id;
     t '$urls=' . d $urls;
     my $next_day = 0;
-
+    my $skip_remaining = 0;
     foreach my $url (@$urls) {
-	local $SIG{__WARN__} = sub {
-	    warn "$url (from $master_url): $_[0]";
-	};
-
-	# We make an HTML::TreeBuilder object, get the information
-	# from it and them delete it.
-	#
-	my $t = new HTML::TreeBuilder();
-	$t->parse(get_nice($url));
-	my @elems = $t->look_down(class => 'detailDeel');
-	if (not @elems) {
-	    warn "did not see any 'detailDeel' elements, skipping page";
+	t 'getting details for URL: ' . d $url;
+	my $prog = process_details_page($writer, $ch_xmltv_id, $url, $master_url);
+	if (not $prog) {
+	    warn "skipped details page $url\n";
+	    update $bar;
 	    next;
 	}
-	my @info;
-	foreach (@elems) {
-	    my @cont = grep { ref } $_->content_list();
-	    my $n = scalar @cont;
-	    if ($n != 2) {
-		warn "'detailDeel' has $n elements instead of 2";
-		next;
-	    }
-	    my ($k, $v) = @cont;
-	    for ($k->attr('class')) {
-		if (not defined or $_ ne 'detailLabel2') {
-		    warn "didn't see 'detailLabel2' in 'detailDeel'";
-		    next;
-		}
-	    }
-	    for ($v->attr('class')) {
-		if (not defined or $_ ne 'detailContent2') {
-		    warn "didn't see 'detailContent2' in 'detailDeel'";
-		    next;
-		}
-	    }
-	    push @info, [ $k->as_text(), $v->as_text() ];
+	if ($prog eq 'END') {
+	    t 'nothing more to write for this day';
+	    $skip_remaining = 1;
 	}
-	$t->delete(); undef $t;
-
-	# Process the list of [ heading, data ] pairs.
-	my ($van, $tot, # exactly one
-	    $naam, $sub_title, $genre, $date,               #
-	    $episode_num, $actors, $writers, $commentators, #
-	    $director, $previously_shown, $orig_title,      # at most one
-	    @presenter, @url # zero or more
-	   );
-	# NB 'at most one' $actors but that one entry can give several
-
-	my $teletext_sub = 0;  # boolean
-	my @desc;              # accumulate bits
-	my $seen_tijdstip = 0;
-   	my $last;
-      ELEM: foreach (@info) {
-	    my ($regel, $text) = @$_;
-	    foreach ($regel, $text) {
-		s/^\s+//; s/\s+$//;
-	    }
-
-	    if ($regel eq '') {
-		# Continuation of the previous one, hopefully.
-		$regel = $last;
-	    }
-	    else {
-		# They usually end with a colon but not always.
-		$regel =~ s/:$//;
-		$last = $regel;
-	    }
-
-	    if ($regel eq 'Tijdstip') {
-		warn "seen 'Tijdstip' twice\n" if $seen_tijdstip++;
-		if (length($text)<=16) {
-		    t "'onvolledig' is true, nothing more to write";
-		    t 'write_details() RETURNING';
-		    return;
-		}
-		else {
-		    $van = time_van_str($text);
-		    warn if not defined $van;
-		    $tot = time_tot_str($text);
-		    warn if not defined $tot;
-		}
-	    }
-	    elsif ($regel eq 'Inhoud') {
-		# Empty text for this happens often, just skip it.
-		push @desc, $text if $text ne '';
-	    }
-	    elsif ($regel eq 'Programma') {
-		warn "seen 'Programma' twice\n" if defined $naam;
-		# FIXME should really look for 'herhaling' in italics.
-		if ($text =~ s/\bherhaling\s+van\s+(\d\d?)-(\d\d?)-(\d{4})//) {
-		    warn "seen previously-shown information twice\n"
-		      if $previously_shown;
-		    my ($dd, $mm, $yyyy) = ($1, $2, $3);
-		    $previously_shown = { start => "$yyyy$mm$dd" };
-		    $text =~ s/^\s+//; $text =~ s/\s+$//;
-		}
-		elsif ($text =~ s/herhaling\b//) {
-		    # Repeat, but no previous date given.  NB
-		    # sometimes we see 'herhaling' without a space
-		    # before it, as in the redundant
-		    #
-		    # 'Netwerk herhalingenherhaling'
-		    #
-		    # Hence no \b at the start of the regexp.  We just
-		    # have to hope there aren't too many compound
-		    # words ending in 'herhaling'.
-		    #
-		    $previously_shown = {};
-		    $text =~ s/^\s+//; $text =~ s/\s+$//;
-		}
-		$naam = $text;
-	    }
-	    elsif ($regel eq 'Genre') {
-		warn "seen 'Genre' twice\n" if defined $genre;
-		# Empty text for this happens often, just skip it.
-		$genre = $text if $text ne '';
-	    }
-	    elsif ($regel eq 'Zender') {
-		# I think this means 'broadcaster' but the information
-		# is rendundant because we already know the channel.
-		#
-		# Then we should check it and warn if it differs!  But
-		# it does differ - every programme on the channel
-		# Nederland 1, it seems, has Zender of 'Nederland
-		# 2'. So we just ignore this information.
-		#
-	    }
-	    elsif ($regel eq 'Omroep') {
-		# FIXME I don't know what this means (the dictionary
-		# says 'wireless telegraph' but that's no help) so
-		# just ignore it.
-		#
-	    }
-	    elsif ($regel eq 'Kenmerken') {
-		foreach (split /,\s*/, $text) {
-		    if ($_ eq 'Teletekst ondertiteld') {
-			# I'm guessing this means teletext subtitles :-).
-			$teletext_sub++
-			  && warn 'seen teletext subtitles twice';
-		    }
-		    elsif ($_ eq 'Breedbeeld uitzending') {
-			# FIXME I don't know what this means.
-			push @desc, $_;
-		    }
-		    else {
-			warn "unknown 'Kenmerken' bit $_"
-			  unless $warned_regel{"Kenmerken: $_"}++;	
-			push @desc, $_;
-		    }
-		}
-	    }
-	    elsif ($regel eq 'Presentatie') {
-		push @presenter, $text;
-	    }
-	    elsif ($regel eq 'Afleverings nummer') {
-		warn "seen 'Afleverings nummer' twice"
-		  if defined $episode_num;
-		if ($text eq 'Slot') {
-		    # I don't really know what this means but assume
-		    # it means the same as no episode number at all.
-		    #
-		}
-		elsif ($text =~ /^\d+$/) {
-		    if ($text == 0) {
-			warn "I thought episode nums on the site were from 1";
-		    }
-		    else {
-			$episode_num = $text - 1;
-		    }
-		}
-		else {
-		    warn "bad episode number $text";
-		}
-	    }
-	    elsif ($regel eq 'Titel aflevering') {
-		warn "seen 'Titel aflevering' twice"
-		  if defined $sub_title;
-		$sub_title = $text;
-	    }
-	    elsif ($regel eq 'Webpagina') {
-		# We have to turn the string given, which is normally
-		# just a hostname, into a URL.  I don't see why they
-		# don't just link to it directly, this is a web site
-		# after all.
-		#
-		# Anyway, the URI library doesn't seem to have any way
-		# to take a string and turn it into a URL adding
-		# 'http:' if necessary, so we do this by hand.
-		#
-		if ($text !~ tr/://) {
-		    $text = "http://$text";
-		}
-		push @url, $text;
-	    }
-	    elsif ($regel eq 'Rolverdeling') {
-		warn "seen 'Rolverdeling' twice" if $actors;
-
-		# Maybe 'e.a' is Latin for 'and others' or something.
-		$text =~ s/\s*e\.a\s*$//;
-	
-		while (length $text) {
-		    if ($text =~ s/\s*([^:]+):\s*([^.]+)(?:$|\.)//) {
-			warn "discarding information about the parts played by each actor\n"
-			  unless $warned_discarding_parts++;
-			push @$actors, $2;
-		    }
-		    elsif ($text =~ s/\s*([^,]+)(?:$|,)//) {
-			push @$actors, $1;
-		    }
-		    else {
-			warn "unknown remnamt 'Rolverdeling' text '$text'";
-			last;
-		    }
-		}
-	    }
-	    elsif ($regel eq 'Scenario schrijver') {
-		warn "seen 'Scenario schrijver' twice" if $writers;
-		push @$writers, $text;
-	    }
-	    elsif ($regel eq 'E-mail') {
-		push @url, "mailto:$text";
-	    }
-	    elsif ($regel eq 'Bron') {
-		# FIXME cannot do anything special with this.  It
-		# means 'source' and perhaps by parsing the text we
-		# could find the names of writers or whatever.
-		#
-		push @desc, "$regel: $text";
-	    }
-	    elsif ($regel eq 'Commentaar') {
-		push @$commentators, $text;
-	    }
-	    elsif ($regel eq 'Jaar van premiere') {
-		# Year of release, I think.
-		warn "seen 'Jaar van premiere' twice"
-		  if defined $date;
-		$date = $text;
-	    }
-	    elsif ($regel eq 'Regisseur') {
-		warn "seen 'Regisseur' twice" if defined $director;
-		$director = $text;
-	    }
-	    elsif ($regel eq 'Orginele titel') {
-		warn "seen 'Orginele titel' twice" if defined $orig_title;
-		$orig_title = $text;
-	    }
-	    elsif ($regel eq 'Behaalde prijzen') {
-		# Awards won.  It doesn't seem worth adding a separate
-		# field for this to the XMLTV format, just append to
-		# the description.
-		#
-		push @desc, "$regel: $text";
-	    }
-	    else {
-		# Unknown key, but let's add it to the desc so we
-		# don't lose information.  These newlines are just for
-		# the benefit of someone reading the XML by hand.
-		#
-		push @desc, "$regel: $text";
-		warn "unknown programme info key $regel\n"
-		  unless $warned_regel{$regel}++;
-	    }
-	}
-
-	if (not defined $naam) {
-	    warn "did not see programme title, skipping programme\n";
+	if ($skip_remaining) {
+	    # Would just 'return' but need to deal with the bar.
+	    update $bar;
 	    next;
 	}
-	if (not defined $van) {
-	    warn "did not see programme times, skipping programme\n";
-	    next;
-	}
-	die if not defined $tot;
+
+	t 'got programme hash: ' . d $prog;
+
+	my $van_unparsed = delete $prog->{van};
+	die if not defined $van_unparsed;
+	my $van = parse_eur_date($van_unparsed, $TZ);
+	die "could not parse date $van_unparsed"
+	  if not defined $van or not length $van;
+
+	my $tot_unparsed = delete $prog->{tot};
+	die if not defined $tot_unparsed;
+	my $tot = parse_eur_date($tot_unparsed, $TZ);
+	die "could not parse date $tot_unparsed"
+	  if not defined $tot or not length $tot;
 
 	t "adjusting for \$next_day if necessary (currently $next_day)";
 	$van = DateCalc($van, '+ 1 day') if $next_day;
@@ -749,6 +507,11 @@ sub write_details( $$$$$ ) {
 	}
 	t "after adjustment, \$van=$van, \$tot=$tot, \$next_day=$next_day";
 
+	my ($van_base, $van_tz) = @{date_to_eur($van, $TZ)};
+	my ($tot_base, $tot_tz) = @{date_to_eur($tot, $TZ)};
+	$prog->{start} = UnixDate($van_base, '%q') . " $van_tz";
+	$prog->{stop} = UnixDate($tot_base, '%q') . " $tot_tz";
+
 	# Sometimes it happens that the start time of this programme
 	# is before the start time of the previously seen programme.
 	#
@@ -763,45 +526,333 @@ sub write_details( $$$$$ ) {
 	# faithfully in the XML output and let someone else worry
 	# about the problem when reading the file.
 	#
-
-	my @title = ([ $naam, $LANG]);
-	push @title, [ $orig_title ] if defined $orig_title; # not Dutch!
-	my ($van_base, $van_tz) = @{date_to_eur($van, $TZ)};
-	my ($tot_base, $tot_tz) = @{date_to_eur($tot, $TZ)};
-	my %prog
-	  = (channel  => $ch_xmltv_id,
-	     title    => \@title,
-	     start    => UnixDate($van_base, '%q') . " $van_tz",
-	     stop     => UnixDate($tot_base, '%q') . " $tot_tz",
-	    );
 	
-	# We have lots of bits of description.  But we make them
-	# into a single <desc> element because they probably give
-	# different information, rather than stating the same
-	# information in different ways.
-	#
-	$prog{desc} = [ [ join("\n\n", @desc), $LANG ] ] if @desc;
-	
-	$prog{'sub-title'} = [ [ $sub_title, $LANG ] ] if defined $sub_title;
-	$prog{subtitles} = [ { type => 'teletext' } ] if $teletext_sub;
-	$prog{credits} = { presenter => \@presenter } if @presenter;
-	$prog{'episode-num'} = [ $episode_num ] if defined $episode_num;
-	$prog{url} = \@url if @url;
-	$prog{date} = $date if defined $date;
-	$prog{category} = [ [ $genre, $LANG ] ] if defined $genre;
-	$prog{'previously-shown'} = $previously_shown if $previously_shown;
-	
-	my %c;
-	$c{actor} = $actors if $actors;
-	$c{writer} = $writers if $writers;
-	$c{commentator} = $commentators if $commentators;
-	$c{director} = [ $director ] if $director;
-	$prog{credits} = \%c if %c;
-	
-	$writer->write_programme(\%prog);
+	local $Log::TraceMessages::On = 0;
+	$writer->write_programme($prog);
 	update $bar if $bar;
     }
     t 'write_details() RETURNING';
+}
+# Returns a programme hashref, or undef, or the magic 'END'.
+sub process_details_page( $$$$ ) {
+    my ($writer, $ch_xmltv_id, $url, $master_url) = @_;
+    local $SIG{__WARN__} = sub {
+	warn "$url (from $master_url): $_[0]";
+    };
+
+    # We make an HTML::TreeBuilder object, get the information
+    # from it and them delete it.
+    #
+    my $t = new HTML::TreeBuilder();
+    $t->parse(get_nice($url));
+    my @elems = $t->look_down(class => 'detailDeel');
+    if (not @elems) {
+	warn "did not see any 'detailDeel' elements, skipping page";
+	return;
+    }
+    my @info;
+    foreach (@elems) {
+	my @cont = grep { ref } $_->content_list();
+	my $n = scalar @cont;
+	if ($n != 2) {
+	    warn "'detailDeel' has $n elements instead of 2";
+	    next;
+	}
+	my ($k, $v) = @cont;
+	for ($k->attr('class')) {
+	    if (not defined or $_ ne 'detailLabel2') {
+		warn "didn't see 'detailLabel2' in 'detailDeel'";
+		next;
+	    }
+	}
+	for ($v->attr('class')) {
+	    if (not defined or $_ ne 'detailContent2') {
+		warn "didn't see 'detailContent2' in 'detailDeel'";
+		next;
+	    }
+	}
+	push @info, [ $k->as_text(), $v->as_text() ];
+    }
+    $t->delete(); undef $t;
+
+    # Process the list of [ heading, data ] pairs.
+    my (
+	# Exactly one:
+	$van, $tot, $naam,
+
+	# At most one:
+        $director, $previously_shown, $orig_title, $sub_title, $genre,
+        $date, $episode_num, $actors, $writers, $commentators,
+
+	# Zero or more:
+        @presenter, @url,
+       );
+    # NB 'at most one' $actors but that one entry can give several.
+
+    my $teletext_sub = 0;	# boolean
+    my @desc;			# accumulate bits
+    my $seen_tijdstip = 0;
+    my $last;
+  ELEM: foreach (@info) {
+	my ($regel, $text) = @$_;
+	foreach ($regel, $text) {
+	    s/^\s+//; s/\s+$//;
+	}
+
+	if ($regel eq '') {
+	    # Continuation of the previous one, hopefully.
+	    $regel = $last;
+	}
+	else {
+	    # They usually end with a colon but not always.
+	    $regel =~ s/:$//;
+	    $last = $regel;
+	}
+
+	if ($regel eq 'Tijdstip') {
+	    warn "seen 'Tijdstip' twice\n" if $seen_tijdstip++;
+	    if (length($text)<=16) {
+		t "'onvolledig' is true, nothing more to write";
+		t 'write_details() RETURNING';
+		return 'END';
+	    }
+	    else {
+		# Extract time strings from the text, but not full
+		# Date::Manip objects.
+		#
+		$van = time_van_str($text);
+		$tot = time_tot_str($text);
+	    }
+	}
+	elsif ($regel eq 'Inhoud') {
+	    # Empty text for this happens often, just skip it.
+	    push @desc, $text if $text ne '';
+	}
+	elsif ($regel eq 'Programma') {
+	    warn "seen 'Programma' twice\n" if defined $naam;
+	    # FIXME should really look for 'herhaling' in italics.
+	    if ($text =~ s/\bherhaling\s+van\s+(\d\d?)-(\d\d?)-(\d{4})//) {
+		warn "seen previously-shown information twice\n"
+		  if $previously_shown;
+		my ($dd, $mm, $yyyy) = ($1, $2, $3);
+		$previously_shown = { start => "$yyyy$mm$dd" };
+		$text =~ s/^\s+//; $text =~ s/\s+$//;
+	    }
+	    elsif ($text =~ s/herhaling\b//) {
+		# Repeat, but no previous date given.  NB
+		# sometimes we see 'herhaling' without a space
+		# before it, as in the redundant
+		#
+		# 'Netwerk herhalingenherhaling'
+		#
+		# Hence no \b at the start of the regexp.  We just
+		# have to hope there aren't too many compound
+		# words ending in 'herhaling'.
+		#
+		$previously_shown = {};
+		$text =~ s/^\s+//; $text =~ s/\s+$//;
+	    }
+	    $naam = $text;
+	}
+	elsif ($regel eq 'Genre') {
+	    warn "seen 'Genre' twice\n" if defined $genre;
+	    # Empty text for this happens often, just skip it.
+	    $genre = $text if $text ne '';
+	}
+	elsif ($regel eq 'Zender') {
+	    # I think this means 'broadcaster' but the information
+	    # is redundant because we already know the channel.
+	    #
+	    # Then we should check it and warn if it differs!  But
+	    # it does differ - every programme on the channel
+	    # Nederland 1, it seems, has Zender of 'Nederland
+	    # 2'. So we just ignore this information.
+	    #
+	}
+	elsif ($regel eq 'Omroep') {
+	    # FIXME I don't know what this means (the dictionary
+	    # says 'wireless telegraph' but that's no help) so
+	    # just ignore it.
+	    #
+	}
+	elsif ($regel eq 'Kenmerken') {
+	    foreach (split /,\s*/, $text) {
+		if ($_ eq 'Teletekst ondertiteld') {
+		    # I'm guessing this means teletext subtitles :-).
+		    $teletext_sub++
+		      && warn 'seen teletext subtitles twice';
+		}
+		elsif ($_ eq 'Breedbeeld uitzending') {
+		    # FIXME I don't know what this means.
+		    push @desc, $_;
+		}
+		else {
+		    warn "unknown 'Kenmerken' bit $_"
+		      unless $warned_regel{"Kenmerken: $_"}++;	
+		    push @desc, $_;
+		}
+	    }
+	}
+	elsif ($regel eq 'Presentatie') {
+	    push @presenter, $text;
+	}
+	elsif ($regel eq 'Afleverings nummer') {
+	    warn "seen 'Afleverings nummer' twice"
+	      if defined $episode_num;
+	    if ($text eq 'Slot') {
+		# I don't really know what this means but assume
+		# it means the same as no episode number at all.
+		#
+	    }
+	    elsif ($text =~ /^\d+$/) {
+		if ($text == 0) {
+		    warn "I thought episode nums on the site were from 1";
+		}
+		else {
+		    $episode_num = $text - 1;
+		}
+	    }
+	    else {
+		warn "bad episode number $text";
+	    }
+	}
+	elsif ($regel eq 'Titel aflevering') {
+	    warn "seen 'Titel aflevering' twice"
+	      if defined $sub_title;
+	    $sub_title = $text;
+	}
+	elsif ($regel eq 'Webpagina') {
+	    # We have to turn the string given, which is normally
+	    # just a hostname, into a URL.  I don't see why they
+	    # don't just link to it directly, this is a web site
+	    # after all.
+	    #
+	    # Anyway, the URI library doesn't seem to have any way
+	    # to take a string and turn it into a URL adding
+	    # 'http:' if necessary, so we do this by hand.
+	    #
+	    if ($text !~ tr/://) {
+		$text = "http://$text";
+	    }
+	    push @url, $text;
+	}
+	elsif ($regel eq 'Rolverdeling') {
+	    warn "seen 'Rolverdeling' twice" if $actors;
+
+	    # Maybe 'e.a' is Latin for 'and others' or something.
+	    $text =~ s/\s*e\.a\s*$//;
+	
+	    while (length $text) {
+		if ($text =~ s/\s*([^:]+):\s*([^.]+)(?:$|\.)//) {
+		    warn "discarding information about the parts played by each actor\n"
+		      unless $warned_discarding_parts++;
+		    push @$actors, $2;
+		}
+		elsif ($text =~ s/\s*([^,]+)(?:$|,)//) {
+		    push @$actors, $1;
+		}
+		else {
+		    warn "unknown remnamt 'Rolverdeling' text '$text'";
+		    last;
+		}
+	    }
+	}
+	elsif ($regel eq 'Scenario schrijver') {
+	    warn "seen 'Scenario schrijver' twice" if $writers;
+	    push @$writers, $text;
+	}
+	elsif ($regel eq 'E-mail') {
+	    push @url, "mailto:$text";
+	}
+	elsif ($regel eq 'Bron') {
+	    # FIXME cannot do anything special with this.  It
+	    # means 'source' and perhaps by parsing the text we
+	    # could find the names of writers or whatever.
+	    #
+	    push @desc, "$regel: $text";
+	}
+	elsif ($regel eq 'Commentaar') {
+	    push @$commentators, $text;
+	}
+	elsif ($regel eq 'Jaar van premiere') {
+	    # Year of release, I think.
+	    warn "seen 'Jaar van premiere' twice"
+	      if defined $date;
+	    $date = $text;
+	}
+	elsif ($regel eq 'Regisseur') {
+	    warn "seen 'Regisseur' twice" if defined $director;
+	    $director = $text;
+	}
+	elsif ($regel eq 'Orginele titel') {
+	    warn "seen 'Orginele titel' twice" if defined $orig_title;
+	    $orig_title = $text;
+	}
+	elsif ($regel eq 'Behaalde prijzen') {
+	    # Awards won.  It doesn't seem worth adding a separate
+	    # field for this to the XMLTV format, just append to
+	    # the description.
+	    #
+	    push @desc, "$regel: $text";
+	}
+	else {
+	    # Unknown key, but let's add it to the desc so we
+	    # don't lose information.  These newlines are just for
+	    # the benefit of someone reading the XML by hand.
+	    #
+	    push @desc, "$regel: $text";
+	    warn "unknown programme info key $regel\n"
+	      unless $warned_regel{$regel}++;
+	}
+    }
+
+    if (not defined $naam) {
+	warn "did not see programme title, skipping programme\n";
+	return;
+    }
+    if (not defined $van) {
+	warn "did not see programme times, skipping programme\n";
+	return;
+    }
+    die if not defined $tot;
+
+    my @title = ([ $naam, $LANG]);
+    push @title, [ $orig_title ] if defined $orig_title; # not Dutch!
+
+    # We return a programme hash with 'van' and 'tot' rather than
+    # fully parsed times.
+    #
+    my %prog
+      = (channel => $ch_xmltv_id,
+	 title   => \@title,
+	 van     => $van,
+	 tot     => $tot,
+	);
+	
+    # We have lots of bits of description.  But we make them
+    # into a single <desc> element because they probably give
+    # different information, rather than stating the same
+    # information in different ways.
+    #
+    $prog{desc} = [ [ join("\n\n", @desc), $LANG ] ] if @desc;
+	
+    $prog{'sub-title'} = [ [ $sub_title, $LANG ] ] if defined $sub_title;
+    $prog{subtitles} = [ { type => 'teletext' } ] if $teletext_sub;
+    $prog{credits} = { presenter => \@presenter } if @presenter;
+    $prog{'episode-num'} = [ $episode_num ] if defined $episode_num;
+    $prog{url} = \@url if @url;
+    $prog{date} = $date if defined $date;
+    $prog{category} = [ [ $genre, $LANG ] ] if defined $genre;
+    $prog{'previously-shown'} = $previously_shown if $previously_shown;
+	
+    my %c;
+    $c{actor} = $actors if $actors;
+    $c{writer} = $writers if $writers;
+    $c{commentator} = $commentators if $commentators;
+    $c{director} = [ $director ] if $director;
+    $prog{credits} = \%c if %c;
+	
+    return \%prog;
 }
 
 sub time_tot_str( $ ) {
@@ -820,10 +871,7 @@ sub time_tot_str( $ ) {
       or die "cannot find time in '$tot'";
     my ($HH, $MM) = ($1, $2);
 
-    my $str = "$yyyy-$mm-$dd $HH:$MM:00";
-    my $p = parse_eur_date($str, $TZ);
-    die "could not parse date $str" if not defined $p or not length $p;
-    return $p;
+    return "$yyyy-$mm-$dd $HH:$MM:00";
 }
 sub time_van_str( $ ) {
     my $input = shift;
@@ -841,10 +889,7 @@ sub time_van_str( $ ) {
     $van =~ /(\d\d):(\d\d)/
       or die "cannot find time in '$van'";
     my ($HH, $MM) = ($1, $2);
-    my $str = "$yyyy-$mm-$dd $HH:$MM:00";
-    my $p = parse_eur_date($str, $TZ);
-    die "could not parse date $str" if not defined $p or not length $p;
-    return $p;
+    return "$yyyy-$mm-$dd $HH:$MM:00";
 }
 
 
