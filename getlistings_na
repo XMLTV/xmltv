@@ -1,11 +1,10 @@
 #!/usr/bin/perl -w 
 
-use strict;
-use Fcntl qw(:DEFAULT);
-use XML::Writer;
-use IO;
-use Getopt::Long;
-use ClickListings;
+#
+# This script scrapes www.zap2it.com tv listings, producing
+# xmltv.dtd and channels.dtd compliant output. Zap2it supports
+# both Canadian and US listings.
+#
 
 #
 # ----------------------------------------------------------------------------
@@ -23,278 +22,577 @@ use ClickListings;
 #
 # ChangeLog
 # ---------
-# 2001-09-06  Jerry Veldhuis, jerry@matilda.com
-#	- started ChangeLog
-#	- version updated to V0.3
-#	- fixed 'Use of uninitialized value at ./getlistings_na line 601.'
-#	  which occurs when --programs is used on command line
-#	- deals with case where --programs is used to specify one output
-#	  file for multiple days of program listings.
-#	- renamed $writer_g to $Pwriter_g, while adding $Poutput_g.
-#	- changed --trackQualifiers and --dumpQualifiers
-#	  --trackQualifiers must be used on commandline to enable db, defaults
-#	  to off.
-#	  --dumpQualifiers now requires a db file to dump.
-#	- fixed and prettied up usage (use --help to see)
-#	- moved 'use ' directives to top of script to make it more
-#	  obvious what required packages are.
-#	- identifies case were reading of schedule failed, and
-#	  cleans up afterward.
-#	- replaced URL we ship with, with one with only 6 channels
-#	- now puts 'source-*' and 'generator-*' entries in 'tv' entry
-#	  instead of 'source' and 'author'
+# 2001-11-3	Jerry Veldhuis, jerry@matilda.com
+#	- conception
 #
-# 2001-09-13  Jerry Veldhuis, jerry@matilda.com
-#	- added --serviceURL to command line instead of force script modification
+# 2001-11-5	Jerry Veldhuis, jerry@matilda.com
+#	- fixed up configure options
+#	- note --configure should validate --provider entry
+#
+# 2001-11-6	Jerry Veldhuis, jerry@matilda.com
+#	- polished configure started grabber
+#
+# 2001-11-7	Jerry Veldhuis, jerry@matilda.com
+#	- now outputs xml consistant with xmltv.dtd and
+#	  channels.dtd
+#
 #
 
 #
-# This script scrapes www.clicktv.com, while trying to remain
-# compatible with www.tvguide.ca which shares the same user
-# Profiles, but produces the schedule listings in a slightly
-# different format. Update: tvguide.ca have changed their
-# format and is problem no longer supported.
-# 
-# Clicktv supports both Canadian and US listings.
+# Known Bugs
+#  - accepts but ignores --startHour and --endHour parameters
+#  - not all program qualifiers have been defined, so sometimes
+#    program descriptions include qualifiers that are unidentified
+#    These should be reported to the author
 #
-my $VersionID="getlistings_na V0.4";
-
-# Note: I decided not to cache any program listings html pages like
-#       other xmltv scripts since I'm reading multiple listings and
-#       resolving programs that span listings, so if one is out of date
-#       the script may fail.
-#
-# To use this script you must:
-#  1. visit www.clicktv.com and setup a membership. 
-#     a) In "Login Settings", its important to:
-#        - set your postal code / zip correctly
-#        - set your 'Observes Daylight Saving' setting appropriately
-#     b) In "Line-up Settings", choose your service.
-#     c) In "Line-up Arrangement", choose to channels you
-#        want to include in the channel "display" list.
-#     d) In "Layout Grid" set
-#        - channels deep to "All"
-#        - hours wide to "6 hours" (script should work with any setting
-#          but this minimizes the # of www page requests)
-#        - "tick" the details you wish included in the output.
-#          (only tested with all ticked)
-#          Note: a future version might include a way to control what
-#          details are ignored when writting output.
-#
-#  2. click on "Listing" button 
-#     a) verify the text above the date/time selections near the top
-#        of the page reads your location, date/time and timezone
-#        is correct.
-#     b) copy/paste the URL into $URL below.  (The example URL
-#        supplied is mine, but you really should change it.)
-#	 An alternative is to use '--serviceURL' on command line.
 #
 
-# Warning !!! your URL may change if you update your settings later.
-my $URL = 'http://www.clicktv.com/listings.asp?CID=TVD&profileID=%247B%2477%2490%2479%248C%2487&WSN=WSERVER20&UserID=%2479%2477%2488%247A%2491%2489';
+my $VersionMajor="1";
+my $VersionMinor="0";
+
+my $VersionID="getlistings_na V$VersionMajor\.$VersionMinor";
 
 #
-#     c) If your not interested in the entire days schedule, you
-#        can either specify a range on the cmd line (useing -start and -end)
-#        or you can modify the '$StartHour' and '$EndHour' values below.
-#        see "Output Hours" section for details.
+# define name of getlistings_na config file
+#
+my $ConfigFile_g=".config_na";
+
+use strict;
+
+package myConfig;
+
+sub new
+{
+    my($type) = shift;
+    my $self={ @_ };            # remaining args become attributes
+    
+    bless($self, $type);
+    return($self);
+}
+
+sub setValue($$$)
+{
+    my ($self, $key, $value)=@_;
+    $self->{$key}=$value;
+    if ( $key ne "option_postalcode" &&
+	 $key ne "option_zipcode" &&
+	 $key ne "option_provider" &&
+	 $key ne "option_provider_desc" ) {
+	die "attempt to set invalid key $key to $value";
+    }
+}
+
+sub unsetValue($$$)
+{
+    my ($self, $key, $value)=@_;
+    delete($self->{$key}) if ( defined($self->{$key}));
+}
+
+sub save($$)
+{
+    my ($self, $file)=@_;
+
+    open(FD, "> $file") || return(-1);
+    print FD "# config file: getlistings_na $VersionMajor.$VersionMinor\n";
+    print FD "#\n";
+    print FD "# this file is generated by running getlistings_na --configure\n";
+    print FD "# the only change you should make is prefixing 'channel:' lines\n";
+    print FD "# with a '#' to signal that they should be ignored during the\n";
+    print FD "# grab step\n";
+    print FD "#\n";
+    if ( defined($self->{option_postalcode})) {
+	print FD "postal code: $self->{option_postalcode}\n";
+    }
+    if ( defined($self->{option_zipcode}) ) {
+	print FD "zip code: $self->{option_zipcode}\n";
+    }
+    print FD "provider: $self->{option_provider} \# ".
+	$self->{option_provider_desc}."\n";
+    
+    foreach my $station (sort keys (%{$self->{channels}})) {
+	if ( $self->{channels}->{$station}->{in} ) {
+	    print FD "channel: $station # ".$self->{channels}->{$station}->{description}."\n";
+	}
+	else {
+	    print FD "#channel: $station # ".$self->{channels}->{$station}->{description}."\n";
+	}
+    }
+    close(FD);
+    return(0);
+}
+
+sub load($$)
+{
+    my ($self, $file)=@_;
+
+    open(FD, "< $file") || return(-1);
+    while (<FD>) {
+	s/\n$//o;
+	if ( $. == 1 ) {
+	    if ( m/^\#\s+config\s+file:\s*getlistings_na (\d+)\.(\d+)/o ) {
+		# assumes version number is still 1.1
+		if ( $1 != $VersionMajor || $2 != $VersionMinor ) {
+		    print STDERR "$0: $file:$.: $1\.$2 is an unsupported version number\n";
+		    close(FD);
+		    return(-1);
+		}
+	    }
+	    else {
+		print STDERR "$0: $file:$.: unsupported version header\n";
+		close(FD);
+		return(-1);
+	    }
+	}
+	elsif ( m/^postal code:\s*([^\s]+)$/o ) {
+	    $self->setValue("option_postalcode", $1);
+	}
+	elsif ( m/^zip code:\s*([^\s]+)$/o ) {
+	    $self->setValue("option_zipcode", $1);
+	}
+	elsif ( m/^provider:\s*([^\s]+)\s+\#\s+(.*)$/o ) {
+	    $self->setValue("option_provider", $1);
+	    $self->setValue("option_provider_desc", $2);
+	}
+	elsif ( m/^\#channel:\s*([^\s]+)\s+\#\s+(.*)$/o ) {
+	    $self->{channels}->{$1}->{in}=0;
+	    $self->{channels}->{$1}->{description}=$2;
+	}
+	elsif ( m/^channel:\s*([^\s]+)\s+\#\s+(.*)$/o ) {
+	    $self->{channels}->{$1}->{in}=1;
+	    $self->{channels}->{$1}->{description}=$2;
+	}
+	elsif ( m/^\s*$/o ) {
+	    # ignore empty lines
+	}
+	else {
+	    print STDERR "$0: $file:$.: invalid\n";
+	    close(FD);
+	    return(-1);
+	}
+	   
+    }
+    close(FD);
+    if ( defined($self->{option_postalcode}) && defined($self->{option_zipcode})) {
+	print STDERR "$0: $file: corrupt, only one of postal or zip can be defined\n";
+	return(-1);
+    }
+    return(0);
+}
+
+1;
+
+package main;
+
+use Fcntl qw(:DEFAULT);
+use XML::Writer;
+use IO;
+use Getopt::Long;
+use ZapListings;
+use Date::Manip;
 
 #
-# Output Days
-# -----------
-# Set the number of days of listings to output. ClickTV like most
-# sources only support up to 14 days in advance.
-#
-# The number of days included may be set at run-time via the command line.
-#
-my $Days=14;
+# How this grabber works:
 
-#
-# Output Hours
-# ------------
-# These settings are used to help refine the hours included in output.
-# They are really the range of programming your interested in. A schedule
-# request only requires a starting hour, and the number of
-# hours in the resulting schedule are determined by YOUR preferences 
-# setting at the www site. So the 'start' hour is really hour used in that
-# first request. The 'end' hour is the hour that must appear (or at least the 
-# start of the 'end' hour) in the schedule for the schedule retrieval to
-# consider itself finished.
-#
-# Unless you enable 'include partial listings', the default settings (include
-# being off) means the the output will include all programs that start at
-# or after the 'start' hour and end prior to or at 'end' hour.
-#
-# A 24 hour clock is used to define the 'start' and 'end' hours.
-# The 'start' hour must be between 0 (== 12am) and 23 (11pm), and
-# 'end' hour may be any value greater than 'start' hour and < 30. 'End' hours
-# greater than 24 allow you to ensure programs that start at 12pm, or even
-# 1am (that same night) are included in the output.
-#
-# Other filtering techniques should be used to more finely tune theN
-# output as needed.
-#
-# Warning: using a 'start' value <6 and a 'end' value that is > 24 may
-# result in programs appearing more than once if running for more than one
-# day.
-#
-# Warning: endhour > 24 is only useful when you grabbing one day
-#
-# 'start' and 'end' hours may be set at run-time via the command line.
-#
-my $StartHour=0;
-my $EndHour=24;
+# Step 1 - Configure
+#  
+#   The configure step is meant to be run interactively.
+#   You can use 'getlistings_na --configure --help' to see
+#   how to run non-interactively, providing information on
+#   the command line.
 
+#   run 'getlistings_na --configure'
 #
-# Partial Programs
-# ----------------
-# If you want programs that end after, but start prior to the 'start'
-# (defined above) and programs that start prior but don't end until after
-# 'end' hour (defined above) set '$IncludePartialPrograms' to non-zero.
-# Since xmltv format doesn't support partial program listings (or at least
-# programs that don't have a start time), the program title is prepended
-# with "(<- cont)" or appended with "(cont ->)" as appropriate.
+#   Follow the prompts to provide the necessary information.
 #
-# Using this feature isn't recommended since this violates the xmltv
-# specificatoin and results in programs with modified titles, and unreliable
-# start and end dates.
+#   When finished, configure will create a file $ConfigFile_g
+#   which contains the postal/zip code, the provider id
+#   and a line for each channel that provider supplies.
+#   This file is what you specify with the --config command
+#   line option to "Step 2 Grabbing Data". See Step 2 for details
+#   of how this file is interpreted.
 #
-my $IncludePartialPrograms=0;
 
-# Program Details
-# ------------------
-# ClickTV only categorizes programs in the schedule grid by colour
-# coding the entires into 5 categories. Currently: Movies, Sports, Kids Show,
-# Music, Specials and Sci-Fi. The fact that these didn't seem useful to
-# me and the html decode would have been hell, I decided to instead add
-# an option to get the details for every program containing a url link.
-# The detail page includes a much more diverse group of categories
-# and subcategories.
-#
-# WARNING: an extra html page for each program can be VERY expensive
-# both in time and bandwidth. Before permanently enabling, run once
-# with and once without to determine if its right for you.
-#
-# Since the extra page is so expensive, an option of creating a details
-# cache helps by caching a minimal version of the details (post parsing)
-# keyed on the program title. Using the cache based on the program title
-# gets you what you asked for, fast and possibly wrong answers, since there
-# are certainly cases where the program title is the same for two completly
-# different programs. If you want the right answers pay the price and disable
-# the cache.
-# 
-# to disable the cache, set ExpandedDetailsCacheName to undef or an empty
-# string.
-my $ExpandedDetails=0;
-my $ExpandedDetailsCacheName="progDetails.db";
+sub ConfigureUsage
+{
+    print "usage $0 --configure [options]\n";
+    print "where options are:\n";
+    print "   --help\n";
+    print "     print configure help\n";
+    print "\n";
+    print "   --debug\n";
+    print "     turn on debugging\n";
+    print "\n";
+    print "   --postalcode XXXXXX\n";
+    print "     specify postal code, don't use with --zipcode\n";
+    print "\n";
+    print "   --zipcode YYYYYY\n";
+    print "     specify zip code, don't use with --postalcode\n";
+    print "\n";
+    print "   --provider ZZZZZZZ\n";
+    print "     specify provider id\n";
+    print "\n";
+    print "   --config <file>\n";
+    print "     write results of configure to <file> instead of ./$ConfigFile_g\n";
+    print "\n";
+    print "If any neccessary options are given, interactive mode is enabled\n";
+    print "Result of running configure is a xml formated configuration file\n";
+    print "$ConfigFile_g in current directory (use --config to override location).\n";
+}
 
-# Output Format(s)
-# ----------------
-# Currently the only support output format XMLTV.
-# Future version may include html, or csv files...
+# Step 2 - Grab
+#   
+#   The grab step uses the information collected during
+#   configuration to get tv listings.
+#  
 #
-# By default, a file channels.xml is written which contains data about
-# the channels found, in XMLTV's channels.dtd format.
-#
-my $Format="xmltv";
-my $programsFile="";
-my $channelsFile="channels.xml";
-
-#
-# Unidentified Program Detail/Qualifiers
-# --------------------------------------
-# program details and qualifiers can optionally be stored to a
-# "unidentified qualifiers" database so you don't see the same
-# parse warning for these more than once.
-# use --trackQualifiers db
-#
-# If you want, you can use --dumpQualifiers and submit these for
-# possible additions the list of qualifiers that are understood.
 #
 
 sub Usage
 {
-    print STDERR "usage: $0 [options]\n";
-    print STDERR "where options is:\n";
-    print STDERR "   --programs <file>\n";
-    print STDERR "       specify programs.xml file in xml format\n";
-    print STDERR "       <file> may contain Date::Manip::Unix substitutions\n";
-    print STDERR "       for instance, use --programs \"prog-%d%m%Y.xml\" to separate output by day.\n";
-    print STDERR "       if no --programs is specified stdout is used\n";
-    print STDERR "\n";
-    print STDERR "   --channels <file>\n";
-    print STDERR "       specify channels.xml <file>\n";
-    print STDERR "       <file> follows the similar rules to -programs (not sure why)\n";
-    print STDERR "       default is 'channels.xml', empty string means don't write channels file  \n";
-    print STDERR "\n";
-    print STDERR "   --startHour x\n";
-    print STDERR "       specify starting hour (24 hour clock, default $StartHour)\n";
-    print STDERR "\n";
-    print STDERR "   --endHour y\n";
-    print STDERR "       specify ending hour (can be >24 for next day, default $EndHour)\n";
-    print STDERR "\n";
-    print STDERR "   --days n\n";
-    print STDERR "       specify number of days to include in output (default $Days)\n";
-    print STDERR "\n";
-    print STDERR "   --serviceURL url\n";
-    print STDERR "       specify serviceURL url (replaces script default)\n";
-    print STDERR "\n";
-    print STDERR "   --trackQualifiers <path2db>\n";
-    print STDERR "       specify the DB_File database to store unidentified program\n";
-    print STDERR "       qualifiers in\n";
-    print STDERR "\n";
-    print STDERR "   --dumpQualifiers db\n";
-    print STDERR "       dump unidentified qualifiers database 'db'\n";
+    print "usage $0 [--help|--configure [configure-options] |[grab-options]]\n";
+    print "command line options are:\n";
+    print "   --help\n";
+    print "     print this help\n";
+    print "     use --configure --help for configure help or\n";
+    print "     use --grab --help for grab help\n";
+    print "\n";
+    print "   --configure\n";
+    print "     run configuration step, see --configure --help for more info\n";
+    print "\n";
+    print "grab-options are:\n";
+    print "   --debug\n";
+    print "     turn on debugging\n";
+    print "\n";
+    print "   --config <file>\n";
+    print "     specify file that contains config information, default in ./$ConfigFile_g\n";
+    print "     (created by using --configure)\n";
+    print "\n";
+    print "   --programs <file>\n";
+    print "       specify programs.xml file in xml format\n";
+    print "       <file> may contain Date::Manip::Unix substitutions\n";
+    print "       for instance, use --programs \"prog-%d%m%Y.xml\" to separate output by day.\n";
+    print "       if no --programs is specified stdout is used\n";
+    print "\n";
+    print "   --channels <file>\n";
+    print "       specify channels.xml <file>\n";
+    print "       <file> follows the similar rules to -programs (not sure why)\n";
+    print "       default is 'channels.xml', empty string means don't write channels file  \n";
+    print "\n";
+    print "   --startHour x\n";
+    print "       specify starting hour (24 hour clock, default 0)\n";
+    print "\n";
+    print "   --endHour y\n";
+    print "       specify ending hour (default 24)\n";
+    print "\n";
+    print "   --days n\n";
+   print "       specify number of days to include in output (default 1)\n";
 }
 
-use vars qw/ $opt_programs $opt_channels $opt_startHour $opt_endHour $opt_days $opt_serviceURL $opt_trackQualifiers $opt_dumpQualifiers/;
 
-if ( ! GetOptions('programs=s', 'channels=s', 'startHour=i', 'endHour=i', 'days=i', 'serviceURL=s',
-		   'trackQualifiers=s', 'dumpQualifiers=s') ) {
+# First lets check to see if someone asked for help.
+# this is easier to do here than later.
+my $configure=0;
+if ( @ARGV ) {
+    foreach my $arg (@ARGV) {
+	$configure=1 if ( $arg=~m/^--configure/o );
+    }
+}
+
+sub ask($)
+{
+    print "$_[0]";
+    my $result=<>;
+    chop($result) if ( defined($result) );
+    return($result);
+}
+
+sub askyesorno($$)
+{
+    my ($def, $question)=@_;
+    while ( 1 ) {
+	my $res=ask("$question [$def] ");
+	if ( !defined($res) || $res eq "" ) {
+	    return($def);
+	}
+	$res=~tr/[A-Z]/[a-z]/;
+	if ( $res eq "yes" ) {
+	    return("yes");
+	}
+	elsif ( $res eq "no" ) {
+	    return("no");
+	}
+	else {
+	    print STDERR "invalid response, please use yes or no\n";
+	    print STDERR "\n";
+	}
+    }
+}
+
+if ( $configure ) {
+    use vars qw/$opt_configure $opt_help $opt_postalcode $opt_zipcode $opt_provider $opt_config $opt_debug/;
+
+    $opt_debug=0;
+
+    if ( ! GetOptions('configure', 'help', 'postalcode=s', 'zipcode=s', 'provider=s', 'config=s', 'debug') ) {
+	ConfigureUsage();
+	exit(1);
+    }
+
+    if ( defined($opt_help) ) {
+	ConfigureUsage();
+	exit(0);
+    }
+
+    my $config=new myConfig();
+    
+    my $configfile=$ConfigFile_g;
+    if ( defined($opt_config) ) {
+	if ( ! -f $opt_config ) {
+	    print STDERR "$0: specified config file '$opt_config' does not exist, run --configure\n";
+	    exit(1);
+	}
+	$configfile=$opt_config;
+    }
+
+    if ( -f $configfile && $config->load($configfile) != 0 ) {
+	print STDERR "$0: Failed to read $configfile\n";
+	exit(1);
+    }
+
+    if ( defined($opt_postalcode) && defined($opt_zipcode) ) {
+	print STDERR "$0: only one of --postalcode and --zipcode is allowed\n";
+	exit(1);
+    }
+
+    # command line arguments
+    if ( defined($opt_postalcode) ) {
+	$config->setValue("option_postalcode", $opt_postalcode);
+	$config->unsetValue("option_zipcode");
+    }
+
+    if ( defined($opt_zipcode) ) {
+	$config->setValue("option_zipcode", $opt_zipcode);
+	$config->unsetValue("option_postalcode");
+    }
+    
+    if ( defined($opt_provider) ) {
+	$config->setValue("option_provider", $opt_provider);
+	$config->setValue("option_provider_desc", ""); # unknown so reset to ''
+    }
+
+    # sanity check
+    if ( defined($config->{option_postalcode}) && defined($config->{option_zipcode})) {
+	print STDERR "$0: only one of postal or zip code can be defined\n";
+	exit(1);
+    }
+
+    #
+    # Go interactive to collect what we don't have
+    #
+
+    # if we have no postal code or zip code, the prompt for it
+    if ( !defined($config->{option_postalcode}) && !defined($config->{option_zipcode})) {
+	my $res=ask('what is your postal/zip code ?');
+	if ( defined($res) && length($res) ) {
+	   # $res=~tr/[a-z]/[A-Z]/;
+	    if ( $res=~m/^[a-zA-Z]/o ) {
+		$config->setValue("option_postalcode", $res);
+	    }
+	    else {
+		$config->setValue("option_zipcode", $res);
+	    }
+	}
+	else {
+	    print STDERR "$0: failed to get postal/zip code\n";
+	    exit(1);
+	}
+    }
+    
+    # get list of providers and give them the choice
+    if ( !$config->{option_provider} ) {
+
+	my $code;
+	$code=$config->{option_postalcode} if ( defined($config->{option_postalcode}) );
+	$code=$config->{option_zipcode} if ( defined($config->{option_zipcode}) );
+
+	print STDERR "\ngetting list of providers for postal/zip code $code, be patient..\n";
+	my $providers=ZapListings::getProviders($config->{option_postalcode},
+						$config->{option_zipcode},
+						$opt_debug);
+	if ( !defined($providers) ) {
+	    #print STDERR "$0: failed to get list of providers for postal/zip code $code\n";
+	    #print STDERR "   visit zap2it.com and try the postal/zip code for more information\n";
+	    exit(1);
+	}
+
+	while ( !$config->{option_provider} ) {
+	    print "\n";
+	    print "Id   \tService Provider\n";
+	    print "-----\t---------------------------\n";
+	    foreach my $key (sort keys (%{$providers}) ) {
+		print "$providers->{$key}\t$key\n";
+	    }
+	    print "\n";
+	    my $res=ask("Choose a service provider by id (use '0' to cancel):");
+	    if ( defined($res) ) {
+		if ( $res eq '0' ) {
+		    print "operation cancelled by user\n";
+		    exit(0);
+		}
+
+		foreach my $key (keys (%{$providers}) ) {
+		    if ( $res eq $providers->{$key} ) {
+			$config->{option_provider}=$providers->{$key};
+			$config->{option_provider_desc}=$key;
+		    }
+		}
+	    }
+	}
+    }
+
+    # if we're in the configure step, lets refresh the list of channels
+    # being careful to warn about additions and deletions
+    
+    if ( defined($config->{channels}) ) {
+	print STDERR "\nchecking for changes to channel list, be patient..\n";
+    }
+    else {
+	print STDERR "\ngetting channel list, be patient..\n";
+    }
+
+    my $channels=ZapListings::getChannelList($config->{option_postalcode},
+					     $config->{option_zipcode},
+					     $config->{option_provider},
+					     $opt_debug);
+    
+    if ( !defined($channels) ) {
+	#print STDERR "$0: failed to get list of channels for postal/zip code $config->{option_postalzipcode}\n";
+	#print STDERR "   visit zap2it.com and try the postal/zip code for more information\n";
+	exit(1);
+    }
+
+    my $newChannels;
+    foreach my $station (keys %{$channels}) {
+	my $letters=pop(@{$channels->{$station}});
+	my $number=pop(@{$channels->{$station}});
+
+	# default is channel is in listing
+	$newChannels->{$station}="";
+	$newChannels->{$station}.="$number " if ( defined($number) );
+	$newChannels->{$station}.="$letters" if ( defined($letters) );
+    }
+
+    my $channelsUpdated=0;
+
+    # notify user about update channel ids and new channels
+    foreach my $station (keys %{$newChannels}) {
+	if ( defined($config->{channels}) ) {
+	    if ( $config->{channels}->{$station} ) {
+		$config->{channels}->{$station}->{found}=1;
+
+		# update description
+		if ( $config->{channels}->{$station}->{description} ne 
+		     $newChannels->{$station} ) {
+		    print STDERR "Updated channel id: $station from \"".
+			$config->{channels}->{$station}->{description}."\" to \"".
+			$newChannels->{$station}."\"\n";
+		    $config->{channels}->{$station}->{description}=$newChannels->{$station};
+		    $channelsUpdated++;
+		}
+	    }
+	    else {
+		my $res=askyesorno('yes', "add channel $station \# ".$newChannels->{$station}." ?");
+		$res=~tr/[A-Z]/[a-z]/;
+		if ( $res eq 'yes' ) {
+		    #print STDERR "Adding new channel id: $station \#".$newChannels->{$station}."\n";
+		    $config->{channels}->{$station}->{found}=1;
+		    $config->{channels}->{$station}->{in}=1;
+		    $config->{channels}->{$station}->{description}=$newChannels->{$station};
+		    $channelsUpdated++;
+		}
+	    }
+	}
+	else {
+	    my $res=askyesorno('yes', "add channel $station \# ".$newChannels->{$station}." ?");
+	    $res=~tr/[A-Z]/[a-z]/;
+	    if ( $res eq 'yes' ) {
+		#print STDERR "Adding new channel id: $station \#".$newChannels->{$station}."\n";
+		$config->{channels}->{$station}->{found}=1;
+		$config->{channels}->{$station}->{in}=1;
+		$config->{channels}->{$station}->{description}=$newChannels->{$station};
+		$channelsUpdated++;
+	    }
+	}
+    }
+
+    # warn about channel declarations we didn't find
+    foreach my $station (sort keys (%{$config->{channels}})) {
+	if ( defined($config->{channels}->{$station}->{found}) ) {
+	    delete($config->{channels}->{$station}->{found});
+	}
+	else {
+	    my $res=askyesorno('yes', "drop no-longer available channel $station \# ".$config->{channels}->{$station}->{description}." ?");
+	    $res=~tr/[A-Z]/[a-z]/;
+	    if ( $res eq 'yes' ) {
+		#print STDERR "warning: didn't find channel id: $station \#".
+		#    $config->{channels}->{$station}->{description}."\n";
+		delete($config->{channels}->{$station});
+		$channelsUpdated++;
+	    }
+	}
+    }
+
+    if ( $channelsUpdated == 0 ) {
+	if ( defined($config->{channels}) ) {
+	    print STDERR "\nchannel line-up hasn't changed\n";
+	}
+	else {
+	    print STDERR "\nno channels added\n";
+	}
+    } 
+
+    # write out config file
+    print STDERR "\nupdating $configfile..\n";
+    if ( $config->save($configfile) != 0 ) {
+	print STDERR "$0: $configfile save failed\n";
+	exit(1);
+
+    }
+
+    print STDERR "\nconfiguration step complete, let the games begin !\n";
+    exit(0);
+}
+
+# in grabber mode - yeah !
+
+use vars qw/$opt_help $opt_config $opt_debug $opt_programs $opt_channels $opt_startHour $opt_endHour $opt_days/;
+
+$opt_debug=0;
+
+if ( ! GetOptions('help', 'config=s', 'debug', 'programs=s', 'channels=s', 'startHour=i', 'endHour=i', 'days=i') ) {
     Usage();
     exit(1);
 }
 
-$opt_programs=$programsFile if ( !defined($opt_programs) );
-$opt_channels=$channelsFile if ( !defined($opt_channels) );
-$opt_startHour=$StartHour if ( !defined($opt_startHour) );
-$opt_endHour=$EndHour if ( !defined($opt_endHour) );
-$opt_days=$Days if ( !defined($opt_days) );
-$opt_serviceURL=$URL if ( !defined($opt_serviceURL) );
-
-my $ServiceID;
-if ($opt_serviceURL =~ /[?&](profileID=.+&UserID=[^&]+)/) {
-    $ServiceID = $1;
-}
-else {
-    die "cannot find profileID and stuff in Service ID URL $opt_serviceURL\n";
-}
-
-if ( defined($opt_dumpQualifiers) ) {
-    use DB_File;
-
-    if ( !defined($opt_trackQualifiers) ) {
-	die "you need to specify --trackQualifiers on the command line";
-    }
-
-    my %hash;
-    tie (%hash, "DB_File", $opt_dumpQualifiers, O_RDWR, 0444) || die "$opt_dumpQualifiers: $!";
-    
-    print STDERR "List of identified qualifiers that are not understood:\n";
-    foreach my $key (keys %hash) {
-	print STDERR "\t$key\n";
-    }
-    untie %hash;
+if ( defined($opt_help) ) {
+    Usage();
     exit(0);
 }
+
+# setup defaults
+$opt_programs="" if ( !defined($opt_programs) );
+$opt_channels="channels.xml" if ( !defined($opt_channels) );
+$opt_startHour=0 if ( !defined($opt_startHour) );
+$opt_endHour=24 if ( !defined($opt_endHour) );
+$opt_days=1 if ( !defined($opt_days) );
 
 if ( $opt_startHour < 0 || $opt_startHour > 23 ) {
     print STDERR "specified startHour must be between 0 and 23\n";
     Usage();
     exit(1);
 }
-if ( $opt_endHour < 1 || $opt_endHour > 30 ) {
-    print STDERR "specified endHour must be between 1 and 30\n";
+if ( $opt_endHour < 1 || $opt_endHour > 24 ) {
+    print STDERR "specified endHour must be between 1 and 24\n";
     Usage();
     exit(1);
 }
@@ -312,34 +610,6 @@ if ( $opt_days < 0 || $opt_days > 14 ) {
 
 STDOUT->autoflush(1);
 
-# specify source host site for getting listings.
-# I originally intended to support www.tvguide.ca as well, but
-# as of late, they've changed their format. (again).
-# They use to just proxy the tables from clicktv, but no longer.
-my $SourceHost="www.clicktv.com";
-
-my ($y,$m,$d,$h,$mn,$s)=&Date::Manip::Date_Split(&Date::Manip::ParseDateString("now"));
-my $startNDay=&Date::Manip::Date_DayOfYear($m,$d,$y);
-
-if ( 0 ) {
-    # used for testing... 
-    ($y,$m,$d,$h,$mn,$s)=&Date::Manip::Date_Split(&Date::Manip::ParseDateString("June 17, 2001"));
-    $startNDay=&Date::Manip::Date_DayOfYear($m,$d,$y);
-    #$startDate=&Date::Manip::Date_SecsSince1970($m,$d,$y,0,0,1);
-}
-
-# hash for unidentified program qualifiers
-# used to reduce otherwise repeated warnings
-my %undefQualifiers;
-
-# track qualifiers to db file if specified.
-# if database exists, it is used to remove repeated warnings
-# across invokations of getlistings_na.
-if ( defined($opt_trackQualifiers) ) { 
-    use DB_File;
-    tie (%undefQualifiers, "DB_File", $opt_trackQualifiers, O_RDWR|O_CREAT) || die "$opt_trackQualifiers: $!";
-}
-
 # initalize global XML::Writer if we're writting programs to stdout
 # or if all programs are to being output'd to a single file.
 # The later allows us to use --programs tv.xml with more than one
@@ -351,99 +621,7 @@ my $Poutput_g;
 
 my @FilesWeOpened_g;
 
-if ( !length($opt_programs) ) {
-    print STDERR "writing Programs to stdout\n";
-    $Pwriter_g = new XML::Writer(DATA_MODE => 1, DATA_INDENT => 2 );
-    writeXMLHeader($Pwriter_g);
-}
-elsif ( &Date::Manip::UnixDate("now","$opt_programs") eq $opt_programs ) {
-    print STDERR "writing Programs to $opt_programs\n";
-    $Poutput_g = new IO::File("> $opt_programs") || die "$opt_programs: $!";
-    push(@FilesWeOpened_g, $opt_programs);
-    $Pwriter_g = new XML::Writer(OUTPUT=>$Poutput_g,
-				 DATA_MODE => 1, DATA_INDENT => 2 );
-    writeXMLHeader($Pwriter_g);
-}
-
-sub writeXMLHeader($)
-{
-    my $writer=shift;
-
-    $writer->xmlDecl("ISO-8859-1", "1.0");
-    $writer->doctype('tv', undef, 'xmltv.dtd');
-    $writer->startTag('tv',
-		      date                  =>&Date::Manip::UnixDate("now","%T on %b %e, %Y"),
-		      'source-info-url'     =>"http://$SourceHost",
-		      'source-info-name'    =>"ClickTV",
-		      'source-data-url'     =>"http://$SourceHost/listings.asp?$ServiceID",
-		      'generator-info-name' =>"$VersionID",
-		      'generator-info-url'  =>'http://www.doc.ic.ac.uk/~epa98/work/apps/xmltv/');
-}
-
-my $failed=0;
-
-# special case if you want all the listings for multiple days
-# if so, we grab and resolve "spanning" programs in the listings by
-# requesting multiple days in one call
-if ( $opt_startHour == 0 && $opt_endHour == 24 ) {
-    my $lg=new ClickListings('ServiceID' => $ServiceID,
-			     'URLBase' => "http://$SourceHost/listings.asp",
-			     'DetailURLBase' => "http://$SourceHost/detail.asp",
-			     'undefQualifiers' => \%undefQualifiers);
-
-    # build an array of the dates we should collect
-    my @dates;
-    for (my $nday=0; $nday<$opt_days ; $nday++) {
-	push(@dates, [$opt_startHour, $opt_endHour, $startNDay+$nday, $y]);
-    }
-    if ( $lg->readSchedule(@dates) == 0 ) {
-	$failed++;
-    }
-    else {
-	$lg->expandDetails($ExpandedDetailsCacheName) if ( $ExpandedDetails );
-
-	# set time zone for date conversions
-      Date::Manip::Date_SetConfigVariable('TZ', $lg->{TimeZone});
-      Date::Manip::Date_Init();
-	
-	updateChannelIds($lg);
-	writeOutChannels($lg);
-	writeOutPrograms($lg);
-    }
-}
-
-# otherwise we'll don't need to resolve programs that span days, so
-# we instead loop over the days, and produce output for each
-else {
-    # build an array of the dates we should collect
-    for (my $nday=0; $nday<$opt_days ; $nday++) {
-	my $lg=new ClickListings('ServiceID' => $ServiceID,
-				 'URLBase' => "http://$SourceHost/listings.asp",
-				 'DetailURLBase' => "http://$SourceHost/detail.asp",
-				 'undefQualifiers' => \%undefQualifiers);
-	
-	if ( $lg->readSchedule([$opt_startHour, $opt_endHour, $startNDay+$nday, $y]) != 0 ) {
-	    $failed++;
-	}
-	else {
-	    $lg->expandDetails($ExpandedDetailsCacheName) if ( $ExpandedDetails );
-
-	    # set time zone for date conversions
-	  Date::Manip::Date_SetConfigVariable('TZ', $lg->{TimeZone});
-	  Date::Manip::Date_Init();
-	    
-	    updateChannelIds($lg);
-	    writeOutChannels($lg);
-	    writeOutPrograms($lg);
-	}
-    }
-}
-
-#
-# untie db file if needed
-if ( defined($opt_trackQualifiers) ) { 
-    untie(%undefQualifiers);
-}
+my $failed=grab();
 
 if ( defined($Pwriter_g) ) {
     $Pwriter_g->endTag('tv');
@@ -453,7 +631,7 @@ if ( defined($Pwriter_g) ) {
 
 if ( $failed != 0 ) {
     #print STDERR "cleaning up..\n";
-    if ( defined(@FilesWeOpened_g) ) {
+    if ( @FilesWeOpened_g ) {
 	for my $file (@FilesWeOpened_g) {
 	    if ( -f $file ) {
 		#print STDERR "   removing $file\n";
@@ -465,28 +643,322 @@ if ( $failed != 0 ) {
 }
 exit(0);
 
-sub updateChannelIds
+sub writeXMLHeader($)
 {
-    my ($lg)=@_;
+    my $writer=shift;
 
-    my @Channels=$lg->getChannelList();
-    for (my $chindex=0 ; $chindex< scalar(@Channels) ; $chindex++) {
-	my $channel=$Channels[$chindex];
-	if ( defined($channel->{localStation}) ) {
-	    $channel->{xml_id}="$channel->{number} $channel->{localStation}";
+    $writer->xmlDecl("ISO-8859-1", "1.0");
+    $writer->doctype('tv', undef, 'xmltv.dtd');
+    $writer->startTag('tv',
+		      date                  =>&Date::Manip::UnixDate("now","%T on %b %e, %Y"),
+		      'source-info-url'     =>"http://www.zap2it.com",
+		      'source-info-name'    =>"Zap2It",
+		      'source-data-url'     =>"http://tvlistings2.zap2it.com/textall.asp",
+		      'generator-info-name' =>"$VersionID",
+		      'generator-info-url'  =>'http://www.sourceforge.net/projects/xmltv');
+}
+
+sub grab
+{
+    my $config=new myConfig();
+    
+    my $configfile=$ConfigFile_g;
+    if ( defined($opt_config) ) {
+	if ( ! -f $opt_config ) {
+	    print STDERR "$0: specified config file '$opt_config' does not exist, run --configure\n";
+	    return(1);
+	}
+	$configfile=$opt_config;
+    }
+    else {
+	if ( ! -f $configfile ) {
+	    print STDERR "$0: config file '$configfile' does not exist, run --configure\n";
+	    return(1);
+	}
+    }
+
+    if ( $config->load($configfile) != 0 ) {
+	print STDERR "$0: Failed to read $configfile\n";
+	return(1);
+    }
+    
+    if ( !length($opt_programs) ) {
+	print STDERR "writing Programs to stdout\n";
+	$Pwriter_g = new XML::Writer(DATA_MODE => 1, DATA_INDENT => 2 );
+	writeXMLHeader($Pwriter_g);
+    }
+    elsif ( &Date::Manip::UnixDate("now","$opt_programs") eq $opt_programs ) {
+	print STDERR "writing Programs to $opt_programs\n";
+	$Poutput_g = new IO::File("> $opt_programs") || die "$opt_programs: $!";
+	push(@FilesWeOpened_g, $opt_programs);
+	$Pwriter_g = new XML::Writer(OUTPUT=>$Poutput_g,
+				     DATA_MODE => 1, DATA_INDENT => 2 );
+	writeXMLHeader($Pwriter_g);
+    }
+
+    my $failedCount=0;
+
+    my ($y,$m,$d,$h,$mn,$s)=&Date::Manip::Date_Split(&Date::Manip::ParseDateString("now"));
+    my $startNDay=&Date::Manip::Date_DayOfYear($m,$d,$y);
+
+    #
+    # So that the output a day at a time, this allows for separate files per day
+    #
+    my $tz=&Date::Manip::Date_TimeZone();
+    my $year=$y;
+    for (my $nday=0; $nday<$opt_days ; $nday++) {
+	my $writer;
+	my $output;
+
+	my $dateStr=createDateString(0, $startNDay+$nday, $year, 0, $tz);
+
+	if ( defined($Pwriter_g) ) {
+	    $writer=$Pwriter_g;
 	}
 	else {
-	    $channel->{xml_id}=$channel->{number};
+	    my $filename=&Date::Manip::UnixDate($dateStr, "$opt_programs");
+	    if ( $opt_programs eq $filename ) {
+		die "This case should have been caught before here";
+	    }
+	    
+	    print STDERR "writing Programs to $filename\n";
+	    $output = new IO::File("> $filename") || die "$filename: $!";
+	    push(@FilesWeOpened_g, $filename);
+	    $writer = new XML::Writer(OUTPUT=>$output, DATA_MODE => 1, DATA_INDENT => 2 );
+	    
+	    writeXMLHeader($writer);
 	}
+	
+	my $lg=new ZapListings::Scraper('PostalCode'=> $config->{option_postalcode},
+					'ZipCode'   =>$config->{option_zipcode},
+					'ProviderID'=>$config->{option_provider},
+					'Debug'     =>$opt_debug);
+
+	foreach my $station (keys %{$config->{channels}}) {
+	    
+	    next if ( !$config->{channels}->{$station}->{in} );
+	    
+	    my ($year,$month,$day,$hr,$min,$sec)=Date::Manip::Date_NthDayOfYear($y, $startNDay+$nday);
+	    
+	    if ( $lg->readSchedule($station, $opt_startHour, $opt_endHour, $day, $month, $year) == 0 ) {
+		$failedCount++;
+	    }
+	    else {
+		# set time zone for date conversions
+		#Date::Manip::Date_SetConfigVariable('TZ', $lg->{TimeZone});
+		#Date::Manip::Date_Init();
+		
+		writeOutPrograms($lg, $startNDay+$nday, $year, $tz, $writer, $station);
+	    }
+	}
+	
+	if ( defined($Pwriter_g) && $writer != $Pwriter_g ) {
+	    $writer->endTag('tv');
+	    $writer->end();
+	    $output->close();
+	}
+	
+	# update and write out channels after every day in case
+	# user wanted different files for different days
+	writeOutChannels($config, $dateStr, $opt_channels);
+    }
+    return($failedCount);
+}
+
+# create a conversion string
+sub createDateString($$$$$)
+{
+    my ($minuteOfDay, $dayOfYear, $year, $additionalMin, $time_zone)=@_;
+    
+    if ( $additionalMin != 0 ) {
+	$minuteOfDay+=$additionalMin;
+
+	# deal with case where additional minutes pushes us over end of day
+	if ( $minuteOfDay > 24*60 ) {
+	    $minuteOfDay-=24*60;
+	    $dayOfYear++;
+
+	    # check and deal with case where this pushes us past end of year
+	    my $isleap=&Date_LeapYear($year);
+	    if ($dayOfYear >= ($isleap ? 367 : 366)) {
+		$year++;
+		$dayOfYear-=($isleap ? 367 : 366);
+	    }
+	}
+    }
+
+    # calculate year,month and day from nth day of year info
+    my ($pYEAR,$pMONTH,$pDAY,$pHR,$pMIN,$pSEC)=Date::Manip::Date_NthDayOfYear($year, $dayOfYear);
+
+    # set HR and MIN to what they should really be
+    $pHR=int($minuteOfDay/60);
+    $pMIN=$minuteOfDay-($pHR*60);
+
+    return(sprintf("%4d%02d%02d%02d%02d00 %s", $pYEAR, $pMONTH, $pDAY, $pHR, $pMIN, $time_zone));
+}
+
+sub writeOutPrograms($$$$$$)
+{
+    my ($lg, $dayOfYear, $year, $mytz, $writer, $channel)=@_;
+    my $IncludePartialPrograms=0;
+
+    my @programs=$lg->getPrograms();
+
+    for (my $p=0 ; $p<scalar(@programs) ; $p++) {
+	my $prog=$programs[$p];
+
+    }
+
+    for my $prog (@programs) {
+
+	$prog->{start}=createDateString(($prog->{start_hour}*60+$prog->{start_min}), $dayOfYear, $year, 0, $mytz);
+	delete($prog->{start_hour});
+	delete($prog->{start_min});
+	if ( $prog->{end_hour} >= 24 ) {
+	    $prog->{end}=createDateString((($prog->{end_hour}-24)*60+$prog->{end_min}), $dayOfYear+1, $year, 0, $mytz);
+	}
+	else {
+	    $prog->{end}=createDateString(($prog->{end_hour}*60+$prog->{end_min}), $dayOfYear, $year, 0, $mytz);
+	}
+	delete($prog->{end_hour});
+	delete($prog->{end_min});
+
+	my $title=$prog->{title};
+	    
+	#print STDERR "storing $title..\n";
+
+	if ( defined($prog->{contFromPreviousListing}) ) {
+	    if ( !$IncludePartialPrograms ) {
+		#print STDERR "warning: not including program $prog->{title} which starts previous to listing\n";
+		next;
+	    }
+	    $title="(<-cont) $title";
+	}
+	if ( defined($prog->{contToNextListing}) ) {
+	    if ( !$IncludePartialPrograms ) {
+		#print STDERR "warning: not including program $prog->{title} which ends past listing boundaries\n";
+		next;
+	    }
+	    $title="$title (cont->)";
+	}
+	
+	$writer->startTag('programme', start=> $prog->{start}, 
+			  stop => $prog->{end}, channel=> "$channel");
+	$writer->dataElement('title', $title);
+	$writer->dataElement('sub-title', $prog->{subtitle}) if ( defined($prog->{subtitle}) );
+	$writer->dataElement('desc', $prog->{desc}) if ( defined($prog->{desc}) );
+		
+	if ( defined($prog->{director}) || defined($prog->{actors}) ) {
+	    $writer->startTag('credits');
+	    $writer->dataElement('director', $prog->{director}) if ( defined($prog->{director}) );
+	    if ( defined($prog->{actors}) ) {
+		foreach my $actor (@{$prog->{actors}}) {
+		    $writer->dataElement('actor', $actor);
+		}
+	    }
+	    $writer->endTag('credits');
+	}
+	$writer->dataElement('date', $prog->{year}) if ( defined($prog->{year}) );
+	
+	if ( defined($prog->{category}) ) {
+	    foreach my $cat(@{$prog->{category}}) {
+		$writer->dataElement('category', $cat);
+	    }
+	}
+	# hunt for things in the "qualifiers bucket" where alot of things fall.
+	if ( defined($prog->{qualifiers}) ) {
+	    if ( defined($prog->{qualifiers}->{PaidProgram}) ) {
+		# FIXME I don't that payment counts as a
+		# 'category'.  Though there should probably be
+		# some way to include it.  -- epa98@doc.ic.ac.uk
+		# 
+		$writer->dataElement('category', "advertisement");
+	    }
+	    if ( defined($prog->{qualifiers}->{Language}) ) {
+		if ( defined($prog->{qualifiers}->{Dubbed}) ) {
+		    $writer->dataElement('orig-language', $prog->{qualifiers}->{Language});
+		}
+		else {
+		    $writer->dataElement('language', $prog->{qualifiers}->{Language});
+		}
+	    }
+	    
+	    if ( defined($prog->{qualifiers}->{Taped}) ) {
+		# nowhere to put this
+	    }
+	    if ( defined($prog->{qualifiers}->{InProgress}) ) {
+		# nowhere to put this
+	    }
+	    if ( defined($prog->{qualifiers}->{PartInfo}) ) {
+		# nowhere to put this
+		# comes in the form of "Part 1 of 2"
+	    }
+	    if ( defined($prog->{qualifiers}->{Live}) ) {
+		# nowhere to put this
+	    }
+	    if ( defined($prog->{qualifiers}->{Animated}) ) {
+		# nowhere to put this 
+	    }
+	    if ( defined($prog->{qualifiers}->{HDTV}) ) {
+		# nowhere to put this 
+	    }
+	    if ( defined($prog->{qualifiers}->{BlackAndWhite}) ) {
+		$writer->startTag('video');
+		$writer->dataElement('colour', 'no');
+		$writer->endTag('video');
+	    }
+	    if ( defined($prog->{qualifiers}->{InStereo}) ) {
+		$writer->startTag('audio');
+		$writer->dataElement('stereo', '');
+		$writer->endTag('audio');
+	    }
+	    if ( defined($prog->{qualifiers}->{PremiereShowing}) ) {
+		$writer->dataElement('premiere',$prog->{qualifiers}->{PremiereShowing});
+	    }
+	    if ( defined($prog->{qualifiers}->{LastShowing}) ) {
+		$writer->dataElement('last-chance',$prog->{qualifiers}->{LastShowing});
+	    }
+	    
+	    if ( defined($prog->{qualifiers}->{Subtitles}) ) {
+		$writer->dataElement('subtitles', '', 'type' => "onscreen");
+	    }
+	    elsif ( defined($prog->{qualifiers}->{ClosedCaptioned}) ) {
+		$writer->dataElement('subtitles', '', 'type' => "teletext");
+	    }
+	}
+	if ( defined($prog->{ratings_VCHIP}) ) {
+	    if ( defined($prog->{ratings_VCHIP_Expanded}) ) {
+		$writer->dataElement('rating', "$prog->{ratings_VCHIP} $prog->{ratings_VCHIP_Expanded}", system =>'VCHIP');
+	    }
+	    else {
+		$writer->dataElement('rating', "$prog->{ratings_VCHIP}", 'system' =>'VCHIP');
+	    }
+	}
+	$writer->dataElement('rating', "$prog->{ratings_MPAA}", 'system' =>'MPAA') if ( defined($prog->{ratings_MPAA}) );
+
+	if ( defined($prog->{ratings_Warnings}) ) {
+	    my %hash;
+	    foreach my $k ( sort @{$prog->{ratings_Warnings}}) {
+		$hash{$k}=1;
+	    }
+	    foreach my $k ( keys %hash ) {
+		$writer->dataElement('rating', "$k", 'system' =>'General Warning');
+	    }
+	}
+	if ( defined($prog->{stars_rating}) ) {
+	    # nowhere to put this yet.
+	    # comes in the form of a rating out fraction out of 4
+	}
+	$writer->endTag('programme');
     }
 }
 
 # write the channels in xml format
-sub writeOutChannels
+sub writeOutChannels($$$)
 {
-    my ($lg)=@_;
+    my ($config, $dateStr, $filenamefmt)=@_;
 
-    my $filename=&Date::Manip::UnixDate($lg->getProgramStartTime(),"$opt_channels");
+    my $filename=&Date::Manip::UnixDate($dateStr, $filenamefmt);
 
     if ( $filename eq "" ) {
 	return;
@@ -508,20 +980,21 @@ sub writeOutChannels
 	# before nenabling it :)
 	$writer->startTag('channels',
 			  date=>&Date::Manip::UnixDate("now","%T on %b %e, %Y"),
-			  source=>"$SourceHost",
-			  author=>"$VersionID");
+			  'source-info-url'     =>"http://www.zap2it.com",
+			  'source-info-name'    =>"Zap2It",
+			  'source-data-url'     =>"http://tvlistings2.zap2it.com/textall.asp",
+			  'generator-info-name' =>"$VersionID",
+			  'generator-info-url'  =>'http://www.sourceforge.net/projects/xmltv');
     }
-    my @Channels=$lg->getChannelList();
-    for (my $chindex=0 ; $chindex< scalar(@Channels) ; $chindex++) {
-	my $channel=$Channels[$chindex];
-	$writer->startTag('channel', id=> $channel->{xml_id});
 
-	if ( defined($channel->{affiliate}) ) {
-	    $writer->dataElement('display-name', "Channel $channel->{xml_id} ($channel->{affiliate})");
-	}
-	else {
-	    $writer->dataElement('display-name', "Channel $channel->{xml_id}");
-	}
+    foreach my $station (keys %{$config->{channels}}) {
+	
+	next if ( !$config->{channels}->{$station}->{in} );
+
+	$writer->startTag('channel', id=> $station);
+
+	$writer->dataElement('display-name', "Channel $config->{channels}->{$station}->{description}");
+
 	# not supported as of yet
 	#$writer->dataElement('url', $channel->{url}) if ( defined($channel->{url}) );
 	$writer->endTag('channel');
@@ -531,171 +1004,4 @@ sub writeOutChannels
     $output->close();
 }
 
-sub writeOutPrograms
-{
-    my ($lg)=@_;
-
-    my $output;
-    my $writer;
-
-    if ( defined($Pwriter_g) ) {
-	$writer=$Pwriter_g;
-    }
-    else {
-	my $filename=&Date::Manip::UnixDate($lg->getProgramStartTime(),"$opt_programs");
-	if ( $opt_programs eq $filename ) {
-	    die "This case should have been caught before here";
-	}
-
-	print STDERR "writing Programs to $filename\n";
-	$output = new IO::File("> $filename") || die "$filename: $!";
-	push(@FilesWeOpened_g, $filename);
-	$writer = new XML::Writer(OUTPUT=>$output, DATA_MODE => 1, DATA_INDENT => 2 );
-
-	writeXMLHeader($writer);
-    }
-
-    my @Channels=$lg->getChannelList();
-    for (my $chindex=0 ; $chindex< scalar(@Channels) ; $chindex++) {
-	my @progs=$lg->getProgramsOnChannel($chindex);
-	
-	foreach my $p (@progs) {
-	    my $prog=$p->{program};
-	    my $title=$prog->{title};
-	    
-	    #print STDERR "storing $title..\n";
-
-	    if ( defined($p->{contFromPreviousListing}) ) {
-		if ( !$IncludePartialPrograms ) {
-		    #print STDERR "warning: not including program $prog->{title} which starts previous to listing\n";
-		    next;
-		}
-		$title="(<-cont) $title";
-	    }
-	    if ( defined($p->{contToNextListing}) ) {
-		if ( !$IncludePartialPrograms ) {
-		    #print STDERR "warning: not including program $prog->{title} which ends past listing boundaries\n";
-		    next;
-		}
-		$title="$title (cont->)";
-	    }
-	    
-	    $writer->startTag('programme', start=> $p->{start}, stop => $p->{end}, channel=> "$p->{channel}->{xml_id}");
-	    $writer->dataElement('title', $title);
-	    $writer->dataElement('sub-title', $prog->{subtitle}) if ( defined($prog->{subtitle}) );
-	    $writer->dataElement('desc', $prog->{desc}) if ( defined($prog->{desc}) );
-		
-	    if ( defined($prog->{director}) || defined($prog->{actors}) ) {
-		$writer->startTag('credits');
-		$writer->dataElement('director', $prog->{director}) if ( defined($prog->{director}) );
-		if ( defined($prog->{actors}) ) {
-		    foreach my $actor (@{$prog->{actors}}) {
-			$writer->dataElement('actor', $actor);
-		    }
-		}
-		$writer->endTag('credits');
-	    }
-	    $writer->dataElement('date', $prog->{year}) if ( defined($prog->{year}) );
-	    
-	    if ( defined($prog->{category}) ) {
-		foreach my $cat(@{$prog->{category}}) {
-		    $writer->dataElement('category', $cat);
-		}
-	    }
-	    # hunt for things in the "qualifiers bucket" where alot of things fall.
-	    if ( defined($prog->{qualifiers}) ) {
-		if ( defined($prog->{qualifiers}->{PaidProgram}) ) {
-		    # FIXME I don't that payment counts as a
-		    # 'category'.  Though there should probably be
-		    # some way to include it.  -- epa98@doc.ic.ac.uk
-		    # 
-		    $writer->dataElement('category', "advertisement");
-		}
-		if ( defined($prog->{qualifiers}->{Language}) ) {
-		    if ( defined($prog->{qualifiers}->{Dubbed}) ) {
-			$writer->dataElement('orig-language', $prog->{qualifiers}->{Language});
-		    }
-		    else {
-			$writer->dataElement('language', $prog->{qualifiers}->{Language});
-		    }
-		}
-		
-		if ( defined($prog->{qualifiers}->{Taped}) ) {
-		    # nowhere to put this
-		}
-		if ( defined($prog->{qualifiers}->{InProgress}) ) {
-		    # nowhere to put this
-		}
-		if ( defined($prog->{qualifiers}->{PartInfo}) ) {
-		    # nowhere to put this
-		    # comes in the form of "Part 1 of 2"
-		}
-		if ( defined($prog->{qualifiers}->{Live}) ) {
-		    # nowhere to put this
-		}
-		if ( defined($prog->{qualifiers}->{Animated}) ) {
-		    # nowhere to put this 
-		}
-		if ( defined($prog->{qualifiers}->{HDTV}) ) {
-		    # nowhere to put this 
-		}
-		if ( defined($prog->{qualifiers}->{BlackAndWhite}) ) {
-		    $writer->startTag('video');
-		    $writer->dataElement('colour', 'no');
-		    $writer->endTag('video');
-		}
-		if ( defined($prog->{qualifiers}->{InStereo}) ) {
-		    $writer->startTag('audio');
-		    $writer->dataElement('stereo', '');
-		    $writer->endTag('audio');
-		}
-		if ( defined($prog->{qualifiers}->{PremiereShowing}) ) {
-		    $writer->dataElement('premiere',$prog->{qualifiers}->{PremiereShowing});
-		}
-		if ( defined($prog->{qualifiers}->{LastShowing}) ) {
-		    $writer->dataElement('last-chance',$prog->{qualifiers}->{LastShowing});
-		}
-
-		if ( defined($prog->{qualifiers}->{Subtitles}) ) {
-		    $writer->dataElement('subtitles', '', 'type' => "onscreen");
-		}
-		elsif ( defined($prog->{qualifiers}->{ClosedCaptioned}) ) {
-		    $writer->dataElement('subtitles', '', 'type' => "teletext");
-		}
-	    }
-	    if ( defined($prog->{ratings_VCHIP}) ) {
-		if ( defined($prog->{ratings_VCHIP_Expanded}) ) {
-		    $writer->dataElement('rating', "$prog->{ratings_VCHIP} $prog->{ratings_VCHIP_Expanded}", system =>'VCHIP');
-		}
-		else {
-		    $writer->dataElement('rating', "$prog->{ratings_VCHIP}", 'system' =>'VCHIP');
-		}
-	    }
-	    $writer->dataElement('rating', "$prog->{ratings_MPAA}", 'system' =>'MPAA') if ( defined($prog->{ratings_MPAA}) );
-
-	    if ( defined($prog->{ratings_Warnings}) ) {
-		my %hash;
-		foreach my $k ( sort @{$prog->{ratings_Warnings}}) {
-		    $hash{$k}=1;
-		}
-		foreach my $k ( keys %hash ) {
-		    $writer->dataElement('rating', "$k", 'system' =>'General Warning');
-		}
-	    }
-	    if ( defined($prog->{stars_rating}) ) {
-		# nowhere to put this yet.
-		# comes in the form of a rating out fraction out of 4
-	    }
-	    $writer->endTag('programme');
-	}
-    }
-    if ( defined($Pwriter_g) && $writer != $Pwriter_g ) {
-	$writer->endTag('tv');
-	$writer->end();
-	$output->close();
-    }
-}
-
-
-
-
+1;
