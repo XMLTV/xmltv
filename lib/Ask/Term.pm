@@ -6,6 +6,7 @@
 package XMLTV::Ask::Term;
 use strict;
 use Carp qw(croak carp);
+use Term::ReadKey;
 
 # Use Log::TraceMessages if installed.
 BEGIN {
