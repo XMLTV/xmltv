@@ -225,7 +225,7 @@ sub getForms($)
 	$start=index($content, "<FORM") if ( $start == -1 );
 
 	if ( $start == -1 ) {
-	    $start=index($content, $1) if ( $start=~m/(<FORM)/ios );
+	    $start=index($content, $1) if ( $content=~m/(<FORM)/ios );
 	}
 	last if ( $start == -1 );
 
@@ -235,7 +235,7 @@ sub getForms($)
 	$end=index($insideContent, "</FORM>") if ( $end == -1 );
 
 	if ( $end == -1 ) {
-	    $end=index($content, $1) if ( $end=~m/(<FORM)/ios );
+	    $end=index($insideContent, $1) if ( $insideContent=~m/(<FORM)/ios );
 	}
 	last if ( $end == -1 );
 
@@ -246,7 +246,11 @@ sub getForms($)
 	$insideContent=substr($insideContent, 0, $end);
 	#print STDERR "inside = $insideContent\n";
 
+	# Make sure the loop always terminates.
+	my $oldLength = length $content;
 	$content=substr($content, $start+$end);
+	die "failed to trim content (start $start, end $end after start): $content"
+	  unless length $content < $oldLength;
 
 	$insideContent=~s/^<form\s*([^>]+)>(.*)<\/form>$//ios;
 	my $formAttrs=$1;
@@ -301,7 +305,12 @@ sub getForms($)
 		my $above=substr($insideForm, 0, $start);
 		
 		my $ntext=substr($insideForm, $start, $end);
+
+		# Make sure the loop always terminates.
+		my $oldLength = length $insideForm;
 		$insideForm=$above.substr($insideForm, $end);
+		die "failed to trim $insideForm"
+		  unless length $insideForm < $oldLength;
 
 		while ( $ntext=~s/^<select\s*([^>]+)>(.*)(?=<\/select>)//ios ) {
 		    my $selectAttrs=$1;
@@ -663,6 +672,7 @@ sub Form2Request($$)
 sub doRequest($$$)
 {
     my ($ua, $req, $debug)=@_;
+    die if not $req;
     my $cookie_jar=$ua->cookie_jar();
 
     if ( $debug ) {
@@ -714,7 +724,9 @@ sub getCurrentReleaseInfo($$)
     my $debug=shift;
     my $ua=XMLTV::ZapListings::RedirPostsUA->new();
 
-    my $res=doRequest($ua, GET($url), $debug);
+    my $req = GET($url);
+    die "cannot make request object for $url" if not $req;
+    my $res=doRequest($ua, $req, $debug);
     if ( !defined($res) ) {
 	return(undef);
     }
@@ -771,6 +783,7 @@ sub initGeoCodeAndGetProvidersList($$)
     my $geocode=shift;
 
     my $req = GET("http://www.zap2it.com/index");
+    die "cannot make request object for http://www.zap2it.com/index" if not $req;
     my $res=&doRequest($self->{ua}, $req, $self->{Debug});
 
     if ( !$res->is_success ) {
@@ -804,6 +817,7 @@ sub initGeoCodeAndGetProvidersList($$)
 
     $req=$self->getZipCodeForm($geocode, $res->base());
     if ( !defined($req) ) {
+	warn "failed to get zip code form for $geocode, " . $res->base() . "\n";
 	return(-1);
     }
 
@@ -904,6 +918,7 @@ sub getChannelList($$)
 
     my $req=$self->Form2Request($self->{ProviderForm});
     if ( !defined($req) ) {
+	warn "failed to get provider form\n";
 	return(undef);
     }
 
@@ -922,7 +937,7 @@ sub getChannelList($$)
 	}
     }
 
-warn "zap2it gave us a server error, but let's go for it anyway\n" if $res->code eq '500' and !$got500error++ ;
+    warn "zap2it gave us a server error, but let's go for it anyway\n" if $res->code eq '500' and !$got500error++ ;
     if ( !($res->is_success || $res->code eq '500') ) {
 	warn("zap2it failed to give us a page: ".$res->code().":".
 			 HTTP::Status::status_message($res->code())."\n");
@@ -944,13 +959,13 @@ warn "zap2it gave us a server error, but let's go for it anyway\n" if $res->code
     }
 
     if ( !defined($self->{GridForm}) ) {
-      warn("zap2it doesn't have a grid form\n");
+	warn("zap2it doesn't have a grid form\n");
 	return(undef);
     }
 
     $self->{formSettings}->{rowdisplay} = 0;  # All Channels
     $req = $self->Form2Request($self->{GridForm});
-
+    die "failed to get grid form\n" if not $req;
     $res=&doRequest($self->{ua}, $req, $self->{Debug});
 
     warn "zap2it gave us a server error, but let's go for it anyway\n" if $res->code eq '500' and !$got500error++;
@@ -2057,6 +2072,7 @@ sub readSchedule($$$$$)
 
 	my $req=$self->Form2Request($self->{ChannelByTextForm});
 	if ( !defined($req) ) {
+	    warn "failed to get channel by text form\n";
 	    return(-1);
 	}
 	
