@@ -369,8 +369,7 @@ print STDERR "\nMyReplay looking for ",join("|",$title,$chan,$hhmm,$len,$days),"
 #
 # convert channel ID to new format if ncessary
 #
-       if ( ! exists $CHAN{$chan} 
-           && exists $CHAN_NAME{$chan} )
+       if ( ! exists $CHAN{$chan} && exists $CHAN_NAME{$chan} )
        {
           $chan=$CHAN_NAME{$chan};
        }
@@ -380,7 +379,6 @@ print STDERR "\nMyReplay looking for ",join("|",$title,$chan,$hhmm,$len,$days),"
 #
       unless ( exists $CHAN{$chan})
       {
-
           print STDERR "MyReplayTV Channel '$chan' not in guide\n";
           $CHAN{$chan}{'display-name'}[0][0]=$chan;
       }
@@ -395,44 +393,66 @@ print STDERR "\nMyReplay looking for ",join("|",$title,$chan,$hhmm,$len,$days),"
       }
 
 #
-# Check for a time match in our list of episodes.
+# Now this gets tricky.  MyReplayTV tells us the time of a show, but not
+# the day.  We can't assume the show is available for all days listed
+# because that would cause too many false alarms in tv_check
+#
+# We can't use any day the show is on because of syndication.  A 2am
+# Daily showing of a weekly show would also cause false alarms.
+#
+# So, the solution is to find the episode 2 slots back and 2 slots forward.
+# If the MyReplay hhmm start time is between these values, record the day.
+#
+# This will cause problems around midnight.  I don't have a good solution there
+#
+# Personally, I now set all shows to record on a single day on the Replay, and
+# if you specify a single day, this check isn't done... there's you're work-around!
 #
       my $found="";
-      for my $ep (@{$GUIDE{all}{$title}})
+      for my $ep (@{$GUIDE{all}{lc($title)}})
       {
-
-        my $next = $ep->{next};
-        my $prev = $ep->{prev};
-
-        next if $ep->{device} eq $device; # already recording?
-
-        gen_episode_dates($ep)   unless $ep->{day};
-        gen_episode_dates($next) if $next && !$next->{day};
-        gen_episode_dates($prev) if $prev && !$prev->{day};
-
-#
-#     timeslot is a hit if start time is greater than previous show's
-#                      and start time and less than next show's start time.
-#
+        gen_episode_dates($ep)    unless $ep->{day};
     	my $day  = $ep->{day};
 
         next if $chan ne $ep->{channel};
         next if $days !~ /$day/;    	# episode on of myreplay's days?
         next if $found =~ /:$day/;      # already got this day?
 
-      next if (   $prev
-               && $prev->{mmdd} eq $ep->{mmdd}
-               && $prev->{hhmm} gt $hhmm);
+#
+# get start time 2 slots back
+#
+        my ($ep2,$wstart,$wstop);
+        $ep2= $ep;
+        $ep2 =$ep2->{prev} if $ep2->{prev};
+        $ep2 =$ep2->{prev} if $ep2->{prev};
+        gen_episode_dates($ep2)    unless $ep2->{day};
+        $wstart=$ep2->{hhmm};
 
-      next if (   $next
-               && $next->{mmdd} eq $ep->{mmdd}
-               && $next->{hhmm} lt $hhmm);
+#
+# Now start time 2 slots forward
+#
+        $ep2= $ep;
+        $ep2 =$ep2->{next} if $ep2->{next};
+        $ep2 =$ep2->{next} if $ep2->{next};
+        gen_episode_dates($ep2)    unless $ep2->{day};
+        $wstop=$ep2->{hhmm};
 
+printf STDERR "day search: %s: %s<%s<%s\n",$title,$wstart,$hhmm,$wstop;
+
+#
+# record the day if MyReplay start time is between these times
+#
+        next if $hhmm le $wstart;
+        next if $hhmm ge $wstop;
+        
+#
+# guess it's a hit... mark it
+#
       add_myreplaytv_show($title,$chan,$hhmm,$len,$day);
       $ep->{device} = $device;
       $found       .= ":$day";
 
-      } #epiosde scan
+      } # myreplay day search
 
 #
 # add it as an unknown if not found
@@ -943,31 +963,27 @@ for my $start (sort keys %SHOW_TIME)
           next unless length($show->{day} ); # don't record title-only scans
           next unless length($show->{hhmm}); # this should never happen
           next unless $ep->{channel} eq $show->{channel}; # Replay is channel specific
-          my $slot=0;
-          my $sh_slot = 0;
-          my $ep_slot = 0;
-          my $sh_ep  = ""; # holds episode data at show slot
-
-          for my $key ( sort keys %{$GUIDE{$ep->{channel}}{$ep->{mmdd}}} )
-          {
-  	        unless ( $key gt $show->{hhmm} )
-	        {
-	    	   $sh_ep   = $GUIDE{$ep->{channel}}{$ep->{mmdd}}{$key};
-               $sh_slot = $slot;
-	        }
-            $ep_slot = $slot unless $key gt $ep->{hhmm};
-            $slot++;
-          }
 
 #
-# consider it a hit if our show is on at another matching time
+# check show two show slots forward + back (one slot caught by start-time search)
 #
-          if (  $sh_ep                                       and
-                lc(get_text($sh_ep->{title})) eq lc($show->{title})  and
-          	    abs( $ep_slot - $sh_slot ) < 2 )
+          my $hit=undef;
+          my $epp=undef;
+          
+          $epp = $ep->{prev} if defined $ep;
+          $epp = $ep->{prev} if defined $epp;
+          $hit = $epp if lc(get_text($epp->{title})) eq lc($show->{title});
+          $hit = undef if $epp->{device} eq $show->{device};
+          
+          $epp = $ep->{next} if defined $ep;
+          $epp = $ep->{next} if defined $epp;
+          $hit = $epp if !$hit && lc(get_text($epp->{title})) eq lc($show->{title});
+          $hit = undef if $epp->{device} eq $show->{device};
+          
+          if ($hit)
           {
-              $ep->{device}=$show->{device};
-              push @{$RECORD{$show->{device}}},$ep;
+              $epp->{device}=$show->{device};
+              push @{$RECORD{$show->{device}}},$epp;
           }
         } # replay conflict check
     } # extra episode scan
