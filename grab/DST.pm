@@ -14,6 +14,8 @@ use Date::Manip; # no Date_Init(), that can be done by the app
 use XMLTV::TZ qw(gettz tz_to_num);
 use XMLTV::Date;
 
+our $Mode = 'eur';
+
 # Use Log::TraceMessages if installed.
 BEGIN {
     eval { require Log::TraceMessages };
@@ -108,7 +110,15 @@ sub parse_local_date($$) {
       if not defined $year;
 
     # Start and end dates of DST in local winter time.
-    my ($start_dst, $end_dst) = @{dst_dates($year)};
+    my ($start_dst, $end_dst);
+    if ($Mode eq 'eur') {
+	($start_dst, $end_dst) = @{dst_dates($year)};
+    }
+    elsif ($Mode eq 'na') {
+	($start_dst, $end_dst) = @{dst_dates_na($year, $winter_tz)};
+    }
+    else { die }
+	
     foreach ($start_dst, $end_dst) {
 	$_ = Date_ConvTZ($_, 'UTC', $winter_tz);
     }
@@ -197,7 +207,14 @@ sub date_to_local( $$ ) {
     }
 
     # Find the start and end dates of summer time.
-    my ($start_dst, $end_dst) = @{dst_dates($year)};
+    my ($start_dst, $end_dst);
+    if ($Mode eq 'eur') {
+	($start_dst, $end_dst) = @{dst_dates($year)};
+    }
+    elsif ($Mode eq 'na') {
+	($start_dst, $end_dst) = @{dst_dates_na($year, $base_tz)};
+    }
+    else { die }
 
     my $use_tz;
     if (Date_Cmp($d, $start_dst) < 0) {
@@ -253,7 +270,7 @@ sub utc_offset( $$ ) {
 #   start time and date of summer time (in UTC)
 #   end time and date of summer time (in UTC)
 #
-sub dst_dates($) {
+sub dst_dates( $ ) {
     die "usage: dst_dates(year), got args: @_" if @_ != 1;
     my $year = shift;
     die "don't know about DST before 1998" if $year < 1998;
@@ -275,6 +292,43 @@ sub dst_dates($) {
 
     return [ $start_dst, $end_dst ];
 }
+
+sub dst_dates_na( $$ ) {
+    die "usage: dst_dates(year, winter_tz), got args: @_" if @_ != 2;
+    my ($year, $winter_tz) = @_;
+    die "don't know about DST before 1988" if $year < 1988;
+    $winter_tz =~ /^\s*-\s*(\d\d)(?:00)?\s*$/
+      or die "bad North American winter time zone $winter_tz";
+    my $hours = $1;
+
+    my ($start_dst, $end_dst);
+    foreach (1 .. 31) {
+	if (not defined $start_dst and $_ < 31) {
+	    my $date = "$year-04-$_";
+	    my $day = UnixDate(parse_date($date), '%A');
+	    if ($day =~ /Sunday/) {
+		# First Sunday in April.  DST starts at 02:00 local
+		# standard time.
+		#
+		$start_dst = Date_ConvTZ(parse_date("$date 02:00"),
+					 "-$winter_tz", 'UTC');
+	    }
+	}
+
+	my $date = "$year-10-$_";
+	my $day = UnixDate(parse_date($date), '%A');
+	next unless $day =~ /Sunday/;
+	# A Sunday in October (and the last one we see will be the
+	# last Sunday).  DST ends at 01:00 local standard time.
+	#
+	$end_dst = Date_ConvTZ(parse_date("$date 01:00"),
+			       "-$winter_tz", 'UTC');
+    }
+    die if not defined $start_dst or not defined $end_dst;
+
+    return [ $start_dst, $end_dst ];
+}
+
 
 
 1;
