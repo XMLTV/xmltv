@@ -7,29 +7,12 @@
 # 2. XMLTV::IMDB package that uses data files from the Cruncher package to
 #    update/add details to XMLTV programme nodes.
 #
-# Be warned, this and the tv_imdb script are prototypes and may change
-# without notice.
-#
 # FUTURE - multiple hits on the same 'title only' could try and look for
 #          character names matching from description to imdb.com character
 #          names.
 #
 # FUTURE - multiple hits on 'title only' should probably pick latest
 #          tv series over any older ones. May make for better guesses.
-#
-# FUTURE - common english->french vowel changes. For instance
-#          "Anna Karénin" (é->e)
-#
-# FIXED - "Victoria and Albert" appears for imdb's "Victoria & Albert" (and -> &)
-#
-# FUTURE - close hit could be just missing or extra
-#          punctuation:
-#       "Run Silent, Run Deep" for imdb's "Run Silent Run Deep"
-#       "Cherry, Harry and Raquel" for imdb's "Cherry, Harry and Raquel!"
-#       "Cat Women of the Moon" for imdb's "Cat-Women of the Moon"
-#       "Baywatch Hawaiian Wedding" for imdb's "Baywatch: Hawaiian Wedding" :)
-#
-# FUTURE "Columbo Cries Wolf" appears instead of "Columbo:Columbo Cries Wolf"
 #
 # BUG - we identify 'presenters' by the word "Host" appearing in the character
 #       description. For some movies, character names include the word Host.
@@ -535,6 +518,21 @@ sub getMovieIdDetails($$)
     return($results);
 }
 
+#
+# FUTURE "Columbo Cries Wolf" appears instead of "Columbo:Columbo Cries Wolf"
+#
+# FUTURE - common english->french vowel changes. For instance
+#          "Anna Karénin" (é->e)
+#
+# FUTURE - close hit could be just missing or extra
+#          punctuation:
+#       "Run Silent, Run Deep" for imdb's "Run Silent Run Deep"
+#       "Cherry, Harry and Raquel" for imdb's "Cherry, Harry and Raquel!"
+#       "Cat Women of the Moon" for imdb's "Cat-Women of the Moon"
+#       "Baywatch Hawaiian Wedding" for imdb's "Baywatch: Hawaiian Wedding" :)
+#
+# FIXED - "Victoria and Albert" appears for imdb's "Victoria & Albert" (and -> &)
+#
 sub alternativeTitles($)
 {
     my $title=shift;
