@@ -173,7 +173,7 @@ sub _getChannelList($$$$)
     }
 
     my $content=$res->content();
-    if ( 0 && $content=~m/<p>(We are sorry, but your session has timed out[^<]*)/g ) {
+    if ( 0 && $content=~m/>(We are sorry, [^<]*)/ig ) {
 	my $err=$1;
 	$err=~s/\n/ /og;
 	$err=~s/\s+/ /og;
@@ -249,7 +249,7 @@ sub getChannelList($$$$)
     }
 
     my $content=$res->content();
-    if ( 0 && $content=~m/<p>(We are sorry, but your session has timed out[^<]*)/g ) {
+    if ( 0 && $content=~m/>(We are sorry, [^<]*)/ig ) {
 	my $err=$1;
 	$err=~s/\n/ /og;
 	$err=~s/\s+/ /og;
@@ -853,13 +853,23 @@ sub readSchedule($$$$$)
 	    print STDERR "check postal/zip code or www site (maybe their down)\n";
 	    return(-1);
 	}
+	$content=$res->content();
+        if ( $content=~m/>(We are sorry, [^<]*)/ig ) {
+	   my $err=$1;
+	   $err=~s/\n/ /og;
+	   $err=~s/\s+/ /og;
+	   $err=~s/^\s+//og;
+	   $err=~s/\s+$//og;
+	   print STDERR "ERROR: $err\n";
+	   return(-1);
+        }
 	if ( -d "urldata" ) {
 	    open(FD, "> urldata/content-$station-$month-$day-$year.html");
 	    print FD $res->content();
 	    close(FD);
 	}
-	$content=$res->content();
     }
+
     if ( $self->{Debug} ) {
 	print STDERR "scraping html for $year-$month-$day on station $station\n";
     }
