@@ -4,7 +4,7 @@
 # (and other) countries that have daylight saving time.
 #
 # Warning: this might break if Date::Manip is initialized to some
-# timezone other than UTC: best to call Date_Init('UTC') first.
+# timezone other than UTC: best to call Date_Init('TZ=+0000') first.
 #
 
 package XMLTV::DST;
