@@ -195,12 +195,11 @@ are present.",
        prereqs => {},
        special_prereqs =>
        [ [ sub {
-	       my $p = `python -V 2>&1`;
-	       return undef if not defined $p;
-	       $p =~ /Python (\S+)/ or return undef;
-	       return $1;
+	       my $p = `python -c 'import sys; print sys.hexversion'`;
+	       chomp $p;
+	       return $p;
 	   },
-	   'Python', '1.5.2' ] ] },
+	   'Python', '17105648', '1.5.2' ] ] },
     );
 
 foreach my $info (@opt_components) {
@@ -222,11 +221,11 @@ foreach my $info (@opt_components) {
     my %special_missing;
     local *special_prereqs = $info->{special_prereqs} || {};
     foreach (@special_prereqs) {
-	my ($sub, $name, $ver) = @$_;
+	my ($sub, $name, $ver, $friendly_ver) = @$_;
 	next if test_special($sub, $ver)->[0] eq 'OK';
 	warn "strange, special prereq $name mentioned twice"
 	  if defined $special_missing{$name};
-	$special_missing{$name} = $ver;
+	$special_missing{$name} = $friendly_ver;
     }
 	
     my %missing = (%modules_missing, %special_missing);
