@@ -646,35 +646,25 @@ windows_dist ::
 	perl -MExtUtils::Command -e rm_r $location/share/doc
 	perl -MExtUtils::Command -e mkpath $location/doc/man
 	# Generate plain text documentation from pod.
-	set -e; \
-	cd blib/script; \
-	for i in *; do \
-	    out=$location/doc/man/$$i.txt; \
-	    echo Writing documentation for $$i into $$out; \
-	    pod2text $$i >$$out; \
-	done
+	perl -e "chdir 'blib/script' or die; foreach (<*>) { system 'pod2text', \$$_, qq'$location/doc/man/\$$_.txt' }"
 	# Remove 'real' manual pages, not needed on Windows.
-	rm -rfv $location/man $location/share/man
+	perl -MExtUtils::Command -e rm_rf $location/man $location/share/man
 	# My MakeMaker creates this dud directory.
-	rm -rfv $location/5.8.0
+	perl -MExtUtils::Command -e rm_rf $location/5.8.0
 	rmdir $location/share/doc
 	# Generate Date::Manip docs by filtering perldoc output.  The
 	# use of temp files instead of pipes is so set -e works properly.
 	#
-	set -e; \
-	out=$location/doc/man/date_formats.txt; \
-	echo Extracting part of Date::Manip manual page into $$out; \
-	echo "This is an extract from the documentation of Perl's" \
-	     "Date::Manip module, describing the different format" \
-	     "strings that may be used for dates.  Bear in mind that" \
-	     "depending on your Windows version you will need to quote" \
-	     "the % characters on the command line somehow (see" \
-	     "README.win32)." | fmt >$$out; \
-	echo >>$$out; \
-	perldoc -u Date::Manip >$$out.tmp; \
-	perl -ne 'BEGIN { print "\n=pod\n\n" }  print if (/^The format options are:/ .. /^=/) and not /^=/' <$$out.tmp >$$out.tmp.1; \
-	pod2text <$$out.tmp.1 >>$$out; \
-	rm $$out.tmp*
+	echo Extracting part of Date::Manip manual page into $location/doc/man/date_formats.txt
+	echo "This is an extract from the documentation of Perl's Date::Manip module," >>$location/doc/man/date_formats.txt
+	echo "describing the different format strings that may be used for dates."     >>$location/doc/man/date_formats.txt
+	echo "Bear in mind that depending on your Windows version you will need to"    >>$location/doc/man/date_formats.txt
+	echo "quote the % characters on the command line somehow (see README.win32)."  >>$location/doc/man/date_formats.txt
+	echo "" >>$location/doc/man/date_formats.txt
+	perldoc -u Date::Manip >$location/doc/man/date_formats.txt.tmp
+	perl -ne "BEGIN { print qq'\n=pod\n\n' } print if (/^The format options are:/ .. /^=/) and not /^=/" <$location/doc/man/date_formats.txt.tmp >$location/doc/man/date_formats.txt.tmp.1
+	pod2text <$location/doc/man/date_formats.txt.tmp.1 >>$location/doc/man/date_formats.txt
+	perl -MExtUtils::Command -e rm_f $location/doc/man/date_formats.txt.tmp*
         # Don't use $(INSTALLBIN), it seems to disregard PREFIX passed
         # to 'make'.
         #
