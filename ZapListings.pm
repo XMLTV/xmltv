@@ -879,7 +879,7 @@ sub readSchedule($$$$$$$)
     if ( $self->{Debug} ) {
 	print STDERR "scraping html for $year-$month-$day on station $station\n";
     }
-    @{$self->{Programs}}=$self->scrapehtml($content, "$month/$day/$year on station $station");
+    @{$self->{Programs}}=$self->scrapehtml($content, "$year-$month-$day on station $station");
 
     print STDERR "Day $year-$month-$day schedule for station $station_desc has:".
 	scalar(@{$self->{Programs}})." programs\n";
