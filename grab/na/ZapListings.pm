@@ -724,9 +724,7 @@ sub doRequest($$$)
     return($res);
 }
 
-# todo - change to freshmeat.net/projects-xml/xmltv/xmltv.xml
-#        problem is this xml doesn't include a date of the release :<
-# expects the sourceforge project page url
+# Takes URL of Freshmeat project record in XML, and debug flag.
 sub getCurrentReleaseInfo($$)
 {
     my $url=shift;
@@ -739,34 +737,27 @@ sub getCurrentReleaseInfo($$)
     if ( !defined($res) ) {
 	return(undef);
     }
-    # html looks something like:
-    #    <TR BGCOLOR="#EAECEF" ALIGN="center">
-    #    <TD ALIGN="left">
-    #    <B>xmltv</B></TD><TD>0.5.6
-    #    </TD>
-    #    <td>January 6, 2003</td>
 
-    my $content=$res->content();
-    if ( $content=~m;<TR[^>]*>\s*<TD[^>]*>\s*<B>([^<]+)</B>\s*</TD>\s*<TD>([^<]+)</TD>\s*<td>([^<]+)</td>;ois ) {
-	my %ret;
-
-	$ret{NAME}=$1;
-	$ret{VERSION}=$2;
-	$ret{DATESTRING}=$3;
-
-	for my $key (keys %ret) {
-	    $ret{$key}=~s/^\s+//o;
-	    $ret{$key}=~s/\s+$//o;
+    my %ret;
+    for ( $res->content() ) {
+	# Don't really parse the XML, just look for what we want.  If
+	# we don't find things then return undef.
+	#
+	my %wanted = (projectname_short => 'NAME',
+		      latest_release_version => 'VERSION',
+		      latest_release_date => 'DATESTRING',
+		     );
+	foreach my $k ( keys %wanted ) {
+	    m!<$k>([^<]+)</$k>! or return undef;
+	    $ret{$wanted{$k}} = $1;
 	}
-	if ( $debug ) {
-            main::debugMessage("URL: $url\n");
-            main::debugMessage("Returned $ret{NAME} $ret{VERSION} on $ret{DATESTRING}\n");
-	}
-	return(\%ret);
     }
-    else {
-	return(undef);
+
+    if ( $debug ) {
+	main::debugMessage("URL: $url\n");
+	main::debugMessage("Returned $ret{NAME} $ret{VERSION} on $ret{DATESTRING}\n");
     }
+    return(\%ret);
 }
 
 sub getZipCodeForm($$$)
