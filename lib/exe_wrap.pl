@@ -28,16 +28,17 @@ unless (exists $ENV{TZ})
     my $tz     = ($lhour - $ghour);
        $tz    -= 24 if $tz >  12;
        $tz    += 24 if $tz < -12;
-       if    ($tz == -5 ) { $tz='EST5EDT' }
+#       if    ($tz == -5 ) { $tz='EST5EDT' }
 #
 # this should not be necessary, but DATE::MANIP doesn't always deal with
 # numeric time zones correctly.  This should hold us until the fix is widely
 # distributed.
 #
-       elsif ($tz == -6 ) { $tz='CST6CDT' }
-       elsif ($tz == -7 ) { $tz='MST7MDT' }
-       elsif ($tz == -8 ) { $tz='PST8PDT' }
-       else               { $tz= sprintf("%+03d00",$tz) };
+#       elsif ($tz == -6 ) { $tz='CST6CDT' }
+#       elsif ($tz == -7 ) { $tz='MST7MDT' }
+#       elsif ($tz == -8 ) { $tz='PST8PDT' }
+#       else               { $tz= sprintf("%+03d00",$tz) };
+        $tz= sprintf("%+03d00",$tz);
 
        $ENV{TZ}= $tz;
 
@@ -64,6 +65,19 @@ foreach my $exe (split(/ /,$files))
 
     $cmds{$_}=sub {do $exe};
 }
+
+#
+# add tv_imdb which doesn't work on windows
+#
+$cmds{tv_imdb}=sub {
+    die <<END
+Sorry, tv_imdb requires the unix "look" program which is not available 
+for windows.  It is hoped that a windows capable tv_imdb will be 
+available in the future.
+
+END
+  ;
+};
 
 #
 # add tv_grab_nz which is a Python program
