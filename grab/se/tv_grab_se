@@ -512,9 +512,6 @@ sub get_data_tv4
     # the description if it exists. The description can be found since it has
     # an empty first td.
 
-    my( $starttime, $title, $description, $url );
-    my $lasttime = "0000";
-
     my $ns = $doc->find( "//span[\@id='LabelResults']/tr" );
 
     if( $ns->size() <= 2 )
@@ -522,6 +519,10 @@ sub get_data_tv4
         warning "No data available for $channel on $date.";
         return;
     }
+
+    my @programmes = ();
+
+    my $lasttime = "0000";
 
     foreach my $node ($ns->get_nodelist)
     {
@@ -533,51 +534,58 @@ sub get_data_tv4
         $text =~ s/^\s+//;
         $text =~ s/\s+$//;
 
+        # Delete character that TV4 uses to signify a link.
+        $text =~ tr/»//d;
+
+    
         if( $time =~ /^\s*\d\d:\d\d\s*$/ )
         {
-            $starttime = $time;
-            $title = $text;
-            $url = $node->findvalue('td[2]//a/@href');
-        }
-        elsif( defined( $starttime ) )
-        {
-            $description = $text;
+            # This tr contains a time. 
+            $time =~ s/^\s*(\d\d):(\d\d)\s*/$1$2/;
 
-            $starttime =~ s/^\s*(\d\d):(\d\d)\s*/$1$2/;
-
-            if( $starttime < $lasttime )
+            if( $time < $lasttime )
             {
                 $date = increase_date( $date, 1 );
             }
-
-            # Delete character that TV4 uses to signify a link.
-            $title =~ tr/»//d;
-            $description =~ tr/»//d;
-
-            my %d = (
-                     channel => $channel,
-                     start   => utc_offset( "$date$starttime", LOCAL_TZ ),
-                     title   => [ [ $title, 'se' ] ],
-                     );
-
-            $d{desc} = [ [ $description, 'se' ] ] if $description =~ /\S/;
-
-            $d{url} = [URI->new($url)->abs($base)] if $url =~ /\S/;
-
-            $w->write_programme( \%d );
-
-            $lasttime = $starttime;
-            $starttime = undef;
-            $description = "";
+            
+            $lasttime = $time;
+            
+            if( $text =~ /^\s*-S.ndningsuppeh.ll-\s*$/ )
+            {
+                # This entry signals that there is nothing on TV. 
+                # Use the starttime of this entry as the end-time of the
+                # previous entry.
+                $programmes[-1]->{stop} = utc_offset( "$date$time", LOCAL_TZ );
+            }
+            else
+            {
+                my %prog = ( 
+                             channel   => $channel,
+                             start     => utc_offset( "$date$time", LOCAL_TZ ),
+                             title     => [ [$text, 'se' ] ],
+                             );
+                
+                my $url = $node->findvalue('td[2]//a/@href');
+                $prog{url} = [URI->new($url)->abs($base)] if $url =~ /\S/;
+                
+                push @programmes, \%prog;
+            }
+        }
+        else
+        {
+            # This tr does not contain a time. It must be a description
+            # for the previous entry.
+            if( $text =~ /\S/ )
+            {
+                $programmes[-1]->{desc} = [ [$text, 'se'] ];
+            }
         }
     }
 
-    # Write the last entry in case it had no description.
-    $w->write_programme( {
-        channel => $channel,
-        start   => utc_offset( "$date$starttime", LOCAL_TZ ),
-        title   => [ [ $title, 'se' ] ],
-    } ) if defined( $starttime );
+    foreach my $prog (@programmes)
+    {
+        $w->write_programme( $prog );
+    }
 }
 
 ##########################################
