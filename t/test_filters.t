@@ -6,7 +6,7 @@
 # filters at all: we assume that each can take an input filename and
 # the --output option.
 #
-# -- Ed Avis, epa98@doc.ic.ac.uk, 2002-02-14
+# -- Ed Avis, ed@membled.com, 2002-02-14
 #
 
 use strict;
