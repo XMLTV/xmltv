@@ -138,79 +138,6 @@ sub getProviders($$$)
     return($providers);
 }
 
-sub _getChannelList($$$$)
-{
-    if ( 0 ) {
-    my ($postalcode, $zipcode, $provider, $debug)=@_;
-
-    $cookieJar=HTTP::Cookies->new() if ( !defined($cookieJar) );
-
-    my $code;
-    $code=$postalcode if ( defined($postalcode) );
-    $code=$zipcode if ( defined($zipcode) );
-
-    $cookieJar->set_cookie(0, 'TVListings', 
-			   "zipcode=$code&ProviderID=$provider&vstr%2D1",
-			   '/', 'tvlistings2.zap2it.com');
-
-    my $ua=ZapListings::RedirPostsUA->new();
-
-    my $req=POST('http://tvlistings2.zap2it.com/listings_redirect.asp?spp=0', [ ]);
-    my $res=&doRequest($ua, $req, $cookieJar, $debug);
-
-    # looks like some requests require two identical calls since
-    # the zap2it server gives us a cookie that works with the second
-    # attempt after the first fails
-    if ( !$res->is_success || $res->content()=~m/your session has timed out/i ) {
-	# again.
-	$res=&doRequest($ua, $req, $cookieJar, $debug);
-    }
-
-    if ( !$res->is_success ) {
-	print STDERR "zap2it failed to give us a page\n";
-	print STDERR "check postal/zip code or www site (maybe their down)\n";
-	return(undef);
-    }
-
-    my $content=$res->content();
-    if ( 0 && $content=~m/>(We are sorry, [^<]*)/ig ) {
-	my $err=$1;
-	$err=~s/\n/ /og;
-	$err=~s/\s+/ /og;
-	$err=~s/^\s+//og;
-	$err=~s/\s+$//og;
-	print STDERR "ERROR: $err\n";
-	exit(1);
-    }
-    #$content=~s/>\s*</>\n</g;
-    if ( $debug ) {
-	open(FD, "> channels.html") || die "channels.html: $!";
-	print FD $content;
-	close(FD);
-    }
-
-    my $channels;
-    my @lines=reverse(split(/\n/, $content));
-    while (@lines) {
-	my $l=pop(@lines);
-	if ( $l=~m;<a href="listings_redirect.asp\?station_num=(\d+)">(\d+)<br><nobr>(\w+)</nobr></a>;o ) {
-	    my $station=$1;
-	    my $number=$2;
-	    my $letters=$3;;
-	    if ( !defined($channels->{$station}) ) {
-		push(@{$channels->{$station}}, $number);
-		push(@{$channels->{$station}}, $letters);
-	    }
-	}
-    }
-    if ( !defined($channels) ) {
-	print STDERR "zap2it gave us a page with no channels\n";
-	return(undef);
-    }
-    return($channels);
-}
-}
-
 sub getChannelList($$$$)
 {
     my ($postalcode, $zipcode, $provider, $debug)=@_;
@@ -259,6 +186,10 @@ sub getChannelList($$$$)
 	exit(1);
     }
     #$content=~s/>\s*</>\n</g;
+
+    # Probably this is not needed?  I think that calling dumpPage() if
+    # an error occurs is probably better.  -- epa
+    # 
     if ( $debug ) {
 	open(FD, "> channels.html") || die "channels.html: $!";
 	print FD $content;
@@ -269,7 +200,7 @@ sub getChannelList($$$$)
     my @lines=reverse(split(/\n/, $content));
     while (@lines) {
 	my $l=pop(@lines);
-	if ( $l=~m;<a href="listings_redirect.asp\?station_num=(\d+)">(\d+)<br><nobr>(\w+)</nobr></a>;o ) {
+	if ( $l=~m;<a href="listings_redirect.asp\?station_num=(\d+)">([A-Z0-9-]+)<br><nobr>(\w+)</nobr></a>;o ) {
 	    my $station=$1;
 	    my $number=$2;
 	    my $letters=$3;;
@@ -281,9 +212,29 @@ sub getChannelList($$$$)
     }
     if ( !defined($channels) ) {
 	print STDERR "zap2it gave us a page with no channels\n";
+	dumpPage($content);
 	return(undef);
     }
     return($channels);
+}
+
+# Write an offending HTML page to a file for debugging.
+my $dumpPage_counter;
+sub dumpPage($)
+{
+    my $content = shift;
+    $dumpPage_counter = 0 if not defined $dumpPage_counter;
+    my $filename = "ZapListings.dump.$dumpPage_counter";
+    local *OUT;
+    if (open (OUT, ">$filename")) {
+	print STDERR "dumping HTML page to $filename\n";
+	print OUT $content
+	  or warn "cannot dump HTML page to $filename: $!";
+	close OUT or warn "cannot close $filename: $!";
+    }
+    else {
+	warn "cannot dump HTML page to $filename: $!";
+    }
 }
 
 1;
