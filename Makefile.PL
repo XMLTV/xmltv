@@ -131,7 +131,7 @@ my %prereqs
      # anyway it doesn't appear with 2.34).
      #
      'XML::Parser' => 2.34,
-     'XML::Twig'   => 3.09,
+     'XML::Twig'   => 3.10,
      'Date::Manip' => 5.42,
      'XML::Writer' => '0.4.6',
      'Memoize'     => 0,
@@ -239,6 +239,11 @@ my @opt_components
        pm => { 'grab/na/ZapListings.pm' =>
 	       '$(INST_LIBDIR)/XMLTV/ZapListings.pm' },
        prereqs => { 'HTML::Parser' => 3.34 } },
+
+     { name => 'tv_grab_na_bb',
+       blurb => 'Grabber for North America using DataDirect',
+       exes => [ 'grab/na_dd/tv_grab_na_dd' ],
+       prereqs => { 'SOAP::Lite' => 0 } },
 
      { name => 'tv_grab_nz',
        blurb => 'Grabber for New Zealand',
