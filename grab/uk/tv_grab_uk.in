@@ -384,12 +384,12 @@ END
  	    use vars '@ch_in_pkg';
 	    local *ch_in_pkg = delete $to_choose{$chosen};
 	    my @r = askManyBooleanQuestions
-	      (1, map { "Add channel $_?" } @ch_in_pkg);
+	      (1, map { "Add channel $_->{main_display_name}?" } @ch_in_pkg);
 	    die if @r != @ch_in_pkg;
 	    foreach (@ch_in_pkg) {
 		if (shift @r) {
-		    unless ($chose_ch{$_}++) {
-			print CONF "channel $_\t# from package $chosen\n";
+		    unless ($chose_ch{$_->{xmltv_id}}++) {
+			print CONF "channel $_->{xmltv_id}\t# from package $chosen\n";
 		    }
 		}
 	    }
@@ -423,8 +423,15 @@ END
 	$in =~ s/^\s+//; $in =~ s/\s+$//;
 	last if $in eq '.';
 	my @poss;
-	foreach (@ch_all) {
-	    push @poss, $_ if $_->{main_display_name} =~ /\Q$in\E/i;
+	foreach my $ch (@ch_all) {
+	    for ($ch->{main_display_name}) {
+		if (defined) {
+		    push @poss, $ch if /\Q$in\E/i;
+		}
+		else {
+		    warn "no main display name for channel $ch->{first_ananova_id}, not selecting\n";
+		}
+	    }
 	}
 	if (@poss == 0) {
 	    print "No channel matching that.\n";
@@ -1013,6 +1020,33 @@ sub read_channels_page( $$ ) {
 	    $ch->{type} = $t;
 	}
     }
+
+    # Clean up by removing channels in config but not on site.
+    my @new_ch_all;
+    foreach (@ch_all) {
+	my $type = $_->{type};
+	my $keep;
+	if ($type eq 'duff') {
+	    $keep = 0;
+	}
+	elsif ($type eq 'tentative') {
+	    warn 
+"channel $_->{xmltv_id} ($_->{first_ananova_id}) not seen on site, remove from channel_ids file\n";
+	    $keep = 0;
+	}
+	else { $keep = 1 }
+
+	if ($keep) {
+	    push @new_ch_all, $_;
+	}
+	else {
+	    delete $ch_by_x{$_->{xmltv_id}};
+	    foreach my $aid (keys %{$_->{ananova_ids}}) {
+		delete $ch_by_a{$aid}->{$_};
+	    }
+	}
+    }
+    @ch_all = @new_ch_all;
 }
 
 
@@ -1183,11 +1217,13 @@ sub init_channels() {
 	    # FIXME also check doesn't match main display name
 	    push @{$ch->{extra_display_names}}, $extra_dn unless $found;
 	}
+
+	$ch->{type} = 'tentative'; # not yet seen on site
     }
     close FH or warn "cannot close $CHANNEL_NAMES_FILE: $!";
 }
 
-# Return a hash mapping package names to lists of XMLTV channel ids.
+# Return a hash mapping package names to lists of channel objects.
 sub get_channel_pkgs() {
     # Each package is a file under channel_pkgs/ somewhere in share/.
     # The filename is the package name, and then channel ids are
@@ -1204,12 +1240,14 @@ sub get_channel_pkgs() {
 	while (<PKG>) {
 	    s/\#.*//; s/^\s+//; s/\s+$//;
 	    next unless length;
-	    push @{$pkgs{$pkg_name}}, $_;
 
 	    # Check the XMLTV id is actually known.
 	    my $ch = $ch_by_x{$_};
 	    if (not defined $ch) {
-		warn "channel id $_ mentioned in package $pkg_name, but not known";
+		warn "unknown channel id $_ in package $pkg_name\n";
+	    }
+	    else {
+		push @{$pkgs{$pkg_name}}, $ch;
 	    }
 	}
 	close PKG or die "cannot close $_: $!";
