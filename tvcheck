@@ -1,0 +1,210 @@
+#!perl -w
+#
+# TVCHECK.PL
+#
+# This script searches a channel guide for shows in a show list and alerts when
+# a listed show is missing from it's time slot, or shows up at other days or times.
+#
+# The show list is a custom XML format.
+# The channel guide needs to be in XMLTV format.
+#
+# syntax
+#       tvcheck <guide.xml <shows.xml <channels.xml>>>
+#
+# (C)2001 - Robert Eden, free to use under the GNU License.
+#
+# 11/28/01 - Robert Eden - reden@cpan.org
+#
+#
+
+use XML::Simple;
+use Date::Manip;
+
+#
+# Define constants
+#
+$_=1;
+@WEEKDAY  = qw (Su Mo Tu We Th Fr Sa);
+$GUIDE_XML= shift || 'guide.xml';
+$SHOW_XML = shift || 'shows.xml';
+$CHAN_XML = shift || 'channels.xml';
+
+#
+# Global Vars
+#
+my %chan;   # channel list ( channel-id key )
+my @guide;  # tv schedule
+my %guide;  # tv schedule by title (title key), value reference to @guide member
+my @shows;  # list of shows to check
+
+#
+# Load input files
+#
+print "Loading xml channel info\n";
+my $xml = XMLin($CHAN_XML, searchpath => ".");
+%chan = %{$xml -> {channel}};
+
+print "Loading xml guide info\n";
+$xml = XMLin($GUIDE_XML, forcearray => 1, searchpath => "." );
+@guide = @{$xml -> {programme}};
+
+print "Loading xml show info\n";
+$xml = XMLin($SHOW_XML, searchpath => "." );
+@shows = @{$xml -> {shows}};
+
+#
+# Build an title hash from XMLTV data
+#
+print "Building title hash\n";
+foreach $episode (@guide)
+{
+    foreach $title (@{$episode -> {title}})
+    {
+        push @{$guide{lc($title)}}, $episode;
+    }
+}
+
+#
+# Process Shows
+#
+print "Processing shows\n\n\n";
+foreach $show (@shows)
+{
+    my $title = $show -> {title};
+    
+    print "Checking $title\n";
+    $title = lc($title);
+
+
+#
+# deal with spelling errors, or show missing
+#
+    unless ( exists $guide{$title} ) 
+    {
+        print "  "x5,
+              $WEEKDAY[$show -> {day}]                ,",",
+                       $show -> {hhmm}                ,",",
+                       $show -> {len}                 ,",",
+                $chan{ $show -> {channel}}{"display-name"},
+                 "\n";
+        print " "x40,"Can't find <$title>\n";
+        next;
+    }
+
+#
+# scan through matching episodes
+#
+# flag values: 0= extra episode
+#              1= ignored episode (timeonly or dayonly option set)
+#              2= matched show
+#
+    my $bad=0;
+    my $hit=0;
+    foreach $episode  ( @{$guide{$title}} )
+    {
+        $episode -> {flag}=0;
+
+#
+# compute times for this episode
+#
+      ( $episode -> {mmdd},
+        $episode -> {hhmm},
+        $episode -> {day}  )= UnixDate( ParseDate( $episode -> {start}),
+                                        "%m%d",
+                                        "%H%M",
+                                        "%w");
+        $episode -> {day}   = $episode -> {day} % 7; # fix day to start 0=sunday
+                                          
+                                                    
+        $episode -> {len}  = Delta_Format( DateCalc( $episode -> {start},
+                                                     $episode -> {stop} ),
+                                                     0, "%mh" );
+#
+# Validate Channel
+#
+        if ( $episode -> {channel} != $show -> {channel} )
+        {
+                $episode -> {flag} = 1;
+                next;
+        }
+#
+# Validate Day
+#
+        if ( $episode -> {day} != $show -> {day} )
+        {
+            if ( exists $show -> {dayonly} )
+            {
+                $episode -> {flag} = 1;
+                next;
+            }
+            else
+            {
+                $bad =1;
+                next;
+            }
+        }
+#
+# Validate Time
+#
+        if ( $episode -> {hhmm} ne $show -> {hhmm} )
+        {
+            if ( exists $show -> {timeonly} )
+            {
+                $episode -> {flag} = 1;
+            }
+            else
+            {
+                $bad =1;
+            }
+            next;
+        }
+#
+# Validate Length
+#
+        if ( $episode -> {len} ne $show -> {len} )
+        {
+            if ( $show -> {len} == 0 )
+            {
+                $episode -> {flag} = 1;
+                next;
+            }
+            else
+            {
+                $bad =1;
+            }
+        }
+
+    $hit++;
+    $episode -> {flag} = 2;
+    } # episode scan
+
+#
+# Print found shows ( if needed )
+#
+    if ($bad or $hit != 1 )
+    {
+        print "  "x5,
+              $WEEKDAY[$show -> {day}]                ,",",
+                       $show -> {hhmm}               ,",",
+                       $show -> {len}                 ,",",
+                $chan{ $show -> {channel}}{"display-name"},
+                 "\n";
+
+        print "  "x20," Timeslot Missing\n" if $hit == 0;
+
+        foreach $episode  ( @{$guide{$title}} )
+        {
+            next if $episode -> {flag} == 1;
+            print "  "x20,
+                      ( $episode -> {flag} == 2 ? "*":" "),
+                        $episode -> {mmdd}                ,",",
+               $WEEKDAY[$episode -> {day}]                ,",",
+                        $episode -> {hhmm}                ,",",
+                        $episode -> {len}                 ,",",
+                  $chan{$episode -> {channel}}{"display-name"},
+                     "\n";
+        } # episode print
+    } # print error report
+
+} # show loop
+
