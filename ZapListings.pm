@@ -728,6 +728,9 @@ sub scrapehtml($$$)
 	# <td><b><text>....</text></b><td> etc.
 	# 
 	my $prog;
+	if ( $self->{DebugListings} ) {
+	   $prog->{precomment}=$desc;
+ 	}
 	print STDERR "ROW: $rowNumber: $desc\n" if ( $self->{Debug} );
 	if ( $desc=~s;^<td><b><text>([0-9]+):([0-9][0-9]) ([AP]M)</text></b></td><td></td>;;io ) {
 	    my $posted_start_hour=scalar($1);
@@ -815,7 +818,7 @@ sub scrapehtml($$$)
 		    $self->setValue(\$prog, "end_hour", $prog->{end_hour}+24);
 		}
 		# if started in pm and end was not 12, then adjustment to 24 hr clock
-		elsif ( $pm && $prog->{end_hour} != 12 ) {
+		elsif ( $prog->{start_hour} > $prog->{end_hour} ) {
 		    $self->setValue(\$prog, "end_hour", $prog->{end_hour}+12);
 		}
 	    }
