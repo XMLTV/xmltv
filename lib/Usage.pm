@@ -21,7 +21,7 @@
 #
 
 package XMLTV::Usage;
-use base 'Exporter'; use vars '@EXPORT'; @EXPORT = qw(usage);
+use base 'Exporter'; our @EXPORT = qw(usage);
 my $msg;
 
 sub import( @ ) {

@@ -40,8 +40,7 @@ use strict;
 
 package XMLTV::IMDB;
 
-use vars qw($VERSION);
-$VERSION = '0.2';
+our $VERSION = '0.2';
 
 sub new
 {

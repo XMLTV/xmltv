@@ -31,7 +31,7 @@ use strict;
 
 package XMLTV::Gunzip;
 use base 'Exporter';
-use vars '@EXPORT'; @EXPORT = qw(gunzip gunzip_open);
+our @EXPORT; @EXPORT = qw(gunzip gunzip_open);
 use File::Temp;
 
 # Implementations of gunzip().

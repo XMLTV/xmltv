@@ -9,7 +9,7 @@
 
 package XMLTV::Get_nice;
 use base 'Exporter';
-use vars '@EXPORT'; @EXPORT = qw(get_nice);
+our @EXPORT = qw(get_nice);
 use LWP::Simple;
 
 sub get_nice( $ ) {

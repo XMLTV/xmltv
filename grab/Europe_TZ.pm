@@ -24,8 +24,8 @@ unless ($@) {
     }
 }
 
-use base 'Exporter'; use vars '@EXPORT';
-@EXPORT = qw(parse_eur_date date_to_eur utc_offset);
+use base 'Exporter';
+our @EXPORT = qw(parse_eur_date date_to_eur utc_offset);
 
 # parse_eur_date()
 #

@@ -134,7 +134,7 @@ my %all_encodings = reverse %input_encoding;
 # the list.  Aargh, this is so horrible.
 #
 sub move_to_front( \@$ ) {
-    use vars '@l'; local *l = shift;
+    our @l; local *l = shift;
     my $elem = shift;
     my @r;
     foreach (@l) {

@@ -1,8 +1,8 @@
 package XMLTV::Summarize;
 use strict;
-use base 'Exporter'; use vars qw(@EXPORT @EXPORT_OK);
-@EXPORT = ();
-@EXPORT_OK = qw(summarize);
+use base 'Exporter';
+our @EXPORT = ();
+our @EXPORT_OK = qw(summarize);
 use Date::Manip; Date_Init('TZ=UTC');
 use XMLTV;
 use XMLTV::TZ qw(gettz ParseDate_PreservingTZ);
@@ -75,7 +75,7 @@ L<XMLTV(1)>.
 # After loading this module you are free to change @PREF_LANGS.  It is
 # just a list of language codes.
 #
-use vars '@PREF_LANGS';
+our @PREF_LANGS;
 my $el = $ENV{LANG};
 if (defined $el and $el =~ /\S/) {
     $el =~ s/\..+$//; # remove character set

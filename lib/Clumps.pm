@@ -43,9 +43,9 @@ BEGIN {
 }
 
 # Won't Memoize, you can do that yourself.
-use base 'Exporter'; use vars '@EXPORT_OK';
-@EXPORT_OK = qw(new_relation related relate unrelate nuke_from_rel
-		relatives clump_relation fix_clumps);
+use base 'Exporter';
+our @EXPORT_OK = qw(new_relation related relate unrelate nuke_from_rel
+		    relatives clump_relation fix_clumps);
 
 sub new_relation();
 sub related( $$$ );
@@ -149,7 +149,7 @@ sub clump_relation( $ ) {
     }
     t 'updating $related from todo list';
     foreach my $ch (keys %todo) {
-	use vars '%times'; local *times = $todo{$ch};
+	our %times; local *times = $todo{$ch};
 	my $times = $todo{$ch};
 	foreach my $t (keys %times) {
 	    t "todo list for channel $ch, time $t";
@@ -189,7 +189,7 @@ sub fix_clumps( $$$ ) {
     return if not defined $orig->{clumpidx} or $orig->{clumpidx} eq '0/1';
     die if ref($rel) ne 'HASH';
     die if ref($new) ne 'ARRAY';
-    use vars '@new'; local *new = $new;
+    our @new; local *new = $new;
 #    local $Log::TraceMessages::On = 1;
     t 'fix_clumps() ENTRY';
     t 'original programme: ' . d $orig;

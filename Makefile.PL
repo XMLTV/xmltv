@@ -22,10 +22,10 @@ END
   ;
 }
 
-use vars '$VERSION';
+our $VERSION;
 $VERSION = '0.5.15';
 
-use vars '%extra_constants';
+our %extra_constants;
 %extra_constants
   = (INST_PLAINDOC   => 'blib/doc',
      INSTALLPLAINDOC => "\$(PREFIX)/share/doc/xmltv-$::VERSION",
@@ -51,7 +51,7 @@ use vars '%extra_constants';
 # Documentation files to be installed.  This is a global variable
 # because it is accessed by some code we add to MakeMaker.
 #
-use vars '@docs';
+our @docs;
 @docs = qw(doc/COPYING doc/QuickStart doc/README.win32 README);
 
 # Executables to be installed.
@@ -288,7 +288,7 @@ my @opt_components
 foreach my $info (@opt_components) {
     my $name = $info->{name};
     my %modules_missing;
-    use vars '%module_prereqs';
+    our %module_prereqs;
     local *module_prereqs = $info->{prereqs} || {};
     foreach (sort keys %module_prereqs) {
 	my $ver = $module_prereqs{$_};
@@ -298,7 +298,7 @@ foreach my $info (@opt_components) {
 	$modules_missing{$_} = $ver;
     }
 
-    use vars '@special_prereqs';
+    our @special_prereqs;
     my %special_missing;
     local *special_prereqs = $info->{special_prereqs} || {};
     foreach (@special_prereqs) {
@@ -696,7 +696,7 @@ sub MY::installbin {
     my %seen_dir;
     foreach my $filetype (sort keys %new_filetypes) {
 	my $uc = uc $filetype;
-	use vars '%files'; local *files = $new_filetypes{$filetype};
+	our %files; local *files = $new_filetypes{$filetype};
 	foreach my $src (sort keys %files) {
 	    my $inst_pos = $files{$src};
 	    my $extra = '';

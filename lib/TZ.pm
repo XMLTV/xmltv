@@ -7,7 +7,7 @@ package XMLTV::TZ;
 use Carp;
 use Date::Manip; # no Date_Init(), that can be done by the app
 # Won't Memoize, you can do that yourself.
-use base 'Exporter'; use vars '@EXPORT_OK';
+use base 'Exporter'; our @EXPORT_OK;
 @EXPORT_OK = qw(gettz ParseDate_PreservingTZ tz_to_num parse_local_date);
 
 

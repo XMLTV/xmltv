@@ -4,7 +4,7 @@
 package XMLTV::Grep;
 use strict;
 use XMLTV;
-use base 'Exporter'; use vars '@EXPORT_OK';
+use base 'Exporter'; our @EXPORT_OK;
 @EXPORT_OK = qw(get_matcher);
 
 my %key_type = %{XMLTV::list_programme_keys()};

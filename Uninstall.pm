@@ -6,7 +6,7 @@
 #
 package Uninstall;
 use strict;
-use base 'Exporter'; use vars '@EXPORT'; @EXPORT = qw(uninstall);
+use base 'Exporter'; our @EXPORT = qw(uninstall);
 use File::Find;
 
 sub uninstall( % ) {
