@@ -73,6 +73,13 @@ To grab listings: $0 [--config-file FILE] [--output FILE] [--days N]
 END
   ;
 
+# Use Term::ProgressBar if installed.
+my $have_bar;
+BEGIN {
+    eval { require Term::ProgressBar };
+    $have_bar = not $@;
+}
+
 # Whether zero-length programmes should be included in the output.
 my $WRITE_ZERO_LENGTH = 0;
 
@@ -91,6 +98,7 @@ my %char_map
      8240 => chr(226),		# LATIN SMALL LETTER A WITH CIRCUMFLEX
      8226 => chr(239),		# LATIN SMALL LETTER I WITH DIAERESIS
      8218 => 'i',
+     2014 => '--',
      382  => chr(251),		# LATIN SMALL LETTER U WITH CIRCUMFLEX
      339  => 'u',
     );
@@ -204,14 +212,13 @@ unless ($@) {
 }
 
 #Find Channels.
+my $bar = new Term::ProgressBar('getting list of channels', 1)
+  if $have_bar;
 my $url="http://www.dagenstv.com/$country/frontpage";
 my $local_data=get($url);
+update $bar;
 if ($local_data=~m/<select\s*name=\"cha\"(.*?)<\/select>/s) {
     $local_data=$1;
-    local $SIG{__WARN__} = sub {
-	warn "$url: $_[0]";
-    };
-
     my %w_args;
     $w_args{OUTPUT} = $opt_output if defined $opt_output;
     $w_args{encoding} = 'ISO-8859-1';
@@ -226,18 +233,30 @@ if ($local_data=~m/<select\s*name=\"cha\"(.*?)<\/select>/s) {
     # TODO write <channel> elements.
 
     # for each channel
+    my @to_get;
     while ($local_data=~m/<option\s*value=\"(\d+)\"\s*>([^>]+)<\/option>/sg) {
-	my $channel_name=tidy($2);
-	my $channel_id=$1;
+	my $ch_name=tidy($2);
+	my $ch_did=$1;
+	my $ch_xid="$ch_did.dagenstv.com";
+	$w->write_channel({ id => $ch_xid, 'display-name' => [ [ $ch_name ] ] });
 	my $day=$now;
 	for (my $i=0;$i<$opt_days;$i++) {
 	    #for each day
 	    if ($i>0) {
 		$day=dc($day, '+ 1 day'); die if not defined $day;
 	    }
-	    #get info
-	    process_table($w, $day, $channel_name, $channel_id);
+	    push @to_get, [ $day, $ch_xid, $ch_did ];
 	}
+    }
+
+    # This progress bar is for both downloading and parsing.  Maybe
+    # they could be separate, as with tv_grab_uk.
+    #
+    my $bar = new Term::ProgressBar('getting listings', scalar @to_get)
+      if $have_bar;
+    foreach (@to_get) {
+	process_table($w, $_->[0], $_->[1], $_->[2]);
+	update $bar if $have_bar;
     }
     $w->end();
 }else{
@@ -253,9 +272,9 @@ if ($local_data=~m/<select\s*name=\"cha\"(.*?)<\/select>/s) {
 #    xmltv id of channel
 #    dagenstv id of channel
 sub process_table( $$$$ ) {
-    my ($w, $date, $channel_name, $channel_id) = @_;
+    my ($w, $date, $ch_xmltv_id, $ch_dagenstv_id) = @_;
     my $today = UnixDate($date, '%Y-%m-%d');
-    my $url = "http://www.dagenstv.com/$country/chart/?dat=$today&cha=$channel_id";
+    my $url = "http://www.dagenstv.com/$country/chart/?dat=$today&cha=$ch_dagenstv_id";
     my $data=get($url);
     if (not defined $data) {
 	die "could not fetch $url, aborting\n";
@@ -269,7 +288,7 @@ sub process_table( $$$$ ) {
     $te->parse($data);
     my $table=$te->first_table_found();
     $today =~ tr/-//d;
-    my %program = (channel => $channel_name);
+    my %program = (channel => $ch_xmltv_id);
     foreach my $row ($te->rows($table)) {
 	# Get the interesting fields of this row.
 	my ($first, $third) = (tidy($row->[0]), tidy($row->[2]));
@@ -291,7 +310,7 @@ sub process_table( $$$$ ) {
 		    }
 		    $w->write_programme(\%program);
 		}
-		%program = (channel => $channel_name);
+		%program = (channel => $ch_xmltv_id);
 	    }
 
 	    $program{start} = pd("$today $1 CET");
@@ -337,7 +356,7 @@ sub process_table( $$$$ ) {
 			}
 			$w->write_programme(\%program);
 		    }
-		    %program = (channel => $channel_name);
+		    %program = (channel => $ch_xmltv_id);
 		}
 	    }			# if we have a time row.
 	}
@@ -375,6 +394,11 @@ sub decode_char( $ ) {
 	}
     }
 }
+# Remove weird characters and entities in the HTML.  Some of these
+# come from Per Wigren's dagenstv2xmltv grabber, but most are just
+# observed from what the site returns.
+#
+# Could use HTML::Entites for at least some of these things.
 sub tidy($) {
     for (my $tmp=shift) {
 	return undef if not defined;
@@ -384,18 +408,27 @@ sub tidy($) {
 
 	# Deal with &#xxx; entities, including those which specify
 	# illegal characters.
-	#
 	s/&\#(\d{3,});/decode_char($1)/eg;
+	s/&\#[xX](\d{3,});/decode_char(oct("0x$1"))/eg;
 
 	# We've reduced the string to 8-bit chars, but some of them
 	# are not legal Latin-1.
-	#
 	s/([\000-\037])//g; # remove control characters
 	tr/\220/\352/;      # LATIN SMALL LETTER E WITH CIRCUMFLEX
 	tr/\235/\371/;      # LATIN SMALL LETTER U WITH GRAVE
 	tr/†/?/;         # no idea, FIXME
 	tr/\217/e/;
 	tr/\200-\237//d && warn "removing illegal high-bit-set chars\n";
+
+	s/&[rl]squo;/chr(39)/eg; # ' character
+	s/&[rl]dquo;/chr(22)/eg; # " character
+	s/&mdash;/--/g;
+
+	# dagenstv2xmltv does &[aeiou](grave|acute|circ|tilde|uml|ring);
+	# entities, but I have never seen them in the site's output.
+
+	# It's not necessary to change the copyright sign 169, because
+	# that is a legal character in the Latin-1 output.
 
 	s/&lt;/</g;
 	s/&gt;/>/g;
