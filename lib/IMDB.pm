@@ -1402,7 +1402,9 @@ sub closeMaybeGunzip($$)
 	#
 	#return gunzip_close($_[1]);
     }
-    return close($_[1]);
+
+    # Apparently this can also segfault (wtf?).
+    #return close($_[1]);
 }
 
 sub readMoviesOrGenres($$$$)
