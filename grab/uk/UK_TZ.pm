@@ -9,7 +9,7 @@
 #
 
 package XMLTV::UK_TZ;
-use Date::Manip;
+use Date::Manip; # no Date_Init(), that can be done by the app
 use XMLTV::TZ qw(gettz);
 
 # Memoize some of our own routines as well as gettz() from
