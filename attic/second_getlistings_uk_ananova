@@ -1,0 +1,863 @@
+#!/usr/bin/perl -w
+use strict;
+use Log::TraceMessages qw(t d); Log::TraceMessages::check_argv();
+use LWP::Simple;
+use HTML::Parser;
+use HTML::TokeParser;
+use Date::Manip 5.40;
+use XML::Writer;
+use URI;
+use Term::ProgressBar;
+use Tie::RefHash;
+use XMLTV;
+use UK_TZ;
+
+# Memoize some subroutines if possible (25x speedup)
+eval { require Memoize };
+if ($@) {
+    warn "could not load Memoize module, things will run slowly";
+}
+else {
+    foreach (qw/parse_uk_date date_to_uk
+	        ParseDate UnixDate DateCalc Date_Cmp
+                ParseDateDelta/)
+    {
+	Memoize::memoize($_) or die "cannot memoize $_: $!";
+    }
+}
+
+# Things will go horribly wrong if Ananova change pages from one day
+# to the next while the script is running.  Assume they do it at
+# midnight. 
+# 
+my $today = ParseDate('today'); die if not defined $today;
+END {
+    if (UnixDate(ParseDate('today'), '%Q') ne UnixDate($today, '%Q')) {
+	warn "current day has changed, results may be messed up";
+    }
+}
+
+my %CHANNELS = (bbc1    => [ 'bbc1.bbc.co.uk' ],
+		bbc2    => [ 'bbc2.bbc.co.uk' ],
+		carlton => [ 'carlton.com' ],
+		ch4     => [ 'channel4.com', 'Channel 4' ],
+		ch5     => [ 'channel5.co.uk', 'Channel 5' ],
+	       );
+my $NUMDAYS = 7;
+
+# Quicker version for testing
+#%CHANNELS = (bbc1 => [ 'bbc1.bbc.co.uk' ]); $NUMDAYS = 1;
+
+# What language the pages are in.  This has no real effect :-)
+my $LANG = 'en';
+
+my $writer = new XML::Writer(DATA_MODE   => 1,
+			     DATA_INDENT => 2 );
+$writer->xmlDecl();
+{ local $^W = 0; $writer->doctype('tv', undef, 'xmltv.dtd') }
+$writer->startTag('tv');
+
+foreach my $ch (sort keys %CHANNELS) {
+    my $ch_data = $CHANNELS{$ch};
+    my $ch_internal = shift @$ch_data;
+    my $junk_test_code = join(' || ', map('/^\s*\Q' . $_ . '\E\s*$/i', $ch, @$ch_data));
+    t "\$junk_test_code: $junk_test_code";
+    my $junk_test = eval "sub { $junk_test_code }";
+
+    foreach my $day (1 .. $NUMDAYS) {
+	# Work out the actual day this number corresponds to - 1 is
+	# today.
+	# 
+	my $day_offset = $day-1;
+	t 'day offset: ' . d $day_offset;
+	my $day_date = DateCalc($today, "+ $day_offset days");
+	die if not defined $day_date;
+
+	my $last_start;
+	my @progs_this_day;
+
+	my @prog_urls = prog_urls($ch, $day);
+	my $bar = new Term::ProgressBar("channel $ch_internal, day $day",
+					scalar @prog_urls);
+	t 'URLs of individual programmes: ' . d \@prog_urls;
+	foreach my $url (@prog_urls) {
+	    t "getting url: $url";
+	    my $page = get $url;
+	    if (not defined $page) {
+		warn "cannot get $url";
+		next;
+	    }
+	    t "got page: $page";
+	    my $r = get_text($page, [ qw(color bgcolor class) ]);
+	    t 'got bits: ' . d $r;
+	    my $a = arrange_text_by_type($r);
+	    t 'by type: ' . d $a;
+	    my $prog = typed_text_to_programme($a);
+	    if (not defined $prog) {
+		warn "couldn't parse content of $url\n";
+		next;
+	    }
+	    $prog->{channel} = $ch_internal;
+	    my $junk = delete $prog->{JUNK};
+	    if (defined $junk) {
+		foreach (@$junk) {
+		    warn "throwing away text: $_"
+		      unless &$junk_test;
+		}
+	    }
+
+	    t 'programme before munging time: ' . d $prog;
+	    push @progs_this_day, $prog;
+	    update $bar;
+	}
+	date_programmes(\@progs_this_day, $day_date);
+	
+	# Clumpidx stuff
+	my $rel = new_relation();
+	add_clumpidx(\@progs_this_day, $rel);
+	t 'related programmes: ' . d($rel);
+
+	write_programme($writer, $_) foreach @progs_this_day;
+    }
+}
+$writer->endTag('tv');
+
+
+# get_text()
+# 
+# Extract bits of text from some HTML.  Each 'bit' is a hashref with a
+# key CONTENT, the actual text, and additional keys you specify.  The
+# value of each extra key is whatever was set as an HTML attribute by
+# the innermost enclosing element of the text that set this attribute.
+# 
+# Parameters:
+#   HTML string
+#   listref of attributes to look for
+# 
+sub get_text($$) {
+    local $Log::TraceMessages::On = 0;
+    my $html = shift;
+    local *attrs = shift; use vars '@attrs';
+    t 'attrs: ' . d \@attrs;
+
+    my %attrs;
+    foreach (@attrs) {
+	$attrs{$_}++ && warn "attr $_ mentioned twice";
+    }
+
+    my @stack;
+    my %default; # default is nothing for anything
+    push @stack, \%default;
+
+    my @r;
+
+    my $start_h = sub {
+	local *v = shift; use vars '%v';
+	my %new_state = %{$stack[$#stack]};
+	foreach (keys %attrs) {
+	    if (defined $v{$_}) {
+		$new_state{$_} = $v{$_};
+	    }
+	}
+	push @stack, \%new_state;
+	t 'pushed new state onto stack, now: ' . d \@stack;
+    };
+
+    my $end_h = sub {
+	pop @stack;
+	t 'popped stack, now: ' . d \@stack;
+	if (not @stack) {
+	    warn "mismatched tags in input\n";
+	    push @stack, \%default;
+	}
+    };
+
+    my $text_h = sub {
+	local $_ = shift;
+	s/\000//g; s/\240//g; s/^\s+//; s/\s+$//;
+	return if not length;
+	my %h = %{$stack[$#stack]};
+	$h{CONTENT} = kludge_text($_);
+	t 'text bit: ' . d \%h;
+	push @r, \%h;
+    };
+
+    my $p = HTML::Parser->new(api_version => 3,
+			      start_h => [ $start_h, 'attr'  ],
+			      end_h   => [ $end_h,   ''      ],
+			      text_h  => [ $text_h,  'dtext' ],
+			     );
+    $p->unbroken_text(1);
+    $p->parse($html);
+    $p->eof();
+    return \@r;
+}
+
+
+# arrange_text_by_type()
+# 
+sub arrange_text_by_type($) {
+    local *bits = shift; use vars '@bits';
+
+    # Try to match each bit against each of these in turn to find out
+    # what 'type' it is.  They are matched top to bottom, so the more
+    # specific ones come first.
+    # 
+    my @types = ([ 'time_and_channel', { bgcolor => '#FFFFFF',
+					 class   => 'helvsmall',
+					 color   => '#990099' } ],
+		 [ 'title_and_stuff',  { bgcolor => '#cccccc',
+					 class  => 'helvsmall' } ],
+		 [ 'desc',             { bgcolor => '#FFFFFF',
+					 class => 'helvsmallnobold' } ],
+		 [ 'page_title',       {} ]);
+
+    my %bits_of_type;
+    foreach my $bit (@bits) {
+	t 'trying to match bit: ' . d $bit;
+	my $found_type;
+	TYPE: foreach my $type (@types) {
+	    my $type_name = $type->[0];
+	    local *attrs = $type->[1]; use vars '%attrs';
+	    foreach (keys %attrs) {
+		t 'testing attr: ' . d $_;
+		# Undefined attrs as part of the type template are not
+		# allowed.
+		# 
+		if (not defined $bit->{$_}) {
+		    t 'nope, does not have this attr defined';
+		    next TYPE;
+		}
+		if ($bit->{$_} ne $attrs{$_}) {
+		    t 'nope, has ' . d($bit->{$_}) . ' rather than ' . d($attrs{$_});
+		    next TYPE;
+		}
+	    }
+	    t 'match successful';
+	    $found_type = $type_name;
+	    last;
+	}
+	if (not defined $found_type) {
+	    # This won't happen with the types I defined, since
+	    # 'title' matches everything.
+	    # 
+	    local $Log::TraceMessages::On = 1;
+	    warn "unknown bit: " . d $bit;
+	}
+	else {
+	    push @{$bits_of_type{$found_type}}, $bit->{CONTENT};
+	}
+    }
+    
+    return \%bits_of_type;
+}
+	    
+
+# typed_text_to_programme()
+# 
+# Returns a hash of programme details, but with the following
+# differences: 
+# 
+# - Instead of 'start', the hash has 'time' which is hours and minutes
+# and optionally a timzeone.  It's up to you to convert this into a
+# proper date and time, because the grabbed pages themselves don't
+# contain a date.
+# 
+# - Instead of 'end', there may be 'length' which is of the form 'X
+# minutes'.  You can probably add this to the start time and date to
+# get the stop time.
+# 
+# - The extra key JUNK gives a listref of text which was found, but
+# didn't map to any of the programme details.  You should examine this
+# to make sure no useful information is being thrown away, and then
+# get rid of it.  (Usually, unrecognized bits of text are warned
+# about to stderr rather than placed in JUNK.  But sometimes it's not
+# possible for this sub to know what's okay and what isn't, so passing
+# it back to the caller is easiest.)
+# 
+# Parameter:
+#   reference to (type => [ items ]) hash
+# 
+sub typed_text_to_programme($) {
+    local *ts = shift; use vars '%ts';
+    my %r;
+
+    my $expect_at_least_one = sub {
+	my $name = shift;
+	my $bits = $ts{$name};
+	if (not defined $bits) {
+	    warn "expected some bits of text of type $name, got none";
+	    return undef;
+	}
+	elsif (@$bits == 0) {
+	    warn "shouldn't get here - empty list of bits";
+	    return undef;
+	}
+	else {
+	    return $bits;
+	}
+    };
+
+    my $expect_exactly_one = sub {
+	my $name = shift;
+	my $bits = $expect_at_least_one->($name);
+	if (@$bits == 1) {
+	    return $bits->[0];
+	}
+	elsif (@$bits >= 2) {
+	    warn "expected exactly one bit of text of type $name, got: " . join(', ', @$bits);
+	    return $bits->[0];
+	}
+	else { die }
+    };
+
+    my $expect_at_most_one = sub {
+	my $name = shift;
+	my $bits = $ts{$name};
+	if (not defined $bits) {
+	    return undef;
+	}
+	elsif (@$bits == 0) {
+	    warn "shouldn't get here - empty list of bits";
+	    return undef;
+	}
+	elsif (@$bits == 1) {
+	    return $bits->[0]
+	}
+	elsif (@$bits >= 2) {
+	    warn "expected at most one bit of text of type $name, got: " . join(', ', @$bits);
+	    return $bits->[0];
+	}
+	else { die }
+    };
+
+    # Time
+    my $time_and_channel = $expect_exactly_one->('time_and_channel');
+    if ($time_and_channel =~ s/^(\d\d?:\d\d)\s*(GMT|UT|BST|)\s*//) {
+	$r{time} = $1;
+	$r{time} .= " $2" if length $2;
+    }
+    else {
+	warn "line does not contain a valid time: $time_and_channel";
+    }
+    push @{$r{JUNK}}, $time_and_channel if $time_and_channel =~ /\S/;
+
+    # Although the DTD says you can have several descriptions, we
+    # don't expect Ananova to return more than one.
+    # 
+    my $desc =  $expect_at_most_one->('desc');
+    $r{desc} = [ $desc ] if defined $desc;
+
+    # Programme title and other details
+    my ($subtitles, $repeat, $length);
+    my ($expect_sub_title, $expect_cast) = (0, 0);
+    foreach (@{$ts{title_and_stuff}}) {
+	if (/^(\d+) (?:mins|minutes)$/) {
+	    my $new_length = "$1 minutes";
+	    if (not defined $r{length}) {
+		$r{length} = $new_length;
+	    }
+	    elsif ($r{length} eq $new_length) {
+		warn "length $new_length seen twice";
+	    }
+	    else {
+		warn "seen length $r{length} but also $new_length";
+	    }
+	}
+	elsif (not defined $r{title}) {
+	    # Assume that the first bit of text of this type which we
+	    # can't identify as being something else must be the
+	    # title. 
+	    # 
+	    # A title with a colon at the end signifies a programme
+	    # with title and 'sub-title', for example 'Kilroy: Debt is
+	    # Driving Us Apart'.
+	    # 
+	    if (s/\s*:\s*$//) {
+		$expect_sub_title = 1;
+	    }
+	    push @{$r{title}}, $_;
+	}
+	elsif ($expect_sub_title) {
+	    push @{$r{sub_title}}, $_;
+	    $expect_sub_title = 0;
+	}
+	else {
+	    # Probably a string like 'repeat, subtitles'.
+	    my @bits = split /\s*,\s*/;
+	    BIT: foreach (@bits) {
+		if ($_ eq 'subtitles') {
+		    # The DTD allows several sets of subtitles, but
+		    # British TV never has more than one.
+		    # 
+		    warn "seen 'subtitles' twice" if defined $r{subtitles};
+		    $r{subtitles} = [ 'teletext' ];
+		}
+		elsif ($_ eq 'repeat') {
+		    # In the XMLTV format, the previously-shown
+		    # element can have an attribute channel saying
+		    # what channel the old screening was on.  In UK TV
+		    # listings, 'repeat' often means 'seen before on
+		    # this channel', but not always.  The BBC channels
+		    # in particular have 'repeats' which were shown on
+		    # a different BBC channel before.  So we can't
+		    # reliably set the channel attribute from these
+		    # listings data.
+		    # 
+		    $r{previously_shown}++ && warn "seen 'repeat' twice";
+		}
+		elsif ($_ eq 'stereo') {
+		    # In XMLTV files, this would be
+		    # <audio><stereo>stereo</stereo></audio>.
+		    # 
+		    $r{stereo}++ && warn "seen 'stereo' twice";
+		}
+		elsif (m!^Episode ([0-9/]+)$!) {
+		    # Assume that Ananova numbers episodes from 1; but
+		    # XMLTV - like all good languages - counts from 0.
+		    # 
+		    (my $new_episode_num = $1) =~ s/^(\d+)/$1 - 1/e;
+		    if (not defined $r{episode_num}) {
+			$r{episode_num} = $new_episode_num;
+		    }
+		    elsif ($new_episode_num eq $r{episode_num}) {
+			warn "episode number $new_episode_num seen twice";
+		    }
+		    else {
+			warn "seen episode number $r{episode_num} but also $new_episode_num";
+		    }
+		}
+		elsif (/^Cast:\s*(.+)/) {
+		    $expect_cast = 1;
+		    push @{$r{credits}{actor}}, $1;
+		}
+		elsif ($_ eq 'new') {
+		    $r{new}++ && warn "'new' seen twice";
+		}
+		elsif (/^Director:\s*(.+)/) {
+		    # And the remaining bits are probably also
+		    # directors, eg
+		    # 'Director: Boon Collins, Kathleen Phelan'
+		    # 
+		    push @{$r{credits}{director}}, $1, @bits[1..$#bits];
+		    last BIT;
+		}
+		elsif ($_ eq 'B&W' or $_ eq 'B and W') {
+		    my $new_colour = 0;
+		    if (not defined $r{colour}) {
+			$r{colour} = $new_colour;
+		    }
+		    elsif ($new_colour eq $r{colour}) {
+			warn "colour boolean $new_colour seen twice";
+		    }
+		    else {
+			warn "seen colour $r{colour} but also $new_colour";
+		    }
+		}
+
+		# If we haven't matched anything so far, try assuming
+		# that it's the name of a cast member.
+		# 
+		elsif ($expect_cast) {
+		    # Everything after the 'Cast:' text is assumed to
+		    # be the name of a member of the cast.
+		    # 
+		    warn "$_ may not be a cast member" if tr/://;
+		    push @{$r{credits}{actor}}, $_;
+		}
+		else {
+		    warn "unknown bit of programme information $_";
+		}
+	    }
+	}
+    }
+
+    if (not defined $r{title}) {
+#	local $Log::TraceMessages::On = 1;
+	warn "no title found, skipping programme\n";
+	t 'managed to get: ' . d \%r;
+	return undef;
+    }
+
+    return \%r;
+}
+
+
+# date_programmes()
+# 
+# Given a list of programme details (from extract_progs()) and the date
+# of this listing, add proper time and date for each programme.  In UT.
+# 
+# Parameters:
+#   reference to list of programme details
+#   date in Date::Manip format
+# 
+# Modifies the list passed in, so that each programme no longer has
+# {'time'} but has {'start'} instead.  If the programme has
+# {'length'}, gets rid of that too and puts in {'stop'}.
+# 
+sub date_programmes($$) {
+#    local $Log::TraceMessages::On = 1;
+    die 'usage: date_programmes(ref to list of programmes, date)'
+      if @_ != 2;
+    my ($progs, $base_date) = @_;
+    t 'adding date to programmes: ' . d $progs;
+    t 'base date: ' . d $base_date;
+    my $base_day = UnixDate($base_date, '%Q');
+    die if not defined $base_day;
+    die 'bad base day, format should be YYYYMMDD'
+      if $base_day !~ /^\d{8}$/;
+
+    my $prev_date;
+    my $day_later = ParseDateDelta('+1 day') or die;
+    my $current_tz = 0; # not undef, because of Memoize complaining
+  
+    foreach (@$progs) {
+	t('adding date to programme ' . d($_));
+	my $t = $_->{'time'};
+	
+	# $t should be hours and minutes, add seconds
+	$t =~ s/\b(\d\d):(\d\d)\b/$1:$2:00/ or die "bad hh:mm $t";
+
+	if (defined gettz($t)) {
+#	    local $Log::TraceMessages::On = 1;
+	    t "found explicit timezone $t, using for future progs";
+	    $current_tz = gettz($t);
+	}
+
+	t "doing 24h UK time $t with base day $base_day";
+	my $prog_date = parse_uk_date("$base_day $t", $current_tz);
+	if (not defined $prog_date) {
+	    # It's not a valid UK time.  Two reasons for this: it
+	    # really isn't, or we're just confused about what day it
+	    # is and need to 'jump' forward a day.
+	    # 
+	    t 'that date is bad, maybe need to jump a day?';
+	    my $err;
+	    my $new_base_day = UnixDate
+	      DateCalc($base_day, $day_later, \$err),
+	      '%Q';
+	    die "error from DateCalc(): $err" if defined $err;
+	    my $new_prog_date = parse_uk_date("$new_base_day $t", $current_tz);
+	    die "bad base day + time '$t' (even tried next day)"
+	      if (not defined $new_prog_date) or ($new_prog_date !~ /\S/);
+	    t 'okay... assume we will jump a day (do it later)';
+	}
+
+	if ((not defined $prog_date)
+	    or (defined $prev_date
+		and (Date_Cmp($prev_date, $prog_date) > 0) ) )
+        {
+	    # Seem to have jumped backwards in time.  Must be the next
+	    # day - but see below.
+	    # 
+	    t 'time is lower than before';
+	    my $prev_day = UnixDate $prev_date, '%Q';
+	    t 'previous programme was at ' . d($prev_date);
+	    my $threshold = ParseDate("$prev_day 12:00:00");
+	    t 'threshold is ' . d($threshold);
+	    if (Date_Cmp($prev_date, $threshold) < 0) {
+		# I can't believe that one programme would last from
+		# before 12:00 until after midnight on any day.  So
+		# this seeming jump to the next day is bogus - it's
+		# the same day but the time is a little bit earlier
+		# for some reason.  (Probably UT/BST switching)
+		# 
+		t 'previous programme started before threshold, ' .
+		  'cannot be next day';
+	    }
+	    else {
+		t 'must be next day';
+		my $err;
+		$base_day = UnixDate
+		  DateCalc($base_day, $day_later, \$err),
+		  '%Q';
+		die "error from DateCalc(): $err" if defined $err;
+		$prog_date = parse_uk_date("$base_day $t", $current_tz);
+		die "bad base day + time '$t'"
+		  if (not defined $prog_date) or ($prog_date !~ /\S/);
+		t 'new base day: ' . d($base_day);
+	    }
+	}
+
+	delete $_->{'time'};
+	$_->{'start'} = $prog_date;
+	t 'new start time: ' . d($_->{start});
+	$prev_date = $prog_date;
+
+	if (defined(my $length = delete $_->{length})) {
+	    # Try to calculate the stop time based on start time and length.
+	    if (not defined $_->{stop}) {
+		my $stop = DateCalc($_->{start}, "+ $length");
+		if (defined $stop) {
+		    $_->{stop} = $stop;
+		}
+		else {
+		    warn "could not calculate stop time from $_->{start} + $length";
+		}
+	    }
+	    else {
+		warn 'programme has both length and stop';
+	    }
+	}
+    }
+}
+
+
+# links()
+# 
+# Return a list of all links in an HTML document.  Based on the
+# example in the HTML::TokeParser documentation :-).
+# 
+sub links($) {
+    my $html = shift;
+    my @r;
+    my $p = HTML::TokeParser->new(\$html)
+      or die 'cannot instantiate HTML::TokeParser';
+    while (my $t = $p->get_tag('a')) {
+	my $href = $t->[1]{href};
+	push @r, $href if defined $href;
+    }
+    return @r;
+}
+
+
+# prog_urls()
+# 
+# Return a list of all URLs for programme details, given a particular
+# Ananova day number and Ananova channel id.
+# 
+# Parameters:
+#   Ananova channel id
+#   day number
+# 
+sub prog_urls($) {
+    my ($ch, $day) = @_;
+    my $index_uri = new URI
+"http://www.ananova.com/tv/tv_mainlisting.html?day=day$day&start=Start&c=$ch&h=1";
+    t 'getting index: ' . $index_uri->as_string();
+    my $index_html = get $index_uri;
+    if (not defined $index_html) {
+	die "cannot get $index_uri";
+    }
+    t "got index html: $index_html";
+
+    my %seen;
+    my @r;
+    foreach (links($index_html)) {
+	my $u = new URI($_);
+	my $abs = $u->abs($index_uri);
+	if (not defined $abs) {
+	    warn "cannot absolutize $_";
+	    next;
+	}
+	if ($abs == $u) {
+	    # Absolute link (with http: or whatever) - assume to
+	    # somewhere unrelated.
+	}
+	elsif (m!/!) {
+	    # Absolute link somewhere on the same site - still assume
+	    # it's unrelated.
+	}
+	elsif (/^tv_det\.html\?c=\Q$ch\E&rs=&rid=2&n=(\d+)&d=day\Q$day\E$/) {
+	    # It's a relative link to tv_det.html, with the correct
+	    # channel and day number.  Add the absolute version to the
+	    # result list.
+	    # 
+	    warn "seen URL $_ twice" if $seen{$_}++;
+	    push @r, $abs;
+	}
+	else {
+	    warn "unrecognized URL in index page: $_";
+	}
+    }
+    return @r;
+}
+
+
+# kludge_text()
+# 
+# Fixes to strings of text from the HTML which wouldn't be necessary
+# if the whole XML-reading-and-writing system handled non-ASCII
+# characters and ligatures correctly.  But as it is, my nsgmls and
+# perl installations are slightly misconfigured; since they're just
+# the standard Red Hat packages, other people's will be also; and it's
+# easier to just work around the problems here.
+# 
+sub kludge_text($) {
+    local $_ = shift;
+
+    # Remove £ signs.
+    s/\xa3((?:\d|,)*)/($1 ne '') ? "$1 pounds" : ''/ge;
+    s/\Q&nbsp;\E/ /g;
+
+    # XML::Simple turns '&' into '&amp;', but nsgmls -wxml doesn't
+    # like this.
+    # 
+    s/\s*\Q\&amp\;\s*\E/ and /g;
+    s/\s*\Q&\E\s*/ and /g;
+
+    return $_;
+}
+
+
+# add_clumpidx()
+# 
+# Sometimes two programmes on a channel are given the same
+# start time in the listings.  This seems to happen when the
+# first is a 'mothership' containing several smaller things,
+# for example '11:00 The Core, 11:00 Core News'.
+# 
+# We add a 'clumpidx' attribute to distinguish these
+# programmes.  Eg 'The Core' has clumpidx '0/2' and 'Core
+# News' has '1/2'.
+# 
+# See also special_split_title() which handles a similar problem.
+# 
+# Parameters:
+#   a reference to a list of programmes for one channel, which will
+#   be modified
+# 
+#   a reference to a 'relation' scalar.  Programmes sharing a clump are
+#   in this relation together.  This scalar will be modified.
+# 
+sub add_clumpidx($$) {
+    die "usage: add_clumpidx(ref to list of programmes, 'related' hashref)"
+      if @_ != 2;
+    my ($progs, $related) = @_;
+    t('add_clumpidx() ENTRY');
+
+    my $last_start;
+    my %num_in_clump; # Maps start time to num. progs at that time
+    foreach (@$progs) {
+	t 'looking at programme: ' . d($_);
+	my $start = $_->{start};
+	t '$start=' . d($start);
+	$_->{clumpidx} = $num_in_clump{$start}++;
+	t 'clumpidx now ' . d($_->{clumpidx});
+
+	if ($num_in_clump{$start} > 1) {
+	    if (not defined $last_start or $last_start ne $start) {
+		warn <<END
+more than one programme at $start on same channel, \
+but not consecutive in listings (this is $_->{title})
+END
+				 ;
+	    }
+	}
+	$last_start = $start;
+    }
+    
+    # Okay, we've got clumpidx of '0', '1' where needed, but even
+    # better would be '0/2', '1/2'.  We look at how many programmes
+    # are in each clump: if only one, remove the clumpidx entirely.
+    # If more than one, put the full 'x/y' clumpidx and additionally
+    # make a note to updated the %{$related} hash.
+    # 
+    t "refine clumpidx's and build todo list";
+    my %todo;
+    foreach (@$progs) {
+	t 'looking at programme: ' . d($_);
+	my $start = $_->{start};
+	my $num = $num_in_clump{$start};
+	die if not defined $_->{clumpidx};
+	if ($num == 1) {
+	    # Ordinary, sane programme not sharing its slot.  This
+	    # would have a clumpidx of '0/1', which isn't worth
+	    # putting in the output.
+	    # 
+	    t 'only programme in slot';
+	    die if $_->{clumpidx} ne '0';
+	    delete $_->{clumpidx};
+	}
+	elsif ($num > 1) {
+	    t 'shares a slot';
+	    $_->{clumpidx} .= "/$num";
+	    t 'new clumpidx: ' . d($_->{clumpidx});
+	    push @{$todo{$start}}, $_;
+	    t "\$todo{$start} now " . d($todo{$start});
+	}
+	else { die }
+    }
+
+    # Update $related
+    t 'updating $related from todo list';
+    foreach (keys %todo) {
+	t 'todo list for ' . d($_);
+	my @l = @{$todo{$_}};
+	t 'list of programmes: ' . d(\@l);
+	foreach my $ai (0 .. $#l) {
+	    foreach my $bi ($ai+1 .. $#l) {
+		my $a = $l[$ai]; my $b = $l[$bi];
+		t "$a and $b related";
+		die if "$a" eq "$b";
+		warn "$a, $b over-related" if related($related, $a, $b);
+		relate($related, $a, $b);
+	    }
+	}
+    }
+
+    t 'add_clumpidx() EXIT';
+}
+
+
+# Routines to handle a symmmetric 'relation'.  This is used to keep
+# track of which programmes are sharing a clump so that fix_clumps()
+# can sort them out if needed.
+# 
+# FIXME make this into a module.
+# 
+sub new_relation() {
+    die 'usage: new_relation()' if @_;
+    my %h; tie %h, 'Tie::RefHash';
+    return \%h;
+}
+sub related($$$) {
+    die 'usage: related(relation, a, b)' if @_ != 3;
+    my ($rel, $a, $b) = @_;
+    my $list = $rel->{$a};
+    return 0 if not defined $list;
+    foreach (@$list) {
+	return 1 if "$_" eq "$b";
+    }
+    return 0;
+}
+sub relate($$$) {
+    die 'usage: related(relation, a, b)' if @_ != 3;
+    my ($rel, $a, $b) = @_;
+    unless (related($rel, $a, $b)) {
+	push @{$rel->{$a}}, $b;
+	push @{$rel->{$b}}, $a;
+    }
+}
+sub unrelate($$$) {
+    die 'usage: related(relation, a, b)' if @_ != 3;
+    my ($rel, $a, $b) = @_;
+    die unless related($rel, $a, $b) and related($rel, $b, $a);
+    @{$rel->{$a}} = grep { "$_" ne "$b" } @{$rel->{$a}};
+    @{$rel->{$b}} = grep { "$_" ne "$a" } @{$rel->{$b}};
+}    
+sub nuke_from_rel($$) {
+    die 'usage: nuke_from_rel(relation, a)' if @_ != 2;
+    my ($rel, $a) = @_;
+    die unless ref($rel) eq 'HASH';
+    foreach (@{relatives($rel, $a)}) {
+	die unless related($rel, $a, $_);
+	unrelate($rel, $a, $_);
+    }
+
+    # Tidy up by removing from hash
+    die if defined $rel->{$a} and @{$rel->{$a}};
+    delete $rel->{$a};
+}
+sub relatives($$) {
+    die 'usage: relatives(relation, a)' if @_ != 2;
+    my ($rel, $a) = @_;
+    die unless ref($rel) eq 'HASH';
+    if ($rel->{$a}) {
+	return [ @{$rel->{$a}} ]; # make a copy
+    }
+    else {
+	return [];
+    }
+}
