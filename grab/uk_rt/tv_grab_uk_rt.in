@@ -15,7 +15,7 @@ tv_grab_uk_rt [--config-file FILE] --configure
 
 tv_grab_uk_rt [--config-file FILE] [--output FILE] [--quiet]
               [--days N] [--offset N]
-              [--slow [--limit-details HH:MM-HH:MM]]
+              [--slow [--limit-details HH:MM-HH:MM] --get-categories]
 
 =head1 DESCRIPTION
 
@@ -52,6 +52,10 @@ details fetched for programmes by checking that the start time falls
 within the specified time range, which must be specified in 24-hour
 clock, eg: 16:00-02:00. This can significantly reduce the number of
 web page fetches.
+
+B<--get-categories> (use with --slow) Attempt to find out the category
+each program is in. This requires another web page get per category
+per day, so it can really slow down the grab.
 
 B<--quiet> suppress the progress messages normally written to standard
 error.
@@ -97,7 +101,8 @@ use XMLTV::Date qw(parse_date);
 use XMLTV::Usage <<END
 To configure: $0 --configure [--config-file FILE]
 To grab listings: $0 [--config-file FILE] [--output FILE] [--days N]
-    [--offset N] [--quiet] [--slow [--limit-details HH:MM-HH:MM]]
+    [--offset N] [--quiet] 
+    [--slow [--limit-details HH:MM-HH:MM] --get-categories]
 END
   ;
 
@@ -148,8 +153,6 @@ my $RADIO_CHANNELS_URL = ( $BASE_URL
 		     ."&jspLocation=/jsp/select_channels_radio.jsp"
 		     ."&rtError=/jsp/mesg.jsp");
 
-# Whether to fetch categories (makes everything slower)
-my $GET_CATEGORIES = 0;
 
 #statistics
 my $numwebgets=0;
@@ -185,6 +188,7 @@ my ($opt_days,
     $opt_detailtimerange,
     $opt_detailstarttime,
     $opt_detailstoptime,
+    $opt_get_categories,
    );
 # No default for $opt_days, we determine it from the site.
 $opt_offset = 0; # default today
@@ -200,6 +204,7 @@ GetOptions('days=i'        => \$opt_days,
 	   'quiet'         => \$opt_quiet,
 	   'slow'          => \$opt_slow,
 	   'limit-details=s' => \$opt_detailtimerange,
+	   'get-categories' => \$opt_get_categories,
 	  )
   or usage(0);
 die 'number of days must not be negative'
@@ -320,8 +325,16 @@ argument, eg:
 END
 		     ) unless $opt_quiet;
 	}
-    }
+	if ( $opt_get_categories ) {
+	    print  ( STDERR  <<END
+WARNING --get-categories makes --slow mode even slower (it makes
+another 35 page requests per day)!
 
+END
+                    )  unless $opt_quiet;
+
+        }
+    }
     # Read the configuration file.  At present the lines must be one
     # of two forms:
     #
@@ -401,11 +414,11 @@ END
 		   });
 
     my %categories;
-    if ($GET_CATEGORIES) {
+    if ($opt_get_categories) {
 	# Find all the categories.  FIXME turn into progress bar.
-	print STDERR "finding categories:\t" unless $opt_quiet;
+	print STDERR "getting category names:\t" unless $opt_quiet;
 	%categories = get_categories();
-	print STDERR "done.\n" unless $opt_quiet;
+        print STDERR "got ". (scalar keys %categories) . " done.\n" unless $opt_quiet;
     }
 
     # Find all the programes on the channels
@@ -601,33 +614,40 @@ END
 	    # search over less channels
 	    #
 	    if (@new_programmes) {
-		if ($opt_slow && $GET_CATEGORIES) {
-		    # FIXME turn into progress bar.
-		    print STDERR "finding the categories at $time:\t"
-		      unless $opt_quiet;
-		    %prog_to_cat =
-		      get_progs_in_cat([ sort keys %write_channels ], $time, \%categories);
-		    print STDERR "done.\n" unless $opt_quiet;
-		}
-	    }
-
-	    # Set the category for each new programme
-	    foreach my $new_prog (@new_programmes) {
-		my $channelId = $new_prog->{_chanID};
-		my $programmeId = $new_prog->{_progID};
-		if ($opt_slow && $GET_CATEGORIES) {
-		    if (!defined($channelId) or !defined($programmeId)) {
-		        warn "FIXME: undefined programmeId or channelId\n"  ;
-		    } elsif (exists($prog_to_cat{"$channelId$programmeId"})) {
-    		        my $cat_ID = $prog_to_cat{"$channelId$programmeId"};
-		        my $cat = $categories{$cat_ID};
-		        if (defined $cat) {
-			    push @{$new_prog->{category}}, [ $cat ];
-		        }
-			else {
-			    warn "unknown category id $cat\n";
+		if ($opt_get_categories) {
+		    t "searching categories";
+		    %prog_to_cat = get_progs_in_cat([ sort keys %write_channels ], 
+						    $time, 
+						    \%categories);
+		    # Set the category for each new programme
+		    foreach my $new_prog (@new_programmes) {
+			# can only be sure of categories for listed programmes, 
+			# followons do not have a _progID, and may be a different
+			# type to their parent.
+			# so only get categs for non-clumped and 0'th clump
+			if ( not defined $new_prog->{clumpidx} 
+			     or $new_prog->{clumpidx} =~ m/0\/[0-9]/ ) {
+			    my $channelId = $new_prog->{_chanID};
+			    my $programmeId = $new_prog->{_progID};
+			    if (!defined($channelId) or !defined($programmeId)) {
+				warn "Cannot add categories for prog: \"$new_prog->{title}[0][0]\" at \"$new_prog->{start}\"";
+				warn "  --> got undefined programmeId\n" if ( !defined($programmeId));
+				warn "  --> got undefined channelId\n" if (!defined($channelId));
+				t  d $new_prog;
+			    } elsif (exists($prog_to_cat{"$channelId$programmeId"})) {
+				my $cat_ID = $prog_to_cat{"$channelId$programmeId"};
+				my $cat = $categories{$cat_ID};
+				if (defined $cat) {
+				    push @{$new_prog->{category}}, [ $cat ];
+				}
+				else {
+				    warn "unknown category id $cat\n";
+				}
+			    }
 			}
 		    }
+		    t "done adding categories to programmes";
+
 		}
 	    }
 
@@ -762,7 +782,7 @@ sub get_programmes( $$$$$ ) {
 	    }
 	}
 	
-	my $url = "$BASE_URL/ListingsServlet?event=10&";
+	$url = "$BASE_URL/ListingsServlet?event=10&";
 	$url .= "channelId=$channelId&";
 	$url .= "programmeId=$programmeId&";
 	$url .= 'jspLocation=/jsp/prog_details.jsp';
@@ -772,6 +792,7 @@ sub get_programmes( $$$$$ ) {
 		   title => [ [ $link_title, $LANG ] ],
 		   url => [ $url ],
 		   _progID => $programmeId,
+		   _chanID => $channelId,
 	       };
 	print STDERR '#' unless $opt_quiet;
     }
@@ -816,7 +837,7 @@ sub get_programme_details( $$$$$ ) {
     #
     my @followons;
 
-    if ($GET_CATEGORIES) {
+    if ($opt_get_categories) {
 	my $cat_ID = $prog_to_cat{"$channelId$programmeId"};
 	if ($cat_ID and exists($categories{$cat_ID})) {
 	    my $cat = $categories{$cat_ID};
@@ -1687,6 +1708,7 @@ sub get_available_dates() {
 # given.
 #
 sub get_progs_in_cat( $$$ ) {
+#    local $Log::TraceMessages::On = 1;
     my @channels_to_search = map { xmltv_to_rt($_) } @{shift()};
     my $time = shift;
     our %categories; local *categories = shift;
@@ -1694,14 +1716,14 @@ sub get_progs_in_cat( $$$ ) {
     my %cats;
     my $url;
 
-    # FIXME commonize this
-    local $SIG{__WARN__} = sub {
-	warn "$url: $_[0]";
-    };
-    local $SIG{__DIE__} = sub {
-	die "$url: $_[0]";
-    };
+    # This has been tested for 40 channels with no problems...
+    # But we may need to split channels-to-search into smaller 
+    # slices if user has a LOT of channels... 
     
+    # FIXME: chould be a progress bar with scalar(keys %categories) increments
+    print STDERR 'time ', UnixDate($time, '%q'), ", getting categories:\t"
+	if not $opt_quiet;
+
     # For each category find all the programmes in that category
     foreach my $category (keys %categories) {
 	$url = "$BASE_URL/ListingsServlet?event=7&";
@@ -1727,22 +1749,28 @@ sub get_progs_in_cat( $$$ ) {
 	my @results = ($data =~ /<!-- start of a result -->.*?<!-- end of a result -->/ig);
  	if (not @results) {
  	    unless ($data =~ /There are no programmes available/) {
- 	        warn "cannot find results in data";
+ 	        warn "$url: cannot find results in data";
              }
  	}
-
 	foreach (@results) {
 	    /channelId=([0-9]+)/
-	      or die "cannot find channelId= in $_";
+	      or warn "$url: cannot find channelId= in $_";
 	    my $channelId = $1;
 
 	    /programmeId=([0-9]+)/
-	      or die "cannot find programmeId= in $_";
+	      or warn "$url: cannot find programmeId= in $_";
 	    my $programmeId = $1;
 
-	    $cats{"$channelId$programmeId"} = $category;
+	    if ( defined $channelId && defined $programmeId ) {
+		$cats{"$channelId$programmeId"} = $category ;
+	    }
 	}
+
+	# FIXME progress bar
+	print STDERR "#" 	if ( not $opt_quiet );
     }
+    # FIXME progress bar
+    print STDERR " done\n"    if ( not $opt_quiet );
     return %cats;
 }
 
@@ -1792,9 +1820,12 @@ sub configure() {
 Enter the name of a channel, or '.' to finish selecting channels:
 END
 	);
-	die "cannot read input, aborting configuration\n"
-	  if not defined $in;
-	$in =~ s/^\s+//; $in =~ s/\s+$//;
+	# treat EOF as same as '.' -- finish
+	last if not defined $in; 
+	$in =~ s/^\s+//; 
+	$in =~ s/\s+$//;
+	# handle backspace
+	$in =~ s/.\x08//g;
 	last if $in eq '.';
 
 	# FIXME commonize this matching by display name.
@@ -1807,7 +1838,8 @@ END
 		next CH;
 	    }
 	    foreach (map { $_->[0] } @$dns) {
-		if (/$in/i) {
+		# use substring match
+		if (index(lc, lc $in) != -1) {
 		    push @poss, $ch;
 		    next CH;
 		}
@@ -1843,8 +1875,8 @@ END
 	    my $r = askQuestion('Which channel to add?',
 				$poss[0]->{'display-name'}->[0]->[0],
 				(sort keys %dn_to_ch), $none_option);
-	    die "cannot read input, aborting configuration\n"
-	      if not defined $r;
+	    # treat EOF as same as none-option
+	    next if not defined $r;
 	    next if $r eq $none_option;
 	    my $ch = $dn_to_ch{$r}; die if not defined $ch;
 	    my $xmltv_id = $ch->{id};
