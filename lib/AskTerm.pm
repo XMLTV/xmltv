@@ -8,9 +8,9 @@ package XMLTV::AskTerm;
 use strict;
 use base 'Exporter';
 our @EXPORT = qw(ask
-                 askQuestion
-                 askBooleanQuestion
-                 askManyBooleanQuestions
+                 ask_question               askQuestion
+                 ask_boolean_question       askBooleanQuestion
+                 ask_many_boolean_questions askManyBooleanQuestions
                  say
                 );
 use Carp qw(croak carp);
@@ -29,9 +29,9 @@ BEGIN {
 }
 
 sub ask( $ );
-sub askQuestion( $$@ );
-sub askBooleanQuestion( $$ );
-sub askManyBooleanQuestions( $@ );
+sub ask_question( $$@ );              sub askQuestion( $$@ );
+sub ask_boolean_question( $$ );       sub askBooleanQuestion( $$ );
+sub ask_many_boolean_questions( $@ ); sub askManyBooleanQuestions( $@ );
 sub say( $ );
 
 sub ask( $ )
@@ -75,7 +75,7 @@ sub match( $@ ) {
 #
 # Returns one of the choices, or undef if input could not be read.
 #
-sub askQuestion( $$@ )
+sub ask_question( $$@ )
 {
     my $question=shift(@_); die if not defined $question;
     chomp $question;
@@ -160,6 +160,7 @@ sub askQuestion( $$@ )
 	}
     }
 }
+sub askQuestion( $$@ ) { &ask_question }
 
 # Ask a yes/no question.
 #
@@ -168,7 +169,7 @@ sub askQuestion( $$@ )
 #
 # Returns true or false, or undef if input could not be read.
 #
-sub askBooleanQuestion( $$ )
+sub ask_boolean_question( $$ )
 {
     my ($text, $default) = @_;
     my $r = askQuestion($text, ($default ? 'yes' : 'no'), 'yes', 'no');
@@ -177,6 +178,7 @@ sub askBooleanQuestion( $$ )
     return 0 if $r eq 'no';
     die;
 }
+sub askBooleanQuestion( $$ ) { &ask_boolean_question }
 
 # Ask yes/no questions with option 'default to all'.
 #
@@ -186,7 +188,7 @@ sub askBooleanQuestion( $$ )
 # Returns: lots of booleans, one for each question.  If input cannot
 # be read, then a partial list is returned.
 #
-sub askManyBooleanQuestions( $@ )
+sub ask_many_boolean_questions( $@ )
 {
     my $default = shift;
 
@@ -221,6 +223,7 @@ sub askManyBooleanQuestions( $@ )
     }
     return @r;
 }
+sub askManyBooleanQuestions( $@ ) { &ask_many_boolean_questions }
 
 sub say( $ )
 {

@@ -7,9 +7,9 @@ package XMLTV::AskTk;
 use strict;
 use base 'Exporter';
 our @EXPORT = qw(ask
-                 askQuestion
-                 askBooleanQuestion
-                 askManyBooleanQuestions
+                 ask_question               askQuestion
+                 ask_boolean_question       askBooleanQuestion
+                 ask_many_boolean_questions askManyBooleanQuestions
                  say
                 );
 use Carp qw(croak);
@@ -35,10 +35,10 @@ my $bottom_frame;
 my $mid_bottom_frame;
 
 sub ask( $ );
-sub askQuestion( $$@ );
-sub askBooleanQuestion( $$ );
-sub askManyBooleanQuestions( $@ );
-sub askBooleanOptions( $$$@ );
+sub ask_question( $$@ );              sub askQuestion( $$@ );
+sub ask_boolean_question( $$ );       sub askBooleanQuestion( $$ );
+sub ask_many_boolean_questions( $@ ); sub askManyBooleanQuestions( $@ );
+sub ask_boolean_options( $$$@ );      sub askBooleanOptions( $$$@ );
 sub say( $ );
 
 sub ask( $ ) {
@@ -83,7 +83,7 @@ sub ask( $ ) {
 #
 # Returns one of the choices, or undef if input could not be read.
 #
-sub askQuestion( $$@ ) {
+sub ask_question( $$@ ) {
     my $question = shift; die if not defined $question;
     my $default = shift; die if not defined $default;
     my @options = @_; die if not @options;
@@ -92,6 +92,7 @@ sub askQuestion( $$@ ) {
       if not grep { $_ eq $default } @options;
     return askBooleanOptions( $question, $default, 0, @options );
 }
+sub askQuestion( $$@ ) { &ask_question }
 
 # Ask a yes/no question.
 #
@@ -100,7 +101,7 @@ sub askQuestion( $$@ ) {
 #
 # Returns true or false, or undef if input could not be read.
 #
-sub askBooleanQuestion( $$ ) {
+sub ask_boolean_question( $$ ) {
     my ($text, $default) = @_;	
     t "asking question $text, default $default";
 	
@@ -142,6 +143,7 @@ sub askBooleanQuestion( $$ ) {
     $main_window->destroy;
     return 1;
 }
+sub askBooleanQuestion( $$ ) { &ask_boolean_question }
 
 # Ask yes/no questions with option 'default to all'.
 #
@@ -151,13 +153,14 @@ sub askBooleanQuestion( $$ ) {
 # Returns: lots of booleans, one for each question.  If input cannot
 # be read, then a partial list is returned.
 #
-sub askManyBooleanQuestions( $@ ) {
+sub ask_many_boolean_questions( $@ ) {
     my $default=shift;
     my @options = @_;
     return askBooleanOptions('', $default, 1, @options);
 }
+sub askManyBooleanQuestions( $@ ) { &ask_many_boolean_questions }
 
-sub askBooleanOptions( $$$@ ) {
+sub ask_boolean_options( $$$@ ) {
     my $question=shift;
     my $default=shift;
     my $allowedMany=shift;
@@ -251,6 +254,7 @@ sub askBooleanOptions( $$$@ ) {
 	return $ans;
     }
 }
+sub askBooleanOptions( $$$@ ) { &ask_boolean_options }
 
 sub say( $ ) {
     my $question = shift;
