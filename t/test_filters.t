@@ -33,6 +33,8 @@ my @cmds
   = (
      [ [ 'tv_cat'                                              ], 1 ],
      [ [ 'tv_extractinfo_en'                                   ], 1 ],
+# We assume that most usages of tv_grep are idempotent on the sample
+# files given.  But see BUGS section of manual page.
      [ [ 'tv_grep', 'a'                                        ], 1 ],
      [ [ 'tv_grep', '--category', 'b'                          ], 1 ],
      [ [ 'tv_grep', '-i', '--last-chance', 'c'                 ], 1 ],
@@ -41,7 +43,7 @@ my @cmds
      [ [ 'tv_grep', '--channel-name', 'd'                      ], 1 ],
      [ [ 'tv_grep', '--channel-id', 'channel4.com'             ], 1 ],
      [ [ 'tv_grep', '--on-after', '2002-02-05'                 ], 1 ],
-     [ [ 'tv_grep', '--eval', 'scalar keys %$_ > 5'            ], 1 ],
+     [ [ 'tv_grep', '--eval', 'scalar keys %$_ > 5'            ], 0 ],
      [ [ 'tv_grep', '--category', 'e', '--and', '--title', 'f' ], 1 ],
      [ [ 'tv_grep', '--category', 'g', '--or', '--title', 'h'  ], 1 ],
      [ [ 'tv_grep', '-i', '--category', 'i', '--title', 'j'    ], 1 ],
@@ -157,9 +159,9 @@ foreach my $pair (@cmds) {
 	else { die }
 
 	if ($idem) {
+	    ++ $test_num;
 	    if ($okay) {
 		die if not -e $out;
-		++ $test_num;
 		# Run the command again, on its own output.
 		my $twice_out = "$base.twice_out";
 		my $twice_err = "$base.twice_err";
@@ -200,7 +202,8 @@ foreach my $pair (@cmds) {
 	system 'gzip', keys %to_gzip if %to_gzip;
     }
 }
-die if $test_num != $num_tests;
+die "ran $test_num tests, expected to run $num_tests"
+  if $test_num != $num_tests;
 
 
 # run()
