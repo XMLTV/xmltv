@@ -9,6 +9,17 @@ sub test_module( $$ );
 sub test_special( $$ );
 sub targets( $ );
 
+if ($] == 5.006) {
+    warn <<END
+Some installations of perl 5.6.0 are buggy and crash while running
+this script.  If you get 'segmentation fault' below, please report it
+to the xmltv-users mailing list so we can try to work around the bug.
+At present the only known fix is to upgrade to a newer perl version
+such as 5.6.1 or 5.8.0.
+END
+  ;
+}
+
 use vars '$VERSION';
 $VERSION = '0.5.8';
 
