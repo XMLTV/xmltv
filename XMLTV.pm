@@ -145,6 +145,13 @@ sub write_programme($$) {
     t "beginning 'programme' element";
     $w->startTag('programme', %attrs);
 
+    # Source (probably a URL or filename) is only for debugging and
+    # not actually part of the file format.
+    # 
+    if (defined(my $val = delete $p{source})) {
+	$w->comment("source: $val");
+    }
+
     my $titles = delete $p{title};
     if (defined($titles) and @$titles) {
 	t 'titles';

@@ -14,6 +14,30 @@ package ClickListings::ParseTable;
 #
 
 #
+# ChangeLog
+# ---------
+# 2001-09-06  Jerry Veldhuis, jerry@matilda.com
+#	- started ChangeLog
+#	- added/fixed some program qualifiers
+#	- changed format of warning messages
+#	- removed usage of unbroken_text setting in HTML::Parser
+#	- fixed dumpMe() calls that don't print return value.
+#	- reworked code to identify and drop schedule tables that
+#	  don't parse correctly.
+#	- when row in table missing columns, we attempt to print
+#	  channel information for easier diagnosis.
+#	- identifies when clicktv server responds with
+#	  "Sorry, your request could not be processed", sleeps and
+#	  tries again, eventually failing entire request.
+#	- if directory ./urldata exists caches html pages to ease
+#	  testing and problem diagnosis
+#	- correctly identify year of movies
+#	- auto corrects program details that look like 'actors' lists
+#	  and then later notices these are on the unidentified
+#	  qualifiers lists (because later, they were ruled-out as
+#	  being properly identified)
+
+#
 # This package is the core scraper for schedules
 # from clicktv.com and tvguide.ca.
 #
@@ -22,7 +46,7 @@ package ClickListings::ParseTable;
 # - Clicktv may change their format and we play catch-up.
 #
 # - sometimes details that appear in () get by us. In these cases,
-#   we emit a "unable to identify type of detal for '????'" to
+#   we emit a "warning: unidentified qualifier %s" to
 #   STDERR. These may be qualifiers we don't yet understand, feel
 #   free contribute the error message and I'll add them.
 #
@@ -31,7 +55,7 @@ package ClickListings::ParseTable;
 #   guests. Sometime the description ends with "guest:.." or
 #   "guest stars:..."
 #
-# - not all error messages go to stderr
+# - some error messages may go to stdout instead of stderr
 #
 # - sometimes actors names include nicknames in (), for instance:
 #   (Kasan Butcher, Cynthia (Alex) Datcher)
@@ -47,8 +71,28 @@ package ClickListings::ParseTable;
 # - add some comments, so perldoc works. Maybe later if we
 #   make subpackages for Channel and Program objects.
 #
+# - could use time first table request takes and amount
+#   of data it required to download to put up a fairly
+#   accurate progress bar. Unlike explorer it does something.
+#   May require using something other than LWP::Simple for 
+#   urldata lookups. Note: look at scp, for a good example
+#
+# - could attempt to extract guest names from descriptions to
+#   locate 'actors'. For instance, some listings include
+#   phrases like:
+#       'Scheduled: actors Darrell Hammond and Lauren Graham,
+#        music guest Case.'
+#       'From June: L.A. Lakers forward Rick Fox, music
+#        guest Dido, actor Tim Stack.'
+#       'From March: actor Dean Haglund; music guest Quartetto
+#        Gelato; columnist George Christy; dog of the week.'
+#   could probably pick out the 'actors' listed, maybe not
+#   the 'musical guest...' and 'L.A. Lakeer forward...'
+#   Although this is probably better suited for a secondary
+#   xmltv output scraper.
 
 use strict;
+use HTML::Entities qw(decode_entities);
 
 use vars qw(@ISA $infield $inrecord $intable $nextTableIsIt);
 
@@ -59,6 +103,20 @@ use Dumpvalue;
 
 my $debug=0;
 my $verify=0;
+
+sub reset($)
+{
+    my $self=shift;
+    delete($self->{Table});
+    delete($self->{Row});
+    delete($self->{Field});
+    delete($self->{undefQualifiers});
+
+    $infield=0;
+    $inrecord=0;
+    $intable=0;
+    $nextTableIsIt=0;
+}
 
 sub dumpMe($)
 {
@@ -115,9 +173,7 @@ sub start()
 
     }
     if ( $debug>1 && $intable ) {
-	print STDERR "start: ($tag, ";
-	dumpMe($attr);
-	print STDERR ")\n";
+	print STDERR "start: ($tag, ".dumpMe($attr).")\n";
     }
 
 }
@@ -140,14 +196,11 @@ sub massageText
 {
     my ($text) = @_;
 
-    #print STDERR "MASSAGE:\"$text\"\n";
     $text=~s/&nbsp;/ /og;
-    #$text=~s/&#0//og;
-    $text=HTML::Entities::decode($text);
+    $text=decode_entities($text);
     $text=~s/^\s+//o;
     $text=~s/\s+$//o;
     $text=~s/\s+/ /o;
-    #print STDERR "MASSAGE:'$text'\n";
     return($text);
 }
 
@@ -173,7 +226,7 @@ sub evaluateDetails
 	    next;
 	}
 	# check for (1997) being the year declaration
-	elsif ( $info=~s/^(\d+)$//o ) {
+	elsif ( $info=~s/^(\d+)$/$1/o ) {
 	    $result->{prog_year}=$info;
 	    next;
 	}
@@ -198,204 +251,267 @@ sub evaluateDetails
 	
 	    #
 	    # www.tvguidelines.org and http://www.fcc.gov/vchip/
-	    for my $rating ('Y','Y7','G','PG','14','MA') {
-		if ( $i eq "TV-$rating" ) {
-		    $result->{prog_ratings_VCHIP}=$rating;
-		    undef($i);
-		    $matches++;
-		    last;
-		}
-	    }
-	    next if ( !defined($i) );
-
-	    # Expanded VChip Ratings (see notes above)
-	    for my $rating ('FV','V','S','L','D') {
-		if ( $i eq $rating ) {
-		    if ( $rating eq 'FV' ) {
-			$result->{prog_ratings_VCHIP_Expanded}="Fantasy Violence";
-		    }
-		    elsif ( $rating eq 'V' ) {
-			$result->{prog_ratings_VCHIP_Expanded}="Violence";
-		    }
-		    elsif ( $rating eq 'S' ) {
-			$result->{prog_ratings_VCHIP_Expanded}="Sexual Situations";
-		    }
-		    elsif ( $rating eq 'L' ) {
-			$result->{prog_ratings_VCHIP_Expanded}="Course Language";
-		    }
-		    elsif ( $rating eq 'D' ) {
-			$result->{prog_ratings_VCHIP_Expanded}="Suggestive Dialogue";
-		    }
-		    else {
-			die "coding error: how did we get here ?";
-		    }
-		    undef($i);
-		    $matches++;
-		    last;
-		}
-	    }
-	    next if ( !defined($i) );
-
-	    # www.filmratings.com
-	    for my $rating ('G','PG','PG-13','R','NC-17','NR') {
-		if ( $i eq $rating || $i eq "Rated $rating" ) {
-		    $result->{prog_ratings_MPAA}=$rating;
-		    undef($i);
-		    $matches++;
-		    last;
-		}
-	    }
-	    next if ( !defined($i) );
-
-	    # search for 'violence' at www.twckc.com and get:
-	    #    http://www.twckc.com/inside/faq2_0116.html
-	    # 
-	    for my $rating ('Adult Content',
-			    'Adult Humor',
-			    'Adult Language', 
-			    'Adult Situations',
-			    'Adult Theme', 
-			    'Brief Nudity',
-			    'Graphic Language',
-			    'Graphic Violence',
-			    'Mature Theme',
-			    'Mild Violence',
-			    'Nudity',
-			    'Profanity',
-			    'Strong Sexual Content',
-			    'Rape',
-			    'Violence') {
-		if ( $i=~m/^$rating$/i ) {
-		    push(@{$result->{prog_ratings_Warnings}}, $rating);
-		    undef($i);
-		    $matches++;
-		    last;
-		}
-	    }
-	    next if ( !defined($i) );
-
-	    if ( $i=~m/^debut$/i ) {
-		$result->{prog_qualifiers}->{Debut}++;
+	    if ( $i=~m/^TV-(Y)$/oi ||
+		 $i=~m/^TV-(Y7)$/oi ||
+		 $i=~m/^TV-(G)$/oi ||
+		 $i=~m/^TV-(PG)$/oi ||
+		 $i=~m/^TV-(14)$/oi ||
+		 $i=~m/^TV-(MA)$/oi ) {
+		$result->{prog_ratings_VCHIP}="$1";
 		undef($i);
 		$matches++;
 		next;
 	    }
-	    elsif ( $i=~m/in progress$/i ) {
+
+	    # Expanded VChip Ratings (see notes above)
+	    if ( $i=~m/^FV$/oi ) {
+		$result->{prog_ratings_VCHIP_Expanded}="Fantasy Violence";
+		undef($i);
+		$matches++;
+		next;
+	    }
+	    elsif ($i=~m/^V$/oi ) {
+		$result->{prog_ratings_VCHIP_Expanded}="Violence";
+		undef($i);
+		$matches++;
+		next;
+	    }
+	    elsif ($i=~m/^S$/oi ) {
+		$result->{prog_ratings_VCHIP_Expanded}="Sexual Situations";
+		undef($i);
+		$matches++;
+		next;
+	    }
+	    elsif ($i=~m/^L$/oi ) {
+		$result->{prog_ratings_VCHIP_Expanded}="Course Language";
+		undef($i);
+		$matches++;
+		next;
+	    }
+	    elsif ($i=~m/^D$/oi ) {
+		$result->{prog_ratings_VCHIP_Expanded}="Suggestive Dialogue";
+		undef($i);
+		$matches++;
+		next;
+	    }
+
+	    # www.filmratings.com
+	    if ( $i=~m/^(G)$/oi ||
+		 $i=~m/^(PG)$/oi ||
+		 $i=~m/^(PG-13)$/oi ||
+		 $i=~m/^(R)$/oi ||
+		 $i=~m/^(NC-17)$/oi ||
+		 $i=~m/^(NR)$/oi ||
+		 $i=~m/^Rated (G)$/oi ||
+		 $i=~m/^Rated (PG)$/oi ||
+		 $i=~m/^Rated (PG-13)$/oi ||
+		 $i=~m/^Rated (R)$/oi ||
+		 $i=~m/^Rated (NC-17)$/oi ||
+		 $i=~m/^Rated (NR)$/oi ) {
+		$result->{prog_ratings_MPAA}="$1";
+		undef($i);
+		$matches++;
+		next;
+	    }
+	    elsif ($i=~m/^(GP)$/oi || # french for PG
+		   $i=~m/^(GP-13)$/oi || # french for PG-13
+		   $i=~m/^Rated (GP)$/oi || # french for PG
+		   $i=~m/^Rated (GP-13)$/oi # french for PG-13
+		   ) {
+		# convert back from french
+		my $rating=$1;
+		$rating=~s/^GP/PG/og;
+		$result->{prog_ratings_MPAA}="$rating";
+		undef($i);
+		$matches++;
+		next;
+	    }
+
+	    # search for 'violence' at www.twckc.com and get:
+	    #    http://www.twckc.com/inside/faq2_0116.html
+	    # 
+	    if ( $i=~m/^(Adult Content)$/oi ||
+		 $i=~m/^(Adult Humor)$/oi ||
+		 $i=~m/^(Adult Language)$/oi ||
+		 $i=~m/^(Adult Situations)$/oi ||
+		 $i=~m/^(Adult Theme)$/oi ||
+		 $i=~m/^(Brief Nudity)$/oi ||
+		 $i=~m/^(Graphic Language)$/oi ||
+		 $i=~m/^(Graphic Violence)$/oi ||
+		 $i=~m/^(Mature Theme)$/oi ||
+		 $i=~m/^(Mild Violence)$/oi ||
+		 $i=~m/^(Nudity)$/oi ||
+		 $i=~m/^(Profanity)$/oi ||
+		 $i=~m/^(Strong Sexual Content)$/oi ||
+		 $i=~m/^(Rape)$/oi ||
+		 $i=~m/^(Violence)$/oi ) {
+		push(@{$result->{prog_ratings_Warnings}}, $1);
+		undef($i);
+		$matches++;
+		next;
+	    }
+
+	    if ( $i=~m/^debut$/oi || 
+		 $i=~m/^d.but$/oi # french translation e usually has circumflex (sp?)
+		 ) {
+		 $result->{prog_qualifiers}->{Debut}++;
+		undef($i);
+		$matches++;
+		next;
+	    }
+	    elsif ( $i=~m/^in progress$/oi ) {
 		$result->{prog_qualifiers}->{InProgress}++;
 		undef($i);
 		$matches++;
 		next;
 	    }
-	    elsif ( $i=~m/finale$/i ) {
+	    elsif ( $i=~m/^finale$/oi ||
+		    $i=~m/^series finale$/oi ||
+		    $i=~m/^season finale$/oi) {
 		$result->{prog_qualifiers}->{LastShowing}=$i;
 		undef($i);
 		$matches++;
 		next;
 	    }
-	    elsif ( $i=~m/premiere$/i ) {
+	    elsif ( $i=~m/^premiere$/oi ||
+		    $i=~m/^series premiere$/oi ||
+		    $i=~m/^season premiere$/oi ||
+		    $i=~m/^D.but de la s.rie$/oi # french
+		    ) {
 		$result->{prog_qualifiers}->{PremiereShowing}=$i;
 		undef($i);
 		$matches++;
 		next;
 	    }
-	    elsif ( $i=~m/^network\-/i ) {
-		# ignore these
+	    elsif ( $i=~m/^network\-/oi ) {
+		# understand and ignore these
 		undef($i);
 		$matches++;
 		next;
 	    }
-	    elsif ( $i=~m/^closed captioned$/i ) {
+	    elsif ( $i=~m/^closed captioned$/oi ||
+		    # french translation
+		    # loosly translates to 'Subtitled coded for the deaf people'
+		    $i=~m/^Sous-titr. cod. pour les malentendants$/oi
+		    ) {
 		$result->{prog_qualifiers}->{ClosedCaptioned}++;
 		undef($i);
 		$matches++;
 		next;
 	    }
 	    # this pops up for series oriented showings
-	    elsif ( $i=~m/^(part [0-9]+ of [0-9]+)$/i ) {
-		$result->{prog_qualifiers}->{PartInfo}="$1";
+	    elsif ( $i=~m/^part ([0-9]+) of ([0-9]+)$/oi ||
+		    $i=~m/^partie ([0-9]+) de ([0-9]+)$/oi # french translation
+		    ) {
+		$result->{prog_qualifiers}->{PartInfo}="Part $1 of $2";
 		undef($i);
 		$matches++;
 		next;
 	    }
-	    # this pops up for series oriented showings
-	    elsif ( $i=~m/^HDTV$/i ) {
+	    elsif ( $i=~m/^HDTV$/oi ) {
 		$result->{prog_qualifiers}->{HDTV}++;
 		undef($i);
 		$matches++;
 		next;
 	    }
-	    elsif ( $i=~m/^Taped$/i ) {
+	    elsif ( $i=~m/^Taped$/oi ||
+		    $i=~m/^Same-day Tape$/oi ) {
 		$result->{prog_qualifiers}->{Taped}++;
 		undef($i);
 		$matches++;
 		next;
 	    }
-	    elsif ( $i=~m/^Dubbed$/i ) {
+	    elsif ( $i=~m/^Dubbed$/oi ) {
 		$result->{prog_qualifiers}->{Dubbed}++;
 		undef($i);
 		$matches++;
 		next;
 	    }
-	    elsif ( $i=~m/^new$/i ) {
+	    elsif ( $i=~m/^new$/oi ) {
 		# ignore
 		undef($i);
 		$matches++;
 		next;
 	    }
-	    elsif ( $i=~m/^live/i ) {
+	    elsif ( $i=~m/^live$/oi ||
+		    $i=~m/^live phone-in$/oi) {
 		$result->{prog_qualifiers}->{Live}++;
 		undef($i);
 		$matches++;
 		next;
 	    }
-	    elsif ( $i=~m/^repeat/i ) {
+	    elsif ( $i=~m/^Subject to Blackout$/oi ) {
 		# understand, but ignore
 		undef($i);
 		$matches++;
 		next;
 	    }
-	    elsif ( $i=~m/^subtitled/i ) {
+	    elsif ( $i=~m/^Time approximate$/oi ) {
+		# understand, but ignore
+		undef($i);
+		$matches++;
+		next;
+	    }
+	    elsif ( $i=~m/^repeat$/oi ) {
+		# understand, but ignore
+		undef($i);
+		$matches++;
+		next;
+	    }
+	    elsif ( $i=~m/^cable in the classroom$/oi ) {
+		# understand, but ignore
+		undef($i);
+		$matches++;
+		next;
+	    }
+	    elsif ( $i=~m/^joined in progress$/oi ) {
+		# understand, but ignore
+		undef($i);
+		$matches++;
+		next;
+	    }
+	    elsif ( $i=~m/^subtitled$/oi ) {
 		$result->{prog_qualifiers}->{Subtitles}++;
 		undef($i);
 		$matches++;
 		next;
 	    }
-	    elsif ( $i=~m/^in stereo/i ) {
+	    elsif ( $i=~m/^in stereo$/oi ) {
 		$result->{prog_qualifiers}->{InStereo}++;
 		undef($i);
 		$matches++;
 		next;
 	    }
 	    # saw an instance of "In German" appear
-	    elsif ( $i=~m/^in (.*)$/i ) {
+	    elsif ( $i=~m/^in (.*)$/oi ) {
 		$result->{prog_qualifiers}->{Language}="$1";
 		undef($i);
 		$matches++;
 		next;
 	    }
 	    # appears in details window
-	    elsif ( $i=~m/^paid program/i ) {
+	    elsif ( $i=~m/^paid program$/oi ) {
 		$result->{prog_qualifiers}->{PaidProgram}++;
 		undef($i);
 		$matches++;
 		next;
 	    }
 	    # appears in details window
-	    elsif ( $i=~m/^animated/i ) {
+	    elsif ( $i=~m/^animated$/oi ) {
 		$result->{prog_qualifiers}->{Animated}++;
 		undef($i);
 		$matches++;
 		next;
 	    }
 	    # appears in details window
-	    elsif ( $i=~m/^black & white/i ) {
+	    elsif ( $i=~m/^black & white$/oi ) {
 		$result->{prog_qualifiers}->{BlackAndWhite}++;
 		undef($i);
 		$matches++;
 		next;
 	    }
 	    # appears in details window
-	    elsif ( $i=~m/^home video/i ) {
+	    elsif ( $i=~m/^home video$/oi ) {
 		# understand, but ignore
 		undef($i);
 		$matches++;
@@ -411,18 +527,20 @@ sub evaluateDetails
 	if (  defined(@unmatched) && scalar(@unmatched) ) {
 	    # if nothing inside the () matched any of the above,
 	    if ( $matches == 0 ) {
+		my $found=0;
+		for my $k (@unmatched) {
+		    if ( defined($undefQualifiers->{$k}) ) {
+			$found++;
+		    }
+		}
+
 		# assume anything else is a list of actors or something to complain about
-		if ( !defined($result->{prog_actors}) || scalar(@{$result->{prog_actors}}) == 0 ) {
+		if ( $found == 0 &&
+		     (!defined($result->{prog_actors}) || scalar(@{$result->{prog_actors}}) == 0) ) {
 		    #print STDERR "Actors ?: ". join(",", @unmatched)."\n";
 		    push(@{$result->{prog_actors}}, @unmatched);
 		}
 		else {
-		    my $found=0;
-		    for my $k (@unmatched) {
-			if ( defined($undefQualifiers->{$k}) ) {
-			    $found++;
-			}
-		    }
 		    if ( $found == scalar(@unmatched) ) {
 			# all unmatched keywords are in knownUndefined, so ignore
 		    }
@@ -435,7 +553,7 @@ sub evaluateDetails
 			    for my $k (@unmatched) {
 				if ( !defined($undefQualifiers->{$k}) ) {
 				    $undefQualifiers->{$k}=1;
- 				    print STDERR "adding unidentified qualifier \"$k\" to filter list\n";
+ 				    print STDERR "warning: unidentified qualifier \"$k\"\n";
 				}
 				else {
 				    $undefQualifiers->{$k}++;
@@ -451,7 +569,7 @@ sub evaluateDetails
 		for my $k (@unmatched) {
 		    if ( ! defined($undefQualifiers->{$k}) ) {
 			$undefQualifiers->{$k}=1;
-			print STDERR "adding unidentified qualifier \"$k\" to filter list\n";
+			print STDERR "warning: unidentified qualifier \"$k\"\n";
 		    }
 		    else {
 			$undefQualifiers->{$k}++;
@@ -459,23 +577,16 @@ sub evaluateDetails
 		}
 	    }
 	}
-
     }
     return($result);
 }
 
-sub endField
+sub endField($)
 {
     my ($self) = @_;
     my $result;
     
     #print STDERR "push field: \n";
-
-    my $column=0;
-
-    if ( defined($self->{Row}) ) {
-	$column=scalar(@{$self->{Row}});
-    }
 
     #$result->{prog_title}='';
 
@@ -487,8 +598,8 @@ sub endField
     if ( $debug ) {
 	my $count=0;
 	foreach my $entry (@thgs) {
-	    print STDERR "\tPRE $count"; $count++;
-	    dumpMe($entry);
+	    print STDERR "\tPRE $count".dumpMe($entry)."\n";
+	    $count++;
 	}
     }
 
@@ -535,8 +646,7 @@ sub endField
 		}
 	    }
 	    if ( keys (%{$e}) != $understood ) {
-		print STDERR "understood $understood, out of ".keys (%{$e}) ." keys of:";
-		dumpMe($e);
+		print STDERR "understood $understood, out of ".keys (%{$e}) ." keys of:".dumpMe($e)."\n";
 	    }
 	}
 	print STDERR "PROG SYNTAX: $str\n";
@@ -544,12 +654,14 @@ sub endField
 
     # cells always start with 'td' and end in 'td'
 
-    my $end=scalar(@thgs);
-    for (my $e=0 ; $e<$end ; $e++) {
-	my $thg=$thgs[$e];
-	if ( defined($thg->{starttag}) && $thg->{starttag} eq 'img' ) {
-	    if ( defined($thg->{attr}->{src}) ) {
-		if ( $thg->{attr}->{src}=~m/_prev/oi ) {
+    for (my $e=0 ; $e<scalar(@thgs) ; $e++) {
+	my $thg0=$thgs[$e];
+	if ( defined($thg0->{starttag}) && $thg0->{starttag} eq 'img' ) {
+	    if ( defined($thg0->{attr}->{src}) ) {
+		if ( $thg0->{attr}->{src}=~m/_prev/oi ) {
+		    #print STDERR "entry was cont from prior listing\n";
+		    $result->{contFromPreviousListing}=1;
+
 		    if ( $thgs[$e-1]->{starttag} eq 'a' &&
 			 $thgs[$e+1]->{endtag} eq 'a' ) {
 			
@@ -561,74 +673,58 @@ sub endField
 			    else {
 				splice(@thgs,$e-1,3);
 			    }
+			    $e=( $e <= 2 )?0:$e-2;
+			    next;
 			}
-			else {
-			    die "failed to find time <text> tag for previous start time";
-			}
+			die "failed to find time <text> tag for previous start time";
 		    }
-		    else {
-			die "found prev line without <a></a> around";
-		    }
-		    #print STDERR "entry was cont from prior listing\n";
-		    $result->{contFromPreviousListing}=1;
-		    
-		    # start again
-		    $e=0;
-		    next;
+		    die "found prev line without <a></a> around";
 		}
-		elsif ($thg->{attr}->{src}=~m/_next/oi ) {
+		elsif ($thg0->{attr}->{src}=~m/_next/oi ) {
+		    #print STDERR "entry was cont to next listing\n";
+		    $result->{contToNextListing}=1;
 		    
 		    if ( $thgs[$e-1]->{starttag} eq 'a' &&
 			 $thgs[$e+1]->{endtag} eq 'a' ) {
 			splice(@thgs,$e-1,3);
+			$e=( $e <= 2 )?0:$e-2;
+			next;
 		    }
-		    else {
-			die "failed to find time <text> tag for previous start time";
-		    }
-		    #print STDERR "entry was cont to next listing\n";
-		    $result->{contToNextListing}=1;
-		    
-		    # start again
-		    $e=0;
-		    next;
+		    die "failed to find time <text> tag for previous start time";
 		}
-		elsif ($thg->{attr}->{src}=~m/\/stars_(\d+)\./oi ) {
+		elsif ($thg0->{attr}->{src}=~m/\/stars_(\d+)\./oi ) {
 		    $result->{prog_stars_rating}=sprintf("%.1f", int($1)/2);
 		    if ( $thgs[$e-1]->{text}=~m/^\s+$/o ) {
 			splice(@thgs,$e-1,2);
+			$e-=2;
 		    }
 		    else {
 			splice(@thgs,$e,1);
+			$e--;
 		    }
-		    
-		    # start again
-		    $e=0;
 		    next;
 		}
-		else {
-		    print STDERR "img link defined with unknown image link ".$thg->{attr}->{src}."\n";
-		    exit(1);
-		}
-		next;
+		print STDERR "img link defined with unknown image link ".$thg0->{attr}->{src}."\n";
+		exit(1);
 	    }
-	    print STDERR "img link defined without src definition $e ".$thg."\n";
-	    dumpMe($thg);
+	    print STDERR "img link defined without src definition $e ".$thg0."\n";
+	    print STDERR dumpMe($thg0)."\n";
 	    exit(1);
 	}
 	
 	# nuke <b> and </b>
-	if ( (defined($thg->{starttag}) && $thg->{starttag} eq 'b') ||
-	     (defined($thg->{endtag}) && $thg->{endtag} eq 'b')) {
+	if ( (defined($thg0->{starttag}) && $thg0->{starttag} eq 'b') ||
+	     (defined($thg0->{endtag}) && $thg0->{endtag} eq 'b')) {
 	    splice(@thgs,$e,1);
 	    
 	    # start again
-	    $e=0;
+	    $e--;
 	    next;
 	}
 	
 	# grab space<i>text</i>space and remove surrounding space
 	if ( scalar(@thgs)>$e+4 &&
-	     defined($thg->{text}) && $thg->{text}=~m/^\s+$/o &&
+	     defined($thg0->{text}) && $thg0->{text}=~m/^\s+$/o &&
 	     defined($thgs[$e+1]->{starttag}) && $thgs[$e+1]->{starttag} eq 'i' &&
 	     defined($thgs[$e+2]->{text}) &&
 	     defined($thgs[$e+3]->{endtag}) && $thgs[$e+3]->{endtag} eq 'i' &&
@@ -639,20 +735,20 @@ sub endField
 	    splice(@thgs,$e+3,1);
 	    
 	    # start again
-	    $e=0;
+	    $e--;
 	    next;
 	}
 
 	# grab <i>text</i> as being the subtitle
 	if ( scalar(@thgs)>$e+2 &&
-	     defined($thg->{starttag}) && $thg->{starttag} eq 'i' &&
+	     defined($thg0->{starttag}) && $thg0->{starttag} eq 'i' &&
 	     defined($thgs[$e+1]->{text}) &&
 	     defined($thgs[$e+2]->{endtag}) && $thgs[$e+2]->{endtag} eq 'i' ) {
 	    $result->{prog_subtitle}=massageText($thgs[$e+1]->{text});
 	    splice(@thgs,$e,3);
 	    
 	    # start again
-	    $e=0;
+	    $e--;
 	    next;
 	}
 
@@ -660,13 +756,13 @@ sub endField
 	# and <font>textspace<br> means text is the description
 	# and <font>text<br> means text is the description
 	# also check </font> combination
-	if ( (defined($thg->{starttag}) && $thg->{starttag} eq 'font') ||
-	     (defined($thg->{endtag}) && $thg->{endtag} eq 'font') ) {
+	if ( (defined($thg0->{starttag}) && $thg0->{starttag} eq 'font') ||
+	     (defined($thg0->{endtag}) && $thg0->{endtag} eq 'font') ) {
 	    if ( defined($thgs[$e+1]->{starttag}) && $thgs[$e+1]->{starttag} eq 'br') {
 		$result->{prog_desc}="";
 		splice(@thgs,$e+1,1);
 		# start again
-		$e=0;
+		$e--;
 		next;
 	    }
 	    elsif ( scalar(@thgs)>$e+3 && 
@@ -675,7 +771,7 @@ sub endField
 		$result->{prog_desc}=massageText($thgs[$e+1]->{text});
 		splice(@thgs,$e+1,2);
 		# start again
-		$e=0;
+		$e--;
 		next;
 	    }
 	    elsif ( scalar(@thgs)>$e+4 && 
@@ -685,7 +781,7 @@ sub endField
 		$result->{prog_desc}=massageText($thgs[$e+1]->{text}.$thgs[$e+2]->{text});
 		splice(@thgs,$e+1,3);
 		# start again
-		$e=0;
+		$e--;
 		next;
 	    }
 	}
@@ -718,25 +814,25 @@ sub endField
 	    }
 	    if ( keys (%{$e}) != $understood ) {
 		print STDERR "understood $understood, out of ".keys (%{$e}) ." keys of:";
-		dumpMe($e);
+		print STDERR dumpMe($e)."\n";
 	    }
 	}
 	print STDERR "PROG2 SYNTAX: $str\n";
     }
 
-    my $count=0;
     my $startEndTagCount=0;
     my @textSections;
-    for ($count=0 ; $count<scalar(@thgs) ; $count++ ) {
-	my $entry=$thgs[$count];
-	if ( $debug > 1) { print STDERR "\tNUM $count"; dumpMe($entry); }
+    my $count=-1;
+    foreach my $entry (@thgs) {
+	$count++;
+
+	if ( $debug > 1) { print STDERR "\tNUM $count".dumpMe($entry)."\n"; }
 
 	#print STDERR "entry is a ". $entry ."\n";
 	#print STDERR "entry start is a ". $entry->{starttag} ."\n" if ( defined($entry->{starttag}) );
 
 	if ( defined($entry->{starttag}) ) {
 	    my $tag=$entry->{starttag};
-	    my $attr=$entry->{attr};
 
 	    #print STDERR "tag is a ". $tag ."\n";
 
@@ -744,18 +840,16 @@ sub endField
 		if ( !defined($result->{fieldtag}) ) {
 		    $result->{fieldtag}=$tag;
 		}
-		if ( defined($attr->{colspan}) ) {
-		    $result->{colspan}=$attr->{colspan};
+		if ( defined($entry->{attr}->{colspan}) ) {
+		    $result->{colspan}=$entry->{attr}->{colspan};
 		}
 		else {
 		    $result->{colspan}=1;
 		}
 	    }
 	    elsif ( $tag eq "a" ) {
-		die "link missing href attr" if ( !defined($attr->{href}) );
-		$result->{prog_href}=$attr->{href};
-		#$result->{prog_title}='';
-		#$startEndTagCount++;
+		die "link missing href attr" if ( !defined($entry->{attr}->{href}) );
+		$result->{prog_href}=$entry->{attr}->{href};
 	    }
 	    elsif ( $tag eq "i" ) {
 		# ignore
@@ -794,7 +888,7 @@ sub endField
 	    elsif ( $tag eq 'td') {
 		# ignore
 	    }
-	    elsif ( $tag eq "i" ) {
+	    elsif ( $tag eq 'i' ) {
 		# ignore
 	    }
 	    elsif ( $tag eq 'b') {
@@ -811,40 +905,57 @@ sub endField
 		$textSections[$startEndTagCount].=$entry->{text};
 	}
 	else {
-	    print STDERR "undefined thing:$count:"; dumpMe($entry);
+	    print STDERR "undefined thing:$count:".dumpMe($entry)."\n";
 	    die "undefined thing";
 	}
     }
 
-    
+    my $extraDetails;
     for my $text (@textSections) {
 	next if ( !defined($text) );
 
+	$text=massageText($text);
+	if ( $text=~m/^\(/o && $text=~m/\)$/o ) {
+	    if ( defined($extraDetails) ) {
+		$extraDetails.=" ";
+	    }
+	    $extraDetails.=$text;
+	    next;
+	}
 	if ( !defined($result->{prog_title}) ) {
-	    $result->{prog_title}=massageText($text);
+	    $result->{prog_title}=$text;
 	}
 	elsif ( !defined($result->{prog_subtitle}) ) {
-	    $result->{prog_subtitle}=massageText($text);
+	    $result->{prog_subtitle}=$text;
 	}
 	elsif ( !defined($result->{prog_desc}) ) {
-	    $result->{prog_desc}=massageText($text);
+	    $result->{prog_desc}=$text;
 	}
 	elsif ( !defined($result->{prog_details}) ) {
-	    $result->{prog_details}=massageText($text);
+	    $result->{prog_details}=$text;
 	}
 	else {
 	    print STDERR "don't have a place for extra text section '$text'\n";
 	}
     }
 
+    if ( defined($extraDetails) ) {
+	 if ( defined($result->{prog_details}) ) {
+	     $result->{prog_details}="$extraDetails $result->{prog_details}";
+	 }
+	 else {
+	     $result->{prog_details}="$extraDetails";
+	 }
+    }
+
     if ( defined($result->{prog_details}) ) {
 	my $info=$result->{prog_details};
-	delete($result->{prog_details});
 
 	my @parenlist=grep (!/^\s*$/, split(/(?:\(|\))/,$info));
 	if ( scalar(@parenlist) ) {
 	    evaluateDetails($self->{undefQualifiers}, $result, @parenlist);
 	}
+	delete($result->{prog_details});
     }
 
     # compress result removing unneeded entries or entries that have no values
@@ -854,14 +965,15 @@ sub endField
 	}
     }
 
-    push(@{$self->{Row}}, $result);
-
     if ( $debug ) {
-	print STDERR "READ FIELD (col $column):"; dumpMe($result);
+	my $column=(defined($self->{Row}))?scalar(@{$self->{Row}}):0;
+	print STDERR "READ FIELD (col $column):".dumpMe($result)."\n";
     }
 
+    push(@{$self->{Row}}, $result);
+
     #print STDERR "push field: $self->{Field}->{text} ($self->{Field}->{tag}, $self->{Field}->{colspan})\n";
-    undef($self->{Field});
+    delete($self->{Field});
 }
 
 sub end()
@@ -911,6 +1023,7 @@ package ClickListings;
 
 use strict;
 use LWP::Simple;
+use DB_File;
 
 sub dumpMe($)
 {
@@ -1074,12 +1187,14 @@ sub readSchedule
     foreach my $timedef (@timedefs) {
 
 	my ($hourMin, $hourMax, $nday, $nyear)=(@{$timedef});
-	my @DayTable;
-	undef(@DayTable);
 
 	my @TimeTable;
+	my $SegmentsInTimeLine=-1;
+	my $DayOfSchedules;
+	my $Schedules=0;
 
 	for (my $wanthour=$hourMin; $wanthour<$hourMax ; $wanthour+=$hours_per_listing) {
+	    my $scheduleCorrupt=0;
 	    my $hour=$wanthour;
 	    if ( $hour == 24 ) {
 		$hour=0;
@@ -1091,17 +1206,64 @@ sub readSchedule
 	    printf STDERR "retrieving hour $hour of %4d-%02d-%02d...\n", $year, $month, $day;
 	    
 	    my $tbl = new ClickListings::ParseTable();
+	    $tbl->reset();
 	    $tbl->{undefQualifiers}=$self->{undefQualifiers};
-	    $tbl->unbroken_text(1);
 
-	    my $urldata=$self->getListingURLData($url);
-	    if ( !defined($urldata) ) {
-		print STDERR "unable to read url $url\n";
-		return(0);
-	    }
-	    else {
-		print STDERR "\tread ".length($urldata). " bytes of html\n" if ( $debug );
-		print STDERR "urldata:\n'$urldata'\n" if ( $debug>1 );
+	    #print "url:$url\n";
+	    my $urldata;
+
+	    my $attemptDelay=10;
+	    while ( !defined($urldata) ) {
+		if ( -d "urldata" ) {
+		    if ( open(FD, "< urldata/$hour-$year-$month-$day.html") ) {
+			my $r=$/;
+			undef($/);
+			$urldata=<FD>;
+			close(FD);
+			$/=$r;
+		    }
+		}
+		
+		if ( !defined($urldata) ) {
+		    $urldata=$self->getListingURLData($url);
+		}
+
+		if ( !defined($urldata) ) {
+		    print STDERR "unable to read url $url\n";
+		    return(0);
+		}
+		else {
+		    print STDERR "\tread ".length($urldata). " bytes of html\n" if ( $debug );
+		    print STDERR "urldata:\n'$urldata'\n" if ( $debug>1 );
+		    if ( -d "urldata" ) {
+			if ( open(FD, "> urldata/$hour-$year-$month-$day.html") ) {
+			    print FD $urldata;
+			    close(FD);
+			}
+		    }
+		}
+
+		if ( $urldata=~m/(Please enter a five digit U.S. ZIP code)/oi ) {
+		    print STDERR "Server Response: $1..\n";
+		    print STDERR "Update ServiceID in script, and try again\n";
+		    return(0);
+		}
+		    
+		if ( $urldata=~m/(Sorry, your request could not be processed)/oi ) {
+		    print STDERR "Server Response: $1..\n";
+		    # flush cache if enabled
+		    if ( -f "urldata/$hour-$year-$month-$day.html" ) {
+			unlink("urldata/$hour-$year-$month-$day.html");
+		    }
+		    if ( $attemptDelay > 30*100 ) {
+			print STDERR "failed too many times..giving up\n";
+			return(0);
+		    }
+		    print STDERR "sleeping $attemptDelay seconds and trying again..\n";
+		    sleep($attemptDelay);
+		    $attemptDelay+=30;
+		    undef($urldata);
+		}
 	    }
 
 	    # first listing, scrape for number of hours per page
@@ -1154,9 +1316,7 @@ sub readSchedule
 	    
 	    #my @tablearr=$tablearr[0];
 	    
-	    #print STDERR "RESULT:\n";
-	    #dumpMe($tablearr);
-	    #print STDERR "/RESULT:\n";
+	    #print STDERR "RESULT:\n".dumpMe($tablearr)."\n/RESULT:\n";
 
 	    my @noSubHeadersTable;
 	    my @arr=@{$tablearr};
@@ -1166,13 +1326,11 @@ sub readSchedule
 
 	    for (my $i=1 ; $i<scalar(@arr) ; $i++) {
 		if ( $i != 0 ) {
-		    my @row=@{$arr[$i]};
-		    
-		    if ( isTimeRow(\@row) ) {
+		    if ( isTimeRow(\@{$arr[$i]}) ) {
 			print STDERR "row $i is time\n" if ($debug);
 		    }
 		    else {
-			push(@noSubHeadersTable, \@row);
+			push(@noSubHeadersTable, $arr[$i]);
 		    }
 		}
 	    }
@@ -1183,7 +1341,7 @@ sub readSchedule
 	    for (my $nrow=0 ; $nrow< scalar(@noSubHeadersTable) ; $nrow++) {
 		my @row=@{$noSubHeadersTable[$nrow]};
 
-		#print STDERR "examing row:";dumpMe(\@row);
+		#print STDERR "examing row:".dumpMe(\@row)."\n";
 
 		# remove unneeded last column
 		if ( $nrow == 0 ) {
@@ -1191,8 +1349,8 @@ sub readSchedule
 		    my $field=$row[0];
 		    
 		    if ( $field->{colspan} != 2 || $field->{fieldtag} ne 'td' || defined($field->{prog_title})) {
-			print STDERR "ROW: "; dumpMe(\@{$noSubHeadersTable[$nrow]});
-			print STDERR "FIELD: "; dumpMe($field);
+			print STDERR "ROW: ".dumpMe(\@{$noSubHeadersTable[$nrow]})."\n";
+			print STDERR "FIELD: ".dumpMe($field)."\n";
 			die "column 0 failed on row $nrow";
 		    }
 		    # change colspan to remove virtual first column
@@ -1203,8 +1361,8 @@ sub readSchedule
 		    my $field=$row[0];
 		    
 		    if ( $field->{colspan} != 1 || $field->{fieldtag} ne 'td' || defined($field->{prog_title}) ) {
-			print STDERR "ROW: "; dumpMe(\@{$noSubHeadersTable[$nrow]});
-			print STDERR "FIELD: "; dumpMe($field);
+			print STDERR "ROW: ".dumpMe(\@{$noSubHeadersTable[$nrow]})."\n";
+			print STDERR "FIELD: ".dumpMe($field)."\n";
 			die "column 0 failed on row $nrow";
 		    }
 		    #print STDERR "row $nrow: deleting first column entry\n";
@@ -1220,8 +1378,8 @@ sub readSchedule
 		    if ( $nrow == 0 ) {
 			# check constraints on last column of time row
 			if ( $field->{colspan} != 2 || $field->{fieldtag} ne 'td' ) {
-			    print STDERR "ROW: "; dumpMe(\@{$noSubHeadersTable[$nrow]});
-			    print STDERR "FIELD: "; dumpMe($field);
+			    print STDERR "ROW: ".dumpMe(\@{$noSubHeadersTable[$nrow]})."\n";
+			    print STDERR "FIELD: ".dumpMe($field)."\n";
 			    die "column ".(scalar(@{$noSubHeadersTable[$nrow]})-1)." failed on row $nrow";
 			}
 			# change colspan to remove virtual last column
@@ -1230,8 +1388,8 @@ sub readSchedule
 		    else {
 			# check constraints on last column of non-time rows
 			if ( $field->{colspan} != 1 || $field->{fieldtag} ne 'td' ) {
-			    print STDERR "ROW: "; dumpMe(\@{$noSubHeadersTable[$nrow]});
-			    print STDERR "FIELD: "; dumpMe($field);
+			    print STDERR "ROW: ".dumpMe(\@{$noSubHeadersTable[$nrow]})."\n";
+			    print STDERR "FIELD: ".dumpMe($field)."\n";
 			    die "column ".(scalar(@{$noSubHeadersTable[$nrow]})-1)." failed on row $nrow";
 			}
 			#print STDERR "row $nrow: deleting last column entry ".(scalar(@{$noSubHeadersTable[$nrow]})-1)."\n";
@@ -1249,9 +1407,9 @@ sub readSchedule
 		    if ( $col1->{colspan}!=1 || $col1->{fieldtag} ne 'td' || 
 			 (defined($col1->{prog_title}) != defined($col2->{prog_title}) || 
 			  (defined($col1->{prog_title}) && $col1->{prog_title} ne $col2->{prog_title})) ) {
-			print STDERR "ROW: "; dumpMe(\@{$noSubHeadersTable[$nrow]});
-			print STDERR "FIELD1: "; dumpMe($col1);
-			print STDERR "FIELD2: "; dumpMe($col2);
+			print STDERR "ROW: ".dumpMe(\@{$noSubHeadersTable[$nrow]})."\n";
+			print STDERR "FIELD1: ".dumpMe($col1)."\n";
+			print STDERR "FIELD2: ".dumpMe($col2)."\n";
 			die "first/last column failed to be duplicates - row $nrow";
 		    }
 		    #print STDERR "row $nrow: deleting last column entry ".(scalar(@{$noSubHeadersTable[$nrow]})-1)."\n";
@@ -1259,7 +1417,6 @@ sub readSchedule
 		}
 	    }
 
-	    
 	    # check/verify time row - which appears as first row
 	    my @timerow=@{$noSubHeadersTable[0]};
 	    splice(@timerow, 0, 1);
@@ -1275,7 +1432,7 @@ sub readSchedule
 		my $field=$timerow[0];
 
 		if ( !defined($field->{prog_title}) ) {
-		    print STDERR "analizing time cell:"; dumpMe($field);
+		    print STDERR "analizing time cell:".dumpMe($field)."\n";
 		    die "time cell failed to give value in 'prog_title'";
 		}
 		
@@ -1350,37 +1507,73 @@ sub readSchedule
 		}
 	    }
 	
-	    #print STDERR "RESULT:\n";
-	    #dumpMe(\@noSubHeadersTable);
-	    #print STDERR "/RESULT:\n";
+	    #print STDERR "RESULT:\n".dumpMe(\@noSubHeadersTable)."\n/RESULT:\n";
 
-	    push(@TimeTable, @timerow);
+	    if ( $SegmentsInTimeLine == -1 ) {
+		$SegmentsInTimeLine=scalar(@timerow);
+	    }
 	    
 	    # slap this table onto the start of the existing one
 	    # - append each row onto the end of the existing table (or init a new one)
 	    #
-	    if ( !defined(@DayTable) ) {
-		@DayTable=@noSubHeadersTable;
+
+	    for (my $row=1 ; $row< scalar(@noSubHeadersTable) ; $row++) {
+		my @r=@{$noSubHeadersTable[$row]};
+		my $totalcolspan=0;
+		    
+		for (my $j=1 ; $j<scalar(@r) ; $j++ ) {
+		    $totalcolspan+=$r[$j]{colspan};
+		}
+		if ( $totalcolspan != $SegmentsInTimeLine ) {
+		    print STDERR "ERROR: row $row has $totalcolspan column spans, not $SegmentsInTimeLine\n";
+		    if ( defined($r[0]->{prog_desc}) ) {
+			print STDERR "       looks like it might be channel ".$r[0]->{prog_desc}."\n";
+		    }
+		    print STDERR "       adjusting length of first program, attempting to continue\n";
+		    if ( $debug ) {
+			for (my $j=1; $j<scalar(@r) ; $j++ ) {
+			    print STDERR "schedule for $row $j :".dumpMe(\%{$r[$j]})."\n";
+			}
+		    }
+		    $r[1]{colspan}+=($SegmentsInTimeLine-$totalcolspan);
+		    $row--;
+		}
+	    }
+
+	    # track schedule only if table was deemed sane
+	    # yes, I know currently this can't happen :)
+	    if ( $scheduleCorrupt == 0 ) {
+		push(@TimeTable, @timerow);
+		$DayOfSchedules->{$Schedules}=\@noSubHeadersTable;
+		$Schedules++;
 	    }
 	    else {
-		if ( scalar(@DayTable) != scalar(@noSubHeadersTable) ) {
-		    print STDERR "$url: contained ".scalar(@noSubHeadersTable)." not ".scalar(@DayTable)."\n";
+		printf STDERR "table parse failed, dropping $hours_per_listing hours of programs from %4d-%02d-%02d... attempting to continue\n", $year, $month, $day;
+	    }
+	}
+	my @DayTable;
+
+	for (my $sch=0; $sch < $Schedules ; $sch++ ) {
+	    my @noSubHeadersTable=@{$DayOfSchedules->{$sch}};
+
+	    #push(@{$DayTable[0]}, @{$noSubHeadersTable[0]});
+	    
+	    for (my $row=0 ; $row< scalar(@noSubHeadersTable) ; $row++) {
+		my @r=@{$noSubHeadersTable[$row]};
+		if ( $sch != 0 ) {
+		    splice(@r,0,1);
 		}
-		for (my $i=0 ; $i< scalar(@noSubHeadersTable) ; $i++) {
-		    # append listing without first row (which is the channel row)
-		    my @row=@{$noSubHeadersTable[$i]};
-		    splice(@row,0,1);
-		    push(@{$DayTable[$i]}, @row);
-		}
+		push(@{$DayTable[$row]}, @r);
 	    }
 	}
 
-	my $SegmentsInTimeLine=scalar(@TimeTable);
-	#print STDERR "TimeTable is :"; dumpMe(\@TimeTable);
+	#print STDERR "TimeTable is :".dumpMe(\@TimeTable)."\n";
+	$SegmentsInTimeLine=scalar(@TimeTable);
 
 	# verify that:
 	# - colspan total spans all columns
-	# - merge cells that say cont to next, and next says cont from previous
+	# - merge cells that say 'cont to next',
+	#   and next says 'cont from previous'
 	for (my $row=0 ; $row< scalar(@DayTable) ; $row++) {
 	    my @r=@{$DayTable[$row]};
 	    my $totalcolspan=0;
@@ -1390,8 +1583,11 @@ sub readSchedule
 	    }
 	    if ( $totalcolspan != $SegmentsInTimeLine ) {
 		print STDERR "ERROR: row $row has $totalcolspan column spans, not $SegmentsInTimeLine\n";
+		if ( defined($r[0]->{prog_desc}) ) {
+		    print STDERR "       looks like it might be channel ".$r[0]->{prog_desc}."\n";
+		}
 		for (my $i=1; $i<scalar(@r) ; $i++ ) {
-		    print STDERR "schedule for $row $i :"; dumpMe(\%{$r[$i]});
+		    print STDERR "schedule for $row $i :".dumpMe(\%{$r[$i]})."\n";
 		}
 	    }
 	}
@@ -1405,7 +1601,7 @@ sub readSchedule
 	for (my $i=0 ; $i< scalar(@DayTable) ; $i++) {
 	    if ( $removeChannelColumn) {
 		my @row=@{$DayTable[$i]};
-		#print STDERR "Ignoring Channel row: ";dumpMe(\%{$row[0]});
+		#print STDERR "Ignoring Channel row: ".dumpMe(\%{$row[0]})."\n";
 		splice(@{$DayTable[$i]}, 0, 1);
 	    }
 	    push(@{$WholeTable[$i]}, @{$DayTable[$i]});
@@ -1440,7 +1636,7 @@ sub readSchedule
     for (my $nrow=0 ; $nrow< scalar(@WholeTable) ; $nrow++) {
 	my @row=@{$WholeTable[$nrow]};
 
-	if ( $debug > 1 ) { print STDERR "checking out row:$nrow:"; dumpMe(\@row); }
+	if ( $debug > 1 ) { print STDERR "checking out row:$nrow:".dumpMe(\@row)."\n"; }
 
 	my $ch=$row[0];
 	my $channel;
@@ -1491,7 +1687,7 @@ sub readSchedule
 	}
 	
 	push(@Channels, $channel);
-	#if ( $debug > 1 ) { print STDERR "loaded channel:"; dumpMe($self);}
+	#if ( $debug > 1 ) { print STDERR "loaded channel:".dumpMe($self)."\n";}
 
 	# remove channel row
 	splice(@{$WholeTable[$nrow]}, 0,1);
@@ -1565,10 +1761,14 @@ sub readSchedule
     # - calculate prog ref # as needed
     # - move programs off into separate Programs hash
     # - remove some hash entries we no longer need
+    # - identify programs where actors list contain entries
+    #   from the unidentifiedQualifiers list (because it
+    #   wasn't until later we noticed these as qualifiers and
+    #   not actors
     for (my $nrow=0 ; $nrow< scalar(@WholeTable) ; $nrow++) {
 	my @row=@{$WholeTable[$nrow]};
 
-	if ( $debug > 1 ) { print STDERR "checking out row:$nrow:"; dumpMe(\@row); }
+	if ( $debug > 1 ) { print STDERR "checking out row:$nrow:".dumpMe(\@row)."\n"; }
 
 	for (my $col=0 ; $col<scalar(@row) ; $col++ ) {
 	    my $cell=$row[$col];
@@ -1609,13 +1809,30 @@ sub readSchedule
 			     'qualifiers',
 			     'director',
 			     'year',
-			     'actors',
 			     'stars_rating') {
 		if ( defined($cell->{"prog_$key"}) ) {
 		    $prog->{$key}=$cell->{"prog_$key"};
 		    delete($cell->{"prog_$key"});
 		}
 	    }
+	    # since identifying actors lists in the schedule is
+	    # so hokey, we re-run through the actors we found
+	    # and remove names that were later identified as
+	    # being program qualifiers on the unidentifiedQualifiers
+	    # list.
+	    # 
+	    if ( defined($cell->{prog_actors}) ) {
+		for my $actor (@{$cell->{prog_actors}}) {
+		    if ( defined($self->{undefQualifiers}->{$actor}) ) {
+			print STDERR "fixing incorrectly identified actor '$actor'\n" if ( $debug );
+		    }
+		    else {
+			push(@{$prog->{actors}}, $actor);
+		    }
+		}
+		delete($cell->{"prog_actors"});
+	    }
+
 	    $prog->{refNumber}=$cell->{pref};
 	    if ( defined($self->{Programs}->{$cell->{pref}}) ) {
 		if ( $verify ) {
@@ -1678,8 +1895,7 @@ sub getAndParseDetails($$)
 
     # remove some html tags for easier parsing
     $urldata=~s/<\/*nobr>//ogi;
-    $urldata=~s/\r//og;
-    $urldata=~s/\n//og;
+    $urldata=~s/[\r|\n]//og;
     $urldata=~s/<font [^>]+>//ogi;
     $urldata=~s/<\/font>//ogi;
     $urldata=~s/<\/*a[^>]*>//og;
@@ -1909,14 +2125,10 @@ sub mergeDetails($$)
 	delete($nprog->{ratings});
     }
     if ( scalar(keys %{$nprog}) != 0 ) {
-	print STDERR "$prog->{pref}: ignored scaped values of nprog:"; 
-	dumpMe($nprog);
+	print STDERR "$prog->{pref}: ignored scaped values of nprog:".dumpMe($nprog)."\n";
     }
     return($prog);
 }
-
-use Fcntl qw(:DEFAULT);
-use DB_File;
 
 sub expandDetails
 {
