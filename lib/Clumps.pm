@@ -334,13 +334,13 @@ sub fix_clumps( $$$ ) {
 		die unless Date_Cmp(pd($old->{start}), $start_new) <= 0;
 		my $old_stop = pd($old->{stop});
 		t 'has stop time: ' . d $old_stop;
-		if (defined $old_stop) {
-		    die if not defined $stop_new;
-		    die "stop time $old_stop of old programme is earlier than lub of new shows $stop_new"
-		      if Date_Cmp($old_stop, $stop_new) < 0;
-		    die "stop time $old_stop of old programme is earlier than start of new shows $start_new"
-		      if Date_Cmp($old_stop, $start_new) < 0;
-		}
+# 		if (defined $old_stop) {
+# 		    die if not defined $stop_new;
+# 		    die "stop time $old_stop of old programme is earlier than lub of new shows $stop_new"
+# 		      if Date_Cmp($old_stop, $stop_new) < 0;
+# 		    die "stop time $old_stop of old programme is earlier than start of new shows $start_new"
+# 		      if Date_Cmp($old_stop, $start_new) < 0;
+# 		}
 		$old->{stop} = $start_new_unp;
 		t "set stop time to $old->{stop}";
 
