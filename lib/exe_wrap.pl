@@ -1,6 +1,6 @@
 #!perl -w 
 #
-# $id$
+# $id $
 # This is a quick XMLTV shell routing to use with the windows exe
 #
 # A single EXE is needed to allow sharing of modules and dlls of all the
