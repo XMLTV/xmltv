@@ -1023,6 +1023,21 @@ sub new
 	foreach ( sort keys %missingListFiles ) {
 	    my $url = "$baseUrl/$_.list.gz";
 	    my $filename = $missingListFiles{$_};
+	    my $partial = "$filename.partial";
+	    if (-e $partial) {
+		if (not -s _) {
+		    print STDERR "removing empty $partial\n";
+		    unlink $partial or die "cannot unlink $partial: $!";
+		}
+		else {
+		    die <<END
+$partial already exists, remove it or try renaming to $filename and
+resuming the download of <$url> by hand.
+END
+  ;
+		}
+	    }
+
 	    print STDERR <<END
 Trying to download <$url>.
 With a slow network link this could fail; it might be better to
@@ -1030,12 +1045,22 @@ download the file by hand and save it as
 $filename.
 END
   ;
-	    open(OUT, ">$filename") or die "cannot write to $filename: $!";
-	    my $content = get($url);
-	    die "could not get <$url>\n" if not defined $content;
-	    print OUT $content or die "could not write to $filename: $!";
-	    close OUT or die "could not close $filename: $!";
-	    print STDERR "<$url> -> $filename, success\n\n";
+	    # For downloading we use LWP::Simple::getprint() which
+	    # writes to stdout.
+	    #
+	    open(OLDOUT, '>&STDOUT') or die "cannot dup stdout: $!";
+	    open(STDOUT, ">$filename") or die "cannot write to $filename: $!";
+	    my $success = getprint($url);
+	    close STDOUT or die "cannot close $filename: $!";
+	    open(STDOUT, '>&OLDOUT') or die "cannot dup stdout back again: $!";
+	    if (not $success) {
+		warn "failed to download $url to $filename, renaming to $partial\n";
+		rename $filename, $partial
+		  or die "cannot rename $filename to $partial: $!";
+		warn "You might try continuing the download of <$url> manually.\n";
+		exit(1);
+	    }
+	    print STDERR "<$url>\n\t-> $filename, success\n\n";
 	}
 	$self->{downloadMissingFiles} = 0;
 	goto CHECK_FILES;
