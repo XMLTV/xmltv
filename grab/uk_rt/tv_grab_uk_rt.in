@@ -227,8 +227,6 @@ foreach (XMLTV::Config_file::read_lines($CHANNEL_NAMES_FILE, 1)) {
     $extra_dn{$xmltv_id} = $extra_dn if defined $extra_dn;
 }
 
-die if defined $opt_output; # TODO
-
 # File that stores which channels to download.
 my $config_file
   = XMLTV::Config_file::filename($opt_config_file, 'tv_grab_uk_rt', $opt_quiet);
@@ -401,13 +399,17 @@ sub grab( $$ ) {
 		my $channelId = $new_prog->{_chanID};
 		my $programmeId = $new_prog->{_progID};
 		if ($GET_CATEGORIES) {
-		    my $cat_ID = $prog_to_cat{"$channelId$programmeId"};
-		    my $cat = $categories{$cat_ID};
-		    if (defined $cat) {
-			push @{$new_prog->{category}}, [ lc $cat ];
-		    }
-		    else {
-			warn "unknown category id $cat\n";
+		    if (!defined($channelId) or !defined($programmeId)) {
+		        warn "FIXME: undefined programmeId or channelId\n"  ;
+		    } elsif (exists($prog_to_cat{"$channelId$programmeId"})) {
+    		        my $cat_ID = $prog_to_cat{"$channelId$programmeId"};
+		        my $cat = $categories{$cat_ID};
+		        if (defined $cat) {
+			    push @{$new_prog->{category}}, [ $cat ];
+		        }
+			else {
+			    warn "unknown category id $cat\n";
+			}
 		    }
 		}
 	    }
@@ -580,8 +582,10 @@ sub get_programme_details( $$$$$ ) {
 
     if ($GET_CATEGORIES) {
 	my $cat_ID = $prog_to_cat{"$channelId$programmeId"};
-	my $cat = $categories{$cat_ID};
-	push @{$p{category}}, [ lc $cat ];
+	if ($cat_ID and exists($categories{$cat_ID})) {
+		my $cat = $categories{$cat_ID};
+		push @{$p{category}}, [ $cat ];
+	}
     }
 
     my $url = "$BASE_URL/ListingsServlet?event=10&";
@@ -893,7 +897,8 @@ sub get_programme_details( $$$$$ ) {
 #
 # Also returns any follow-on programmes which are found.
 #
-my $warned_discarding_deaf_signed;
+my $warned_deaf_signed;
+my $warned_audio_described;
 my $warned_discarding_updated_listing;
 sub do_misc( $$ ) {
     our %p; local *p = shift;
@@ -926,10 +931,18 @@ sub do_misc( $$ ) {
 		     };
 	    # The caller must add the clumpidx later.
 	}
-	elsif (s/^Deaf[- ][Ss]igned,?\s*//) {
-	    warn "discarding deaf-signed information\n"
-	      unless $warned_discarding_deaf_signed++;
-	}
+        elsif (s/^(Deaf[- ][Ss]igned),?\s*//) {
+            # Nowhere else to put this and its useful info, so add to description
+            $p{desc}->[0]->[0] .= " ($1)";
+	    warn "adding deaf-signed information to description\n"
+	        unless $warned_deaf_signed++;	  
+        }
+        elsif (s/^(Audio-described)\s*//) {
+            # Nowhere else to put this and its useful info, so add to description
+            $p{desc}->[0]->[0] .= " ($1)";
+	    warn "adding Audio-described information to description\n"
+	        unless $warned_audio_described++;
+        }
 	elsif (s/^TV Movie,?\s*//) {
 	    push @{$p{category}}, [ 'TV movie', 'en' ];
 	}
@@ -1352,10 +1365,19 @@ sub get_progs_in_cat( $$$ ) {
     our %categories; local *categories = shift;
 
     my %cats;
+    my $url;
 
+    # FIXME commonize this
+    local $SIG{__WARN__} = sub {
+	warn "$url: $_[0]";
+    };
+    local $SIG{__DIE__} = sub {
+	die "$url: $_[0]";
+    };
+    
     # For each category find all the programmes in that category
     foreach my $category (keys %categories) {
-	my $url = "$BASE_URL/ListingsServlet?event=7&";
+	$url = "$BASE_URL/ListingsServlet?event=7&";
 	$url .= 'jspGridLocation=%2Fjsp%2Ftv_listings_grid.jsp&';
 	$url .= 'jspListLocation=%2Fjsp%2Ftv_listings_list.jsp&';
 	$url .= 'jspError=%2Fjsp%2Ferror.jsp&';
@@ -1376,7 +1398,11 @@ sub get_progs_in_cat( $$$ ) {
 	$data =~ s/\n//g;
 
 	my @results = ($data =~ /<!-- start of a result -->.*?<!-- end of a result -->/ig);
-	warn "cannot find results in $data" if not @results;
+ 	if (not @results) {
+ 	    unless ($data =~ /There are no programmes available/) {
+ 	        warn "cannot find results in data";
+             }
+ 	}
 
 	foreach (@results) {
 	    /channelId=([0-9]+)/
