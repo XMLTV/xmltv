@@ -1,6 +1,12 @@
+#
+# $Id$
+#
 # Routines for reading and writing XMLTV files from Perl.
 # 
 # $Log$
+# Revision 1.6  2001/11/11 22:30:20  jveldhuis
+# added \$Id \$ as approprate
+#
 # Revision 1.5  2001/11/11 16:44:19  epaepa
 # Whoops, just realized that the last changelog message would itself get
 # keyword-expanded, causing no end of confusion.  I had to perform some

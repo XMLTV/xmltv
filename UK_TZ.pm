@@ -1,3 +1,6 @@
+#
+# $Id$
+#
 # Timezone stuff.
 # 
 # This is hardcoded for British timezones, but it shouldn't be too
@@ -8,6 +11,9 @@
 # -- Ed Avis, epa98@doc.ic.ac.uk, 2001-03-26
 # 
 # $Log$
+# Revision 1.4  2001/11/11 22:30:20  jveldhuis
+# added \$Id \$ as approprate
+#
 # Revision 1.3  2001/11/11 16:44:19  epaepa
 # Whoops, just realized that the last changelog message would itself get
 # keyword-expanded, causing no end of confusion.  I had to perform some
