@@ -6,7 +6,11 @@
 package XMLTV::Ask;
 use strict;
 use base 'Exporter';
-our @EXPORT = qw(ask askQuestion askBooleanQuestion askManyBooleanQuestions);
+our @EXPORT = qw(ask
+		 askQuestion
+		 askBooleanQuestion
+		 askManyBooleanQuestions
+		);
 use Carp qw(croak carp);
 
 # Use Log::TraceMessages if installed.
