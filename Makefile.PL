@@ -40,6 +40,8 @@ my %recommended
 
 # And Log::TraceMessages is 'suggested' but we don't warn about that.
 
+my $warned_uninstall_broken = 1;
+
 # MakeMaker's warning message can be intimidating, check ourselves
 # first.  This code can later be replaced with a less demanding
 # dependency checker that asks what you intend to run and picks those
@@ -159,9 +161,18 @@ END
     foreach (qw(pure_perl_install pure_site_install plaindoc_install share_install)) {
 	die "no $_ in: $inherited" if not defined $targets->{$_};
 	my @t = @{$targets->{$_}}; # make a copy
-	shift @t if $t[0] =~ /^\s*\@echo\b/;
-	$t[0] =~ s/\@\$\(MOD_INSTALL\)/\$(PERL) -I. -MUninstall -e "uninstall(\@ARGV)"/
-	  or die "first command of target $_ isn't \@\$\(MOD_INSTALL\)";
+	my $done = 0;
+	foreach (@t) {
+	    if (s/\@\$\(MOD_INSTALL\)/\$(PERL) -I. -MUninstall -e "uninstall(\@ARGV)"/) {
+		$done = 1;
+		last;
+	    }
+	    s/Installing contents of (\S+) into (\S+)/Removing contents of $1 from $2/;
+	}
+	if (not $done) {
+	    warn "couldn't find \@\$(MOD_INSTALL) in target $_, uninstall may not work\n"
+	      unless $warned_uninstall_broken;
+	}
 	(my $new_target = $_) =~ s/install$/uninstall/ or die;
 	foreach ("\n\n$new_target ::\n", @t) {
 	    $inherited .= $_;
