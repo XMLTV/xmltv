@@ -4,7 +4,7 @@
 
 =head1 NAME
 
-tv_grab_hu - Grab TV listings for Hungary.
+tv_grab_hu - Grab TV listings for Hungary or Romania.
 
 =head1 SYNOPSIS
 
@@ -15,12 +15,13 @@ tv_grab_hu [--config-file FILE] --configure
 tv_grab_hu [--config-file FILE] [--output FILE] [--days N]
            [--offset N] [--quiet]
 
-tv_grab_hu --list-channels
+tv_grab_hu --list-channels --loc [hu | ro]
 
 =head1 DESCRIPTION
 
-Output TV listings for several channels available in Hungary.  The
-grabber relies on parsing HTML so it might stop working at any time.
+Output TV listings for several channels available in Hungary or
+Romania.  The grabber relies on parsing HTML so it might stop working
+at any time.
 
 First run B<tv_grab_hu --configure> to choose, which channels you want
 to download. Then running B<tv_grab_hu> with no arguments will output
@@ -84,36 +85,50 @@ use XMLTV::Config_file;
 use XMLTV::Date;
 # Todo: perhaps we should internationalize messages and docs?
 use XMLTV::Usage <<END
-$0: get Hungarian television listings in XMLTV format
+$0: get Hungarian or Romanian television listings in XMLTV format
 To configure: $0 --configure [--config-file FILE]
 To grab listings: $0 [--config-file FILE] [--output FILE] [--days N]
         [--offset N] [--quiet]
-To list channels: $0 --list-channels
+To list channels: $0 --list-channels --loc [hu | ro]
 END
   ;
+
+sub domain( $ );
+sub xhead( $ );
+sub xid( $$ );
+sub process_table( $$$$$ );
+sub make_programme_hash( $$$$$$ );
+sub bump_start_day( $$ );
+sub get_program_data( @ );
+sub get_time( @ );
+sub get_title( @ );
+sub get_desc( @ );
+sub get_channels( $ );
+sub nextday( $ );
 
 # Use Term::ProgressBar if installed.
 use constant Have_bar => eval { require Term::ProgressBar; 1 };
 
 # Attributes of the root element in output.
-my $DOMAIN = 'port.hu';
-my $HEAD = { 'source-info-url'     => "http://www.$DOMAIN/",
-	     'source-data-url'     => "http://www.$DOMAIN/tv/",
+sub domain( $ ) { "port.$_[0]" };
+sub xhead( $ ) {
+    my $d = &domain;
+    return { 'source-info-url'     => "http://www.$d/",
+	     'source-data-url'     => "http://www.$d/tv/",
 	     'generator-info-name' => 'XMLTV',
 	     'generator-info-url'  => 'http://membled.com/work/apps/xmltv/',
 	   };
+}
+
+my %COUNTRIES = (Hungary => [ 'hu', '+0100' ],
+		 Romania => [ 'ro', '+0200' ],
+		);
 
 # Whether zero-length programmes should be included in the output.
 my $WRITE_ZERO_LENGTH = 0;
 
-# default language
-my $LANG="hu";
-
 # Global channel data.
 our @ch_all;
-
-# The winter timezone in Hungary.  Summer time is one hour ahead of this.
-my $TZ="+0100";
 
 ######################################################################
 # get options
@@ -122,7 +137,7 @@ my $TZ="+0100";
 XMLTV::Memoize::check_argv('XMLTV::Get_nice::get_nice_aux');
 my ($opt_days, $opt_offset, $opt_help, $opt_output,
     $opt_configure, $opt_config_file, $opt_quiet,
-    $opt_list_channels);
+    $opt_list_channels, $opt_loc);
 $opt_days = 8; # default
 $opt_offset = 0; # default
 $opt_quiet = 0; # default
@@ -134,6 +149,7 @@ GetOptions('days=i'        => \$opt_days,
 	   'output=s'      => \$opt_output,
 	   'quiet'         => \$opt_quiet,
 	   'list-channels' => \$opt_list_channels,
+	   'loc=s'         => \$opt_loc,
 	  )
   or usage(0);
 die 'number of days must not be negative'
@@ -160,17 +176,21 @@ elsif ($mode eq 'list-channels') {
 }
 else { die }
 
-# Whatever we are doing, we need the channels data.
-my %channels = get_channels(); # sets @ch_all
-my @channels;
-
 ######################################################################
 # write configuration
 
 if ($mode eq 'configure') {
     open(CONF, ">$config_file") or die "cannot write to $config_file: $!";
 
+    my $default_cn = 'Hungary';
+    my $cn = askQuestion('Grab listings for which country?',
+			 $default_cn,
+			 sort keys %COUNTRIES);
+    my $c = $COUNTRIES{$cn}[0];
+    print CONF "country $c\t# $cn\n";
+
     # Ask about each channel.
+    my %channels = get_channels($c);
     my @chs = sort keys %channels;
     my @names = map { $channels{$_} } @chs;
     my @qs = map { "add channel $_?" } @names;
@@ -207,11 +227,19 @@ if (defined $opt_output) {
     $w_args{OUTPUT} = $fh;
 }
 $w_args{encoding} = 'ISO-8859-2';
-my $writer = new XMLTV::Writer(%w_args);
-$writer->start($HEAD);
 
 if ($mode eq 'list-channels') {
     # Write channels mode.
+    if (not defined $opt_loc) {
+	my $msg = "--loc option required with --list-channels:\n";
+	foreach (sort keys %COUNTRIES) {
+	    $msg .= "    --loc $COUNTRIES{$_}[0] for $_\n";
+	}
+	die $msg;
+    }
+    my $writer = new XMLTV::Writer(%w_args);
+    $writer->start(xhead($opt_loc));
+    get_channels($opt_loc); # sets @ch_all
     $writer->write_channel($_) foreach @ch_all;
     $writer->end();
     exit();
@@ -223,19 +251,43 @@ die if $mode ne 'grab';
 
 # Read configuration
 my $line_num = 0;
+my ($country, $tz);
+my @channels;
 foreach (@config_lines) {
     ++ $line_num;
     next if not defined;
-    if (/^channel:?\s+(\S+)\s+([^\#]+)/) {
+    my $where = "$config_file:$line_num";
+    if (/^country:?\s+(\w\w)$/) {
+	warn "$where: already seen country\n"
+	  if defined $country;
+	$country = $1;
+
+	# Lame reverse lookup on %COUNTRIES.
+	foreach (values %COUNTRIES) {
+	    if ($_->[0] eq $country) {
+		$tz = $_->[1];
+		last;
+	    }
+	}
+	die "$where: unknown country $country\n" if not defined $tz;
+    }
+    elsif (/^channel:?\s+(\S+)\s+([^\#]+)/) {
 	my $ch_did = $1;
 	my $ch_name = $2;
 	$ch_name =~ s/\s*$//;
 	push @channels, $ch_did;
-	# FIXME do not store display-name in the config file
-	$channels{$ch_did} = $ch_name;
+	# FIXME do not store display-name in the config file - it is
+	# ignored here.
+	#
     }
     else {
 	warn "$config_file:$.: bad line\n";
+    }
+}
+for ($country) {
+    if (not defined) {
+	$_ = 'hu';
+	warn "country not seen in $config_file, assuming '$_'\n";
     }
 }
 
@@ -243,15 +295,22 @@ foreach (@config_lines) {
 # begin main program
 
 my $now = DateCalc(parse_date('now'), "$opt_offset days");
+my %channels = get_channels($country); # sets @ch_all
 my @to_get;
+my $writer = new XMLTV::Writer(%w_args);
+$writer->start(xhead($country));
 
 # Turn a site channel id into an XMLTV id.
-sub xid( $ ) { return "$_[0].$DOMAIN" }
+# Parameters: country, site id
+sub xid( $$ ) {
+    my ($country, $id) = @_;
+    return "$id." . domain($country);
+}
 
 # Write channel elements
 foreach my $ch_did (@channels) {
     my $ch_name=$channels{$ch_did};
-    $writer->write_channel({ id => xid($ch_did),
+    $writer->write_channel({ id => xid($country, $ch_did),
 			     'display-name' => [ [ $ch_name ] ] });
 }
 
@@ -272,7 +331,7 @@ foreach my $d (@days) {
     my ($day, $i) = @$d;
     my $some_success = 0;
     foreach my $ch_did (@channels) {
-	my @ps = process_table($day, xid($ch_did), $ch_did, $i);
+	my @ps = process_table($country, $day, xid($country, $ch_did), $ch_did, $i);
 	$some_success = 1 if @ps;
 	$writer->write_programme($_) foreach @ps;
 	update $bar if Have_bar && not $opt_quiet;
@@ -305,16 +364,18 @@ BEGIN {
 # process_table: fetch a URL and process it
 #
 # arguments:
+#    country id (hu, ro)
 #    Date::Manip object giving the day to grab
 #    xmltv id of channel
 #    site id of channel
 #
 # returns: list of the programme hashes to write
 #
-sub process_table {
-    my ($date, $ch_xmltv_id, $ch_port_id, $interval) = @_;
+sub process_table( $$$$$ ) {
+    my ($country, $date, $ch_xmltv_id, $ch_port_id, $interval) = @_;
 
-    my $url = "http://www.$DOMAIN/pls/tv/tv.channel?i_ch=$ch_port_id&i_days=$interval&i_where=1";
+    my $d = domain($country);
+    my $url = "http://www.$d/pls/tv/tv.channel?i_ch=$ch_port_id&i_days=$interval&i_where=1";
     my $data=get_nice($url);
     if (not defined $data) {
 	die "could not fetch $url, aborting\n";
@@ -343,30 +404,32 @@ sub process_table {
 	    $bump_start_day = 1;
 	    $date = UnixDate(DateCalc($date, '+ 1 day'), '%Q');
 	}
-	push @r, make_programme_hash($date, $ch_xmltv_id, $ch_port_id, $cur);
+	# Assume country and lang. code the same.
+	push @r, make_programme_hash($country, $tz, $date,
+				     $ch_xmltv_id, $ch_port_id, $cur);
 	$prev = $cur;
     }
     return @r;
 }
 
-sub make_programme_hash {
-    my ($date, $ch_xmltv_id, $ch_port_id, $cur) = @_;
+sub make_programme_hash( $$$$$$ ) {
+    my ($lang, $tz, $date, $ch_xmltv_id, $ch_port_id, $cur) = @_;
 
     my %prog;
 
     $prog{channel}=$ch_xmltv_id;
-    $prog{title}=[ [ $cur->{title}, $LANG ] ];
+    $prog{title}=[ [ $cur->{title}, $lang ] ];
 
-    my $start=parse_local_date("$date $cur->{time}", $TZ);
-    my ($start_base, $start_tz) = @{date_to_local($start, $TZ)};
+    my $start=parse_local_date("$date $cur->{time}", $tz);
+    my ($start_base, $start_tz) = @{date_to_local($start, $tz)};
     $prog{start}=UnixDate($start_base, '%q') . " $start_tz";
 
     # FIXME: parse description field further
-    $prog{desc}=[ [ $cur->{desc}, $LANG ] ] if defined $cur->{desc};
+    $prog{desc}=[ [ $cur->{desc}, $lang ] ] if defined $cur->{desc};
 
     return \%prog;
 }
-sub bump_start_day {
+sub bump_start_day( $$ ) {
     my ($cur,$next) = @_;
     if (!defined($next)) {
 	return undef;
@@ -387,7 +450,7 @@ sub bump_start_day {
 #   includes several tables...,
 #   however each tv program listing has also a fixed head (HORA, TIPO,
 #   CANAL...) and the data follows this header in a fixed order, so...
-sub get_program_data {
+sub get_program_data( @ ) {
     my ($tree) = @_;
     my @data;
 
@@ -409,7 +472,7 @@ sub get_program_data {
     return @data;
 }
 
-sub get_time {
+sub get_time( @ ) {
 
     my ($tree) = @_;
 
@@ -424,7 +487,7 @@ sub get_time {
     return @txt_elem;
 }
 
-sub get_title {
+sub get_title( @ ) {
 
     my ($tree) = @_;
 
@@ -440,7 +503,7 @@ sub get_title {
     return @txt_elem;
 }
 
-sub get_desc {
+sub get_desc( @ ) {
 
     my ($tree) = @_;
     
@@ -465,21 +528,23 @@ sub get_desc {
 }
 
 
-# get channel listing
-sub get_channels {
+# get channel listing for a country
+sub get_channels( $ ) {
+    my $country = shift;
+    my $d = domain($country);
     my $bar = new Term::ProgressBar('getting list of channels', 1)
 	if Have_bar && not $opt_quiet;
     my %channels;
-    my $url="http://www.$DOMAIN/pls/tv/tv.prog";
+    my $url="http://www.$d/pls/tv/tv.prog";
     my $local_data=get_nice($url);
     die "could not get channel listing $url, aborting\n"
       if not defined $local_data;
 
     my $tree = HTML::TreeBuilder->new();
     $tree->parse($local_data);
-    
+
     my @menus = $tree->find_by_tag_name("_tag"=>"select");
-    
+
     foreach my $elem (@menus) {
 	my $cname = $elem->attr('name');
 	if ($cname eq "i_ch") {
@@ -496,9 +561,10 @@ sub get_channels {
 			$channel_id = "0" . $channel_id
 		    }
 		    $channels{$channel_id}=$channel_name;
+		    # Assume country code and lang. code the same.
 		    push @ch_all, { 'display-name' => [ [ $channel_name,
-							  $LANG ] ],
-				    'id'=> "$channel_id.$DOMAIN" };
+							  $country ] ],
+				    'id'=> "$channel_id.$d" };
 		}
 	    }
 	}
@@ -510,7 +576,7 @@ sub get_channels {
 
 
 # Bump a YYYYMMDD date by one.
-sub nextday {
+sub nextday( $ ) {
     my $d = shift;
     my $p = parse_date($d);
     my $n = DateCalc($p, '+ 1 day');
