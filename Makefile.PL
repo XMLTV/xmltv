@@ -90,7 +90,7 @@ my %prereqs
   = (
      'LWP' => 5.65,
      'XML::Twig' => 3.09,
-     'Date::Manip' => 5.4,
+     'Date::Manip' => 5.41,
      'XML::Writer' => 0,
      'Memoize' => 0,
     );
