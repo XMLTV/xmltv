@@ -15,6 +15,8 @@ use vars '%extra_constants';
      INSTALLSHARE    => '$(PREFIX)/share/xmltv',
      # This next line shouldn't be needed, it works around a bug.
      INSTALLMAN1DIR  => '$(PREFIX)/man/man1',
+     # Directory to install into when making Windows binary dist.
+     WINDOWS_DIST    => "xmltv-$VERSION-win32",
     );
 
 # The following lists of dependencies and files to be installed may
@@ -74,12 +76,28 @@ my %recommended
 
 # And Log::TraceMessages is 'suggested' but we don't warn about that.
 
-# First prompt about how much to install.  This is really only to
+do 'lib/Ask.pm' or die 'could not load lib/Ask.pm, aborting';
+
+# Weird shit happens when you change things like PREFIX without
+# rebuilding everything explicitly.
+#
+if (-e 'Makefile') {
+    warn <<END
+There is already a Makefile.  To avoid weird problems it is
+recommended you run 'make distclean' to clear out old built files
+before generating a new Makefile.
+
+END
+  ;
+    if (! XMLTV::Ask::askBooleanQuestion("Do you wish to continue anyway?", 0)) {
+	exit(1);
+    }
+}
+
+# Now prompt about how much to install.  This is really only to
 # reduce dependencies.  In the long run things like tv_check can be
 # spun off into separate projects.
 #
-do 'lib/Ask.pm' or die 'could not load lib/Ask.pm, aborting';
-
 my @opt_components
   = ({ name => 'tv_check',
        blurb =>
@@ -337,7 +355,39 @@ END
 	}
     }
     $inherited .= 'pure_uninstall :: pure_$(INSTALLDIRS)_uninstall' . "\n";
-    $inherited .= 'uninstall :: all pure_uninstall plaindoc_uninstall share_uninstall';
+    $inherited .= 'uninstall :: all pure_uninstall plaindoc_uninstall share_uninstall' . "\n";
+
+    # Add a target for a Windows distribution.
+    $inherited .= q{
+
+windows_dist ::
+	@if test -e $(PREFIX); then \
+	        echo To build a Windows distribution, please rerun Makefile.PL with >&2; \
+	        echo "PREFIX set to a new (nonexistent) directory then 'make windows_dist'." >&2; \
+	        echo '(Remember that only absolute paths work properly with MakeMaker.)' >&2; \
+	        exit 1; \
+	fi
+	$(MAKE) install
+	mv $(INSTALLPLAINDOC) $(PREFIX)/doc/
+	rmdir $(PREFIX)/share/doc
+	mkdir -p $(PREFIX)/doc/man
+	set -e; for i in $(INSTALLMAN1DIR)/*; do \
+	        b=`basename $$i .1`; \
+	        if test $$b = '*'; then \
+	                echo cannot find manpages in $(INSTALLMAN1DIR) >&2; \
+	                exit 1; \
+	        fi; \
+	        echo Converting $$i to plain text; \
+	        troff -mandoc -Tascii $$i | grotty -buo \
+	            >$(PREFIX)/doc/man/`basename $$i .1`.txt; \
+	done
+	rm -rfv $(INSTALLBIN) $(PREFIX)/lib/ $(INSTALLMAN1DIR) $(INSTALLMAN3DIR)
+	rmdir $(PREFIX)/man
+	@echo
+	@echo Part of a Windows distribution tree has been made in $(PREFIX)/.
+	@echo Now copy in the executables!
+
+};
 
     return $inherited;
 }
@@ -481,7 +531,8 @@ sub targets {
 	    undef $curr_target;
 	}
 	else {
-	    die "bad makefile line: $_";
+	    chomp;
+	    die "bad makefile line: '$_'";
 	}
     }
     return \%r;
