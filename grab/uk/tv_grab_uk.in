@@ -132,6 +132,7 @@ if ($opt_configure) {
 my $SHARE_DIR = undef;
 $SHARE_DIR = $opt_share if defined $opt_share;
 my $OUR_SHARE_DIR = (defined $SHARE_DIR) ? "$SHARE_DIR/tv_grab_uk" : '.';
+(my $CHANNEL_NAMES_FILE = "$OUR_SHARE_DIR/channel_ids") =~ tr!/!/!s;
 
 # PHP page provided by Ananova to access their internal listings data.
 # This is used as an inital substring of all the URLs gotten by this
@@ -483,12 +484,22 @@ sub grab( @ ) {
 	    return 0;
 	}
 
-	foreach my $ch (@chs) {
+	# Whether an Ananova_Channel object is wanted.  This has the
+	# side effect of updating %used_xmltv_id for checking later.
+	#
+	my $wanted_ch_obj = sub( $ ) {
+	    my $ch = shift;
 	    # The same channels may be available as two different
 	    # files.  We want only the first Ananova set of pages
 	    # for this channel.
 	    #
-	    if ($ch->get_first_ananova_id() eq $aid) {
+	    if (defined $ch->get_variant()) {
+		t 'is a variant';
+		# The same page for two variants will be 'downloaded'
+		# twice, which is ugly but not a big deal since it's
+		# cached.
+		#
+	    } elsif ($ch->get_first_ananova_id() eq $aid) {
 		t 'is first Ananova id, continuing';
 	    } else {
 		t 'a secondary Ananova page for this channel, skipping';
@@ -528,19 +539,31 @@ sub grab( @ ) {
 
 	    t 'nothing matched';
 	    return 0;
+	};
+
+	my $wanted = 0;
+	foreach my $ch (@chs) {
+	    $wanted |= $wanted_ch_obj->($ch);
 	}
+	return $wanted;
     };
 
     @files = grep { $wanted_file->($_) } @files;
-    foreach (@files) { die if not ref }
+    foreach (@files) { die 'file not ref' if not ref }
 #    local $Log::TraceMessages::On = 1;
     t 'files to download: ' . d \@files;
     t 'checking that every wanted XMLTV id was found';
     foreach (sort keys %wanted_xmltv_id) {
+	t "checking XMLTV id $_ was found";
 	next if $used_xmltv_id{$_};
 	my $ch = XMLTV::Ananova_Channel->find_by_xmltv_id($_);
-	die if not defined $ch;
-	warn 'channel ' . $ch->stringify() . ' not found on site';
+	if (defined $ch) {
+	    warn 'Channel ' . $ch->stringify()
+	      . ", found for xmltv id $_, is defined in $CHANNEL_NAMES_FILE - but not found on site.  Skipping.\n";
+	}
+	else {
+	    warn "Channel $_ not found on site (or even listed in $CHANNEL_NAMES_FILE).  Skipping.\n";
+	}
     }
 
     # We want to get them in day order, so that we can get the first day's
@@ -1726,20 +1749,19 @@ sub init_channels() {
     # See the distributed version of this file for info about the
     # format.
     #
-    my $channel_names_file = "$OUR_SHARE_DIR/channel_ids";
     local *FH;
-    open (FH, "<$channel_names_file")
-      or die "cannot open $channel_names_file: $!";
+    open (FH, "<$CHANNEL_NAMES_FILE")
+      or die "cannot open $CHANNEL_NAMES_FILE: $!";
     while (<FH>) {
 	s/^\s+//; s/\s+$//; s/\#.*//;
 	next unless length;
 	my @fields = split /:/;
-	die "$channel_names_file:$.: wrong number of fields"
+	die "$CHANNEL_NAMES_FILE:$.: wrong number of fields"
 	  if @fields < 3 or @fields > 4;
 
 	my ($xmltv_id, $ananova_ids, $type, $extra_dn) = @fields;
 	my @aids = split /,/, $ananova_ids;
-	die "$channel_names_file:$.: no Ananova ids"
+	die "$CHANNEL_NAMES_FILE:$.: no Ananova ids"
 	  if not @aids;
 
 	# Look for the notation X/V for a 'transmission variant' of an
@@ -1778,7 +1800,7 @@ sub init_channels() {
 	$ch->add_extra_display_names($extra_dn)
 	  if defined $extra_dn;
     }
-    close FH or warn "cannot close $channel_names_file: $!";
+    close FH or warn "cannot close $CHANNEL_NAMES_FILE: $!";
 }
 
 # Return a hash mapping package names to lists of XMLTV channel ids.
@@ -1899,7 +1921,7 @@ sub get_pages( $$ ) {
 	    else { die }
 	}
 	t 'last page: ' . d $curr;
-	push @got, $curr; update $bar;
+	push @got, $curr;
 	if (@got != @this_fetch) {
 	    warn 'expected ' . (scalar @this_fetch) .
 	      " pages from URL $url, got " . (scalar @got);
@@ -1911,6 +1933,7 @@ sub get_pages( $$ ) {
 		die "really cannot fetch $url, giving up\n";
 	    }
 	}
+	update $bar;
 	foreach (@this_fetch) {
 	    die "page $_ requested twice" if defined $r{$_}->{content};
 	    $r{$_}->{content} = shift @got;
