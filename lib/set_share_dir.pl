@@ -3,6 +3,7 @@
 # on the command line.
 #
 use IO::File;
+use strict;
 my $out = shift @ARGV; die "no output file given" if not defined $out;
 my $share_dir = shift @ARGV;
 die "no final share/ location given" if not defined $share_dir;
