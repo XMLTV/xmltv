@@ -559,6 +559,18 @@ sub MY::processPL {
     return $inherited;
 }
 
+sub MY::makefile {
+    package MY;
+    my $inherited = shift->SUPER::makefile(@_);
+    
+    # Add an extra dependency: the contents of tv_grab_uk's packages
+    # directory. 
+    #
+    $inherited =~ s{^(Makefile\s+:)}{$1 grab/uk/channel_pkgs}m
+      or die "no Makefile dependencies line in: $inherited";
+    return $inherited;
+}
+
 # Split a section of makefile into targets.
 sub targets {
     my @lines = split /\n/, shift;
