@@ -376,6 +376,18 @@ sub passRequirements($$)
     return(1);
 }
 
+#
+# add env_proxy flag to constructed UserAgent.
+#
+sub new
+{
+    my $proto = shift;
+    my $class = ref($proto) || $proto;
+    my $self = $class->SUPER::new(@_, env_proxy => 1);
+    bless ($self, $class);
+    return $self;
+}
+
 sub redirect_ok { 1; }
 1;
 
