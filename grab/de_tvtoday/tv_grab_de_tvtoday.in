@@ -1,0 +1,1127 @@
+#!/usr/bin/perl
+# vim: noexpandtab sw=4 ts=8 sts=0:
+
+=pod
+
+=head1 NAME
+
+tv_grab_de_tvtoday - Grab TV listings for Germany (from www.tvtoday.de webpage).
+
+=head1 SYNOPSIS
+
+tv_grab_de_tvtoday --help
+
+tv_grab_de_tvtoday [--config-file FILE] --configure
+
+tv_grab_de_tvtoday [--config-file FILE] [--output FILE] 
+                   [--days N] [--offset N] [--force]
+                   [--quiet] [--slow] [--nosqueezeout]
+
+tv_grab_de_tvtoday --list-channels
+
+=head1 DESCRIPTION
+
+Output TV listings for several channels available in Germany.
+The data comes from www.tvtoday.de which is the webpage of one of 
+the most popular TV magazines in Germany. The grabber relies on
+parsing HTML so it might stop working at any time.
+
+First run B<tv_grab_de_tvtoday --configure> to choose, which channels 
+you want to download. Then running B<tv_grab_de_tvtoday> with no 
+arguments will output listings in XML format to standard output.
+
+B<--configure> Ask for each available channel whether to download
+and write the configuration file.
+
+B<--config-file FILE> Set the name of the configuration file, the
+default is B<~/.xmltv/tv_grab_de_tvtoday.conf>.  This is the file 
+written by B<--configure> and read when grabbing.
+
+B<--output FILE> write to FILE rather than standard output.
+
+B<--days N> grab N days.  The default is seven.
+
+B<--offset N> start N days in the future.  The default is to start
+from today (= zero).
+
+B<--force> force tv_grab_de_tvtoday to grab. By default tv_grab_de_tvtoday 
+refuses to fetch data for days more than six days in the future 
+(since the web application doesn't allow to request more either).
+
+B<--quiet> suppress the progress messages normally written to standard
+error.
+
+B<--slow> enables long strategy run: tvtoday.de publishes only some (vital)
+information on the actual listing pages, the rest is shown in a separate
+popup window. If you'd like to parse the data from these popups as well,
+supply this flag. But consider that the grab process takes much longer when
+doing so, since many more web pages have to be retrieved.
+
+B<--nosqueezeout> disables aggressive squeeze out of information field from
+the index pages. If specified, the program description from tvtoday.de is
+passed trough as data of the desc-tag, otherwise the data is parsed for
+information about actors, director, etc. and understood data gets returned in
+it's corresponding field.
+
+B<--list-channels> write output giving <channel> elements for every
+channel available (ignoring the config file), but no programmes.
+
+=head1 SEE ALSO
+
+L<xmltv(5)>.
+
+=head1 AUTHOR
+
+Stefan Siegl, ssiegl@gmx.de. Inspired by tv_grab_fi by Matti Airas.
+
+=head1 OUTSTANDING TASKS
+
+=over
+
+=item Channel ids are not in the form recommended by RFC 2838
+
+=back
+
+=head1 BUGS
+
+If you happen to find a bug, you're requested to send a mail to me
+at B<ssiegl@gmx.de> or to one of the XMLTV mailing lists, see webpages
+at http://sourceforge.net/projects/xmltv/.
+
+=cut
+
+use warnings;
+use strict;
+use Date::Manip;
+use XMLTV::Version '$Id$ ';
+use Getopt::Long;
+use HTML::TreeBuilder;
+use HTML::Entities;
+use URI::Escape;
+use XMLTV;
+use XMLTV::Ask;
+use XMLTV::Europe_TZ;
+use XMLTV::Config_file;
+use XMLTV::Mode;
+use XMLTV::Get_nice;
+use XMLTV::Memoize;
+use XMLTV::Usage <<END
+$0: get German television listings from www.tvtoday.de in XMLTV format
+To configure: $0 --configure [--config-file FILE]
+To grab data: $0 [--config-file FILE] [--output FILE] 
+                 [--days N] [--offset N] [--force]
+                 [--quiet] [--slow] [--nosqueezeout]
+Channel List: $0 --list-channels
+END
+  ;
+
+
+#-- our own prototypes first ...
+sub grab_data($$$);
+sub squeeze_out_desc($$);
+sub refine_category_attr($$);
+sub get_channels();
+sub channel_id($);
+sub split_up_names($$);
+sub parse_date_data($);
+sub get_page($);
+sub add_credits($$@);
+sub parse_page($$);
+sub read_popup($$);
+sub refine_credits($);
+
+#-- Category-Matching RegExp 
+our constant $category_regexp = '^(.*?\s+)?((?:[\wäöüßÄÖÜ-]+-?)?(?:[Aa]genten|[Cc]harts|[Dd]oku(?:mentar|mentation)?|Episoden|[Dd]rama|[Kk]rimi|[Kk]omödie|[Ll]iteratur|[Mm]agazin|[Mm]elodram|[Pp]orträt|[Rr]eportage|[Rr]eihe|[Ss]oap|[Ss]atire|[Ss]erie|[Ss]tudie|[Tt]alk|[Tt]hriller)-?(?:[Ff]ilm|[Mm]ovie|[Ss]how)?s?)([\s;,]+.*)?$';
+
+#-- DEBUG FLUFF ...
+my $debug = 0;
+$XMLTV::Get_nice::Delay = 0 if($debug);
+
+#-- Use Term::ProgressBar if installed.
+use constant Have_bar => eval { require Term::ProgressBar; 1; };
+
+#-- attributes of xmltv root element
+my $head = { 
+    'source-data-url'      => 'http://www.tvtoday.de/tv/programm/programm.php',
+    'source-info-url'      => 'http://www.tvtoday.de/',
+    'generator-info-name'  => 'tv_grab_de_tvtoday',
+};
+
+#-- the timezone tvtoday.de lives in is, CET/CEST
+my constant $TZ = "+0100";
+my constant $lang = "de";
+
+#-- Parse argv now.  First do undocumented --cache option.
+XMLTV::Memoize::check_argv('XMLTV::Get_nice::get_nice_aux');
+
+my $opt_configure;
+my $opt_config_file;
+my $opt_output;
+my $opt_days;
+my $opt_offset = 0;
+my $opt_force = 0;
+my $opt_quiet = 0;
+my $opt_slow = 0;
+my $opt_nosqueeze = 0;
+my $opt_list_channels;
+my $opt_help;
+my $opt_share;
+
+GetOptions(
+    'configure'      => \$opt_configure,
+    'config-file=s'  => \$opt_config_file,
+    'output=s'       => \$opt_output,
+    'days=i'         => \$opt_days,
+    'offset=i'       => \$opt_offset,
+    'force'          => \$opt_force,
+    'quiet'          => \$opt_quiet,
+    'slow'           => \$opt_slow,
+    'nosqueezeout'   => \$opt_nosqueeze,
+    'list-channels'  => \$opt_list_channels,
+    'help'           => \$opt_help,
+    'share=s'        => \$opt_share,
+) or usage(0);
+
+usage(1) if $opt_help;
+
+#-- make sure offset+days arguments are within range
+die "you have to specify how many days to fetch, when trying to force"
+  if($opt_force && !defined($opt_days));
+die "offset mustn't be larger than six, consider using --force after reading the manual page"
+  if(!$opt_force && $opt_offset > 6);
+
+warn "number of days for offset must not be negative, assuming zero", $opt_offset = 0 
+  if($opt_offset < 0);
+$opt_days = 7 - $opt_offset unless (defined($opt_days));
+
+if($opt_days + $opt_offset > 7) {
+    if($opt_force) {
+	warn "forcing tv_grab_de_tvtoday to fetch data is not recommended";
+    } 
+    else {
+	$opt_days = 7 - $opt_offset;
+	warn "fetching more than seven days isn't recommended, assuming you wanted to say $opt_days. consider using --force after reading the manual page";
+    }
+}
+
+$opt_days = 7 - $opt_offset, warn("specifying to fetch not at least one day doesn't make sense, assuming you wanted to say $opt_days.")
+  if($opt_days < 1);
+#-- offset and days should be valid now, let's go on ...
+
+
+
+my $mode = XMLTV::Mode::mode('grab', # default value
+    $opt_configure 	=> 'configure',
+    $opt_list_channels	=> 'list-channels',
+);
+
+
+
+#-- initialize config file support
+my $config_file = XMLTV::Config_file::filename($opt_config_file, 'tv_grab_de_tvtoday', $opt_quiet);
+my @config_lines;
+
+if($mode eq 'configure') {
+    XMLTV::Config_file::check_no_overwrite($config_file);
+} 
+elsif($mode eq 'grab' || $mode eq 'list-channels') {
+    @config_lines = XMLTV::Config_file::read_lines($config_file);
+} 
+else { die("never heard of XMLTV mode $mode, sorry :-(") }
+
+#-- hey, we can't live without channel data, so let's get that now!
+my %channels = get_channels();
+
+# share/ directory for storing channel mapping files.  This next line
+# is altered by processing through tv_grab_de_tvtoday.PL.  But we can
+# use the current directory instead of share/tv_grab_de_tvtoday for
+# development.
+#
+# The 'source' file tv_grab_de_tvtoday.in has $SHARE_DIR undef, which
+# means use the current directory.  In any case the directory can be
+# overridden with the --share option (useful for testing).
+#
+my $SHARE_DIR = undef;
+$SHARE_DIR = $opt_share if defined $opt_share;
+my $OUR_SHARE_DIR = (defined $SHARE_DIR) ? "$SHARE_DIR/tv_grab_de_tvtoday" : '.';
+
+# Read the file with channel mappings.
+(my $CHANNEL_NAMES_FILE = "$OUR_SHARE_DIR/channel_ids") =~ tr!/!/!s;
+my (%chid_mapping, %seen);
+my $line_num = 0;
+foreach (XMLTV::Config_file::read_lines($CHANNEL_NAMES_FILE, 1)) {
+    ++ $line_num;
+    next unless defined;
+    my $where = "$CHANNEL_NAMES_FILE:$line_num";
+    my @fields = split /:/;
+    die "$where: wrong number of fields"
+      if @fields != 2;
+
+    my ($xmltv_id, $tvtoday_id) = @fields;
+    warn "$where: tvtoday id $tvtoday_id seen already\n"
+      if defined $chid_mapping{$tvtoday_id};
+    $chid_mapping{$tvtoday_id} = $xmltv_id;
+    warn "$where: XMLTV id $xmltv_id seen already\n"
+      if $seen{$xmltv_id}++;
+}
+
+my @requests;
+
+#-- read our configuration file now
+my $line = 1;
+foreach(@config_lines) {
+    $line ++;
+    next unless defined;
+
+    if (/^channel:?\s+(\S+)/) {
+	push @requests, $1;
+	warn "channel $1 doesn't seem to be available, trying to request anyways"
+	  unless(defined($channels{$1}));
+    } 
+    elsif (/^map:?\s+(\S+)\s+(\S+)/) {
+	# Override anything set in the channel_ids file.
+	$chid_mapping{$1} = $2;
+    } 
+    else {
+	warn "$config_file:$line: bad line\n";
+    }
+}
+
+
+
+#-- if we're requested to do so, write out a new config file ...
+if ($mode eq 'configure') {
+    open(CONFIG, ">$config_file") or die("cannot write to $config_file, due to: $!");
+
+    #-- now let's annoy the user, sorry, I meant ask ..
+    my @chs = sort keys %channels;
+    my @names = map { $channels{$_} } @chs;
+    my @qs = map { "add channel $_?" } @names;
+    my @want = askManyBooleanQuestions(1, @qs);
+
+    foreach (@chs) {
+	my $w = shift @want;
+	my $chname = shift @names;
+	
+	warn("cannot read input, stopping to ask questions ..."), last if not defined $w;
+
+	print CONFIG '#' if not $w; #- comment line out if user answer 'no'
+
+	# shall we store the display name in the config file?
+	# leave it in, since it probably makes it a lot easier for the
+	# user to choose which channel to comment/uncommet - when manually
+	# viing the config file -- are there people who do that?
+	print CONFIG "channel $_ #$chname\n";
+    }
+
+    close CONFIG or warn "unable to nicely close the config file: $!";
+    say("Finished configuration.");
+
+    exit();
+}
+
+
+
+#-- well, we don't have to write a config file, so, probably it's some xml stuff :)
+#-- if not, let's go dying ...
+die unless($mode eq 'grab' or $mode eq 'list-channels');
+
+my %writer_args;
+if (defined $opt_output) {
+    my $handle = new IO::File(">$opt_output");
+    die "cannot write to output file, $opt_output: $!" unless (defined $handle);
+    $writer_args{'OUTPUT'} = $handle;
+}
+
+$writer_args{'encoding'} = 'ISO-8859-1';
+
+#-- create our writer object
+my $writer = new XMLTV::Writer(%writer_args);
+$writer->start($head);
+
+if ($mode eq 'list-channels') {
+    foreach (keys %channels) {
+	$writer->write_channel({'id'=>channel_id($_),
+				'display-name'=>[[$channels{$_}, $lang]]});
+    }
+
+    $writer->end();
+    exit();
+}
+
+
+
+#-- there's only one thing, why we might exist: write out tvdata!
+die unless ($mode eq 'grab');
+die "No channels specified, run me with --configure flag\n" unless(scalar(@requests));
+
+
+
+#-- write out <channel> tags
+foreach(@requests) {
+    $writer->write_channel({'id'=>channel_id($_),
+			    'display-name'=>[[$channels{$_}, $lang]]});
+}
+
+
+
+#-- write out <programme> tags
+my $today = ParseDate(UnixDate(ParseDate('now'), '%Y-%m-%d'));
+my $numdays = $opt_days + $opt_offset - 1;
+my $bar = new Term::ProgressBar('grabbing', scalar(@requests) * $opt_days)
+  if Have_bar && not $opt_quiet;
+
+foreach(@requests) {
+    for (my $day = $opt_offset; $day <= $numdays; $day ++) {
+	grab_data($_, $day, $day == $numdays);
+	update $bar if Have_bar && not $opt_quiet;
+    }
+}
+
+
+#-- hey, looks like we've finished ...
+$writer->end();
+
+
+
+#-- channel_id($s) :: turn site channel id into an xmltv id
+sub channel_id($) {
+    for (my $s = shift) {
+	$_ = lc(defined($chid_mapping{$_}) ? $chid_mapping{$_} : "$_.tvtoday.de");
+	$_ = "C$_" if /^\d/;
+	return $_;
+    }
+}
+
+
+
+#-- grab_data($ch, $offset, $lday) :: grab the tvdata of one channel for one specific day
+sub grab_data($$$) {
+    my $ch = shift @_;      #- station id of the channel to grab (without the .tvtoday.de suffix)
+    my $offset = shift @_;  #- offset we should use
+    my $lday = shift @_;	#- true: last day to grab in row
+
+    my $grab = {
+	'channel'   => channel_id($ch),
+	'url'       => "http://www.tvtoday.de/tv/programm/programm.php?ztag=$offset&sparte=alle&uhrzeit=Ax00&sender=$ch",
+	'lasttime'  => 0,
+	'day'       => DateCalc($today, "+ $offset days"),
+	'lastday'   => $lday,
+    };
+
+    print "grabbing channel $channels{$ch} (", UnixDate($grab->{day}, "%a, %Y-%m-%d"), ") ...\n"
+      unless(Have_bar || $opt_quiet);
+	    
+    while (defined($grab->{url})) {
+	my $tb = HTML::TreeBuilder->new();
+	$tb->parse(get_page($grab->{url}));
+	parse_page($tb, $grab);
+	$tb->delete();
+    }
+}
+
+sub parse_page($$) {
+    my $page = shift(@_)->look_down('_tag' => 'td', 'valign' => 'top', 'width' => 566);
+    my $grab = shift @_;
+    my $day = $grab->{day};
+    my $over_headline_table = 0;
+    my $pos; 
+    
+    #-- delete the navigation form
+    my $form = $page->look_down('_tag' => 'form', 'action' => '/tv/programm/programm.php', 'method' => 'get') or die("navigation form not found in requested page");
+    $form->delete();
+
+    #-- now assert against the given date ...
+    $pos = $page->look_down('_tag' => 'span', 'class' => 'text-weiss');
+    my $expect = UnixDate($day, "%e.%f.%Y");
+    $expect =~ s/ //g;
+    die("cannot find date on requested page") unless ($pos->as_text() =~ m/([1-3]?[0-9]\.1?[0-9]\.20[0-9]{2})/);
+    die("expecting date $expect on page, but got $1") unless ($debug || $expect eq $1);
+    
+    #-- okay, that's okay as well, yippie!
+    foreach ($page->content_list()) {
+	my (%show, $begintime, $stoptime, $popup);
+	next unless(ref($_) eq "HTML::Element");
+
+	if ($_->tag eq "span" and $_->attr("class") eq "text") {
+	    last unless($_->as_text() =~ m/weitere Sendungen/);
+	    last if($grab->{lasttime} >= 86400); #-- don't request another page, if day's over
+
+	    #-- okay, we have even more shows available, scan that page as well ...
+	    my $link = $_->extract_links('a');
+	    $grab->{url} = "http://www.tvtoday.de" . $link->[scalar(@$link)-1]->[0];
+	    return;
+	}
+
+	#-- ignore everything but table's, since these hold our information
+	next unless($_->tag eq "table");
+
+	#-- okay, parse this table now (each table is one show)
+	my @el = $_->content_list();
+	die unless(ref($el[0]) eq "HTML::Element" and $el[0]->tag eq "tr");
+
+	#-- if it's the headline table, ignore it ...
+	unless($over_headline_table) {
+	    my $headline = $el[0]->look_down('_tag' => 'span', 'class' => 'headline-balken')
+	      or next;
+
+	    next unless($headline->as_text() =~ m/P R O G R A M M/);
+	    
+	    $over_headline_table ++, next;
+	}
+		
+	@el = $el[0]->content_list();
+
+	$_ = shift @el; #-- in this column there's only the logo of the tv station, ignore that
+
+	$_ = shift @el; #-- there we should have the time when our show begins ...
+	die "unable to extract time-information from html code, content:\n", $_->as_text()
+	  unless($_->as_text() =~ m/([0-2][0-9])\.([0-5][0-9])/);
+	$begintime = $1 * 3600 + $2 * 60;
+	$begintime += 86400 if($grab->{'lasttime'} >= 86400); 
+	#$show{start} = UnixDate(DateCalc($day, "+ $begintime seconds"), '%q');
+	my $start = parse_eur_date(DateCalc($day, "+ $begintime seconds"), $TZ);
+	my ($start_base, $start_tz) = @{date_to_eur($start, $TZ)};
+	$show{"start"} = UnixDate($start_base, '%q') . " $start_tz";
+
+	#warn("DEBUG: show out of cronological order, beginning: $1.$2!") 
+	#  if($debug && $begintime < $grab->{'lasttime'});
+	next if ($begintime < $grab->{'lasttime'});
+	
+	$_ = shift @el; #-- here we should have: popup url(if any), name of show, end time, showview number
+	my @td=$_->content_list();
+	
+	die unless(ref($td[0]) eq "HTML::Element" and $td[0]->tag eq "span" and $td[0]->attr("class") eq "headline");
+	my @span=$td[0]->content_list();
+	die unless(ref($span[0]) eq "HTML::Element");
+	if ($span[0]->tag eq "span") {
+	    my $title = ($span[0]->content_list())[0];
+	    $title =~ s/\s*\(.*?\)\s*$//;
+	    $show{title} = [[ $title, $lang ]];
+	} 
+	elsif ($span[0]->tag eq "a") {
+	    $popup = "http://www.tvtoday.de/" . $span[0]->attr('href');
+
+	    my $tag = (($span[0]->content_list())[0]->content_list())[0];
+	    die unless(ref($tag) eq "HTML::Element" and $tag->tag eq "u");
+	    
+	    my $title = ($tag->content_list())[0];
+	    $title =~ s/\s*\(.*?\)\s*$//; #-- every title has (station-name) added, chop it off
+	    $show{title} = [[ $title, $lang ]];
+	} 
+	else { die }
+
+	die unless(ref($td[1]) eq "HTML::Element" and $td[1]->tag eq "span" and $td[1]->attr("class") eq "text");
+	
+	# we must not die if tvtoday.de doesn't serve stop-time-info and a
+	# showview number, it doesn't happen often, but it unfortunately
+	# happens (without a reason, I think)
+	#
+	#die unless($td[1]->as_text() =~ m/Min\. bis ([12]?[0-9])\.([0-5][0-9])\s+ShowView ([0-9\-]+)/);
+	if($td[1]->as_text() =~ m/Min\. bis ([12]?[0-9])\.([0-5][0-9])\s+ShowView ([0-9\-]+)/) {
+	    $stoptime = $1 * 3600 + $2 * 60;
+	    $stoptime += 86400 if($stoptime < $begintime);
+	    #$show{stop} = UnixDate(DateCalc($day, "+ $stoptime seconds"), '%q');
+	    my $stop = parse_eur_date(DateCalc($day, "+ $stoptime seconds"), $TZ);
+	    my ($stop_base, $stop_tz) = @{date_to_eur($stop, $TZ)};
+	    $show{"stop"} = UnixDate($stop_base, '%q') . " $stop_tz";
+	    $show{showview} = $3 unless($3 eq "99-999-999"); #-- sometimes tvtoday.de serves invalid showview information
+		
+	}# elsif($debug) { 
+	#	warn "DEBUG: no stop-time and showview information present, huh?"; 
+	#}
+
+	$grab->{"lasttime"} = defined($stoptime) ? $stoptime : ($begintime + 1);
+
+	die unless(ref($td[3]) eq "HTML::Element" and $td[3]->tag eq "span" and $td[1]->attr("class") eq "text");
+
+	my $desc = ($td[3]->content_list())[0];
+	squeeze_out_desc(\$desc, \%show) unless($opt_nosqueeze);
+	
+	$desc =~ s/(^\s+|\s+$)//g;
+	$show{desc} = [[ $desc, $lang ]] if(length($desc));
+
+	read_popup($popup, \%show) if(defined($popup) && $opt_slow);
+	refine_credits(\%show) if((defined($popup) && $opt_slow) || not $opt_nosqueeze);
+
+	#-- okay, commit that data now ...
+	$show{channel} = $grab->{channel};
+	$writer->write_programme(\%show);
+
+	last if($grab->{"lasttime"} >= 86400 && !$grab->{"lastday"});
+    }
+
+    undef($grab->{url});
+    return;
+}
+
+
+
+#-- read_popup($url, %$show) -- read the popup file and add the retrieved data into the %show hash
+my $warned_discarding_fsk = 0;
+my $warned_discarding_two_channel = 0;
+sub read_popup($$) {
+    my $tb = HTML::TreeBuilder->new();
+    my $url = shift;
+    my $show = shift;
+    $tb->parse(get_page($url));
+    
+    #-- scan the "data" column at the left first ...
+    my $col = $tb->look_down('_tag' => 'table', 'width' => '170');
+    #die "cannot find left column in retrieved popup data:\n$got\n" unless ($col);
+    #
+    # we mustn't assume that this table is actually there, there was at
+    # least one popup yet, that didn't provide it (okay, don't know what
+    # an empty popup window is good for, but who knows ...)
+    $tb->delete(), return unless($col);
+
+    foreach ($col->content_list()) {
+	warn "something else but tr-tag found below table-tag, he?", next 
+	  unless(ref($_) eq "HTML::Element" and $_->tag eq "tr");
+	
+	my @td;
+	@td = ($_->content_list());
+	
+	warn "below <tr> there should be a <td>, no here :(", next 
+	  unless(ref($td[0]) eq "HTML::Element" and $td[0]->tag eq "td");
+	@td = ($td[0]->content_list());
+
+	warn "content found below <td>, tag expected, ignoring", next 
+	  unless(ref($td[0]) eq "HTML::Element");
+	next unless ($td[0]->tag eq "span");
+
+	#-- okay, we've got a span!
+	warn "first span's not of headline-class", next 
+	  unless($td[0]->attr('class') eq 'headline');
+
+	#FIX: td[1] doesn't have to be <br>, it may also be just some whitespace !!
+	#warn "expected <br> as td[1], not found, ignoring this span", next unless($td[1]->tag eq "br");
+	warn "td[2] should be a span of text-class, couldn't be found here, sorry.", next unless($td[2]->tag eq "span" and $td[2]->attr('class') eq 'text');
+
+	my $headline = ($td[0]->content_list())[0];
+	my $content = ($td[2]->content_list())[0];
+	$content =~ s/(^\s|\s$)//g;
+	
+	if ($headline =~ m/ShowView:/) {
+	    die unless($content =~ m/ShowView ([0-9\-]+)/);
+	    $show->{"showview"} = $1 unless($1 eq "99-999-999");
+	} 
+	elsif ($headline =~ m/Genre:/) {
+	    $show->{"category"} = [[ $content, $lang ]];
+	} 
+	elsif ($headline =~ m/Regie:/) {
+	    my @tmp = split m/\s*,\s*/, $content;
+	    add_credits($show, 'director', @tmp);
+	} 
+	elsif ($headline =~ m/Darsteller:/) {
+	    my @tmp = split m/\s*,\s*/, $content;
+	    add_credits($show, 'actor', @tmp);
+	} 
+	elsif ($headline =~ m/FSK:/) {
+	    die unless($content =~ m/ab ([0-9]+)/);
+	    warn "discarding fsk's age recommendations"
+	      unless $warned_discarding_fsk++;
+	} 
+	else {
+	    warn "haven't heard of headline $headline yet, adding to description";
+	    my $add = "$headline: $content";
+	    if ($show->{desc}) {
+		$show->{desc}->[0]->[0] .= " $add";
+	    } 
+	    else {
+		$show->{desc} = [ [ $add, $lang ] ];
+	    }
+	}
+    }
+
+    #-- well, now let's have a look for the main column
+    $col = $tb->look_down('_tag' => 'td', 'width' => '270');
+    die "cannot find main column in retrieved popup data" unless ($col);
+    foreach ($col->content_list()) {
+	next unless(ref($_) eq "HTML::Element");
+	next unless($_->tag eq "span");
+	die unless($_->attr('class') eq "text");
+
+	(my $add = ($_->content_list())[0]) =~ s/\s+$//;
+	if ($show->{desc}) {
+	    $show->{desc}->[0]->[0] .= " * $add";
+	} 
+	else {
+	    $show->{desc} = [ [ $add, $lang ] ];
+	}
+	last;
+    }
+
+    #-- write feature defaults
+    $show->{"video"} = { present => 1, colour => 1 };
+    $show->{"audio"} = { present => 1, stereo => "mono" };
+
+
+    #-- last but not least: care for flags that might be available
+    foreach ($tb->look_down('_tag' => 'span', 'class' => 'text-mini')) {
+	$_ = ($_->content_list())[0];
+	if (m/Untertitel für Hörgeschädigte/) {
+	    $show->{"subtitles"} = [{ type => 'teletext' }];
+	} 
+	elsif (m/schwarzweiß/) {
+	    $show->{"video"}->{"colour"} = 0;
+	} 
+	elsif (m/Stereoton/) {
+	    $show->{"audio"}->{"stereo"} = "stereo";
+	} 
+	elsif (m/Zweikanalton/) {
+	    warn "discarding two-channel sound flag"
+		unless $warned_discarding_two_channel++;
+	    #-- show is broadcast in two languages, but we don't
+	    #-- know in which ones ... how to store that?
+	} 
+	else {
+	    warn "unknown show feature: $_";
+	}
+    }
+
+
+    #-- okay, refine category attribute
+    my @newdesc;
+    refine_category_attr(\@newdesc, $show);
+    if (scalar(@newdesc) > 0) { 
+	my $haddesc = ($show->{"desc"} ? $show->{"desc"}->[0][0] . " * " : "");
+	my $newdesc = join " * ", (grep $_, @newdesc);
+
+	unless(index($haddesc, $newdesc) > -1) { 
+	    $show->{"desc"} = [[ "$haddesc$newdesc", $lang ]];
+	}
+    }
+
+
+    #-- okay, we're done, delete what we don't need and return ...
+    $tb->delete();
+}
+
+
+#-- squeeze_out_desc($$desc, %$show)
+sub squeeze_out_desc($$) {
+    my $desc = shift;
+    my $show = shift;
+    my @newdesc;
+
+    #push(@newdesc, $show->{"desc"}->[0][0]) if($show->{"desc"});
+
+    if(my @parts = ($$desc =~ m/^\s*(\(([^\)]*)\))?\s+([^,;]+)(,\s+([^,;]+)\s+([12][09][0-9]{2}(?:[\/-][0-9]{2})?))?\s*(?:; (Buch\/Regie|R): ([^;]+))?(; D: (.+))?\s*$/)) {
+	$$desc = "";
+
+	#-- $parts[1] is the show title in English (doesn't have to be available)
+	#-- second title doesn't have to be Enlish, if you've got a French
+	#-- movie, $parts[1] will be in French! => undef
+	$show->{"title"}->[1] = [ $parts[1], undef ] if($parts[1]);
+
+	#-- $parts[2] is the show's genre in German
+	$show->{"category"} = [[ $parts[2], $lang ]];
+
+	if ($parts[3]) {
+	    #-- $parts[4] specifies where the film was made, [5] when
+	    $show->{"country"} = [[ $parts[4], $lang ]];
+	    $show->{"date"} = parse_date_data($parts[5]);
+	}
+
+	#-- $parts[7] specifies the director (German: Regisseur)
+	if (defined($parts[7])) {
+	    $parts[7] =~ s/\s*u.a.\s*$//;
+	    $parts[7] =~ s/\([^\(\)]+\)//g; 
+	    $parts[7] =~ s/&amp;/&/g;
+
+	    my @people = split m/(?:\s+und\s+|\s*[,;]\s*)/, $parts[7];
+	    my @jobs;
+	    if ($parts[6] eq 'R') {
+		@jobs = qw(director);
+	    }
+	    elsif ($parts[6] eq 'Buch/Regie') {
+		@jobs = qw(director writer);
+	    }
+	    else {
+		warn "don't understand 'director' type $parts[6]";
+	    }
+	    
+	    push @{$show->{credits}{$_}}, @people
+	      foreach @jobs;
+	}
+
+	if (defined($parts[9])) {
+	    #-- $parts[9] specifies the actors (German: Darsteller)
+	    $parts[9] =~ s/\s*u.a.\s*$//;
+	    $parts[9] =~ s/\([^\(\)]+\)//g; 
+	    $parts[9] =~ s/&amp;/&/g;
+
+	    my @actor = split m/(?:\s+und\s+|\s*[,;]\s*)/, $parts[9];
+	    push @{$show->{"credits"}{"actor"}}, @actor;
+	}
+    } 
+    else {
+	my @data = split "·", $$desc;
+	s/(^\s|\s$)//g foreach(@data); #CHG#
+
+	if(scalar(@data) == 3 
+	   && not($data[1] =~ m/[\wäöüßÄÖÜ]+:/) #- FIX false positive: tvtoday.de seems to publish "guests: <names>" here some (rare) times :-(  
+	   && $data[2] =~ m/^Mit (.*?)$/) {
+	    my $actors = $1; #- BUGFIX, cache $1 as $actors
+
+	    # $data[0] --> sub title of show
+	    # $data[1] --> genre, may be "<genre>, <country> <year" 
+	    # $data[2] --> actors
+
+	    #for ($data[0]) { s/^\s+//; s/\s+$// }
+	    s/(^\s|\s$)//g foreach(@data); 
+	    $show->{"sub-title"} = [[ $data[0], $lang ]];
+
+	    if($data[1] =~ m/([^,;]+)(?:,\s+([^,;]*)\s+([12][09][0-9]{2}(?:[\/-][0-9]{2})?))?/) {
+		my ($cat, $country, $date) = ($1, $2, $3);
+		if ($cat =~ /\S/) {
+		    $show->{"category"} = [[ $cat, $lang ]];
+		}
+		else { warn "bad category '$cat'" }
+
+		if (defined $country) {
+		    if ($country =~ /\S/) {
+			    $show->{"country"} = [[ $country, $lang ]];
+		    }
+		    else { warn "bad country '$country'" }
+		}
+
+		$show->{"date"} = parse_date_data($date) if(defined($date));
+	    } 
+	    else {
+		warn "<genre>(, <country> <year>)? expection not met, THIS SHOULD NOT HAPPEN";
+		#-- try to get out here ...
+		push @newdesc, $data[1];
+	    }
+
+	    my @actors = split(",", $actors); #- BUGFIX: relied on $1, which get's destroyed by insertions above
+	    push @{$show->{"credits"}{"actor"}}, @actors;
+	} 
+	else {
+	    foreach (@data) {
+		if (m/^Thema: (.*)$/) {
+		    push @newdesc, $_, next if($show->{"sub-title"});
+		    $show->{"sub-title"} = [[ $1, $lang ]];
+		    next;
+		}
+		    
+		if (m/^\(Live\s*(.*)?\)$/) {
+		    #-- it's a live show, location: $1 (if defined)
+		    push @newdesc, $_; #- xmltv.dtd doesn't support it (yet) -- copy to desc field
+		    #undef $_;
+		    next;
+		}
+
+		if (s/\(VPS ([0-2][0-9])\.([0-5][0-9])\)//) {
+		    # assume that vps begins on the same day as the actual show,
+		    # thus simply overwrite the stored 'start' information
+		    # might do trouble when daylight savings time begins/ends
+		    $show->{"vps-start"} = $show->{"start"};
+		    substr($show->{"vps-start"}, 8, 6) = "$1$200";
+		}
+
+		if (my ($type, $names) = m/^\s*(Reporter:|Moderation:|Kommentar:|Gast:|Gäste:|Mit|Film von)\s+(?!de[nm]\s+)(.*?)\s*$/) {
+		    $names =~ s/\s*u.a.\s*$//;
+		    $names =~ s/\([^\(\)]+\)//g; #-- remove all brackets, that further describe the person
+		    $names =~ s/&amp;/&/g; #- the semicolon behind &amp; causes trouble, replace it -- other entities shouldn't appear ...
+
+		    #-- try to split up ...
+		    my @data = split_up_names($names, $show);
+
+		    if(scalar(@data) > 1 || scalar($data[0] =~ m/\s/g)) {
+			#-- if there's only one word, we seem to be wrong ...
+			#-- ignore and go on without squeezing out too much info
+			if($type eq "Reporter:" || $type eq "Moderation:") {
+			    push @{$show->{"credits"}{"presenter"}}, @data;
+			} 
+			elsif($type eq "Kommentar:") {
+			    push @{$show->{"credits"}{"commentator"}}, @data;
+			} 
+			elsif($type eq "Gast:" || $type eq "Gäste:" || $type eq "Mit") {
+			    if($type eq "Mit" && $names =~ m/(?:Rundschau|Sport|Wetter|Nachrichten|Wirtschaft)/ || $names =~ m/^".*"$/) {
+				push @newdesc, $_;
+				next;
+			    }
+				
+			    push @{$show->{"credits"}{"guest"}}, @data;
+			} 
+			elsif($type eq "Film von") {
+			    push @{$show->{"credits"}{"producer"}}, @data;
+			} 
+			else { die }
+
+			undef $_;
+			next;
+		    }
+		}
+
+		if (m/^\s*u.a.\s*/) {
+		    # "u.a." means and others, this is a left over thing,
+		    # e.g. if you've got a comedy series with comedian1,
+		    # comedian2 + separator + 'u.a.' -> simply ignore
+		    undef $_;
+		    next;
+		}
+
+		if (m/^\s*([^,;!-%\(\)=\+]+), ([^,;!-%\(\)=\+]+) ([12][90][0-9]{2}(?:[\/-][0-9]{2})?)\s*$/) {
+		    $show->{"category"} = [[ $1, $lang ]];
+		    $show->{"country"} = [[ $2, $lang ]];
+		    $show->{"date"} = parse_date_data($3);
+
+		    undef $_;
+		    next;
+		}
+
+		#-- don't know what it means, ....
+		push @newdesc, $_;
+	    }
+	}
+    }
+
+    foreach(@newdesc) {
+	next unless(my ($leftpart, $category, $rightpart) = m/$category_regexp/o);
+	$leftpart = "" unless(defined($leftpart));
+	$rightpart = "" unless(defined($rightpart));
+	
+	warn("already had category for ".$show->{"title"}->[0][0]." available (".$show->{"category"}->[0][0]."), replacing by '$category', this should not happen") if($show->{"category"});
+	$show->{"category"} = [[ $category, $lang ]];
+
+	$leftpart =~ s/(^\s|\s$)//g;
+	$rightpart =~ s/(^\s|\s$)//g;
+	
+	if(not length("$leftpart$rightpart")) {
+	    #- $#newdesc --;
+	    undef $_;
+	} 
+	elsif($rightpart =~ m/^mit\s+(.*)$/) { #-- mit means "with" in German
+	    my @data = split_up_names($1, $show);
+	    add_credits($show, 'presenter', @data);
+	    
+	    undef $_ unless(length($leftpart));
+	} 
+	elsif($rightpart =~ m/^von(?: und mit)?\s+(.+)$/) { #-- mit means "with" in German
+	    my @data = split_up_names($1, $show);
+	    add_credits($show, 'producer', @data);
+	    
+	    undef $_ unless(length($leftpart));
+	} 
+
+	last;
+    }
+
+    refine_category_attr(\@newdesc, $show);
+    $$desc = join " * ", (grep $_, @newdesc);
+}
+
+#-- add_credits(%$show, $credit, @people) -- add names to a <credits>
+# subelement but only if they are not already there.
+#
+# Assumption: nothing is removing from credits lists.
+#
+sub add_credits($$@) {
+    my ($show, $credit, @people) = @_;
+    my %seen;
+    foreach (@{$show->{credits}->{$credit}}) { $seen{$_}++ && die }
+    push @{$show->{credits}->{$credit}},
+      grep { not $seen{$_}++ } @people;
+}
+
+#-- refine_category_attr(@$desc, %$show) -- refine category attribute of %show
+sub refine_category_attr($$) {
+    my $desc = shift;
+    my $show = shift;
+
+    #-- refining category attributes ...
+    return if not exists $show->{"category"};
+    foreach (@{$show->{"category"}}) {
+	die if not defined($_->[0]);
+	$_->[0] =~ s/(^\s|\s$)//g;
+
+	if($_->[0] =~ s/\s+(?:frei\s+)?(nach|von|mit)\s+([^\d]*?)\s*$//) {
+	    my @data = split(m/(?:\sund\s|[,;])/, $2);
+
+	    if ($1 eq "nach") { push @{$show->{"credits"}{"writer"}}, @data; }
+	    elsif ($1 eq "von") { push @{$show->{"credits"}{"producer"}}, @data; }
+	    elsif ($1 eq "mit") { push @{$show->{"credits"}{"presenter"}}, @data; }
+	    else { die }
+	}
+
+	if($_->[0] =~ s/\s*(\d+\. Staffel)\s*//) {
+	    #-- really doesn't belong into category, throw out to description
+	    push @$desc, $1;
+	}
+
+	#-- okay, the last word should be the actual category now,
+	#   discard everything else back to description
+	if($_->[0] =~ s/^\s*(.*?\s+)(?=[\wäöüßÄÖÜ\-\/]+\s*$)//) {
+	    push @$desc, "$1$_->[0]";
+	}
+
+	#-- discard whole entry if we don't have any text left ...
+	$_->[0] =~ s/(^\s|\s$)//g;
+	undef $_ unless(length($_->[0]));
+    }
+
+    # We may have set some category elements to undef, but they
+    # shouldn't be left there.
+    #
+    $show->{"category"} = [ grep { $_ } @{$show->{"category"}} ];
+
+
+    # DEBUG FEATURE
+    # check the stored categories against our list ...
+    1 && return;
+
+    foreach (@{$show->{"category"}}) {
+	my $title = $show->{"title"}->[0][0];
+	
+	warn "show '$title' has invalid category-language tag assigned: $_->[1]"
+	  unless($_->[1] eq $lang);
+
+	next unless(m/$category_regexp/o);
+	warn "show '$title' has strange category assigned: $_->[0]" 
+	  if(length("$1$3"));
+    }
+}
+
+
+
+#-- refine_credits(%$show) -- refine credits listed below %show hash
+sub refine_credits($) {
+    my $show = shift;
+    
+    foreach(keys(%{$show->{"credits"}})) {
+	foreach(@{$show->{"credits"}{$_}}) {
+	    s/(^\s|\s$)//g;
+
+	    #-- remove leading articles in front of group's names, e.g. bands etc.
+	    s/^de[rnm]\s+//g; 
+
+	    #-- trim leading proffession-names, etc ...
+	    #-- this is stupidly given with all these faked judgement shows (for juges and lawyers who probably even don't have and deserve their title ...)
+	    s/^(Anwalt|Anwältin|Anwälten|Richter(in)?)\s+//g;
+	}
+    }
+}
+
+
+
+#-- get channel listing
+sub get_channels() {
+    my %channels;
+    my $url="http://www.tvtoday.de/tv/programm/programm.php?ztag=0&sparte=alle&uhrzeit=Ax00&sender=ZDF";
+
+    my $tb=new HTML::TreeBuilder();
+    $tb->parse(get_page($url));
+    foreach ($tb->look_down('_tag' => 'select', 'name' => 'sender')->content_list()) {
+	next unless(ref($_) eq "HTML::Element");
+	warn "unexpected HTML::Element $_->tag", next if($_->tag ne "option");
+
+	my $station_name = $_->as_text();
+	$station_name =~ s/(?:^\s|\s$)//g;
+
+	next if ($station_name eq "_______");
+	next if ($station_name eq "Regional");
+	next if ($station_name eq "Haupt");
+	next if ($station_name eq "alle");
+	next if ($station_name eq "Haupt+Reg.");
+	next if ($station_name eq "Sparten");
+	next if ($station_name eq "Ausland");
+
+	$channels{uri_escape($_->attr("value"))} = $station_name;
+    }
+
+    $tb->delete;
+    return %channels;
+}
+
+
+#-- split_up_names($names, %$show) :: Split up names into returned array
+sub split_up_names($$) {
+    my $names = shift;
+    my $show = shift;
+
+    $names =~ s/, unter Mitwirkung von\s+/ und /g; #- replace 'with help of' by simple and to allow match below
+    my @data = split(m/\s*[,;]\s*/, $names);
+
+    if(scalar(@data) == 2) {
+	#-- check for "<name(s)>, <country> <year>" construct
+	if($data[1] =~ m/\s*([^,;]*)\s+([12][09][0-9]{2}(?:[\/-][0-9]{2})?)\s*$/) {
+	    $show->{"country"} = [[ $1, $lang ]];
+	    $show->{"date"} = parse_date_data($2);
+
+	    $#data --;
+	    $names = $data[0];
+		
+	} 
+	elsif(scalar($data[1] =~ m/\s/g) == 0) {
+	    #- we most probably have a country specification
+	    #- here, treat it as such, ... and hope it's right
+	    $show->{"country"} = [[ $data[1], $lang ]];
+
+	    $#data --;
+	    $names = $data[0];
+	}
+    }
+
+    if(scalar(@data) == 1 && $names =~ m/\s+und\s+/) {
+	# looks like it didn't work, try splitting by 'und' (== and)
+	@data = split(m/\s+und\s+/, $names);
+
+	#-- check that we didn't have a "hername + hisname familyname or name + name" construct ...
+	if(scalar(@data) == 2) {
+	    @data = $names #-- ignore split in that case
+	      if (scalar($data[0] =~ m/\s/g) == 0 && scalar($data[1] =~ m/\s/g) <= 1);
+	}
+    }
+
+    return @data;
+}
+
+
+#-- parse_date_data($d) :: Parse the given "yyyy([-/]yy)?" date down to "yyyy" only
+sub parse_date_data($) {
+    my $date = shift;
+    warn("bad date '$date' found, returning undef."), return(undef) 
+      unless($date =~ m/((?:19|20)[0-9]{2})(?:(?:[-\/])([0-9]{2}))?/);
+
+    #-- return if it's a plain 'yyyy' date ...
+    return $date unless(defined($2));
+
+    my $century = substr($date, 0, 2);
+    if(substr($date, 2, 2) > $2) {
+	warn("bad date '$date' found, returning undef."), return(undef) 
+	  unless($century == 19);
+	$century ++;
+    } 
+
+    return $century * 100 + $2;
+}
+
+
+
+#-- get_page($url) :: try to download $url via http://, look for closing </body> tag or die
+sub get_page($) {
+    my $url = shift;
+    my $retry = 0;
+
+    local $SIG{__DIE__} = sub { die "\n$url: $_[0]" };
+    
+    while($retry < 4) {
+	my $got = get_nice($url . ($retry ? "&retry=$retry" : ""));
+	$retry ++;
+
+	die "retrieved webpage doesn't look like a tvtoday.de page, maybe a proxy error?"
+	  unless(index($got, "<title>TV TODAY</title>"));
+
+	#-- page seems to be complete, if we have a </body> tag ...
+	return $got unless(index($got, "</body>") < 0);
+
+	#-- be nice to our server, let's wait extra ...
+	sleep(rand($retry * 5)) unless($debug);
+	warn "got incomplete webpage from tvtoday.de" if($debug);
+    }
+
+    die "unable to get tvtoday.de webpage, </body> tag not found, after trying $retry times. giving up";
+}

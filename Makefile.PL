@@ -308,6 +308,21 @@ my @opt_components
        prereqs => { 'HTML::TreeBuilder' => 0,
 		    'Text::Kakasi' => 0 } },
 
+     { name => 'tv_grab_de_tvtoday',
+       blurb => 'Grabber for Germany',
+       exes => [ 'grab/de_tvtoday/tv_grab_de_tvtoday' ],
+       pl_files => { 'grab/de_tvtoday/tv_grab_de_tvtoday.PL'
+		     => 'grab/de_tvtoday/tv_grab_de_tvtoday' },
+       share_files => { 'grab/de_tvtoday/channel_ids'
+			=> 'tv_grab_de_tvtoday/channel_ids' },
+       to_clean => [ 'grab/de_tvtoday/tv_grab_de_tvtoday' ],
+       deps => [ 'grab/de_tvtoday/tv_grab_de_tvtoday'
+		 => [ 'grab/de_tvtoday/tv_grab_de_tvtoday.in' ] ],
+       grab_need_share => [ 'de_tvtoday' ],
+       prereqs => { 'HTML::Entities' => 1.27,
+		    'HTML::TreeBuilder' => 0 },
+     },
+
      { name => 'tv_check',
        blurb => 'Program to report exceptions and changes in a schedule',
        exes => [ 'choose/tv_check/tv_check' ],
