@@ -186,6 +186,7 @@ sub askManyBooleanQuestions( $@ )
 sub say( $ )
 {
     my $question = shift;
+    $question=~s/\n+$//o;
     print STDERR "$question\n";
 }
 
