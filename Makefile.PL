@@ -81,6 +81,7 @@ my %pm
      'grab/Memoize.pm'            => '$(INST_LIBDIR)/XMLTV/Memoize.pm',
      'grab/Grab_XML.pm'           => '$(INST_LIBDIR)/XMLTV/Grab_XML.pm',
      'grab/Europe_TZ.pm'          => '$(INST_LIBDIR)/XMLTV/Europe_TZ.pm',
+     'grab/Config_file.pm'        => '$(INST_LIBDIR)/XMLTV/Config_file.pm',
     );
 
 # Modules required to install.
@@ -708,6 +709,7 @@ sub MY::manifypods {
     my $inherited = shift->SUPER::manifypods(@_);
     $inherited =~ s!\$\(INST_MAN3DIR\)/grab::Grab_XML.\$\(MAN3EXT\)!"\$(INST_MAN3DIR)/XMLTV::Grab_XML.\$(MAN3EXT)"!;
     $inherited =~ s!\$\(INST_MAN3DIR\)/grab::Europe_TZ.\$\(MAN3EXT\)!"\$(INST_MAN3DIR)/XMLTV::Europe_TZ.\$(MAN3EXT)"!;
+    $inherited =~ s!\$\(INST_MAN3DIR\)/grab::Config_file.\$\(MAN3EXT\)!"\$(INST_MAN3DIR)/XMLTV::Config_file.\$(MAN3EXT)"!;
     $inherited =~ s!\$\(INST_MAN3DIR\)/Summarize.\$\(MAN3EXT\)!"\$(INST_MAN3DIR)/XMLTV::Summarize.\$(MAN3EXT)"!;
     return $inherited;
 }
