@@ -53,29 +53,29 @@ my @cmds
      # We assume that most usages of tv_grep are idempotent on the sample
      # files given.  But see BUGS section of manual page.
      [ [ 'tv_grep', '--channel-name', 'd'                        ], 1 ],
-     [ [ 'tv_grep', '--channel', 'xyz', '--or', '--channel', 'b' ], 1 ],
-     [ [ 'tv_grep', '--previously-shown', ''                     ], 1 ],
      [ [ 'tv_sort'                                               ], 1 ],
+     [ [ 'tv_sort', '--by-channel'                               ], 1 ],
      [ [ 'tv_to_latex'                                           ], 0 ],
-     [ [ 'tv_to_text'                                            ], 0 ],
     );
 
 if ($full) {
     push @cmds,
       (
-       [ [ 'tv_grep', 'a'                                        ], 1 ],
-       [ [ 'tv_grep', '--category', 'b'                          ], 1 ],
-       [ [ 'tv_grep', '-i', '--last-chance', 'c'                 ], 1 ],
-       [ [ 'tv_grep', '--premiere', ''                           ], 1 ],
-       [ [ 'tv_grep', '--new'                                    ], 1 ],
-       [ [ 'tv_grep', '--channel-id', 'channel4.com'             ], 1 ],
-       [ [ 'tv_grep', '--on-after', '2002-02-05'                 ], 1 ],
-       [ [ 'tv_grep', '--eval', 'scalar keys %$_ > 5'            ], 0 ],
-       [ [ 'tv_grep', '--category', 'e', '--and', '--title', 'f' ], 1 ],
-       [ [ 'tv_grep', '--category', 'g', '--or', '--title', 'h'  ], 1 ],
-       [ [ 'tv_grep', '-i', '--category', 'i', '--title', 'j'    ], 1 ],
-       [ [ 'tv_grep', '-i', '--category', 'i', '--title', 'h'    ], 1 ],
-       [ [ 'tv_sort', '--by-channel'                             ], 1 ],
+       [ [ 'tv_grep', '--channel', 'xyz', '--or', '--channel', 'b' ], 1 ],
+       [ [ 'tv_grep', '--previously-shown', ''                     ], 1 ],
+       [ [ 'tv_grep', 'a'                                          ], 1 ],
+       [ [ 'tv_grep', '--category', 'b'                            ], 1 ],
+       [ [ 'tv_grep', '-i', '--last-chance', 'c'                   ], 1 ],
+       [ [ 'tv_grep', '--premiere', ''                             ], 1 ],
+       [ [ 'tv_grep', '--new'                                      ], 1 ],
+       [ [ 'tv_grep', '--channel-id', 'channel4.com'               ], 1 ],
+       [ [ 'tv_grep', '--on-after', '2002-02-05'                   ], 1 ],
+       [ [ 'tv_grep', '--eval', 'scalar keys %$_ > 5'              ], 0 ],
+       [ [ 'tv_grep', '--category', 'e', '--and', '--title', 'f'   ], 1 ],
+       [ [ 'tv_grep', '--category', 'g', '--or', '--title', 'h'    ], 1 ],
+       [ [ 'tv_grep', '-i', '--category', 'i', '--title', 'j'      ], 1 ],
+       [ [ 'tv_grep', '-i', '--category', 'i', '--title', 'h'      ], 1 ],
+       [ [ 'tv_to_text'                                            ], 0 ],
       );
 }
 
