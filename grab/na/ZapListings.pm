@@ -892,8 +892,7 @@ sub scrapehtml($$$)
 	    for my $extra (reverse(@extras)) {
 		my $original_extra=$extra;
 
-		my $result;
-		my $resultSure;
+		my $resultNotSure;
 		my $success=1;
 		my @notsure;
 		my @sure;
@@ -933,7 +932,7 @@ sub scrapehtml($$$)
 			 $i=~m/^TV(14)$/oi ||
 			 $i=~m/^TV(M)$/oi ||
 			 $i=~m/^TV(MA)$/oi ) {
-			$resultSure->{ratings_VCHIP}="$1";
+			$prog->{ratings_VCHIP}="$1";
 			push(@sure, $i);
 			next;
 		    }
@@ -950,7 +949,7 @@ sub scrapehtml($$$)
 			    $i=~m/^Rated (R)$/oi ||
 			    $i=~m/^Rated (NC-17)$/oi ||
 			    $i=~m/^Rated (NR)$/oi ) {
-			$resultSure->{ratings_MPAA}="$1";
+			$prog->{ratings_MPAA}="$1";
 			push(@sure, $i);
 			next;
 		    }
@@ -963,9 +962,9 @@ sub scrapehtml($$$)
 			    $i=~/^(T)$/io || #teens
 			    $i=~/^(M)$/io  #mature
 			    ) {
-			$resultSure->{ratings_ESRB}="$1";
+			$prog->{ratings_ESRB}="$1";
 			# remove dashes :)
-			$resultSure->{ratings_ESRB}=~s/\-//o;
+			$prog->{ratings_ESRB}=~s/\-//o;
 			push(@sure, $i);
 			next;
 		    }
@@ -977,54 +976,54 @@ sub scrapehtml($$$)
 		    #   like "CC Stereo 1969" for instance).
 		    #
 		    elsif ( $i=~/^\d\d\d\d$/io ) {
-			$result->{year}=$i;
+			$resultNotSure->{year}=$i;
 			push(@notsure, $i);
 			push(@backup, $i);
 			next;
 		    }
 		    elsif ( $i=~/\((\d\d\d\d)\)/io ) {
-			$resultSure->{year}=$i;
+			$prog->{year}=$i;
 			push(@sure, $i);
 			push(@backup, $i);
 			next;
 		    }
 		    elsif ( $i=~/^CC$/io ) {
-			$resultSure->{qualifiers}->{ClosedCaptioned}++;
+			$prog->{qualifiers}->{ClosedCaptioned}++;
 			push(@sure, $i);
 			next;
 		    }
 		    elsif ( $i=~/^Stereo$/io ) {
-			$resultSure->{qualifiers}->{InStereo}++;
+			$prog->{qualifiers}->{InStereo}++;
 			push(@sure, $i);
 			next;
 		    }
 		    elsif ( $i=~/^\(Repeat\)$/io ) {
-			$resultSure->{qualifiers}->{PreviouslyShown}++;
+			$prog->{qualifiers}->{PreviouslyShown}++;
 			push(@sure, $i);
 			next;
 		    }
 		    elsif ( $i=~/^\(Taped\)$/io ) {
-			$resultSure->{qualifiers}->{Taped}++;
+			$prog->{qualifiers}->{Taped}++;
 			push(@sure, $i);
 			next;
 		    }
 		    elsif ( $i=~/^\(Live\)$/io ) {
-			$resultSure->{qualifiers}->{Live}++;
+			$prog->{qualifiers}->{Live}++;
 			push(@sure, $i);
 			next;
 		    }
 		    elsif ( $i=~/^\(Call-in\)$/io ) {
-			$resultSure->{qualifiers}->{CallIn}++;
+			$prog->{qualifiers}->{CallIn}++;
 			push(@sure, $i);
 			next;
 		    }
-		    elsif ( $i=~/^\(animated\)$/io ) {
-			$resultSure->{qualifiers}->{Animated}++;
+		    elsif ( $i=~/^\(Animated\)$/io ) {
+			$prog->{qualifiers}->{Animated}++;
 			push(@sure, $i);
 			next;
 		    }
 		    # catch commonly imbedded categories
-		    elsif ( $i=~/^\(fiction\)$/io ) {
+		    elsif ( $i=~/^\(Fiction\)$/io ) {
 			push(@{$prog->{category}}, "Fiction");
 			next;
 		    }
@@ -1040,11 +1039,22 @@ sub scrapehtml($$$)
 			push(@{$prog->{category}}, "Comedy");
 			next;
 		    }
+		    elsif ( $i=~/^\(If necessary\)$/io ) {
+			$prog->{qualifiers}->{IfNecessary}++;
+			push(@sure, $i);
+			next;
+		    }
+		    elsif ( $i=~/^\(Subject to blackout\)$/io ) {
+			$prog->{qualifiers}->{SubjectToBlackout}++;
+			push(@sure, $i);
+			next;
+		    }
 		    # 1re de 2
 		    # 2e de 7
 		    elsif ( $i=~/^\((\d+)re de (\d+)\)$/io || # part x of y in french :)
 			    $i=~/^\((\d+)e de (\d+)\)$/io ) { # part x of y in french :)
 			$prog->{qualifiers}->{PartInfo}="Part $1 of $2";
+			next;
 		    }
 
 		    # ignore sports event descriptions that include team records
@@ -1083,8 +1093,8 @@ sub scrapehtml($$$)
 			if ( ! $found2 ) {
 			    print STDERR "identified possible candidate for new language $sub in $i\n";
 			}
-			$resultSure->{qualifiers}->{Language}=$lang;
-			$resultSure->{qualifiers}->{Subtitles}->{Language}=$sub;
+			$prog->{qualifiers}->{Language}=$lang;
+			$prog->{qualifiers}->{Subtitles}->{Language}=$sub;
 		    }
 		    #
 		    # lanuages added as we see them.
@@ -1116,8 +1126,8 @@ sub scrapehtml($$$)
 				    print STDERR "identified possible candidate for new language $sub in $i\n";
 				}
 				if ( $found1 && $found2 ) {
-				    $resultSure->{qualifiers}->{Language}=$lang;
-				    $resultSure->{qualifiers}->{Dubbed}=$sub;
+				    $prog->{qualifiers}->{Language}=$lang;
+				    $prog->{qualifiers}->{Dubbed}=$sub;
 				    $localmatch++;
 				}
 			    }
@@ -1153,7 +1163,7 @@ sub scrapehtml($$$)
 				if ( $matches == scalar(@arr) ) {
 				    # put "lang/lang/lang" in qualifier since we don't know
 				    # what it really means.
-				    $resultSure->{qualifiers}->{Language}=$declaration;
+				    $prog->{qualifiers}->{Language}=$declaration;
 				    $localmatch++;
 				}
 				elsif ( $matches !=0  ) {
@@ -1175,7 +1185,7 @@ sub scrapehtml($$$)
 				}
 
 				if ( defined($found) ) {
-				    $resultSure->{qualifiers}->{Language}=$found;
+				    $prog->{qualifiers}->{Language}=$found;
 				    push(@sure, $declaration);
 				    next;
 				}
@@ -1196,10 +1206,6 @@ sub scrapehtml($$$)
 		    }
 		}
 
-		# always copy the ones we're sure about
-		for (keys %$resultSure) {
-		    $self->setValue(\$prog, $_, $resultSure->{$_});
-		}
 		if ( !$success ) {
 		    if ( @notsure ) {
 			if ( $self->{Debug} ) {
@@ -1221,8 +1227,8 @@ sub scrapehtml($$$)
 		    # if everything in this piece parsed as a qualifier, then
 		    # incorporate the results, partial results are dismissed
 		    # then entire thing must parse into known qualifiers
-		    for (keys %$result) {
-			$self->setValue(\$prog, $_, $result->{$_});
+		    for (keys %$resultNotSure) {
+			$self->setValue(\$prog, $_, $resultNotSure->{$_});
 		    }
 		}
 	    }
