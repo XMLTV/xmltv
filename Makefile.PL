@@ -718,12 +718,10 @@ windows_dist ::
 	# 'make' generates troff documentation anyway this code is
 	# easier.
 	#
-	echo looking in $(INSTALLMAN1DIR)
-	ls -l $(INSTALLMAN1DIR)
-	set -e; for i in $(INSTALLMAN1DIR)/*; do \
+	set -e; for i in $(INST_MAN1DIR)/*; do \
 	        b=`basename $$i .1`; \
 	        if test "$$b" = '*'; then \
-	                echo cannot find manpages in $(INSTALLMAN1DIR) >&2; \
+	                echo cannot find manpages in $(INST_MAN1DIR) >&2; \
 	                exit 1; \
 	        fi; \
 	        echo Converting $$i to plain text; \
@@ -731,9 +729,6 @@ windows_dist ::
 	            | perl -pe 's/Date::Manip[(]3[)]/date_formats.txt/g' \
 	            >$(PREFIX)/doc/man/`basename $$i .1`.txt; \
         done
-	# Don't bother converting section 3 manual pages, they are not
-	# needed for those who don't have source code.
-	#
 	set -e; \
 	out=$(PREFIX)/doc/man/date_formats.txt; \
 	echo Extracting part of Date::Manip manual page into $$out; \
@@ -748,9 +743,10 @@ windows_dist ::
 	perl -MExtUtils::Command -e rm_rf $(INSTALLBIN) $(PREFIX)/lib/ $(INSTMANDIR) $(INSTALLMAN3DIR)
 	perl -MExtUtils::Command -e cp xmltv.dtd $(PREFIX)
 	# The following command will not be necessary when the source
-	# tree was checked out on a DOSish system.
+	# tree was checked out on a DOSish system.  It may not even
+	# work properly when run on a DOSish system - should check.
 	#
-	find $(PREFIX) -type f ! -name \*.jpg | xargs unix2dos
+	find $(PREFIX) -type f ! -name \*.jpg | xargs perl -i -pe 'BEGIN { binmode STDIN } s/\r*\n*$$/\r\n/'
 	perl -MExtUtils::Command -e mv $(PREFIX)/doc/README* $(PREFIX)
 	perl -MExtUtils::Command -e mv $(PREFIX)/README.win32 $(PREFIX)/README
 	@echo
