@@ -1,5 +1,80 @@
 #!/usr/bin/perl -w
 
+=head1 NAME
+
+tv_grab_uk_rt - Grab TV listings for the United Kingdom, from an
+alternative source.
+
+=head1 SYNOPSIS
+
+tv_grab_uk_rt --help
+
+tv_grab_uk_rt [--config-file FILE] --configure
+
+tv_grab_uk_rt [--config-file FILE] [--output FILE] [--days N]
+
+=head1 DESCRIPTION
+
+Output TV and radio listings in XMLTV format for many stations
+available in Britain.  The data comes from the Radio Times website.
+
+=head1 WARNING
+
+Running this grabber requires very many web page fetches (potentially
+one per programme).  It is better where possible to run the ordinary
+UK grabber B<tv_grab_uk>, which has its own specially-created data
+source rather than scraping from a human-readable website.
+
+Normally youE<39>d run this grabber instead of B<tv_grab_uk> only when
+you want more than seven days of listings, or to get the more detailed
+cast lists in the Radio Times data.
+
+=head1 USAGE
+
+First you must run B<tv_grab_uk_rt --configure> to choose which
+stations you want to receive.  Then running B<tv_grab_uk_rt> with no
+arguments will get about a fortnightE<39>s listings for the stations
+you chose.
+
+B<--configure> Prompt for which stations to download and write the
+configuration file.
+
+B<--config-file FILE> Set the name of the configuration file, the
+default is B<~/.xmltv/tv_grab_uk_rt>.  This is the file written by
+B<--configure> and read when grabbing.
+
+B<--output FILE> When grabbing, write output to FILE rather than
+standard output.
+
+B<--days N> When grabbing, grab N days starting from today, rather
+than as many as possible.
+
+=head1 SEE ALSO
+
+L<xmltv(5)>, L<tv_grab_uk(1)>, L<http://www.radiotimes.beeb.com/>
+
+=head1 AUTHOR
+
+Ed Avis, ed@membled.com
+
+=head1 BUGS
+
+The website parsing isnE<39>t perfect and there will often be warning
+messages about bits of HTML that arenE<39>t understood.  Some of the
+details provided by the site have to be thrown away because they
+cannot be accommodated in the XMLTV format; again, warning messages
+are printed.
+
+There are too many web page fetches, because a separate page gives
+'details' for each programme.  It would be better to fetch the details
+only for those programmes that are interesting, in some kind of
+two-pass grabbing.
+
+There is code to find out the 'categories' given for each programme,
+but that involves even more page fetches so it is disabled at present.
+
+=cut
+
 use strict;
 use IO::Socket;
 use LWP::Simple;
@@ -29,8 +104,8 @@ BEGIN {
 }
 
 sub get_url( $ );
-sub get_programmes( $$$$ );
-sub get_programme_details( $$$$ );
+sub get_programmes( $$$$$ );
+sub get_programme_details( $$$$$ );
 sub do_cast( $$ );
 sub get_channels();
 sub get_categories();
@@ -136,9 +211,6 @@ die 'number of days must not be negative'
 if ($opt_help) {
     usage(1);
 }
-if ($opt_configure) {
-    print STDERR "Going to configure channels to download, please wait\n";
-}
 die if defined $opt_share; # TODO
 die if defined $opt_output; # TODO
 
@@ -158,23 +230,7 @@ if (not defined $CONFIG_FILE) {
     }
 }
 
-if ($opt_configure) {
-    if (-e $CONFIG_FILE) {
-	print <<END
-The configuration file $CONFIG_FILE already exists.  There is
-currently no support for altering an existing configuration, you have
-to reconfigure from scratch.
-
-END
-  ;
-	if (not askBooleanQuestion
-	    ('Do you wish to overwrite the old configuration?', 0)) {
-	    print "Exiting.\n";
-	    exit 0;
-	}
-    }
-}
-else {
+if (not $opt_configure) {
     if (-e $CONFIG_FILE) {
 	print STDERR "using config file $CONFIG_FILE\n";
     }
@@ -182,10 +238,6 @@ else {
 	die "config file $CONFIG_FILE does not exist, run me with --configure\n";
     }
 }
-
-print STDERR "finding channels:\t";
-my %channels = get_channels();
-print STDERR "done.\n";
 
 if ($opt_configure) {
     configure();
@@ -207,6 +259,10 @@ exit();
 sub grab( @ ) {
     my $writer = new XMLTV::Writer(@_, encoding => 'ISO-8859-1');
     my %write_channels;		# to be written as <channel> elements
+
+    print STDERR "finding channels:\t";
+    my %channels = get_channels();
+    print STDERR "done.\n";
 
     # Read the configuration file.  At present the lines must be one
     # of two forms:
@@ -314,7 +370,8 @@ sub grab( @ ) {
 		$name = $chan if not defined $name;
 		print STDERR 'time ', UnixDate($time, '%q'), ", channel $name:\t";
 		push @new_programmes,
-		  get_programmes($chan, $time, \%prog_to_cat, \%categories);
+		  get_programmes($chan, $time, \%prog_to_cat,
+				 \%categories, \%channels);
 		print STDERR "\n";
 	    }
 
@@ -389,6 +446,7 @@ sub get_url( $ ) {
 #   Date::Manip object giving date and time
 #   prog_to_cat hash (see elsewhere for details)
 #   categories hash
+#   channels hash
 #
 # Returns: list of programmes
 #
@@ -396,11 +454,12 @@ sub get_url( $ ) {
 # worth of listings.
 #
 my %seen_prog;
-sub get_programmes( $$$$ ) {
+sub get_programmes( $$$$$ ) {
     my $channel_xid = shift;
     my $time = shift;
     my $prog_to_cat = shift;
     my $categories = shift;
+    my $channels = shift;
 
     my @p;
 
@@ -432,7 +491,8 @@ sub get_programmes( $$$$ ) {
 
 	unless ($seen_prog{$channel_xid}->{$programmeId}++) {
 	    my $progs = get_programme_details($channel_xid, $programmeId,
-					      $prog_to_cat, $categories);
+					      $prog_to_cat, $categories,
+					      $channels);
 	    if (not $progs) {
 		warn "could not get programme $programmeId on channel $channel_xid\n";
 	    }
@@ -455,20 +515,20 @@ sub get_programmes( $$$$ ) {
 #   RT id of programme
 #   hash mapping 'channelidprogrammeid' to RT category id
 #   hash of categories
+#   hash of channels
 #
 # Returns a listref of programmes: normally with just one element, but
 # can be more when two programmes share a timeslot.  (The clumpidxes
 # will be set.)
 #
-# Uses the global %channels hash.
-#
-sub get_programme_details( $$$$ ) {
+sub get_programme_details( $$$$$ ) {
 #    local $Log::TraceMessages::On = 1;
     my $channel_xid = shift;
     my $channelId = xmltv_to_rt($channel_xid);
     my $programmeId = shift;
     use vars '%prog_to_cat'; local *prog_to_cat = shift;
     use vars '%categories'; local *categories = shift;
+    use vars '%channels'; local *channels = shift;
 
     # %p is the main programme we will return.
     my %p;
@@ -1170,6 +1230,38 @@ sub xmltv_to_rt( $ ) {
 #
 sub configure() {
 #    local $Log::TraceMessages::On = 1;
+
+    print <<END
+Warning: this grabber requires a large number of page fetches from a
+human-readable website.  It is normally better to run tv_grab_uk,
+which has its own data source.
+
+END
+  ;
+    if (not askBooleanQuestion('Proceed with configuration?', 0)) {
+	print "Exiting.\n";
+	exit 0;
+    }
+
+    if (-e $CONFIG_FILE) {
+	print <<END
+The configuration file $CONFIG_FILE already exists.  There is
+currently no support for altering an existing configuration, you have
+to reconfigure from scratch.
+
+END
+	  ;
+	if (not askBooleanQuestion
+	    ('Do you wish to overwrite the old configuration?', 0)) {
+	    print "Exiting.\n";
+	    exit 0;
+	}
+    }
+
+    print STDERR "finding channels:\t";
+    my %channels = get_channels();
+    print STDERR "done.\n";
+
     # FIXME need to make directory
     open(CONF, ">$CONFIG_FILE") or die "cannot write to $CONFIG_FILE: $!";
     my %chose_ch;
@@ -1245,6 +1337,6 @@ sub configure() {
     }
 
     close CONF or warn "cannot close $CONFIG_FILE: $!";
-    print "All done, run with no arguments to grab a week's listings.\n";
+    print "All done, run with no arguments to grab a fortnight's listings.\n";
     exit();
 }
