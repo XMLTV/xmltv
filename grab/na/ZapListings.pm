@@ -648,10 +648,6 @@ sub scrapehtml($$$)
 
     # declare known languages here so we can more precisely identify
     # them in program details
-
-    # currently we include, but fail to recognize hyphenated languages
-    # for instance i've seen "(English/Oji-Cree)", but parsing fails
-    # since sometimes we get languages declarations (English-French).
     my @knownLanguages=qw(
 			  Aboriginal
 			  Arabic
@@ -672,6 +668,7 @@ sub scrapehtml($$$)
 			  Hungarian
 			  Innu
 			  Inuktitut
+			  Inkutitut
 			  Inukutitut
 			  Inuvialuktun
 			  Italian
@@ -683,7 +680,7 @@ sub scrapehtml($$$)
 			  Mi'kmaq
 			  Mohawk
 			  Musgamaw
-			  Oji-Cree
+			  Oji
 			  Panjabi
 			  Polish
 			  Portuguese
@@ -1088,12 +1085,9 @@ sub scrapehtml($$$)
 		    else {
 			my $localmatch=0;
 
-			# 'Hindi, English'
-			# 'Hindi-English'
 			# 'Hindi and English'
 			# 'Hindi with English'
-			if ( $i=~/^\(([^\s|,|-]+)[\s,\-]+\s*([^\s]+)\)$/io ||
-			     $i=~/^\(([^\s]+)\s+and\s+([^\s]+)\)$/io ||
+			if ( $i=~/^\(([^\s]+)\s+and\s+([^\s]+)\)$/io ||
 			     $i=~/^\(([^\s]+)\s+with\s+([^\s]+)\)$/io ) {
 			    my $lang=$1;
 			    my $sub=$2;
@@ -1120,14 +1114,17 @@ sub scrapehtml($$$)
 			}
 
 			# more language checks
+			# 'Hindi, English'
+			# 'Hindi-English'
 			# 'English/French'
+			# 'English/Oji-Cree'
 			# 'Hindi/Punjabi/Urdu', but I'm not sure what it means.
-			if ( ! $localmatch && $i=~m;/;o ) {
+			if ( ! $localmatch && $i=~m;[/\-,];o) {
 			    my $declaration=$i;
 			    $declaration=~s/^\(\s*//o;
 			    $declaration=~s/\s*\)$//o;
 
-			    my @arr=split(/\//, $declaration);
+			    my @arr=split(/[\/]|[\-]|[,]/, $declaration);
 			    my @notfound;
 			    my $matches;
 			    for my $lang (@arr) {
@@ -1150,7 +1147,7 @@ sub scrapehtml($$$)
 			    if ( $matches == scalar(@arr) ) {
 				# put "lang/lang/lang" in qualifier since we don't know
 				# what it really means.
-				$resultSure->{qualifiers}->{Language}=$i;
+				$resultSure->{qualifiers}->{Language}=$declaration;
 				$localmatch++;
 			    }
 			    elsif ( $matches !=0  ) {
