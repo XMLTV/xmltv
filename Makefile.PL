@@ -128,7 +128,7 @@ Linux 8.0. See
 Until Date::Manip is fixed to work with UTF-8, you need to change your
 LC_ALL environment variable to turn off the UTF-8 locale.
 
-Try setting LC_ALL to $_ and running the Makefile.PL again.  If that
+Try setting LC_ALL to en_US and running the Makefile.PL again.  If that
 doesn't work, please contact the XMLTV maintainer.
 ";
 	    }
