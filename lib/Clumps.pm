@@ -27,6 +27,7 @@
 
 package XMLTV::Clumps;
 use Date::Manip; # no Date_Init(), that can be done by the app
+use Tie::RefHash;
 use Log::TraceMessages qw(t d);
 # Won't Memoize, you can do that yourself.
 use base 'Exporter'; use vars '@EXPORT_OK';
