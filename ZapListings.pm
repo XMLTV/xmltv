@@ -1216,6 +1216,19 @@ sub scrapehtml($$$)
 	    #$desc=~s/<text>(.*?)<\/text>/<text>/og;
 	    #print STDERR "\t$desc\n";
 	    
+
+	    # final massage.
+
+	    my $title=$prog->{title};
+	    if ( defined($title) ) {
+		# look and pull apart titles like: Nicholas Nickleby   Part 1 of 2
+		# putting 'Part X of Y' in PartInfo instead
+		if ( $title=~s/\s+Part\s+(\d+)\s+of\s+(\d+)\s*$//o ) {
+		    $prog->{qualifiers}->{PartInfo}="Part $1 of $2";
+		    $self->setValue(\$prog, "title", $title);
+		}
+	    }
+
 	    push(@programs, $prog);
 	}
     }
