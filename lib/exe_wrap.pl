@@ -75,19 +75,6 @@ foreach my $exe (split(/ /,$files))
 }
 
 #
-# add tv_imdb which doesn't work on windows
-#
-$cmds{tv_imdb}=sub {
-    die <<END
-Sorry, tv_imdb requires the unix "look" program which is not available 
-for windows.  It is hoped that a windows capable tv_imdb will be 
-available in the future.
-
-END
-  ;
-};
-
-#
 # add tv_grab_nz which is a Python program
 #
 $cmds{tv_grab_nz}=sub {
