@@ -36,5 +36,5 @@ sub print_list( $$ ) {
 	my ($elem_name, $h_name, $mult) = @$_;
 	print $fh "\n=item $elem_name, I<$h_name>, B<$mult>\n";
     }
-    print $fh "\n=back\n";
+    print $fh "\n\n=back\n";
 }
