@@ -684,7 +684,10 @@ windows_dist ::
 	perl -ne 'BEGIN { print "\n=pod\n\n" }  print if (/^The format options are:/ .. /^=/) and not /^=/' <$$out.tmp >$$out.tmp.1; \
 	pod2text <$$out.tmp.1 >>$$out; \
 	rm $$out.tmp*
-	perl -MExtUtils::Command -e rm_rf $(INSTALLBIN) $location/lib/ $(INSTMANDIR) $(INSTALLMAN3DIR)
+        # Don't use $(INSTALLBIN), it seems to disregard PREFIX passed
+        # to 'make'.
+        #
+	perl -MExtUtils::Command -e rm_rf $location/bin/ $location/lib/ $(INSTMANDIR) $(INSTALLMAN3DIR)
 	perl -MExtUtils::Command -e cp xmltv.dtd $location
 	# The following command will not be necessary when the source
 	# tree was checked out on a DOSish system.  It may not even
