@@ -1,0 +1,107 @@
+#!/usr/bin/perl -w
+#
+# $Id$
+#
+# tv_cat
+#
+# Concatenate the programmes in several XMLTV files, and merge the
+# channels.  The treatment of programmes and channels is slightly
+# different because for programmes, the ordering is important
+# (typically programmes are processed or displayed in the same order
+# as they appear in the file) whereas channels are just a set indexed
+# by channel id.  There is a warning if channel details clash for the
+# same id.
+#
+# One more wrinkle is the credits (source and all that), they are
+# taken from the first file and then there's a warning if the other
+# files differ.
+#
+# This tool is rather useless, but it makes a good testbed for the
+# XMLTV module.
+#
+# -- Ed Avis, epa98@doc.ic.ac.uk, 2002-02-13
+#
+
+use strict;
+use XMLTV;
+use Log::TraceMessages qw<t d>; Log::TraceMessages::check_argv(); $| = 1;
+use Data::Dumper;
+use Getopt::Long;
+
+# Memoize some subroutines if possible
+eval { require Memoize };
+if ($@) {
+    warn "could not load Memoize module, things will run slowly";
+}
+else {
+    foreach (qw/Dumper/) {
+	Memoize::memoize($_) or die "cannot memoize $_: $!";
+    }
+}
+
+# Prototype declarations
+sub usage( ;$ );
+
+my ($opt_help, $opt_output);
+GetOptions('help' => \$opt_help, 'output=s' => \$opt_output);
+usage(1) if $opt_help;
+@ARGV = ('-') if not @ARGV;
+
+my $all_credits;
+my %all_channels;
+my @all_progs;
+
+foreach (@ARGV) {
+    my ($encoding, $credits, $channels, $progs) = @{XMLTV::read_data($_)};
+    die if $encoding ne 'UTF-8';
+
+    if (not defined $all_credits) {
+	$all_credits = $credits;
+    }
+    elsif (Dumper($credits) ne Dumper($all_credits)) {
+	warn "different files have different credits, taking from first file\n";
+    }
+
+    foreach (keys %$channels) {
+	if (not defined $all_channels{$_}) {
+	    $all_channels{$_} = $channels->{$_};
+	}
+	elsif (Dumper($all_channels{$_}) ne Dumper($channels->{$_})) {
+	    warn "channel $_ differs between two files, taking first appearance\n";
+	}
+    }
+
+    push @all_progs, @$progs;
+}
+$all_credits = {} if not defined $all_credits;
+
+# Write out the new document
+t 'writing out data';
+t 'new programmes list: ' . d \@all_progs;
+my %w_args = ();
+if (defined $opt_output) {
+    my $fh = new IO::File ">$opt_output";
+    die "cannot write to $opt_output\n" if not $fh;
+    %w_args = (OUTPUT => $fh);
+}
+XMLTV::write_data([ 'UTF-8', $all_credits, \%all_channels, \@all_progs ], %w_args);
+exit();
+
+
+# If optional parameter true, is 'help message'.
+sub usage( ;$ ) {
+    my $is_help = shift;
+    my $msg = <<END
+$0: concatenate listings, merging channels
+usage: $0 [--help] [--output FILE] [FILE...]
+END
+;
+    if ($is_help) {
+	print $msg;
+	exit(0);
+    }
+    else {
+	print STDERR $msg;
+	exit(1);
+    }
+}
