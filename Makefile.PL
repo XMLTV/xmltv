@@ -273,7 +273,7 @@ my @opt_components
 
      { name => 'tv_grab_es_digital',
        blurb => 'Grabber for Spain - Digital Satellite (D+)',
-       exes => [ 'grab/es/tv_grab_es_digital' ],
+       exes => [ 'grab/es_digital/tv_grab_es_digital' ],
        prereqs => { 'HTML::TreeBuilder' => 0 } },
 
      { name => 'tv_grab_nl',
