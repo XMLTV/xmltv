@@ -805,7 +805,7 @@ sub applyFound($$$)
 
 sub augmentProgram($$$)
 {
-    my ($self, $prog, $moviesOnly)=@_;
+    my ($self, $prog, $movies_only)=@_;
 
     $self->{stats}->{programCount}++;
     
@@ -835,7 +835,7 @@ sub augmentProgram($$$)
 	# fall through and try again as a tv series
     }
 
-    if ( !$moviesOnly ) {
+    if ( !$movies_only ) {
 	my $id=$self->findTVSeriesInfo($title);
 	if ( defined($id) ) {
 	    $self->{stats}->{$id->{matchLevel}."Matches"}++;
