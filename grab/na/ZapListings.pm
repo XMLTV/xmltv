@@ -12,46 +12,46 @@ sub doRequest($$$$)
     my ($ua, $req, $debug)=@_;
 
     if ( $debug ) {
-	print STDERR "==== req ====\n", $req->as_string();
+      main::statusMessage("==== req ====\n".$req->as_string());
     }
 
     my $cookie_jar=$ua->cookie_jar();
     if ( defined($cookie_jar) ) {
 	if ( $debug ) {
-	    print STDERR "==== request cookies ====\n", $cookie_jar->as_string(), "\n";
-	    print STDERR "==== sending request ====\n";
+	    main::statusMessage("==== request cookies ====\n".$cookie_jar->as_string()."\n");
+	    main::statusMessage("==== sending request ====\n");
 	}
     }
 
     my $res = $ua->request($req);
     if ( $debug ) {
-	print STDERR "==== got response ====\n";
+	main::statusMessage("==== got response ====\n");
     }
 
     $cookie_jar=$ua->cookie_jar();
     if ( defined($cookie_jar) ) {
 	if ( $debug ) {
-	    print STDERR "==== response cookies ====\n", $cookie_jar->as_string(), "\n";
+	    main::statusMessage("==== response cookies ====\n", $cookie_jar->as_string(), "\n");
 	}
     }
 
     if ( $debug ) {
-	print STDERR "==== status: ", $res->status_line, " ====\n";
+	main::statusMessage("==== status: ", $res->status_line, " ====\n");
     }
 
     if ( $debug ) {
 	if ($res->is_success) {
-	    print STDERR "==== success ====\n";
+	    main::statusMessage("==== success ====\n");
 	}
 	elsif ($res->is_info) {
-	    print STDERR "==== what's an info response? ====\n";
+	    main::statusMessage("==== what's an info response? ====\n");
 	}
 	else {
-	    print STDERR "==== bad code ".$res->code().":".HTTP::Status::status_message($res->code())."\n";
+	    main::statusMessage("==== bad code ".$res->code().":".HTTP::Status::status_message($res->code())."\n");
 	}
-	#print STDERR $res->headers->as_string(), "\n";
+	#main::statusMessage("".$res->headers->as_string(), "\n");
 	#dumpPage($res->content());
-	#print STDERR $res->content(), "\n";
+	#main::statusMessage("".$res->content(), "\n");
     }
     return($res);
 }
@@ -62,8 +62,8 @@ sub getProviders($$$)
 
     my $ua=XMLTV::ZapListings::RedirPostsUA->new('cookie_jar'=>HTTP::Cookies->new());
     if ( 0 && ! $ua->passRequirements($debug) ) {
-	print STDERR "version of ".$ua->_agent()." doesn't handle cookies properly\n";
-	print STDERR "upgrade to 5.61 or later and try again\n";
+	main::errorMessage("version of ".$ua->_agent()." doesn't handle cookies properly\n");
+	main::errorMessage("upgrade to 5.61 or later and try again\n");
 	return(undef);
     }
 
@@ -86,9 +86,9 @@ sub getProviders($$$)
     }
 
     if ( !$res->is_success ) {
-	print STDERR "zap2it failed to give us a page: ".$res->code().":".
-	  HTTP::Status::status_message($res->code())."\n";
-	print STDERR "check postal/zip code or www site (maybe they're down)\n";
+	main::errorMessage("zap2it failed to give us a page: ".$res->code().":".
+			 HTTP::Status::status_message($res->code())."\n");
+	main::errorMessage("check postal/zip code or www site (maybe they're down)\n");
 	return(undef);
     }
 
@@ -100,26 +100,25 @@ sub getProviders($$$)
     }
 
     if ( $content=~m/(We do not have information for the zip code[^\.]+)/i ) {
-	print STDERR "zap2it says:\"$1\"\n";
-	print STDERR "invalid postal/zip code\n";
+	main::errorMessage("zap2it says:\"$1\"\ninvalid postal/zip code\n");
 	return(undef);
     }
 
     if ( $debug ) {
 	if ( !$content=~m/<Input type="hidden" name="FormName" value="edit_provider_list.asp">/ ) {
-	    print STDERR "Warning: form may have changed(1)\n";
+	    main::errorMessage("Warning: form may have changed(1)\n");
 	}
 	if ( !$content=~m/<input type="submit" value="See Listings" name="saveProvider">/ ) {
-	    print STDERR "Warning: form may have changed(2)\n";
+	    main::errorMessage("Warning: form may have changed(2)\n");
 	}
 	if ( !$content=~m/<input type="hidden" name="zipCode" value="$code">/ ) {
-	    print STDERR "Warning: form may have changed(3)\n";
+	    main::errorMessage("Warning: form may have changed(3)\n");
 	}
 	if ( !$content=~m/<input type="hidden" name="ziptype" value="new">/ ) {
-	    print STDERR "Warning: form may have changed(4)\n";
+	    main::errorMessage("Warning: form may have changed(4)\n");
 	}
 	if ( !$content=~m/<input type=submit value="Confirm Channel Lineup" name="preview">/ ) {
-	    print STDERR "Warning: form may have changed(5)\n";
+	    main::errorMessage("Warning: form may have changed(5)\n");
 	}
     }
 
@@ -130,14 +129,14 @@ sub getProviders($$$)
 	    my $p;
 	    $p->{id}=$1;
 	    $p->{description}=$2;
-            #print STDERR "provider $1 ($2)\n";
+            #main::debugMessage("provider $1 ($2)\n";
 	    push(@providers, $p);
         }
     }
     if ( !@providers ) {
-	print STDERR "zap2it gave us a page with no service provider options\n";
-	print STDERR "check postal/zip code or www site (maybe they're down)\n";
-	print STDERR "(LWP::UserAgent version is ".$ua->_agent().")\n";
+	main::errorMessage("zap2it gave us a page with no service provider options\n");
+	main::errorMessage("check postal/zip code or www site (maybe they're down)\n");
+	main::errorMessage("(LWP::UserAgent version is ".$ua->_agent().")\n");
 	return(undef);
     }
     return(@providers);
@@ -153,8 +152,8 @@ sub getChannelList($$$$)
 
     my $ua=XMLTV::ZapListings::RedirPostsUA->new('cookie_jar'=>HTTP::Cookies->new());
     if ( 0 && ! $ua->passRequirements($debug) ) {
-	print STDERR "version of ".$ua->_agent()." doesn't handle cookies properly\n";
-	print STDERR "upgrade to 5.61 or later and try again\n";
+	main::errorMessage("version of ".$ua->_agent()." doesn't handle cookies properly\n");
+	main::errorMessage("upgrade to 5.61 or later and try again\n");
 	return(undef);
     }
 
@@ -182,9 +181,9 @@ sub getChannelList($$$$)
     }
 
     if ( !$res->is_success ) {
-	print STDERR "zap2it failed to give us a page: ".$res->code().":".
-	  HTTP::Status::status_message($res->code())."\n";
-	print STDERR "check postal/zip code or www site (maybe they're down)\n";
+	main::errorMessage("zap2it failed to give us a page: ".$res->code().":".
+			 HTTP::Status::status_message($res->code())."\n");
+	main::errorMessage("check postal/zip code or www site (maybe they're down)\n");
 	return(undef);
     }
 
@@ -195,7 +194,7 @@ sub getChannelList($$$$)
 	$err=~s/\s+/ /og;
 	$err=~s/^\s+//og;
 	$err=~s/\s+$//og;
-	print STDERR "ERROR: $err\n";
+	main::errorMessage("ERROR: $err\n");
 	exit(1);
     }
     #$content=~s/>\s*</>\n</g;
@@ -241,19 +240,19 @@ sub getChannelList($$$$)
 	    # img for icon
 	    my $ref=$result->getSRC(2);
 	    if ( !defined($ref) ) {
-		print STDERR "row decode on item 2 failed on '$desc'\n";
+		main::errorMessage("row decode on item 2 failed on '$desc'\n");
 		dumpPage($content);
 		return(undef);
 	    }
 	    else {
-		#print "got channel icon $ref\n";
+		#main::errorMessage("got channel icon $ref\n");
 		$nchannel->{icon}=$ref;
 	    }
 
 	    # <a> gives url that contains station_num
 	    $ref=$result->getHREF(6);
 	    if ( !defined($ref) ) {
-		print STDERR "row decode on item 6 failed on '$desc'\n";
+		main::errorMessage("row decode on item 6 failed on '$desc'\n");
 		dumpPage($content);
 		return(undef);
 	    }
@@ -262,7 +261,7 @@ sub getChannelList($$$$)
 		$nchannel->{stationid}=$1;
 	    }
 	    else {
-		print STDERR "row decode on item 6 href failed on '$desc'\n";
+		main::errorMessage("row decode on item 6 href failed on '$desc'\n");
 		dumpPage($content);
 		return(undef);
 	    }
@@ -274,7 +273,7 @@ sub getChannelList($$$$)
 	    # <a> gives url that contains station_num
 	    my $ref=$result->getHREF(4);
 	    if ( !defined($ref) ) {
-		print STDERR "row decode on item 4 failed on '$desc'\n";
+		main::errorMessage("row decode on item 4 failed on '$desc'\n");
 		dumpPage($content);
 		return(undef);
 	    }
@@ -282,7 +281,7 @@ sub getChannelList($$$$)
 		$nchannel->{stationid}=$1;
 	    }
 	    else {
-		print STDERR "row decode on item 4 href failed on '$desc'\n";
+		main::errorMessage("row decode on item 4 href failed on '$desc'\n");
 		dumpPage($content);
 		return(undef);
 	    }
@@ -297,7 +296,7 @@ sub getChannelList($$$$)
     }
 
     if ( ! @channels ) {
-	print STDERR "zap2it gave us a page with no channels\n";
+	main::errorMessage("zap2it gave us a page with no channels\n");
 	dumpPage($content);
 	return(undef);
     }
@@ -327,7 +326,7 @@ sub dumpPage($)
     my $filename = "ZapListings.dump.$dumpPage_counter";
     local *OUT;
     if (open (OUT, ">$filename")) {
-	print STDERR "dumping HTML page to $filename\n";
+	main::errorMessage("dumping HTML page to $filename\n");
 	print OUT $content
 	  or warn "cannot dump HTML page to $filename: $!";
 	close OUT or warn "cannot close $filename: $!";
@@ -365,7 +364,7 @@ sub passRequirements($$)
     my ($self, $debug)=@_;
     my $haveVersion=$LWP::VERSION;
 
-    print STDERR "requirements check: have $self->_agent(), require 5.61\n" if ( $debug );
+  main::debugMessage("requirements check: have $self->_agent(), require 5.61\n");
 
     if ( $haveVersion=~/(\d+)\.(\d+)/ ) {
 	if ( $1 < 5 || ($1 == 5 && $2 < 61) ) {
@@ -470,7 +469,7 @@ sub summarize($)
     my $self=shift;
 
     if ( defined($self->{Cell}) ) {
-	#print STDERR "warning: cell in row never closed, shouldn't happen\n";
+	#main::errorMessage("warning: cell in row never closed, shouldn't happen\n");
 	return("");
 	#push(@{$self->{Row}}, @{$self->{Cell}->{things}});
 	#delete($self->{Cell});
@@ -498,7 +497,7 @@ sub getSRC($$)
     my @arr=@{$self->{Row}};
     my $thing=$arr[$index-1];
 
-    #print STDERR "item $index : ".XMLTV::ZapListings::Scraper::dumpMe($thing)."\n";
+    #main::errorMessage("item $index : ".XMLTV::ZapListings::Scraper::dumpMe($thing)."\n");
     if ( $thing->{starttag}=~m/img/io ) {
 	return($thing->{attr}->{src}) if ( defined($thing->{attr}->{src}) );
 	return($thing->{attr}->{SRC}) if ( defined($thing->{attr}->{SRC}) );
@@ -513,7 +512,7 @@ sub getHREF($$)
     my @arr=@{$self->{Row}};
     my $thing=$arr[$index-1];
 
-    #print STDERR "item $index : ".XMLTV::ZapListings::Scraper::dumpMe($thing)."\n";
+    #main::errorMessage("item $index : ".XMLTV::ZapListings::Scraper::dumpMe($thing)."\n");
     if ( $thing->{starttag}=~m/a/io) {
 	return($thing->{attr}->{href}) if ( defined($thing->{attr}->{href}) );
 	return($thing->{attr}->{HREF}) if ( defined($thing->{attr}->{HREF}) );
@@ -601,10 +600,10 @@ sub setValue($$$$)
 
     if ( $self->{Debug} ) {
 	if ( defined($hash->{$key}) ) {
-	    print STDERR "replaced value '$key' from '$hash->{$key}' to '$value'\n";
+	    main::errorMessage("replaced value '$key' from '$hash->{$key}' to '$value'\n");
 	}
 	else {
-	    print STDERR "set value '$key' to '$value'\n";
+	    main::errorMessage("set value '$key' to '$value'\n");
 	}
     }
     $hash->{$key}=$value;
@@ -721,7 +720,7 @@ sub scrapehtml($$$)
 	# skipif the split didn't end with a row end </tr>
 	#next if ( !($row=~s/[\n\r\s]*<\/tr>[\n\r\s]*$//iso));
 	$row=~s/<\/tr>.*//so;
-	#print STDERR "working on: $row\n";
+	#main::debugMessage("working on: $row\n");
 	#next if ( !($row=~s/<\/tr>[\n\r\s]*$//iso));
 
 	# ignore if more than one ending </tr> because they signal
@@ -743,7 +742,7 @@ sub scrapehtml($$$)
 	#     CC Stereo  </FONT><FONT face="Helvetica,Arial" size="-2">  (ends at 01:20)
 	#</TD>
 
-	#print STDERR "IN: $rowNumber: $row\n";
+	#main::debugMessage("IN: $rowNumber: $row\n");
 
 	# run it through our row scaper that separates out the html
 	my $result=new XMLTV::ZapListings::ScrapeRow()->parse($row);
@@ -759,7 +758,8 @@ sub scrapehtml($$$)
 	if ( $self->{DebugListings} ) {
 	   $prog->{precomment}=$desc;
  	}
-	print STDERR "ROW: $rowNumber: $desc\n" if ( $self->{Debug} );
+	main::debugMessage("ROW: $rowNumber: $desc\n") if ( $self->{Debug} );
+
 	if ( $desc=~s;^<td><b><text>([0-9]+):([0-9][0-9]) ([AP]M)</text></b></td><td></td>;;io ) {
 	    my $posted_start_hour=scalar($1);
 	    my $posted_start_min=scalar($2);
@@ -795,7 +795,7 @@ sub scrapehtml($$$)
 
 		if ( defined($preRest) && length($preRest) ) {
 		    #if ( $self->{Debug} ) {
-			#print STDERR "prereset: $preRest\n";
+			#main::debugMessage("prereset: $preRest\n");
 		    #}
 		    if ( $preRest=~s;\s*(\*+)\s*$;; ) {
 			$self->setValue(\$prog, "star_rating", sprintf("%d/4", length($1)));
@@ -805,9 +805,8 @@ sub scrapehtml($$$)
 		    }
 		    else {
 			if ( $self->{Debug} ) {
-		           print STDERR "FAILED to decode what we think should be star ratings\n";
-		           print STDERR "\tsource: $htmlsource\n";
-		           print STDERR "\tdecode failed on:'$preRest'\n"
+		           main::debugMessage("FAILED to decode what we think should be star ratings\n");
+			   main::debugMessage("\tsource: $htmlsource\n\tdecode failed on:'$preRest'\n");
 			}
 		    }
 		}
@@ -825,14 +824,14 @@ sub scrapehtml($$$)
 		    # put back reset of the text since sometime the (ends at xx:xx) is tacked on
 		    $desc.="</text></td>";
 		    if ( $self->{Debug} ) {
-			print STDERR "put back details, now have '$desc'\n";
+			main::debugMessage("put back details, now have '$desc'\n");
 		    }
 		}
 	    }
 	    else {
-		print STDERR "FAILED to find endtime\n";
-		print STDERR "\tsource: $htmlsource\n";
-		print STDERR "\thtml:'$desc'\n"
+	      main::errorMessage("FAILED to find endtime\n");
+	      main::errorMessage("\tsource: $htmlsource\n");
+	      main::errorMessage("\thtml:'$desc'\n");
 	    }
 
 	    if ( defined($prog->{end_hour}) ) {
@@ -856,9 +855,8 @@ sub scrapehtml($$$)
 	    }
 	    else {
 		if ( $self->{Debug} ) {
-		    print STDERR "FAILED to find title\n";
-		    print STDERR "\tsource: $htmlsource\n";
-		    print STDERR "\thtml:'$desc'\n";
+		  main::debugMessage("FAILED to find title\n");
+		  main::debugMessage("\tsource: $htmlsource\n\thtml:'$desc'\n");
 		}
 	    }
 	    # <i><text>&quot;</text><a><text>Past Imperfect</text></a><text>&quot;</text></i>
@@ -867,9 +865,8 @@ sub scrapehtml($$$)
 	    }
 	    else {
 		if ( $self->{Debug} ) {
-		    print STDERR "FAILED to find subtitle\n";
-		    print STDERR "\tsource: $htmlsource\n";
-		    print STDERR "\thtml:'$desc'\n";
+		  main::debugMessage("FAILED to find subtitle\n");
+		  main::debugMessage("\tsource: $htmlsource\n\thtml:'$desc'\n");
 		}
 	    }
 
@@ -881,21 +878,20 @@ sub scrapehtml($$$)
 	    }
 	    else {
 		if ( $self->{Debug} ) {
-		    print STDERR "FAILED to find category\n";
-		    print STDERR "\tsource: $htmlsource\n";
-		    print STDERR "\thtml:'$desc'\n";
+		    main::debugMessage("FAILED to find category\n");
+		    main::debugMessage("\tsource: $htmlsource\n\thtml:'$desc'\n");
 		}
 	    }
 
 	    if ( $self->{Debug} ) {
-		print STDERR "PREEXTRA: $desc\n";
+		main::debugMessage("PREEXTRA: $desc\n");
 	    }
 	    my @extras;
 	    while ($desc=~s;<text>\s*(.*?)\s*</text>;;io ) {
 		push(@extras, massageText($1)); #if ( length($1) );
 	    }
 	    if ( $self->{Debug} ) {
-		print STDERR "POSTEXTRA: $desc\n";
+		main::debugMessage("POSTEXTRA: $desc\n");
 	    }
 	    my @leftExtras;
 	    for my $extra (reverse(@extras)) {
@@ -906,7 +902,7 @@ sub scrapehtml($$$)
 		my @notsure;
 		my @sure;
 		my @backup;
-		print STDERR "splitting details '$extra'..\n" if ( $self->{Debug} );
+		main::debugMessage("splitting details '$extra'..\n") if ( $self->{Debug} );
 		my @values;
 		while ( 1 ) {
 		    my $i;
@@ -936,7 +932,7 @@ sub scrapehtml($$$)
 		    }
 		    last if ( !defined($i) );
 
-		    print STDERR "checking detail $i..\n" if ( $self->{Debug} );
+		    main::debugMessage("checking detail $i..\n") if ( $self->{Debug} );
 
 		    # General page about ratings systems, one at least :)
 		    # http://www.attadog.com/splash/rating.html
@@ -1085,13 +1081,13 @@ sub scrapehtml($$$)
 		    # ignore sports event descriptions that include team records
 		    # ex. (10-1)
 		    elsif ( $i=~/^\(\d+\-\d+\)$/o ) {
-			print STDERR "understood program detail, on ignore list: $i\n" if ( $self->{Debug} );
+			main::debugMessage("understood program detail, on ignore list: $i\n") if ( $self->{Debug} );
 			# ignored
 			next;
 		    }
 		    # ignore (Cont'd.) and (Cont'd)
 		    elsif ( $i=~/^\(Cont\'d\.*\)$/io ) {
-			print STDERR "understood program detail, on ignore list: $i\n" if ( $self->{Debug} );
+			main::debugMessage("understood program detail, on ignore list: $i\n") if ( $self->{Debug} );
 			# ignored
 			next;
 		    }
@@ -1113,10 +1109,10 @@ sub scrapehtml($$$)
 			}
 
 			if ( ! $found1 ) {
-			    print STDERR "identified possible candidate for new language $lang in $i\n";
+			  main::statusMessage("identified possible candidate for new language $lang in $i\n");
 			}
 			if ( ! $found2 ) {
-			    print STDERR "identified possible candidate for new language $sub in $i\n";
+			  main::statusMessage("identified possible candidate for new language $sub in $i\n");
 			}
 			$prog->{qualifiers}->{Language}=$lang;
 			$prog->{qualifiers}->{Subtitles}=$sub;
@@ -1143,10 +1139,10 @@ sub scrapehtml($$$)
 				
 				# only print message if one matched and the other didn't
 				if ( ! $found1 && $found2 ) {
-				    print STDERR "identified possible candidate for new language $lang in $i\n";
+				    main::statusMessage("identified possible candidate for new language $lang in $i\n");
 				}
 				if ( ! $found2 && $found1 ) {
-				    print STDERR "identified possible candidate for new language $sub in $i\n";
+				    main::statusMessage("identified possible candidate for new language $sub in $i\n");
 				}
 				if ( $found1 && $found2 ) {
 				    $prog->{qualifiers}->{Language}=$lang;
@@ -1192,7 +1188,7 @@ sub scrapehtml($$$)
 				elsif ( $matches !=0  ) {
 				    # matched 1 or more, warn about rest
 				    for my $sub (@notfound) {
-					print STDERR "identified possible candidate for new language $sub in $i\n";
+					main::statusMessage("identified possible candidate for new language $sub in $i\n");
 				    }
 				}
 			    }
@@ -1215,11 +1211,11 @@ sub scrapehtml($$$)
 
 				if ( $declaration=~/^``/o && $declaration=~/''$/o ) {
 				    if ( $self->{Debug} ) {
-					print STDERR "ignoring what's probably a show reference $i\n";
+					main::debugMessage("ignoring what's probably a show reference $i\n");
 				    }
 				}
 				else {
-				    print STDERR "possible candidate for program detail we didn't identify $i\n"
+				    main::statusMessage("possible candidate for program detail we didn't identify $i\n")
 					unless $warnedCandidateDetail{$i}++;
 				}
 				$success=0;
@@ -1236,17 +1232,17 @@ sub scrapehtml($$$)
 		if ( !$success ) {
 		    if ( @notsure ) {
 			if ( $self->{Debug} ) {
-			    print STDERR "\thtml:'$desc'\n" if ( $self->{Debug} );
-			    print STDERR "\tpartial match on details '$original_extra'\n";
-			    print STDERR "\tsure about:". join(',', @sure)."\n" if ( @sure );
-			    print STDERR "\tnot sure about:". join(',', @notsure)."\n" if ( @notsure );
+			  main::debugMessage("\thtml:'$desc'\n");
+			  main::debugMessage("\tpartial match on details '$original_extra'\n");
+			  main::debugMessage("\tsure about:". join(',', @sure)."\n") if ( @sure );
+			  main::debugMessage("\tnot sure about:". join(',', @notsure)."\n") if ( @notsure );
 			}
 			# we piece the original back using space separation so that the ones
 			# we're sure about are removed
 			push(@leftExtras, join(' ', @backup));
 		    }
 		    else {
-			print STDERR "\tno match on details '".join(',', @backup)."'\n" if ( $self->{Debug} );
+			main::debugMessage("\tno match on details '".join(',', @backup)."'\n") if ( $self->{Debug} );
 			push(@leftExtras, $original_extra);;
 		    }
 		}
@@ -1265,27 +1261,27 @@ sub scrapehtml($$$)
 	    if ( @leftExtras ) {
 		if ( scalar(@leftExtras) != 1 ) {
 		    for (@leftExtras) {
-			print STDERR "scraper failed with left over details: $_\n";
+			main::errorMessage("scraper failed with left over details: $_\n");
 		    }
 		}
 		else {
 		    $self->setValue(\$prog, "desc", pop(@leftExtras));
-		    print STDERR "assuming description '$prog->{desc}'\n" if ( $self->{Debug} );
+		    main::debugMessage("assuming description '$prog->{desc}'\n") if ( $self->{Debug} );
 		}
 	    }
 
 	    #for my $key (keys (%$prog)) {
 		#if ( defined($prog->{$key}) ) {
-		#    print STDERR "KEY $key: $prog->{$key}\n";
+		#    main::errorMessage("KEY $key: $prog->{$key}\n");
 		#}
 	    #}
 
 	    if ( $desc ne "<td><font></font>" &&
 		 $desc ne "<td><font></font><font></td>" ) {
-		print STDERR "scraper failed with left overs: $desc\n";
+		main::errorMessage("scraper failed with left overs: $desc\n");
 	    }
 	    #$desc=~s/<text>(.*?)<\/text>/<text>/og;
-	    #print STDERR "\t$desc\n";
+	    #main::errorMessage("\t$desc\n");
 
 
 	    # final massage.
@@ -1315,7 +1311,7 @@ sub readSchedule($$$$$)
 
     if ( -f "urldata/$stationid/content-$month-$day-$year.html" &&
 	 open(FD, "< urldata/$stationid/content-$month-$day-$year.html") ) {
-	print STDERR "cache enabled, reading urldata/$stationid/content-$month-$day-$year.html..\n";
+	main::statusMessage("cache enabled, reading urldata/$stationid/content-$month-$day-$year.html..\n");
 	my $s=$/;
 	undef($/);
 	$content=<FD>;
@@ -1326,8 +1322,8 @@ sub readSchedule($$$$$)
 	my $ua=XMLTV::ZapListings::RedirPostsUA->new('cookie_jar'=>$self->{cookieJar});
 
 	if ( 0 && ! $ua->passRequirements($self->{Debug}) ) {
-	    print STDERR "version of ".$ua->_agent()." doesn't handle cookies properly\n";
-	    print STDERR "upgrade to 5.61 or later and try again\n";
+	    main::errorMessage("version of ".$ua->_agent()." doesn't handle cookies properly\n");
+	    main::errorMessage("upgrade to 5.61 or later and try again\n");
 	    return(-1);
 	}
 
@@ -1352,9 +1348,9 @@ sub readSchedule($$$$$)
 	}
 
 	if ( !$res->is_success ) {
-	    print STDERR "zap2it failed to give us a page: ".$res->code().":".
-	      HTTP::Status::status_message($res->code())."\n";
-	    print STDERR "check postal/zip code or www site (maybe they're down)\n";
+	    main::errorMessage("zap2it failed to give us a page: ".$res->code().":".
+			     HTTP::Status::status_message($res->code())."\n");
+	    main::errorMessage("check postal/zip code or www site (maybe they're down)\n");
 	    return(-1);
 	}
 	$content=$res->content();
@@ -1364,7 +1360,7 @@ sub readSchedule($$$$$)
 	   $err=~s/\s+/ /og;
 	   $err=~s/^\s+//og;
 	   $err=~s/\s+$//og;
-	   print STDERR "ERROR: $err\n";
+	   main::errorMessage("ERROR: $err\n");
 	   return(-1);
         }
 	if ( -d "urldata" ) {
@@ -1383,26 +1379,26 @@ sub readSchedule($$$$$)
     }
 
     if ( $self->{Debug} ) {
-	print STDERR "scraping html for $year-$month-$day on station $stationid: $station_desc\n";
+	main::debugMessage("scraping html for $year-$month-$day on station $stationid: $station_desc\n");
     }
 
     @{$self->{Programs}}=$self->scrapehtml($content, "$year-$month-$day on station $station_desc (id $stationid)");
     if ( scalar(@{$self->{Programs}}) == 0 ) {
 	unlink($cacheFile) if ( defined($cacheFile) );
 
-	print STDERR "zap2it page format looks okay, but no programs found (no available data yet ?)\n";
+	main::statusMessage("zap2it page format looks okay, but no programs found (no available data yet ?)\n");
 	# return un-retry-able
 	return(-2);
     }
 
     # emit delayed message so we only see it when we succeed
     if ( defined($cacheFile) ) {
-	print STDERR "cache enabled, writing $cacheFile..\n";
+      main::statusMessage("cache enabled, writing $cacheFile..\n");
     }
 
-    print STDERR "Day $year-$month-$day schedule for station $station_desc has:".
-	scalar(@{$self->{Programs}})." programs\n";
-
+  main::statusMessage("Day $year-$month-$day schedule for station $station_desc has:".
+		      scalar(@{$self->{Programs}})." programs\n");
+    
     return(scalar(@{$self->{Programs}}));
 }
 
