@@ -636,7 +636,6 @@ windows_dist ::
 	        troff -mandoc -Tascii $$i | grotty -buo \
 	            | perl -pe 's/Date::Manip[(]3[)]/date_formats.txt/g' \
 	            >$(PREFIX)/doc/man/`basename $$i .1`.txt; \
-
 	set -e; for i in $(INSTALLMAN3DIR)/*; do \
 	        b=`basename $$i .1`; \
 	        if test "$$b" = '*'; then \
@@ -647,7 +646,6 @@ windows_dist ::
 	        troff -mandoc -Tascii $$i | grotty -buo \
 	            | perl -pe 's/Date::Manip[(]3[)]/date_formats.txt/g' \
 	            >$(PREFIX)/doc/man/`basename $$i .1`.txt; \
-
 	done
 	set -e; \
 	out=$(PREFIX)/doc/man/date_formats.txt; \
