@@ -27,12 +27,12 @@ BEGIN {
     if ($ENV{XMLTV_TK}
 	and (defined($ENV{DISPLAY}) || $^O eq 'MSWin32')
 	and eval { require Tk }) {
-	require XMLTV::AskTk; XMLTV::AskTk->import;
-	*XMLTV::Ask:: = *XMLTV::AskTk::;
+	require XMLTV::Ask::Tk; XMLTV::Ask::Tk->import;
+	*XMLTV::Ask:: = *XMLTV::Ask::Tk::;
     }
     else {
-	require XMLTV::AskTerm; XMLTV::AskTerm->import;
-	*XMLTV::Ask:: = *XMLTV::AskTerm::;
+	require XMLTV::Ask::Term; XMLTV::Ask::Term->import;
+	*XMLTV::Ask:: = *XMLTV::Ask::Term::;
     }
 }
 

@@ -1,16 +1,14 @@
 # A few GUI routines for asking the user questions.
 #
-# $Id$
 #
 
-package XMLTV::AskTk;
+package XMLTV::Ask::Tk;
 use strict;
 use base 'Exporter';
 our @EXPORT = qw(ask
-     ask_password
-                 ask_question               askQuestion
-                 ask_boolean_question       askBooleanQuestion
-                 ask_many_boolean_questions askManyBooleanQuestions
+                 askQuestion
+                 askBooleanQuestion
+                 askManyBooleanQuestions
                  say
                 );
 use Carp qw(croak);
@@ -18,12 +16,12 @@ use Carp qw(croak);
 BEGIN {
     eval { require Log::TraceMessages };
     if ($@) {
-  *t = sub {};
-  *d = sub { '' };
+	*t = sub {};
+	*d = sub { '' };
     }
     else {
-  *t = \&Log::TraceMessages::t;
-  *d = \&Log::TraceMessages::d;
+	*t = \&Log::TraceMessages::t;
+	*d = \&Log::TraceMessages::d;
     }
 }
 
@@ -35,20 +33,17 @@ my $middle_frame;
 my $bottom_frame;
 my $mid_bottom_frame;
 
-sub ask( $;$ );
-sub ask_password( $ );
-sub ask_question( $$@ );              sub askQuestion( $$@ );
-sub ask_boolean_question( $$ );       sub askBooleanQuestion( $$ );
-sub ask_many_boolean_questions( $@ ); sub askManyBooleanQuestions( $@ );
-sub ask_boolean_options( $$$@ );      sub askBooleanOptions( $$$@ );
+sub ask( $ );
+sub askQuestion( $$@ );
+sub askBooleanQuestion( $$ );
+sub askManyBooleanQuestions( $@ );
+sub askBooleanOptions( $$$@ );
 sub say( $ );
 
-sub ask( $;$ ) {
+sub ask( $ ) {
     my $question = shift;
-    my $show = shift; $show = "" if not defined $show;
-    
     my $textbox;
-    
+	
     $main_window = MainWindow->new;
 
     $main_window->title("Question");
@@ -58,24 +53,25 @@ sub ask( $;$ ) {
     $top_frame    = $main_window->Frame()->pack;
     $middle_frame = $main_window->Frame()->pack;
     $bottom_frame = $main_window->Frame()->pack(-side => 'bottom');
-  
+	
     $top_frame->Label(-height => 2)->pack;
-  
+	
     $top_frame->Label(-text => $question)->pack;
-  
-    my $ans;
-    
+	
     $bottom_frame->Button(-text    => "OK",
-        -command => sub { $ans = $textbox->get(); $main_window->destroy;},
-        -width    => 10
-       )->pack(-padx => 2, -pady => 4);
-                
-    $textbox = $middle_frame->Entry(-show => $show)->pack();
+			  -command => sub { goto(answer_ok2) },
+			  width    => 10
+			 )->pack(padx => 2, pady => 4);
+								
+    $textbox = $middle_frame->Entry()->pack();
     MainLoop();
-  
+	
+  answer_ok2:
+    my $ans = $textbox->get();
+    $main_window->destroy;
     return $ans;
 }
-sub ask_password( $ ) { ask($_[0], "*") }
+
 
 # Ask a question where the answer is one of a set of alternatives.
 #
@@ -86,7 +82,7 @@ sub ask_password( $ ) { ask($_[0], "*") }
 #
 # Returns one of the choices, or undef if input could not be read.
 #
-sub ask_question( $$@ ) {
+sub askQuestion( $$@ ) {
     my $question = shift; die if not defined $question;
     my $default = shift; die if not defined $default;
     my @options = @_; die if not @options;
@@ -95,7 +91,6 @@ sub ask_question( $$@ ) {
       if not grep { $_ eq $default } @options;
     return askBooleanOptions( $question, $default, 0, @options );
 }
-sub askQuestion( $$@ ) { &ask_question }
 
 # Ask a yes/no question.
 #
@@ -104,10 +99,10 @@ sub askQuestion( $$@ ) { &ask_question }
 #
 # Returns true or false, or undef if input could not be read.
 #
-sub ask_boolean_question( $$ ) {
-    my ($text, $default) = @_;  
+sub askBooleanQuestion( $$ ) {
+    my ($text, $default) = @_;	
     t "asking question $text, default $default";
-  
+	
     $main_window = MainWindow->new;
 
     $main_window->title('Question');
@@ -117,27 +112,35 @@ sub ask_boolean_question( $$ ) {
     $top_frame    = $main_window->Frame()->pack;
     $middle_frame = $main_window->Frame()->pack;
     $bottom_frame = $main_window->Frame()->pack(-side => 'bottom');
-  
+	
     $top_frame->Label(-height => 2)->pack;
     $top_frame->Label(-text => $text)->pack;
-  
-    my $ans = 0;
-    
+	
     $bottom_frame->Button(-text    => "Yes",
-        -command => sub { $ans = 1; $main_window->destroy; },
-        -width => 10,
-       )->pack(-side => 'left', -padx => 2, -pady => 4);
-  
+			  # -command => sub {
+                          #     recreate_frames;
+			  #     draw_download_channels();
+                          # },
+			  -command => sub { goto(answer_yes) },
+			  width => 10,
+			 )->pack(-side => 'left', padx => 2, pady => 4);
+	
     $bottom_frame->Button(-text    => "No",
-        -command => sub { $ans = 0; $main_window->destroy; },
-        -width => 10
-       )->pack(-side => 'left', -padx => 2, -pady => 4);
-  
+			  # -command => sub { exit(0) },
+			  -command => sub { goto(answer_no) },
+			  width => 10
+			 )->pack(-side => 'left', padx => 2, pady => 4);
+	
     MainLoop();
-  
-    return $ans;
+	
+  answer_no:
+    $main_window->destroy;
+    return 0;
+	
+  answer_yes:
+    $main_window->destroy;
+    return 1;
 }
-sub askBooleanQuestion( $$ ) { &ask_boolean_question }
 
 # Ask yes/no questions with option 'default to all'.
 #
@@ -147,14 +150,13 @@ sub askBooleanQuestion( $$ ) { &ask_boolean_question }
 # Returns: lots of booleans, one for each question.  If input cannot
 # be read, then a partial list is returned.
 #
-sub ask_many_boolean_questions( $@ ) {
+sub askManyBooleanQuestions( $@ ) {
     my $default=shift;
     my @options = @_;
     return askBooleanOptions('', $default, 1, @options);
 }
-sub askManyBooleanQuestions( $@ ) { &ask_many_boolean_questions }
 
-sub ask_boolean_options( $$$@ ) {
+sub askBooleanOptions( $$$@ ) {
     my $question=shift;
     my $default=shift;
     my $allowedMany=shift;
@@ -197,13 +199,13 @@ sub ask_boolean_options( $$$@ ) {
 	$select_all_button = $mid_bottom_frame->Button
 	  (-text => 'Select All',
 	   -command => sub { $listbox->selectionSet(0, 1000) },
-	   -width => 10,
+	   width => 10,
 	  )->pack(-side => 'left');
 	
 	$select_none_button = $mid_bottom_frame->Button
 	  (-text => 'Select None',
 	   -command => sub { $listbox->selectionClear(0, 1000) },
-	   -width => 10,
+	   width => 10,
 	  )-> pack(-side => 'right');
     }
     else {
@@ -215,18 +217,17 @@ sub ask_boolean_options( $$$@ ) {
 	
     $bottom_frame = $main_window->Frame()->pack(-side => 'bottom');
 	
-  my @cursel;
-  
     $bottom_frame->Button(-text    => 'OK',
-			  -command => sub { @cursel = $listbox->curselection; $main_window->destroy; },
-			  -width    => 10,
-			 )->pack(-padx => 2, -pady => 4);
+			  -command => sub { goto(answer_ok); },
+			  width    => 10,
+			 )->pack(padx => 2, pady => 4);
 								
     MainLoop();
 
+  answer_ok:
     if( $allowedMany ) {
 	my @choices;
-	my @choice_numbers = @cursel;
+	my @choice_numbers = $listbox->curselection;
 			
 	$i=0;
 	foreach (@options) {
@@ -238,41 +239,43 @@ sub ask_boolean_options( $$$@ ) {
 	    }
 	    $i++;
 	}
-	
+			
+	$main_window->destroy;
 	return @choices;
 	
     }
     else {
-	my $ans = $options[$cursel[0]];
-	
+	my $ans = $options[$listbox->curselection];
+	$main_window->destroy;
 	return $ans;
     }
 }
-sub askBooleanOptions( $$$@ ) { &ask_boolean_options }
 
 sub say( $ ) {
-  my $question = shift;
-  
-  $main_window = MainWindow->new;
+    my $question = shift;
+	
+    $main_window = MainWindow->new;
 
-  $main_window->title("Information");
-  $main_window->minsize(qw(400 250));
-  $main_window->geometry('+250+150');
+    $main_window->title("Information");
+    $main_window->minsize(qw(400 250));
+    $main_window->geometry('+250+150');
 
-  $top_frame    = $main_window->Frame()->pack;
-  $middle_frame = $main_window->Frame()->pack;
-  $bottom_frame = $main_window->Frame()->pack(-side => 'bottom');
-  
-  $top_frame->Label(-height => 2)->pack;
-  $top_frame->Label(-text => $question)->pack;
-  
-  $bottom_frame->Button(-text    => "OK",
-      -command => sub { $main_window->destroy; },
-      -width    => 10,
-     )->pack(-padx => 2, -pady => 4);
-  
-  MainLoop();
-    
+    $top_frame    = $main_window->Frame()->pack;
+    $middle_frame = $main_window->Frame()->pack;
+    $bottom_frame = $main_window->Frame()->pack(-side => 'bottom');
+	
+    $top_frame->Label(-height => 2)->pack;
+    $top_frame->Label(-text => $question)->pack;
+	
+    $bottom_frame->Button(-text    => "OK",
+			  -command => sub { goto(answer_ok3) },
+			  width    => 10,
+			 )->pack(padx => 2, pady => 4);
+	
+    MainLoop();
+	
+  answer_ok3:
+    $main_window->destroy;
 }
 
 
@@ -280,11 +283,11 @@ sub indexArray($@)
 {
     my $s=shift;
     my @array = @_;
-  
+	
     for (my $i = 0; $i < $#array; $i++) {
-  return $i if $array[$i] eq $s;
+	return $i if $array[$i] eq $s;
     }
-  
+	
     return -1;
 }
 

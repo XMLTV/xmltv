@@ -2,16 +2,14 @@
 # and also by Makefile.PL, so this file should not depend on any
 # nonstandard libraries.
 #
-# $Id$
 #
-package XMLTV::AskTerm;
+package XMLTV::Ask::Term;
 use strict;
 use base 'Exporter';
 our @EXPORT = qw(ask
-		 ask_password
-                 ask_question               askQuestion
-                 ask_boolean_question       askBooleanQuestion
-                 ask_many_boolean_questions askManyBooleanQuestions
+                 askQuestion
+                 askBooleanQuestion
+                 askManyBooleanQuestions
                  say
                 );
 use Carp qw(croak carp);
@@ -30,10 +28,9 @@ BEGIN {
 }
 
 sub ask( $ );
-sub ask_password( $ );
-sub ask_question( $$@ );              sub askQuestion( $$@ );
-sub ask_boolean_question( $$ );       sub askBooleanQuestion( $$ );
-sub ask_many_boolean_questions( $@ ); sub askManyBooleanQuestions( $@ );
+sub askQuestion( $$@ );
+sub askBooleanQuestion( $$ );
+sub askManyBooleanQuestions( $@ );
 sub say( $ );
 
 sub ask( $ )
@@ -45,10 +42,6 @@ sub ask( $ )
     my $r = <STDIN>;
     for ($r) {
 	return undef if not defined;
-
-	# Handle backspace, for broken terminals that don't.
-	s/.\x08//g;
-
 	s/^\s+//;
 	s/\s+$//;
 	return $_;
@@ -81,7 +74,7 @@ sub match( $@ ) {
 #
 # Returns one of the choices, or undef if input could not be read.
 #
-sub ask_question( $$@ )
+sub askQuestion( $$@ )
 {
     my $question=shift(@_); die if not defined $question;
     chomp $question;
@@ -99,15 +92,7 @@ sub ask_question( $$@ )
 
     # Check no duplicates (required for later processing, maybe).
     my %seen;
-    my @options_new;
-    foreach (@options) {
-	if ($seen{$_}++) {
-	    carp "removing duplicate option $_";
-	    next;
-	}
-	push @options_new, $_;
-    }
-    @options = @options_new;
+    foreach (@options) { die "duplicate option $_" if $seen{$_}++ }
 
     my $options_size = length("@options");
     t "size of options: $options_size";
@@ -174,7 +159,6 @@ sub ask_question( $$@ )
 	}
     }
 }
-sub askQuestion( $$@ ) { &ask_question }
 
 # Ask a yes/no question.
 #
@@ -183,7 +167,7 @@ sub askQuestion( $$@ ) { &ask_question }
 #
 # Returns true or false, or undef if input could not be read.
 #
-sub ask_boolean_question( $$ )
+sub askBooleanQuestion( $$ )
 {
     my ($text, $default) = @_;
     my $r = askQuestion($text, ($default ? 'yes' : 'no'), 'yes', 'no');
@@ -192,7 +176,6 @@ sub ask_boolean_question( $$ )
     return 0 if $r eq 'no';
     die;
 }
-sub askBooleanQuestion( $$ ) { &ask_boolean_question }
 
 # Ask yes/no questions with option 'default to all'.
 #
@@ -202,7 +185,7 @@ sub askBooleanQuestion( $$ ) { &ask_boolean_question }
 # Returns: lots of booleans, one for each question.  If input cannot
 # be read, then a partial list is returned.
 #
-sub ask_many_boolean_questions( $@ )
+sub askManyBooleanQuestions( $@ )
 {
     my $default = shift;
 
@@ -237,7 +220,6 @@ sub ask_many_boolean_questions( $@ )
     }
     return @r;
 }
-sub askManyBooleanQuestions( $@ ) { &ask_many_boolean_questions }
 
 sub say( $ )
 {
@@ -246,22 +228,5 @@ sub say( $ )
     print STDERR "$question\n";
 }
 
-sub ask_password( $ ) {
-    my $prompt = shift;
-    chomp $prompt;
-    $prompt .= ' ' if $prompt !~ /\s$/;
-    require Term::ReadKey;
-    Term::ReadKey::ReadMode('noecho');
-    print STDERR $prompt;
-    my $r = <STDIN>;
-    print STDERR "\n";
-    Term::ReadKey::ReadMode('normal');
-    for ($r) {
-	return undef if not defined;
-	s/^\s+//;
-	s/\s+$//;
-	return $_;
-    }
-}
 
 1;
