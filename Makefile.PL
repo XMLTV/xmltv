@@ -682,14 +682,15 @@ windows_dist ::
 	fi
 	$(MAKE) install
 	perl -MExtUtils::Command -e mv $(INSTALLPLAINDOC) $(PREFIX)/doc/
-        perl -MExtUtils::Command -e rm_r $(PREFIX)/share/doc
-        perl -MExtUtils::Command -e mkpath $(PREFIX)/doc/man
-
-        # Convert the manual pages to plain text.  A bit roundabout,
-        # this, we could just use pod2text to start with.  But since
-        # 'make' generates troff documentation anyway this code is
-        # easier.
-        #
+	perl -MExtUtils::Command -e rm_r $(PREFIX)/share/doc
+	perl -MExtUtils::Command -e mkpath $(PREFIX)/doc/man
+	# Convert the manual pages to plain text.  A bit roundabout,
+	# this, we could just use pod2text to start with.  But since
+	# 'make' generates troff documentation anyway this code is
+	# easier.
+	#
+	echo looking in $(INSTALLMAN1DIR)
+	ls -l $(INSTALLMAN1DIR)
 	set -e; for i in $(INSTALLMAN1DIR)/*; do \
 	        b=`basename $$i .1`; \
 	        if test "$$b" = '*'; then \
@@ -700,6 +701,7 @@ windows_dist ::
 	        troff -mandoc -Tascii $$i | grotty -buo \
 	            | perl -pe 's/Date::Manip[(]3[)]/date_formats.txt/g' \
 	            >$(PREFIX)/doc/man/`basename $$i .1`.txt; \
+        done
 	set -e; for i in $(INSTALLMAN3DIR)/*; do \
 	        b=`basename $$i .1`; \
 	        if test "$$b" = '*'; then \
@@ -720,7 +722,7 @@ windows_dist ::
 	     "depending on your Windows version you will need to quote" \
 	     "the % characters on the command line somehow (see" \
 	     "README.win32)." | fmt >$$out; \
-        echo >>$$out; \
+	echo >>$$out; \
 	(perldoc -u Date::Manip | perl -ne 'BEGIN { print "\n=pod\n\n" } print if (/^The format options are:/ .. /^=/) and not /^=/' | pod2text) >>$$out
 	perl -MExtUtils::Command -e rm_rf $(INSTALLBIN) $(PREFIX)/lib/ $(INSTMANDIR) $(INSTALLMAN3DIR)
 	perl -MExtUtils::Command -e cp xmltv.dtd $(PREFIX)
