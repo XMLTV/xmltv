@@ -11,15 +11,14 @@
 # The channel guide needs to be in XMLTV format.
 #
 # syntax
-#       tvcheck guide.xml shows.xml
-#
-# The first argument is an XMLTV listings file, the second a 'shows'
-# list as described in README.tvcheck.  One or both arguments can be
-# omitted - the filenames above are defaults.
+#       tvcheck <guide.xml <shows.xml>>
 #
 # (C)2001 - Robert Eden, free to use under the GNU License.
 #
 #  Robert Eden - reden@cpan.org
+#  	
+#     See cvs logs entries for module history
+#
 #
 
 use XML::Simple;
@@ -32,196 +31,252 @@ use Lingua::Preferred qw(which_lang);
 #
 select STDERR; $|=1;
 select STDOUT; $|=1;
-@WEEKDAY  = qw (Su Mo Tu We Th Fr Sa);
+@WEEKDAY  = qw (Sun Mon Tue Wed Thu Fri Sat);
+
 $GUIDE_XML= shift || 'guide.xml';
 $SHOW_XML = shift || 'shows.xml';
+$TODAY    = (localtime())[6];
 
 #
 # Global Vars
 #
-my %chan;   # channel list ( channel-id key )
-my @guide;  # tv schedule
-my %guide;  # tv schedule by title (title key), value reference to @guide member
-my @shows;  # list of shows to check
-my @lang ;  # preferred languages
+my @guide;     # episode list ( TV Schedule )
+my %g_titles;  # tv schedule by title (title key), value reference to @guide member
+my %g_time;    # tv schedule by channel/time.
+
+my %chan;      # channel list ( channel-id key )
+
+my @shows;     # list of shows to check
+my %sh_time;   # show list by channel,date+time
+
+my @lang ;     # preferred languages
 
 #
 # Load input files
 #
 print "Loading xml guide info\n";
 my $xml = XMLTV::read_data($GUIDE_XML);
-%chan   = %{$xml -> [2] };
-@guide  = @{$xml -> [3] };
+%chan   = %{$xml->[2] };
+@guide  = @{$xml->[3] };
 
 print "Loading xml show info\n";
-$xml = XMLin($SHOW_XML, searchpath => "." );
-@shows = @{$xml -> {shows}};
-@lang  = @{$xml -> {lang}};
-die "No Preferred Languages found in $SHOW_XML\n" unless @lang;
+$xml = XMLin($SHOW_XML, searchpath => ".", forcearray => 1 );
+@shows = @{$xml->{shows}};
+@lang  = @{$xml->{lang}};
 
 #
-# Build an title hash from XMLTV data
+# Build an indexes for Episode Data
 #
-print "Building title hash\n";
-foreach $episode (@guide)
+print "Building Episode Indexes\n";
+foreach $ep (@guide)
 {
-    foreach (@{$episode -> {title}})
-    {
-        push @{$guide{lc($_->[0])}}, $episode;
-    }
-}
+    $ep->{displayed} = 0;
 
 #
-# Process Shows
+# Show by title...
 #
-print "Processing shows\n\n\n";
+    foreach (@{$ep->{title}})
+    {
+        push @{$g_titles{lc($_->[0])}}, $ep;
+    }
+
+#
+# Show by Channel/Date/Time ( used to check show slot )
+#
+# Lots of possible problems here
+#    XMLTV format allows partial dates.  They don't help us, Either YYYYMMDDHHMM or skip!
+#    We should check time zone, but doing TZ conversion would take a lot of time. For now,
+#        assume guide times are local times.  At least here.
+#    In both of these cases, the episode would still show up as "other episodes" just not a match.
+#    Also Assume one episode starts at a channel/date/hhmm. If not, keep the last.
+#
+        if ( $ep->{start} =~ /^(\d{8})(\d{4})/ )
+        {
+           $g_time{$ep->{channel}}{$1}{$2} = $ep;
+        }
+} # Building episode indexes
+
+#
+# Convert show list to date/time
+#
+print "Computing show time index\n";
 foreach $show (@shows)
 {
-    my $title = $show -> {title};
-    
-    print "Checking $title\n";
-    $title = lc($title);
-
-#
-# deal with spelling errors, or show missing
-#
-    unless ( exists $guide{$title} ) 
+    my $start;
+    if ($TODAY == $show->{day})
     {
-        print "  "x5,
-              $WEEKDAY[$show -> {day}]                ,",",
-                       $show -> {hhmm}                ,",",
-                       $show -> {len}                 ,",",
-                       get_text($chan{ $show -> {channel}}),
-                 "\n";
-        print " "x40,"Can't find <$title>\n";
+       $start=ParseDate(sprintf("Today at %s:%s",substr($show->{hhmm},0,2),
+                                                    substr($show->{hhmm},2,2)));
+    }
+    else
+    {
+       $start=ParseDate(sprintf("next %s at %s:%s",$WEEKDAY[$show->{day}],
+                                                      substr($show->{hhmm},0,2),
+                                                      substr($show->{hhmm},2,2)));
+    }
+    
+    unless ($start)
+    {
+        warn "Unable to get time for $show->{title}\n";
         next;
     }
 
+    $show->{mmdd} = UnixDate( $start, "%Y%m%d");
+    $sh_time{$start}{$show->{channel}} = $show;
+} #build sh_time index
+
 #
-# scan through matching episodes
+# let the games begin... process shows!
 #
-# flag values: 0= extra episode
-#              1= ignored episode (timeonly or dayonly option set)
-#              2= matched show
-#
-    my $bad=0;
-    my $hit=0;
-    foreach $episode  ( @{$guide{$title}} )
+print "Processing shows\n\n";
+foreach $start (sort keys %sh_time)
+{
+    foreach $chan (sort keys %{$sh_time{$start}})
     {
-        $episode -> {flag}=0;
+        my $show = $sh_time{$start}{$chan};
+        
+#
+# See what episode is on at that time
+#
+        my $ep = find_episode($show);
+        if (!defined $ep)
+        {
+           printf "%-60s **** NO GUIDE DATA ****\n",sh_summary($show);
+           next;
+        }
+        elsif ( lc(get_text($ep->{title})) ne lc($show->{title} ))
+        {
+           printf "%-50s **** wrong show in slot **** \n",sh_summary($show);
+           print " "x10,ep_summary($ep),"\n";
+        }
+        else
+        {
+            $ep->{displayed}=$show;
+            print ep_summary($ep),"\n";
+            if ( !$show->{anylen} && $show->{len} ne $ep->{len} )
+            {
+                print "     ***** LENGTH ALERT ***** Expected $show->{len} got $ep->{len}\n";
+            }
+        }
+        
 
 #
-# compute times for this episode
+# See if the show is on at other times
 #
-      ( $episode -> {mmdd},
-        $episode -> {hhmm},
-        $episode -> {day}  )= UnixDate( ParseDate( $episode -> {start}),
-                                        "%m%d",
-                                        "%H%M",
-                                        "%w");
-        $episode -> {day}   = $episode -> {day} % 7; # fix day to start 0=sunday
-                                          
-                                                    
-        $episode -> {len}  = Delta_Format( DateCalc( $episode -> {start},
-                                                     $episode -> {stop} ),
-                                                     0, "%mh" );
-#
-# Validate Channel
-#
-        if ( $episode -> {channel} != $show -> {channel} )
-        {
-            if ( exists $show -> {anychan} )
-            {
-               $bad =1;
-            }
-            else
-            {
-                $episode -> {flag} = 1;
-	    }
-            next;
-        }
-#
-# Validate Day
-#
-        if ( $episode -> {day} != $show -> {day} )
-        {
-            if ( exists $show -> {dayonly} )
-            {
-                $episode -> {flag} = 1;
-                next;
-            }
-            else
-            {
-                $bad =1;
-                next;
-            }
-        }
-#
-# Validate Time
-#
-        if ( $episode -> {hhmm} ne $show -> {hhmm} )
-        {
-            if ( exists $show -> {timeonly} )
-            {
-                $episode -> {flag} = 1;
-            }
-            else
-            {
-                $bad =1;
-            }
-            next;
-        }
-#
-# Validate Length
-#
-        if ( $episode -> {len} ne $show -> {len} )
-        {
-            if ( $show -> {len} == 0 )
-            {
-                $episode -> {flag} = 1;
-                next;
-            }
-            else
-            {
-                $bad =1;
-            }
-        }
-
-    $hit++;
-    $episode -> {flag} = 2;
-    } # episode scan
-
-#
-# Print found shows ( if needed )
-#
-    if ($bad or $hit != 1 )
+    foreach $ep ( @{$g_titles{lc($show->{title})}})
     {
-        print "  "x5,
-              $WEEKDAY[$show -> {day}]                ,",",
-                       $show -> {hhmm}               ,",",
-                       $show -> {len}                 ,",",
-                       get_text($chan{ $show -> {channel}}),
-                 "\n";
+        next if ($ep->{displayed} eq $show); # already displayed
 
-        print "  "x20," Timeslot Missing\n" if $hit == 0;
+#
+# check channel
+#
+        next if ( !$show->{anychan} && $chan ne $ep->{channel} );
 
-        foreach $episode  ( @{$guide{$title}} )
-        {
-            next if $episode -> {flag} == 1;
-            print "  "x20,
-                      ( $episode -> {flag} == 2 ? "*":" "),
-                        $episode -> {mmdd}                ,",",
-               $WEEKDAY[$episode -> {day}]                ,",",
-                        $episode -> {hhmm}                ,",",
-                        $episode -> {len}                 ,",",
-                        get_text($chan{ $episode -> {channel}}),",",
-			'"',get_text( $episode -> {"sub-title"} ),'"',
-			($episode -> {"previously-shown"} ? "(R)" : "" ),
-                     "\n";
-        } # episode print
-    } # print error report
 
-} # show loop
+#
+# check day
+#
+        gen_ep_dates($ep) unless (exists $ep->{day});
+        next if ( $show->{dayonly} && $WEEKDAY[$show->{day}] ne $ep->{day});
+
+#
+# check time
+#
+        next if ( $show->{timeonly} && $show->{hhmm} ne $ep->{hhmm});
+
+#
+# ok, guess we're interested in it, print it
+#
+        print " "x5,ep_summary($ep,1),"\n";
+    } # extra episode scan
+
+  print "\n";
+  } # show chan loop
+} # show time loop
+
+#
+# That's it, have a nice day
+#
+exit 0;
+
+#
+# Generate a few extra episode dates ( in a subroutine to make changes easier )
+#
+sub gen_ep_dates
+{
+   my $ep = shift;
+   my $date1= ParseDate($ep->{start});
+   my $date2= ParseDate($ep->{stop});
+    
+   ($ep->{hhmm}, $ep->{day}, $ep->{mmdd}) = UnixDate( $date1,"%H%M","%a","%m%d");
+    $ep->{len} = Delta_Format( DateCalc( $date1, $date2), 0,"%mh");
+}
+
+#
+# ep_summary
+#
+# Print a one-line summary of the specified episode  ( in a subroutine to make changes easier )
+#
+sub ep_summary
+{
+    my $ep   = shift || die "ep_summary, how about a episode fella!";
+    my $flag = shift || 0;
+    
+    gen_ep_dates($ep) unless (exists $ep->{day});
+
+    return join(" ",$ep->{day},
+                   $ep->{mmdd},
+                   "$ep->{hhmm}/$ep->{len}",
+                   get_text($chan{ $ep->{channel}}),
+        		   ($flag ? "" : get_text( $ep->{title} ) ),
+        		    '"'.get_text( $ep->{"sub-title"} ).'"',
+        			($ep->{"previously-shown"} ? "(R)" : "" ));
+} # ep_summary
+
+#
+# sh_summary
+#
+# Print a one-line summary of the specified show  ( in a subroutine to make changes easier )
+#
+sub sh_summary
+{
+    my $show = shift;
+    return join(" ",$WEEKDAY[$show->{day}],
+                          substr($show->{mmdd},4),
+                          "$show->{hhmm}/$show->{len}",
+                          get_text($chan{ $show->{channel}}),
+                          $show->{title},
+                     );
+}
+
+#
+# find_episode
+#
+# given a pointer to a show ( with channel/date/time info) see what's playing then.
+# Scan through start times on a specified day and report the last episode not greater than our start time.
+#
+# There are midnight issues there ( a 2 hour 11pm show will not be found for a requested midnight start ), but
+# I'm not sure it's worth the performance penalty of scanning through multiple days.
+#
+# Returns undef if no episodes are found (or all are greater, see above)  This is signifies no guide info
+#
+sub find_episode
+{
+    my $show = shift || die "find_episode(show), show to match please";
+    my $chan = $show->{channel};
+    my $mmdd = $show->{mmdd};
+    my $hhmm = $show->{hhmm};
+
+    my $a;
+    foreach $key ( sort keys %{$g_time{$chan}{$mmdd}} )
+    {
+        last if $key gt $hhmm;
+        $a=$key;
+    }
+
+    return undef unless defined $a;
+    return $g_time{$chan}{$mmdd}{$a};
+} # find_episode
 
 #
 # get_text
@@ -233,15 +288,16 @@ foreach $show (@shows)
 #
 sub get_text
 {
-   my $txt_ptr=shift || die "get_text, how about a pointer fella!\n";
+   my $txt_ptr=shift || return "";
    my %values;
 
    foreach (@$txt_ptr)
    {
-      my $key = $_ -> [1] || "unknown";
+      my $key = $_->[1] || "unknown";
       next if exists $values{$key}; # only keep first value for a language
-      $values{$key} = $_ -> [0];
+      $values{$key} = $_->[0];
    }
    return $values{ which_lang( \@lang, [ keys %values ] ) };
 
 } #get_text
+
