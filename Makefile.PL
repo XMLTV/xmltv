@@ -506,7 +506,7 @@ windows_dist ::
 	# The following command will not be necessary when the source
 	# tree was checked out on a DOSish system.
 	#
-	find $(PREFIX) -type f | xargs unix2dos
+	find $(PREFIX) -type f ! -name \*.jpg | xargs unix2dos
 	mv -vi $(PREFIX)/doc/README* $(PREFIX)
 	mv -vf $(PREFIX)/README.win32 $(PREFIX)/README
 	@echo
