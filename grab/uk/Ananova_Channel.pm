@@ -18,6 +18,16 @@ sub new {
     push @all, $self;
     return $self;
 }
+sub del {
+    my $self = shift;
+    @all = grep { $_ ne $self } @all;
+    foreach my $h (\%idx_a, \%idx_x) {
+	foreach (keys %$h) {
+	    delete $h->{$_} if $h->{$_} eq $self;
+	}
+    }
+    # Okay the object still exists, but it's not referenced anywhere.
+}
 
 # Accessors for individual channel.
 
