@@ -8,7 +8,12 @@ source.
 
 =head1 SYNOPSIS
 
-tv_grab_us_gist [--help] [--output FILE] [--days N] [--offset N] [--quiet]
+tv_grab_us_gist --help
+
+tv_grab_us_gist [--config-file FILE] --configure
+
+tv_grab_us_gist [--config-file FILE] [--output FILE] [--days N] [--offset N]
+                [--quiet]
 
 =head1 DESCRIPTION
 
@@ -47,6 +52,13 @@ Once you have set up the account and configured the grabber, no more
 manual intervention should be necessary.
 
 =head1 OPTIONS
+
+B<--configure> Prompt for which stations to download and write the
+configuration file.
+
+B<--config-file FILE> Set the name of the configuration file, the
+default is B<~/.xmltv/tv_grab_us_gist.conf>.  This is the file written
+by B<--configure> and read when grabbing.
 
 B<--output FILE> write to FILE rather than standard output.
 
@@ -138,27 +150,83 @@ sub get_deflate( $ ) {
 use XMLTV::Grab_XML;
 package Grab_XML_us_gist;
 use base 'XMLTV::Grab_XML';
+sub configure();
 
 use Date::Manip;
+use XMLTV::Ask;
+use XMLTV::Config_file;
+use XMLTV::TZ qw(tz_to_num);
 
-# Todo: perhaps we should internationalize messages and docs?
+# Main program.  Get some of the options (but most are handled in the
+# superclass).
+#
+use Getopt::Long;
+my $opt_configure = 0;
+my $opt_config_file;
+Getopt::Long::Configure('pass_through');
+my $r = GetOptions('configure'     => \$opt_configure,
+		   'config-file=s' => \$opt_config_file);
+my $config_file
+  = XMLTV::Config_file::filename($opt_config_file, 'tv_grab_us_gist');
+my ($userid, $tz); # set by reading config
+if ($opt_configure) {
+    die Grab_XML_us_gist->usage_msg() if @ARGV;
+    configure();
+}
+else {
+    Grab_XML_us_gist->go();
+}
+exit();
+
+sub configure() {
+    XMLTV::Config_file::check_no_overwrite($config_file);
+    # We might as well use the globals $userid and $tz here.
+    for (;;) {
+	$userid = ask('Enter your gist.com user id (a number): ');
+	die "failed to read response\n" if not defined $userid;
+	last if $userid =~ /^\d+$/;
+	print "bad user id, please enter a string of digits\n";
+    }
+    my $tz_str;
+    for (;;) {
+	$tz_str = ask('What timezone should be used? ');
+	die "failed to read response\n" if not defined $tz_str;
+	$tz = tz_to_num($tz_str);
+	if (defined $tz) {
+	    print "Using timezone $tz_str, $tz.\n";
+	    last;
+	}
+	print "bad timezone, try something like '-0500' or 'EDT'\n";
+    }
+    open(FH, ">$config_file")
+      or die "cannot write to $config_file: $!";
+    print FH "userid $userid\n";
+    print FH "tz $tz\n";
+    close FH or die "cannot close $config_file: $!";
+    print "All done, run with no arguments to grab listings.\n";
+}
+
+# Below here are package methods for Grab_XML_us_gist, overriding
+# those from the superclass.
+#
 sub country( $ ) {
     my $pkg = shift;
     return 'USA';
 }
 
-# Returns a hash mapping YYYMMDD to URL.
-my $userid = $ENV{GIST_USERID};
-print "USERID not defined" unless $userid;
-print STDERR "USERID not defined" unless $userid;
-die "USERID not defined" unless $userid;
+# Todo: perhaps we should internationalize messages and docs?
+sub usage_msg( $ ) {
+    my $pkg = shift;
+    my $country = $pkg->country();
+    return <<END
+$0: get $country television listings in XMLTV format
+To configure: $0 [--config-file FILE] --configure
+To grab listings: $0 [--config-file FILE] [--output FILE] [--days N] [--offset N] [--quiet]
+END
+      ;
+}
 
-my $tz = $ENV{GIST_TZ} || $ENV{TZ};
-print        "GIST_TZ ($tz) must be numeric" unless $tz =~ /^[\+\-\d]/;
-print STDERR "GIST_TZ ($tz) must be numeric" unless $tz =~ /^[\+\-\d]/;
-die "GIST_TZ must be numeric" unless $tz =~ /^[\+\-\d]/;
-
-# Returns a hash mapping YYYMMDD to URL.
+# Returns a hash mapping YYYMMDD to URL.  Uses global $userid and $tz.
 sub urls_by_date( $ ) {
     my $pkg = shift;
     my $num_days = 7; # guess
@@ -239,4 +307,26 @@ sub xml_from_data( $$ ) {
     return join("\n", @r);
 }
 
-Grab_XML_us_gist->go();
+# Read the configuration data and set global variables $userid and $tz.
+sub go( $ ) {
+    my $pkg = shift;
+    my $line_num = 0;
+    foreach (XMLTV::Config_file::read_lines($config_file)) {
+	++ $line_num;
+	next if not defined;
+	my $where = "$config_file:$line_num";
+	if (/^userid\s+(\d+)$/) {
+	    warn "$where: seen userid before\n" if defined $userid;
+	    $userid = $1;
+	}
+	elsif (/^tz\s+([+-]\d{4})$/) {
+	    warn "$where: seen tz before\n" if defined $tz;
+	    $tz = $1;
+	}
+	else {
+	    die "$where: bad line\n";
+	}
+    }
+    $pkg->SUPER::go();
+}
+
