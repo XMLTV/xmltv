@@ -63,6 +63,7 @@ my @cmds
      [ [ 'tv_sort'                                               ], 1 ],
      [ [ 'tv_sort', '--by-channel'                               ], 1 ],
      [ [ 'tv_to_latex'                                           ], 0 ],
+     [ [ 'tv_remove_some_overlapping'                            ], 1 ],
      [ [ 'tv_grep', '--on-after', '200302161330 UTC'             ], 1 ],
      [ [ 'tv_grep', '--on-before', '200302161330 UTC'            ], 1 ],
     );

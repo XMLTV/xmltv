@@ -78,6 +78,7 @@ my @exes
        filter/tv_cat
        filter/tv_split
        filter/tv_imdb
+       filter/tv_remove_some_overlapping
       );
 
 # Libraries to be installed.
