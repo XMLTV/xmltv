@@ -117,6 +117,7 @@ sub special_film( $ );
 sub special_new_series( $ );
 sub special_year( $ );
 sub special_tv_movie( $ );
+sub special_teletext_subtitles( $ );
 sub check_time_fits( $$ );
 sub cst( $ );
 sub no_shared_scalars( $ );
@@ -315,6 +316,7 @@ my @special_handlers =
    \&special_new_series,
    \&special_year,
    \&special_tv_movie,
+   \&special_teletext_subtitles,
 
    # There are three handlers specific to Ananova / UK listings.  I
    # haven't yet decided what to do with them: should they be in this
@@ -449,6 +451,7 @@ sub special_category( $ ) {
 	    }
 	}
     }
+    scrub_empty($p->{title}, $p->{desc}) if $changed;
 
     return $changed ? [ $p ] : undef;
 }
@@ -701,6 +704,7 @@ sub special_multipart( $ ) {
     else { die }
 
     if ($SLOW) { cst $_ foreach @progs }
+    scrub_empty($_->{title}, $_->{"sub-title"}, $_->{desc}) foreach @progs;
     t 'returning new list of programmes: ' . d \@progs;
     return \@progs;
 }
@@ -762,7 +766,7 @@ sub multipart_split_desc( $$ ) {
 		    last;
 		}
 		elsif (not $done_title) {
-		    if ($word =~ s/[.?]$//) {
+		    if ($word =~ s/[.]$// or $word =~ s/([!?])$/$1/) {
 			# Finished the title, move on to description.
 			$done_title = 1;
 		    }
@@ -786,13 +790,9 @@ sub multipart_split_desc( $$ ) {
 		    my $word = shift @title_words;
 		    my $main_title_length = @main_title_words + 1;
 
-		    if (# split at colon, sometimes
-			(not $opt_no_create_sub_titles
-			 and $main_title_length >= 2 and $word =~ s/:$//)
-
-			or # split at exclamation mark, always
-			($word =~ /!$/)
-		       ) {
+		    # Split at colon, sometimes
+		    if ((not $opt_no_create_sub_titles)
+			and $main_title_length >= 2 and $word =~ s/:$//) {
 			push @main_title_words, $word;
 			@sub_title_words = @title_words;
 			last;
@@ -1048,7 +1048,10 @@ sub special_credits( $ ) {
 		goto EXTRACTORS; # start again from beginning of loop
 	    }
 	}
-	return [ $p ] if $matched;
+	if ($matched) {
+	    scrub_empty($p->{desc});
+            return [ $p ];
+        }
     }
     return undef;
 }
@@ -1180,6 +1183,7 @@ sub special_new_series( $ ) {
 	#
 	$p->{'episode-num'} = [ ' . 0 . ', 'xmltv_ns' ];
     }
+    scrub_empty($p->{desc});
     return [ $p ];
 }
 
@@ -1211,10 +1215,12 @@ sub special_year( $ ) {
     else {
 	$p->{date} = $year;
     }
+    scrub_empty($p->{desc});
     return [ $p ];
 }
 
 
+# 'TVM' at start of description means TV movie.
 sub special_tv_movie( $ ) {
     die 'usage: special_tv_movie(programme)' if @_ != 1;
     my $p = shift;
@@ -1229,6 +1235,31 @@ sub special_tv_movie( $ ) {
     }
     return undef if not $is_tv_movie;
     add($p, 'category', 'TV movie');
+    scrub_empty($p->{desc});
+    return [ $p ];
+}
+
+
+# '(T)' in description means teletext subtitles.  But this should run
+# after doing any splitting and other stuff.
+#
+sub special_teletext_subtitles( $ ) {
+    die 'usage: special_teletext_subtitles(programme)' if @_ != 1;
+    my $p = shift;
+    my $has_t = 0;
+    foreach (@{$p->{desc}}) {
+	if ($_->[0] =~ s/\s*\(T\)\s*$//) {
+	    $has_t = 1;
+	}
+    }
+    return undef if not $has_t;
+    if (defined $p->{subtitles}) {
+	foreach (@{$p->{subtitles}}) {
+	    return [ $p ] if defined $_->{type} and $_->{type} eq 'teletext';
+	}
+    }
+    push @{$p->{subtitles}}, { type => 'teletext' };
+    scrub_empty($p->{desc});
     return [ $p ];
 }
 
@@ -1354,6 +1385,20 @@ sub add( $$$ ) {
     }
     push @{$p->{$k}}, [ $v, 'en' ];
     return 1;
+}
+
+
+# scrub_empty(): remove empty strings from a list of [text, lang]
+# pairs.
+#
+# Parameters: zero or more listrefs
+#
+# Modifies lists passed in, removing all [ '', whatever ] pairs.
+#
+sub scrub_empty( @ ) {
+    foreach (@_) {
+	@$_ = grep { length $_->[0] } @$_;
+    }
 }
 
 
