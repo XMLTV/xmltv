@@ -1337,7 +1337,6 @@ sub scrapehtml($$$)
 			  German
 			  Greek
 			  Gujarati
-			  Gujrati
 			  Hindi
 			  Hmong
 			  Hungarian
