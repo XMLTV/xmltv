@@ -12,21 +12,24 @@
 use strict;
 use Getopt::Long;
 
-my @cmds = ([ 'tv_cat' ],
-	    [ 'tv_extractinfo_en' ],
-	    [ 'tv_grep', 'a' ],
-	    [ 'tv_grep', '--category', 'b' ],
-	    [ 'tv_grep', '-i', '--last-chance', 'c' ],
-	    [ 'tv_grep', '--new' ],
-	    [ 'tv_grep', '--channel-name', 'd' ],
-	    [ 'tv_grep', '--channel-id', 'channel4.com' ],
-	    [ 'tv_grep', '--on-after', '2002-02-05' ],
-	    [ 'tv_grep', '--eval', 'scalar keys %$_ > 5' ],
-	    [ 'tv_grep', '--category', 'e', '--and', '--title', 'f' ],
-	    [ 'tv_grep', '--category', 'g', '--or', '--title', 'h' ],
-	    [ 'tv_grep', '-i', '--category', 'i', '--title', 'j' ],
-	    [ 'tv_sort' ],
-	    [ 'tv_to_latex' ]);
+my @cmds
+  = (
+     [ 'tv_cat' ],
+     [ 'tv_extractinfo_en' ],
+     [ 'tv_grep', 'a' ],
+     [ 'tv_grep', '--category', 'b' ],
+     [ 'tv_grep', '-i', '--last-chance', 'c' ],
+     [ 'tv_grep', '--new' ],
+     [ 'tv_grep', '--channel-name', 'd' ],
+     [ 'tv_grep', '--channel-id', 'channel4.com' ],
+     [ 'tv_grep', '--on-after', '2002-02-05' ],
+     [ 'tv_grep', '--eval', 'scalar keys %$_ > 5' ],
+     [ 'tv_grep', '--category', 'e', '--and', '--title', 'f' ],
+     [ 'tv_grep', '--category', 'g', '--or', '--title', 'h' ],
+     [ 'tv_grep', '-i', '--category', 'i', '--title', 'j' ],
+     [ 'tv_sort' ],
+     [ 'tv_to_latex' ],
+    );
 
 my $tests_dir = 't/data';     # directory test files live in
 die "no directory $tests_dir" if not -d $tests_dir;
