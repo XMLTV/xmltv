@@ -152,7 +152,7 @@ sub new
 				  env_proxy => 1,
 				  timeout => 180);
     bless ($self, $class);
-    $self->agent('xmltv/0.5.21');
+    $self->agent('xmltv/0.5.22');
     return $self;
 }
 
