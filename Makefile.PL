@@ -362,6 +362,12 @@ END
     # Add a target for a Windows distribution.
     $inherited .= q{
 
+xmltv.exe :: $(EXE_FILES) lib/exe_wrap.pl
+    set PERLAPP_OPT=--nologo --force --trim="Convert::EBCDIC;DB_File;Encode;HASH;HTML::FromText;Text::Iconv;Unicode::Map8;v5"
+    echo $(EXE_FILES) >exe_files.txt
+    perlapp -exe=xmltv.exe -add "$(EXE_FILES)" -bind exe_files.txt lib/exe_wrap.pl
+    $(RM_F) exe_files.txt
+
 windows_dist ::
 	@if test -e $(PREFIX); then \
 	        echo To build a Windows distribution, please rerun Makefile.PL with >&2; \
