@@ -670,6 +670,7 @@ sub scrapehtml($$$)
 			  Hindi
 			  Hmong
 			  Hungarian
+			  Innu
 			  Inuktitut
 			  Inuvialuktun
 			  Italian
@@ -679,17 +680,20 @@ sub scrapehtml($$$)
 			  Korean
 			  Mandarin
 			  Mohawk
+			  Musgamaw
 			  Oji-Cree
 			  Panjabi
 			  Polish
 			  Portuguese
 			  Punjabi
+			  Quechuan
 			  Romanian
 			  Russian
 			  Spanish
 			  Swedish
 			  Tagalog
 			  Tamil
+			  Tlingit
 			  Ukrainian
 			  Urdu
 			  Vietnamese
