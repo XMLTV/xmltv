@@ -81,9 +81,10 @@ sub get_nice_aux( $ ) {
 # (default ~/.xmltv/cache.conf) exists.
 sub init_cache
 {
-    my $home = $ENV{HOME} || 
-               $ENV{HOMEDRIVE} . $ENV{HOMEPATH} ||
-               ".";
+    my $winhome = $ENV{HOMEDRIVE} . $ENV{HOMEPATH} 
+        if defined( $ENV{HOMEDRIVE} ) and defined( $ENV{HOMEPATH} ); 
+
+    my $home = $ENV{HOME} || $winhome || ".";
 
     my $conffile = $ENV{CACHE_CONF} || "$home/.xmltv/cache.conf"; 
     
