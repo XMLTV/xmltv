@@ -79,9 +79,6 @@ use XMLTV::Date qw(parse_date);
 use XMLTV::Get_nice;
 use XMLTV::TZ   qw(tz_to_num);
 
-# Use Term::ProgressBar if installed.
-use constant Have_bar => eval { require Term::ProgressBar; 1 };
-
 # Memoize one routine if possible.
 eval { require Memoize };
 unless ($@) {
@@ -95,8 +92,11 @@ sub country( $ ) {
     return 'UK';
 }
 
-my $URL_HOST = 'http://www.bleb.org';
-my $URL_DIR                     = '/tv/data/listings';
+my $SHARE_DIR = undef;
+my $OUR_SHARE_DIR;
+
+my $URL_HOST     = 'http://www.bleb.org';
+my $URL_DIR      = '/tv/data/listings';
 my $url_base     = "$URL_HOST$URL_DIR";
 my $url_channels = "$URL_HOST$URL_DIR";
 
@@ -156,13 +156,41 @@ sub xml_from_data( $$ ) {
     $zip->readFromFileHandle($fake_filehandle);
 
     my $data_file = $zip->memberNamed('data.xml');
-
     my $xml = $data_file->contents();
 
     $xml = correct_emptydescs($xml);
     $xml = correct_timezones($xml);
+    $xml = add_channel_icons($xml);
 
     return Grab_XML_uk_bleb->remove_early_stop_times($xml);
+}
+
+sub add_channel_icons( $ ) {
+    my $xml = shift;
+    
+    my %channel_urls;
+    if (defined $SHARE_DIR) {
+        $OUR_SHARE_DIR = "$SHARE_DIR/tv_grab_uk_bleb";
+    }
+    else {
+        $OUR_SHARE_DIR = '.';
+    }
+    (my $CHANNEL_ICONS_FILE = "$OUR_SHARE_DIR/icon_urls") =~ tr!/!/!s;
+    foreach (XMLTV::Config_file::read_lines($CHANNEL_ICONS_FILE, 1)) {
+            
+        next unless defined;
+        my @fields = split;
+        my ($channel_id, $channel_url) = @fields;
+            
+        $channel_urls{$channel_id} = $channel_url;
+            
+    }
+    
+    # Do the regex to put in icons
+    $xml =~ s{(<channel id=\")(.*?)(\">.*?)(</display-name>)}
+             {$1.$2.$3.$4.'<icon src="'.$channel_urls{$2}.'" />'}esg;
+        
+    return $xml; 
 }
 
 # Removes description tags which are empty.
@@ -205,12 +233,12 @@ sub configure( $$$ ) {
 
     open(CONF, ">$config_file") or die "cannot write to $config_file: $!";
 
-    my $bar = new Term::ProgressBar('getting available channels', 1)
-        if Have_bar && not $opt_quiet;
+    my $bar = new XMLTV::ProgressBar('getting available channels', 1)
+        if not $opt_quiet;
 
     my $page = get_nice($url_channels);
-    $bar->update() if Have_bar && not $opt_quiet;
-    #$bar->finish();
+    $bar->update() if not $opt_quiet;
+    $bar->finish() if not $opt_quiet;
 
     if ($page =~ /Available channels are: <tt>(.*?)<\/tt>/) {
         my @channels = split(', ', $1);
@@ -219,9 +247,8 @@ sub configure( $$$ ) {
         foreach my $chan (@channels) {
             push @questions, "Add channel $chan? ";
         }
-        my @answers = askManyBooleanQuestions(1, @questions);
+        my @answers = ask_many_boolean(1, @questions);
 
-        my $i = 0;
         for (my $i=0; $i < $#channels; $i++) {
             if ($answers[$i]) {
                 print CONF $channels[$i]."\n";
@@ -233,6 +260,12 @@ sub configure( $$$ ) {
         say("Unable to download channels list from $url_channels.");
         die;
     }
+}
+
+# Set the share directory using the undocumented --share option
+sub set_share_dir( $$ ) {
+    my $pkg = shift;
+    $SHARE_DIR = shift;
 }
 
 Grab_XML_uk_bleb->go();
