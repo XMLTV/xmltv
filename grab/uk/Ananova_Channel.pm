@@ -24,7 +24,8 @@ BEGIN {
 # our own.
 #
 package Tie::RefHash::MyNestable;
-our @ISA = qw(Tie::RefHash);
+use vars '@ISA';
+@ISA = qw(Tie::RefHash);
 sub STORE {
     my($s, $k, $v) = @_;
     if (ref($v) eq 'HASH' and not tied %$v) {
