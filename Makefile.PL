@@ -375,7 +375,7 @@ windows_dist ::
 	mkdir -p $(PREFIX)/doc/man
 	set -e; for i in $(INSTALLMAN1DIR)/*; do \
 	        b=`basename $$i .1`; \
-	        if test $$b = '*'; then \
+	        if test "$$b" = '*'; then \
 	                echo cannot find manpages in $(INSTALLMAN1DIR) >&2; \
 	                exit 1; \
 	        fi; \
