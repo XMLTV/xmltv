@@ -67,16 +67,13 @@ if (index('--version', $cmd) == 0 and length $cmd >= 3) {
 }
 
 #
-# check for tv_grab_nz
+# some grabbers aren't included
 #
-if ($cmd eq 'tv_grab_nz') {
+if ($cmd =~ /^tv_grab_(?:nz|jp|se)$/) {
     die <<END
-Sorry, tv_grab_nz is not available in this Windows binary release,
-although if you have Python installed you will be able to get it from
-the xmltv source distribution.
+Sorry, $cmd is not available in this Windows binary release, although
+it is included in xmltv source releases.
 
-It is hoped that future Windows binaries for xmltv will include a way
-to run tv_grab_nz.
 END
   ;
 };
