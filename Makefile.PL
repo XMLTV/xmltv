@@ -34,6 +34,7 @@ WriteMakefile
 		      ],
    'PL_FILES' => { 'filter/tv_grep.PL' => 'filter/tv_grep' },
    'PM'            => { 'XMLTV.pm'                   => '$(INST_LIBDIR)/XMLTV.pm',
+			'grab/Memoize.pm'            => '$(INST_LIBDIR)/XMLTV/Memoize.pm',
 			'grab/na/ZapListings.pm'     => '$(INST_LIBDIR)/XMLTV/ZapListings.pm',
 			'grab/uk/Ananova_Channel.pm' => '$(INST_LIBDIR)/XMLTV/Ananova_Channel.pm',
 			'grab/uk/UK_TZ.pm'           => '$(INST_LIBDIR)/XMLTV/UK_TZ.pm',

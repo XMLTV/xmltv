@@ -19,9 +19,10 @@ use Tie::RefHash;
 use Term::ProgressBar;
 use IO::File;
 
-use XMLTV::UK_TZ;
 use XMLTV;
+use XMLTV::UK_TZ;
 use XMLTV::Ananova_Channel;
+use XMLTV::Memoize;
 
 # Prototype declarations
 sub get_copyright( $ );
@@ -67,10 +68,13 @@ sub ud { join(' ', @{date_to_uk($_[0])}) }
 # What language the pages are in.  This has no real effect :-)
 my $LANG = 'en';
 
-# Check options.
-my ($opt_days, $opt_help, $opt_cache, $opt_output);
+# Check options.  First do the undocumented --cache option (to cache
+# get(), which retrieves web pages), then the normal ones.
+#
+my $using_cache = XMLTV::Memoize::check_argv('get');
+my ($opt_days, $opt_help, $opt_output);
 GetOptions('days=i' => \$opt_days, 'help' => \$opt_help,
-	   'cache:s' => \$opt_cache, 'output=s' => \$opt_output);
+	   'output=s' => \$opt_output);
 if ($opt_help) {
     print <<END
 $0: get UK television listings in XMLTV format
@@ -82,38 +86,6 @@ redirect it to a file.
 END
   ;
     exit(1);
-}
-
-if (defined $opt_cache) {
-    # Undocumented option to speed up debugging (and reduce server
-    # load).  Previous versions used Memoize all over the place, but
-    # this program doesn't have as many side-effect-free routines.
-    # Many of the subs are self-memoizing in that they update a global
-    # hash; others are run once and return a hash.
-    #
-    if ($opt_cache eq '') {
-	$opt_cache = "$0.cache";
-    }
-    print STDERR "using cache $opt_cache\n";
-    require POSIX;
-    require Memoize;
-
-    require DB_File;
-    my @tie_args = ('DB_File', $opt_cache,
-		    POSIX::O_RDWR() | POSIX::O_CREAT(), 0666);
-    if ($Memoize::VERSION > 0.62) {
-	# Use HASH instead of deprecated TIE.
-	my %cache;
-
-	# Annoyingly tie(%cache, @tie_args) doesn't work
-	tie %cache, 'DB_File', $opt_cache,
-	  POSIX::O_RDWR() | POSIX::O_CREAT(), 0666;
-	Memoize::memoize('get', SCALAR_CACHE => [ HASH => \%cache ]);
-    }
-    else {
-	# Old version of Memoize.
-	Memoize::memoize('get', SCALAR_CACHE => [ 'TIE', @tie_args ]);
-    }
 }
 
 # The date libraries, however, do benefit from memoization.  It's only
@@ -1210,7 +1182,7 @@ sub check_page_date($$) {
 
     # But does it match what we expect?
     if (UnixDate($dp, '%Q') ne UnixDate($expected, '%Q')) {
-	if ($opt_cache) {
+	if ($using_cache) {
 	    unless ($warned_wrong_date++) {
 		warn "since cache is in use, ignoring wrong date in pages\n";
 	    }
