@@ -311,9 +311,12 @@ sub get_display_names {
     #
     my %used;
     foreach (@{$self->{extra_display_names}}) {
-	warn if not defined;
+	if (not defined) {
+	    warn;
+	    next;
+	}
 	warn if $used{$_}++;
-	if (defined and ($_ ne $main)) {
+	if ($_ ne $main) {
 	    push @r, $_;
 	}
     }
