@@ -10,6 +10,12 @@
 # Be warned, this and the tv_imdb script are prototypes and may change
 # without notice.
 #
+# FUTURE - multiple hits on the same 'title only' could try and look for
+#          character names matching from description to imdb.com character
+#          names.
+#
+# FUTURE - multiple hits on 'title only' should probably pick latest
+#          tv series over any older ones. May make for better guesses.
 #
 # FUTURE - common english->french vowel changes. For instance
 #          "Anna Karénin" (é->e)
@@ -40,7 +46,7 @@ use strict;
 
 package XMLTV::IMDB;
 
-our $VERSION = '0.2';
+our $VERSION = '0.3';
 
 sub new
 {
@@ -50,6 +56,23 @@ sub new
     for ('imdbDir', 'verbose') {
 	die "invalid usage - no $_" if ( !defined($self->{$_}));
     }
+    #$self->{verbose}=2;
+    $self->{replaceTitles}=0       if ( !defined($self->{replaceTitles}));
+    $self->{replaceCategories}=0   if ( !defined($self->{replaceCategories}));
+    $self->{replaceURLs}=0         if ( !defined($self->{replaceURLs}));
+    $self->{replaceDirectors}=1    if ( !defined($self->{replaceDirectors}));
+    $self->{replaceActors}=0       if ( !defined($self->{replaceActors}));
+    $self->{replacePresentors}=1   if ( !defined($self->{replacePresentors}));
+    $self->{replaceCommentators}=1 if ( !defined($self->{replaceCommentators}));
+
+    $self->{updateTitles}=1       if ( !defined($self->{updateTitles}));
+    $self->{updateCategories}=1   if ( !defined($self->{updateCategories}));
+    $self->{updateURLs}=1         if ( !defined($self->{updateURLs}));
+    $self->{updateDirectors}=1    if ( !defined($self->{updateDirectors}));
+    $self->{updateActors}=1       if ( !defined($self->{updateActors}));
+    $self->{updatePresentors}=1   if ( !defined($self->{updatePresentors}));
+    $self->{updateCommentators}=1 if ( !defined($self->{updateCommentators}));
+
     $self->{moviedbIndex}="$self->{imdbDir}/moviedb.idx";
     $self->{moviedbData}="$self->{imdbDir}/moviedb.dat";
     $self->{moviedbInfo}="$self->{imdbDir}/moviedb.info";
@@ -106,6 +129,10 @@ sub checkIndexesOkay($)
 	return("imdbDir \"$self->{imdbDir}\" does not exist\n");
     }
 
+    if ( -f "$self->{moviedbOffline}" ) {
+	return("imdbDir index offline: check $self->{moviedbOffline} for details");
+    }
+
     for my $file ($self->{moviedbIndex}, $self->{moviedbData}, $self->{moviedbInfo}) {
 	if ( ! -f "$file" ) {
 	    return("imdbDir index file \"$file\" does not exist\n");
@@ -127,6 +154,10 @@ sub checkIndexesOkay($)
 	}
 	if ( $1 == 0 && $2 == 1 ) {
 	    return("imdbDir index db requires update, rerun --prepStage 5 (bug:actresses never appear)\n");
+	}
+	if ( $1 == 0 && $2 == 2 ) {
+	    # 0.2 -> 0.3 upgrade requires prepStage 5 to be re-run
+	    return("imdbDir index db requires minor reindexing, rerun --prepStage 3 and 5\n");
 	}
 	# okay
 	return(undef);
@@ -321,9 +352,19 @@ sub getMovieMatches($$$)
 	    #$arr[1]=~s/(.*),\s*(The|A|Une|Les|L\'|Le|La|El|Das)$/$2 $1/og;
 		    
 	    #$arr[0]=~s/%(?:([0-9a-fA-F]{2})|u([0-9a-fA-F]{4}))/defined($1)? chr hex($1) : utf8_chr(hex($2))/oge;
-	    $self->debug("exact:$arr[1] ($arr[2]) qualifier=$arr[3] id=$arr[4]");
-	    push(@{$results->{exactMatch}}, {'key'=> "$arr[1] ($arr[2])",
-					     'title'=>$arr[1],
+	    #$self->debug("exact:$arr[1] ($arr[2]) qualifier=$arr[3] id=$arr[4]");
+	    my $title=$arr[1];
+	    if ( $title=~s/\s+\((\d\d\d\d|\?\?\?\?)\)$//o ) {
+	    }
+	    elsif ( $title=~s/\s+\((\d\d\d\d|\?\?\?\?)\/[IVX]+\)$//o ) {
+	    }
+	    else {
+		die "unable to decode year from title key \"$title\", report to xmltv-devel\@lists.sf.net";
+	    }
+	    $title=~s/(.*),\s*(The|A|Une|Les|L\'|Le|La|El|Das)$/$2 $1/og;
+	    $self->debug("exact:$title ($arr[2]) qualifier=$arr[3] id=$arr[4]");
+	    push(@{$results->{exactMatch}}, {'key'=> $arr[1],
+					     'title'=>$title,
 					     'year'=>$arr[2],
 					     'qualifier'=>$arr[3],
 					     'id'=>$arr[4]});
@@ -334,9 +375,19 @@ sub getMovieMatches($$$)
 	    # return title
 	    #$arr[1]=~s/(.*),\s*(The|A|Une|Les|L\'|Le|La|El|Das)$/$2 $1/og;
 	    #$arr[0]=~s/%(?:([0-9a-fA-F]{2})|u([0-9a-fA-F]{4}))/defined($1)? chr hex($1) : utf8_chr(hex($2))/oge;
-	    $self->debug("close:$arr[1] ($arr[2]) qualifier=$arr[3] id=$arr[4]");
-	    push(@{$results->{closeMatch}}, {'key'=> "$arr[1] ($arr[2])",
-					     'title'=>$arr[1],
+	    #$self->debug("close:$arr[1] ($arr[2]) qualifier=$arr[3] id=$arr[4]");
+	    my $title=$arr[1];
+	    if ( $title=~s/\s+\((\d\d\d\d|\?\?\?\?)\)$//o ) {
+	    }
+	    elsif ( $title=~s/\s+\((\d\d\d\d|\?\?\?\?)\/[IVX]+\)$//o ) {
+	    }
+	    else {
+		die "unable to decode year from title key \"$title\", report to xmltv-devel\@lists.sf.net";
+	    }
+	    $title=~s/(.*),\s*(The|A|Une|Les|L\'|Le|La|El|Das)$/$2 $1/og;
+	    $self->debug("close:$title ($arr[2]) qualifier=$arr[3] id=$arr[4]");
+	    push(@{$results->{closeMatch}}, {'key'=> $arr[1],
+					     'title'=>$title,
 					     'year'=>$arr[2],
 					     'qualifier'=>$arr[3],
 					     'id'=>$arr[4]});
@@ -407,10 +458,25 @@ sub getMovieIdDetails($$)
 	    if ( $actors ne "<unknown>" ) {
 		for my $name (split('\|', $actors)) {
 		    # remove (I) etc from imdb.com names (kept in place for reference)
+		    my $HostNarrator;
+		    if ( $name=~s/\[([^\]]+)\]$//o ) {
+			$HostNarrator=$1;
+		    }
 		    $name=~s/\s\([IVX]+\)$//o;
+
 		    # switch name around to be surname last
 		    $name=~s/^([^,]+),\s*(.*)$/$2 $1/o;
-		    push(@{$results->{actors}}, $name);
+		    if ( $HostNarrator ) {
+			if ( $HostNarrator=~s/,*Host//o ) {
+			    push(@{$results->{presenter}}, $name);
+			}
+			if ( $HostNarrator=~s/,*Narrator//o ) {
+			    push(@{$results->{commentator}}, $name);
+			}
+		    }
+		    else {
+			push(@{$results->{actors}}, $name);
+		    }
 		}
 	    }
 	}
@@ -719,13 +785,20 @@ sub findTVSeriesInfo($$)
 # todo - add description (replace an option ?)
 # todo - writer
 # todo - producer
-# todo - commentator ?
+# todo - running time (duration)
+# todo - identify 'Host' and 'Narrator's and put them in as
+#        credits:presenter and credits:commentator resp.
 # todo - check program length - probably a warning if longer ?
 #        can we update length (separate from runnning time in the output ?)
 # todo - icon - url from www.imdb.com of programme image ?
 #        this could be done by scraping for the hyper linked poster
 #        <a name="poster"><img src="http://ia.imdb.com/media/imdb/01/I/60/69/80m.jpg" height="139" width="99" border="0"></a>
 #        and grabbin' out the img entry. (BTW ..../npa.jpg seems to line up with no poster available)
+#
+# todo - should be augmenting data and not replacing everything when
+#        multiples are allowed. For instance we replace all titles
+#        when we have one to add instead of just adding it.
+#        Maybe adding actors should be an option instead of replacing.
 #
 sub applyFound($$$)
 {
@@ -752,94 +825,193 @@ sub applyFound($$$)
 	}
     }
     
-    if ( $idInfo->{title} ne $title ) {
-	$self->debug("replacing 'title' from \"$title\" to \"$idInfo->{title}\"");
-	$prog->{title}->[0]->[0]=$idInfo->{title};
-    }
-
-    my $mycategory=$self->{categories}->{$idInfo->{qualifier}};
-    die "how did we get here with an invalid qualifier '$idInfo->{qualifier}'" if (!defined($mycategory));
-
-    # update/add category based on the type we matched from imdb.com
-    if ( defined($prog->{category}) ) {
-	
-	my $found=0;
-	for my $value (@{$prog->{category}}) {
-	    #print "checking category $value->[0] with $mycategory\n";
-	    if ( $value->[0] eq $mycategory ) {
-		$found=1;
+    if ( $self->{updateTitles} ) {
+	if ( $idInfo->{title} ne $title ) {
+	    if ( $self->{replaceTitles} ) {
+		$self->debug("replacing (all) 'title' from \"$title\" to \"$idInfo->{title}\"");
+		delete($prog->{title});
 	    }
-	}
-	if ( !$found ) {
-	    push(@{$prog->{category}}, [$mycategory,undef]);
-	}
-    }
-    else {
-	push(@{$prog->{category}}, [$mycategory,undef]);
-    }
-    
-    my $details=$self->getMovieIdDetails($idInfo->{id});
-    if ( $details->{noDetails} ) {
-	# we don't have any details on this movie
-    }
-    else {
-	# add url to programme on www.imdb.com
-	my $url=$title;
-	$url=~s/([^a-zA-Z0-9_.-])/uc sprintf("%%%02x",ord($1))/oeg;
-	$url="http://www.imdb.com/Title?".$url;
-	if ( defined($prog->{url}) ) {
-	    my @rep;
-	    my $updated=0;
-	    for (@{$prog->{url}}) {
-		#print "checking existing url $_\n";
-		if ( m;^http://www.imdb.com/Title;o ) {
-		    if ( $_ ne $url && !$updated ) {
-			$self->debug("updating www.imdb.com url on movie \"$idInfo->{key}\"");
-			$updated=1;
-			push(@rep, $url);
+
+	    my @list;
+
+	    push(@list, [$idInfo->{title}, undef]);
+	    
+	    if ( defined($prog->{title}) ) {
+		my $name=$idInfo->{title};
+		my $found=0;
+		for my $v (@{$prog->{title}}) {
+		    if ( $v->[0]=~m/^$name$/ ) {
+			$found=1;
+		    }
+		    else {
+			push(@list, $v);
 		    }
 		}
-		else {
+	    }
+	    $prog->{title}=\@list;
+	}
+    }
+
+    if ( $self->{updateCategories} ) {
+	if ( $self->{replaceCategories} ) {
+	    if ( defined($prog->{category}) ) {
+		$self->debug("replacing (all) 'category'");
+		delete($prog->{category});
+	    }
+	}
+
+	my $mycategory=$self->{categories}->{$idInfo->{qualifier}};
+	die "how did we get here with an invalid qualifier '$idInfo->{qualifier}'" if (!defined($mycategory));
+
+	# update/add category based on the type we matched from imdb.com
+	if ( defined($prog->{category}) ) {
+	
+	    my $found=0;
+	    for my $value (@{$prog->{category}}) {
+		#print "checking category $value->[0] with $mycategory\n";
+		if ( $value->[0]=~m/^$mycategory$/i ) {
+		    $found=1;
+	        }
+	    }
+	    if ( !$found ) {
+		push(@{$prog->{category}}, [$mycategory,'en']);
+	    }
+	}
+	else {
+	    push(@{$prog->{category}}, [$mycategory,'en']);
+	}
+    }
+    
+    if ( $self->{updateURLs} ) {
+	if ( $self->{replaceURLs} ) {
+	    if ( defined($prog->{url}) ) {
+		$self->debug("replacing (all) 'url'");
+		delete($prog->{url});
+	    }
+	}
+	
+	# add url to programme on www.imdb.com
+	my $url=$idInfo->{key};
+	
+	$url=~s/([^a-zA-Z0-9_.-])/uc sprintf("%%%02x",ord($1))/oeg;
+	$url="http://us.imdb.com/M/title-exact?".$url;
+	
+	if ( defined($prog->{url}) ) {
+	    my @rep;
+	    push(@rep, $url);
+	    for (@{$prog->{url}}) {
+		# skip urls for imdb.com that we're probably safe to replace
+		if ( !m;^http://www.imdb.com/M/title-exact;o ) {
 		    push(@rep, $_);
 		}
 	    }
-	    push(@rep, $url) if ( $updated == 0 );
 	    $prog->{url}=\@rep;
 	}
 	else {
 	    push(@{$prog->{url}}, $url);
 	}
-	    
+    }
+
+    my $details=$self->getMovieIdDetails($idInfo->{id});
+    if ( $details->{noDetails} ) {
+	# we don't have any details on this movie
+    }
+    else {
 	# add directors list form www.imdb.com
-	if ( defined($details->{directors}) ) {
-	    # don't add directors for movie or (if tv show) we have EXACTLY ONE director
-	    if ( scalar(@{$details->{directors}}) == 1 ||
-		 $idInfo->{qualifier} eq "movie" ||
-		 $idInfo->{qualifier} eq "video_movie" ||
-		 $idInfo->{qualifier} eq "tv_movie" ) {
-		if ( defined($prog->{credits}->{director}) ) {
-		    $self->debug("replacing director(s) on $idInfo->{qualifier} \"$idInfo->{key}\"");
-		    delete($prog->{credits}->{director});
+	if ( $self->{updateDirectors} ) {
+	    if ( defined($details->{directors}) ) {
+		# don't add directors for movie or (if tv show) we have EXACTLY ONE director
+		if ( scalar(@{$details->{directors}}) == 1 ||
+		     $idInfo->{qualifier} eq "movie" ||
+		     $idInfo->{qualifier} eq "video_movie" ||
+		     $idInfo->{qualifier} eq "tv_movie" ) {
+
+		    if ( $self->{replaceDirectors} ) {
+			if ( defined($prog->{credits}->{director}) ) {
+			    $self->debug("replacing director(s)");
+			    delete($prog->{credits}->{director});
+			}
+		    }
+
+		    my @list;
+		    # add top 3 billing directors list form www.imdb.com
+		    for my $name (splice(@{$details->{directors}},0,3)) {
+			push(@list, $name);
+		    }
+		    if ( defined($prog->{credits}->{director}) ) {
+			for my $name (@{$prog->{credits}->{director}}) {
+			    my $found=0;
+			    for(@list) {
+				if ( m/^$name$/i ) {
+				    $found=1;
+				}
+			    }
+			    if ( !$found ) {
+				push(@list, $name);
+			    }
+			}
+			$prog->{credits}->{director}=\@list;
+		    }
 		}
-		for my $name (@{$details->{directors}}) {
-		    push(@{$prog->{credits}->{director}}, $name);
+		else {
+		    $self->debug("not adding 'director' field to $idInfo->{qualifier} \"$title\"");
 		}
-	    }
-	    else {
-		$self->debug("not adding 'director' field to $idInfo->{qualifier} \"$title\"");
 	    }
 	}
-	# add top 3 billing actors list form www.imdb.com
-	if ( defined($details->{actors}) ) {
-	    if ( defined($prog->{credits}->{actor}) ) {
-		$self->debug("replacing actor(s) on $idInfo->{qualifier} \"$idInfo->{key}\"");
-		delete($prog->{credits}->{actor});
+	if ( $self->{updateActors} ) {
+	    if ( defined($details->{actors}) ) {
+		if ( $self->{replaceActors} ) {
+		    if ( defined($prog->{credits}->{actor}) ) {
+			$self->debug("replacing actor(s) on $idInfo->{qualifier} \"$idInfo->{key}\"");
+			delete($prog->{credits}->{actor});
+		    }
+		}
+
+		my @list;
+		# add top 3 billing actors list form www.imdb.com
+		for my $name (splice(@{$details->{actors}},0,3)) {
+		    push(@list, $name);
+		}
+		if ( defined($prog->{credits}->{actor}) ) {
+		    for my $name (@{$prog->{credits}->{actor}}) {
+			my $found=0;
+			for(@list) {
+			    if ( m/^$name$/i ) {
+				$found=1;
+			    }
+			}
+			if ( !$found ) {
+			    push(@list, $name);
+			}
+		    }
+		    $prog->{credits}->{actor}=\@list;
+		}
 	    }
-	    for my $name (splice(@{$details->{actors}},0,3)) {
-		push(@{$prog->{credits}->{actor}}, $name);
+	}
+	if ( $self->{updatePresentors} ) {
+	    if ( defined($details->{presenter}) ) {
+		if ( $self->{replacePresentors} ) {
+		    if ( defined($prog->{credits}->{presenter}) ) {
+			$self->debug("replacing presentor");
+			delete($prog->{credits}->{presenter});
+		    }
+		}
+		$prog->{credits}->{presenter}=$details->{presenter};
+	    }
+	}
+	if ( $self->{updateCommentators} ) {
+	    if ( defined($details->{commentator}) ) {
+		if ( $self->{replaceCommentators} ) {
+		    if ( defined($prog->{credits}->{commentator}) ) {
+			$self->debug("replacing commentator");
+			delete($prog->{credits}->{commentator});
+		    }
+		}
+		$prog->{credits}->{commentator}=$details->{commentator};
 	    }
 	}
     }
+    
     return($prog);
 }
 
@@ -1301,6 +1473,7 @@ sub readCastOrDirectors($$$)
 	}
 	
 	my $billing;
+	my $HostNarrator="";
 	if ( $whatAreWeParsing < 3 ) {
 	    # actors or actresses
 	    $billing="9999";
@@ -1310,6 +1483,20 @@ sub readCastOrDirectors($$$)
 	    
 	    if ( (my $start=index($line, " [")) != -1 ) {
 		#my $end=rindex($line, "]");
+		my $ex=substr($line, $start+1);
+
+		if ( $ex=~s/Host//o ) {
+		    if ( length($HostNarrator) ) {
+			$HostNarrator.=",";
+		    }
+		    $HostNarrator.="Host";
+		}
+		if ( $ex=~s/Narrator//o ) {
+		    if ( length($HostNarrator) ) {
+			$HostNarrator.=",";
+		    }
+		    $HostNarrator.="Narrator";
+		}
 		$line=substr($line, 0, $start);
 		# ignore character name
 	    }
@@ -1335,20 +1522,24 @@ sub readCastOrDirectors($$$)
 	}
 
 	my $val=$self->{movies}{$line};
+	my $name=$cur_name;
+	if ( length($HostNarrator) ) {
+	    $name.="[$HostNarrator]";
+	}
 	if ( defined($billing) ) {
 	    if ( defined($val) ) {
-		$self->{movies}{$line}=$val."|$billing:$cur_name";
+		$self->{movies}{$line}=$val."|$billing:$name";
 	    }
 	    else {
-		$self->{movies}{$line}="$billing:$cur_name";
+		$self->{movies}{$line}="$billing:$name";
 	    }
 	}
 	else {
 	    if ( defined($val) ) {
-		$self->{movies}{$line}=$val."|$cur_name";
+		$self->{movies}{$line}=$val."|$name";
 	    }
 	    else {
-		$self->{movies}{$line}=$cur_name;
+		$self->{movies}{$line}=$name;
 	    }
 	}
 	$count++;
@@ -1714,17 +1905,17 @@ sub invokeStage($$)
 	    while(<IN>) {
 		chop();
 		s/^([^\t]+)\t//o;
-		my $title=$1;
-		my $val=$movies{$title};
+		my $dbkey=$1;
+		my $val=$movies{$dbkey};
 		if ( !defined($val) ) {
-		    $self->error("actors list references unidentified title '$title'");
+		    $self->error("actors list references unidentified title '$dbkey'");
 		    next;
 		}
 		if ( $val=~m/$tab/o ) {
-		    $movies{$title}=$val."|".$_;
+		    $movies{$dbkey}=$val."|".$_;
 		}
 		else {
-		    $movies{$title}=$val.$tab.$_;
+		    $movies{$dbkey}=$val.$tab.$_;
 		}
 		if (Have_bar) {
 		    # re-adjust target so progress bar doesn't seem too wonky
@@ -1756,17 +1947,17 @@ sub invokeStage($$)
 	    while(<IN>) {
 		chop();
 		s/^([^\t]+)\t//o;
-		my $title=$1;
-		my $val=$movies{$title};
+		my $dbkey=$1;
+		my $val=$movies{$dbkey};
 		if ( !defined($val) ) {
-		    $self->error("actresses list references unidentified title '$title'");
+		    $self->error("actresses list references unidentified title '$dbkey'");
 		    next;
 		}
 		if ( $val=~m/$tab/o ) {
-		    $movies{$title}=$val."|".$_;
+		    $movies{$dbkey}=$val."|".$_;
 		}
 		else {
-		    $movies{$title}=$val.$tab.$_;
+		    $movies{$dbkey}=$val.$tab.$_;
 		}
 		if (Have_bar) {
 		    # re-adjust target so progress bar doesn't seem too wonky
@@ -1805,31 +1996,31 @@ sub invokeStage($$)
 	    
 	    my $count=0;
 	    for my $key (keys %movies) {
-		my $nkey=$key;
+		my $dbkey=$key;
 		
 		# todo - this would make things easier
 		# change double-quotes around title to be (made-for-tv) suffix instead 
-		if ( $nkey=~m/^\"/o && #"
-		     $nkey=~m/\"\s*\(/o ) { #"
-		    $nkey=~s/^\"//o; # "
-		    $nkey=~s/\"(\s*\()/$1/o; #"
-		    $nkey.=" (tv_series)";
+		if ( $dbkey=~m/^\"/o && #"
+		     $dbkey=~m/\"\s*\(/o ) { #"
+		    #$nkey=~s/^\"//o; # "
+		    #$nkey=~s/\"(\s*\()/$1/o; #"
+		    $dbkey.=" (tv_series)";
 		}
 		# how rude, some entries have (TV) appearing more than once.
-		$nkey=~s/\(TV\)\s*\(TV\)$/(TV)/o;
+		$dbkey=~s/\(TV\)\s*\(TV\)$/(TV)/o;
 		
-		$nkey=~s/\(mini\) \(tv_series\)$/(tv_mini_series)/o;
-		$nkey=~s/\(mini\)$/(tv-mini-series)/o;
-		$nkey=~s/\(TV\)$/(tv_movie)/o;
-		$nkey=~s/\(V\)$/(video_movie)/o;
-		$nkey=~s/\(VG\)$/(video_game)/o;
+		$dbkey=~s/\(mini\) \(tv_series\)$/(tv_mini_series)/o;
+		$dbkey=~s/\(mini\)$/(tv-mini-series)/o;
+		$dbkey=~s/\(TV\)$/(tv_movie)/o;
+		$dbkey=~s/\(V\)$/(video_movie)/o;
+		$dbkey=~s/\(VG\)$/(video_game)/o;
 		
-		my $title=$nkey;
 		my $qualifier="movie";
-		if ( $title=~s/\s+\((tv_series|tv_mini_series|tv_movie|video_movie|video_game)\)$//o ) {
+		if ( $dbkey=~s/\s+\((tv_series|tv_mini_series|tv_movie|video_movie|video_game)\)$//o ) {
 		    $qualifier=$1;
 		}
 		my $year;
+		my $title=$dbkey;
 		if ( $title=~s/\s+\((\d\d\d\d|\?\?\?\?)\)$//o ) {
 		    $year=$1;
 		}
@@ -1842,21 +2033,21 @@ sub invokeStage($$)
 		$year="0000" if ( $year eq "????" );
 		$title=~s/(.*),\s*(The|A|Une|Les|L\'|Le|La|El|Das)$/$2 $1/og;
 		
-		$nkey=lc("$title ($year)");
-		$nkey=~s/([^a-zA-Z0-9_.-])/uc sprintf("%%%02x",ord($1))/oeg;
+		my $hashkey=lc("$title ($year)");
+		$hashkey=~s/([^a-zA-Z0-9_.-])/uc sprintf("%%%02x",ord($1))/oeg;
 		
-		if ( defined($movies{$nkey}) ) {
+		if ( defined($movies{$hashkey}) ) {
 		    die "unable to place moviedb key for $key, report to xmltv-devel\@lists.sf.net";
 		}
 		die "title \"$title\" contains a tab" if ( $title=~m/\t/o );
-		#print "key:$nkey\n\ttitle=$title\n\tyear=$year\n\tqualifier=$qualifier\n";
+		#print "key:$dbkey\n\ttitle=$title\n\tyear=$year\n\tqualifier=$qualifier\n";
 		#print "key $key: value=\"$movies{$key}\"\n";
 		my ($directors, $actors)=split('\t', delete($movies{$key}));
 		
 		$directors="<unknown>" if ( !defined($directors) || $directors eq "nodir");
 		$actors="<unknown>" if ( !defined($actors) );
 
-		$nmovies{$nkey}=$title.$tab.$year.$tab.$qualifier.$tab.$directors.$tab.$actors;
+		$nmovies{$hashkey}=$dbkey.$tab.$year.$tab.$qualifier.$tab.$directors.$tab.$actors;
 
 		$count++;
 
@@ -1897,13 +2088,13 @@ sub invokeStage($$)
 		my $val=delete($nmovies{$key});
 		#print "movie $key: $val\n";
 		#$val=~s/^([^\t]+)\t([^\t]+)\t([^\t]+)\t//o || die "internal failure ($key:$val)";
-		my ($title, $year, $qualifier,$directors,$actors)=split('\t', $val);
-		#die ("no 1") if ( !defined($title));
+		my ($dbkey, $year, $qualifier,$directors,$actors)=split('\t', $val);
+		#die ("no 1") if ( !defined($dbkey));
 		#die ("no 2") if ( !defined($year));
 		#die ("no 3") if ( !defined($qualifier));
 		#die ("no 4") if ( !defined($directors));
 		#die ("no 5") if ( !defined($actors));
-		#print "key:$key\n\ttitle=$title\n\tyear=$year\n\tqualifier=$qualifier\n";
+		#print "key:$key\n\ttitle=$dbkey\n\tyear=$year\n\tqualifier=$qualifier\n";
 		
 		#my ($directors, $actors)=split('\t', $val);
 		
@@ -1920,7 +2111,7 @@ sub invokeStage($$)
 		    $details=~s/\|$//o;
 		}
 		$details.=$tab;
-		#print "      $title: $val\n";
+		#print "      $dbkey: $val\n";
 		if ( $actors eq "<unknown>" ) {
 		    $details.="<unknown>";
 		}
@@ -1931,11 +2122,12 @@ sub invokeStage($$)
 			my ($billing, $name)=split(':', $c);
 			if ( $billing != 9999 && defined($order{$billing}) ) {
 			    # this occurs, most of the time so we don't check it  :<
-			    #$self->error("title \"$title\" has two actors at billing level $billing ($order{$billing} and $name)");
+			    #$self->error("title \"$dbkey\" has two actors at billing level $billing ($order{$billing} and $name)");
 			}
+			# remove Host/Narrators from end
 			$order{$billing}=$name;
 			#if ( !defined($billing) || ! defined($name) ) {
-			#warn "no billing or name in $c from movie $title";
+			#warn "no billing or name in $c from movie $dbkey";
 			#warn "y=$year";
 			#warn "q=$qualifier";
 			#warn "d=$directors";
@@ -1943,6 +2135,7 @@ sub invokeStage($$)
 			#}
 			#
 			# BUG - should remove (I)'s from actors/actresses names when details are generated
+			$name=~s/\s\([IVX]+\)\[/\[/o;
 			$name=~s/\s\([IVX]+\)$//o;
 			
 			$details.="$name|";
@@ -1952,7 +2145,7 @@ sub invokeStage($$)
 		$details=~s/\|$//o;
 		$count++;
 		my $lineno=sprintf("%07d", $count);
-		print OUT "$key\t$title\t$year\t$qualifier\t$lineno\n";
+		print OUT "$key\t$dbkey\t$year\t$qualifier\t$lineno\n";
 		print ACT "$lineno:$details\n";
 
 		if (Have_bar) {
@@ -2008,6 +2201,11 @@ sub invokeStage($$)
 	    close(OFF);
 	    return(1);
 	}
+	else {
+	    # success, unlink offline if it exists
+	    unlink("$self->{moviedbOffline}");
+	}
+
 	$self->status("sanity intact :)");
     }
     else {
