@@ -1,0 +1,1448 @@
+#!/usr/bin/perl -w
+#
+# tv_extractinfo_en
+#
+# Look at programme descriptions and other text, and extract
+# information from the textual descriptions into subelements of
+# <programme>.  This tv_extractinfo handles English-language
+# descriptions.
+#
+# It also attempts to split multipart programmes into their
+# constituents, by looking for a description that seems to contain
+# lots of times and titles.  But this depends on the description
+# following the particular style used by Ananova.  If I find more
+# examples of listings with multipart programmes it can be extended.
+#
+# -- Ed Avis, epa98@doc.ic.ac.uk, 2002-01-31
+# $Id$
+#
+
+use strict;
+use XMLTV qw(best_name);
+use Log::TraceMessages qw(t d); Log::TraceMessages::check_argv();
+use Date::Manip;
+use Tie::RefHash;
+use Carp;
+use Term::ProgressBar;
+
+# There are some seeming bugs in Perl which corrupt the stop time of
+# programmes.  They are less in 5.6.1 than 5.6.0 but still there.  The
+# debugging assertions cst() and no_shared_scalars() have the effect
+# of stopping the problem (it's a Heisenbug).  So one way of making
+# stop times correct is to call this routines regularly.
+#
+# Alternatively, we can limit the script's functionality to work
+# around the bug.  It seems to affect stop times, so if we just don't
+# add stop times things should be okay.
+#
+# This flag decides which of the two to pick: slow but with maximum
+# information about stop times, or fast without them.  (Stop times can
+# easily be added back in by sort_listings, and they weren't that good
+# anyway, so you should probably leave this off.)
+#
+my $SLOW = 0;
+warn "this version has debugging calls, will run slowly\n" if $SLOW;
+
+# It might turn out that a particular version of perl is needed.
+# BEGIN {
+#     eval { require 5.6.1 };
+#     if ($@) {
+# 	for ($@) {
+# 	    chomp;
+# 	    s/, stopped at .+$//;
+# 	    warn "$_, continuing but output may be wrong\n";
+# 	}
+#     }
+# }
+
+sub list_names( $ );
+sub new_relation();
+sub related( $$$ );
+sub relate( $$$ );
+sub unrelate( $$$ );
+sub nuke_from_rel( $$ );
+sub relatives( $$ );
+sub special_category( $ );
+sub special_multipart( $ );
+sub special_credits( $ );
+sub special_radio4( $ );
+sub special_split_title( $ );
+sub special_film( $ );
+sub fix_clumps( $$$ );
+sub check_time_fits( $$ );
+sub check_same_channel( $ );
+sub cst( $ );
+sub no_shared_scalars( $ );
+
+my $filename = @ARGV ? $ARGV[0] : '-';
+my ($encoding, $credits, $ch, $progs) = @{XMLTV::read_data($filename)};
+die if $encoding ne 'UTF-8';
+
+####
+# Human name stuff.
+#
+
+# Regular expression to match a name
+my $UC = '[A-Z]';         # upper case
+my $LC = "[a-z]";         # lower case
+my $AC_P = "[\'A-Za-z-]"; # any case with punctuation
+my $NAME_RE;
+{
+    # One word of a name.  Uppercase, anycase then ending in at least
+    # two lowercase.  Alternatively, uppercase then lowercase (eg
+    # 'Wu') or just uppercase and an optional dot (for initials).
+    #
+    my $name_comp_re = "(?:$UC(?:(?:$AC_P+$LC$LC)|(?:$LC+)|\\.?))";
+    foreach ('Simon', 'McCoy') {
+	die "cannot match name component $_" unless /^$name_comp_re$/o;
+    }
+    foreach ("Valentine's") {
+	die "wrongly matched name component $_" if /^$name_comp_re$/o;
+    }
+
+    # Additional words valid in the middle of names.
+    my $name_join_re = "(?:von|van|de|di|da|van\\s+den|bin|ben|al)";
+
+    # A name must have at least two components.  This excludes those
+    # celebrities known only by first name but it's a reasonable
+    # heuristic for distinguishing between the names of actors and the
+    # names of characters.
+    #
+    my $name_re = "(?:$name_comp_re\\s+(?:(?:(?:$name_comp_re)|$name_join_re)\\s+)*$name_comp_re)";
+    foreach ('Simon McCoy', 'Annie Wu') {
+	die "cannot match $_" unless /^$name_re$/o;
+    }
+
+    # Special handling for some titles.
+    $NAME_RE = "(?:(?:[Tt]he\\s+Rev(?:\\.|erend)\\s+)?$name_re)";
+}
+
+# Regexp to match a list of names: 'Tom, Dick, and Harry'
+my $NAMES_RE = "(?:$NAME_RE(?:(?:\\s*,\\s*$NAME_RE)*(?:\\s*,?\\s*\\band\\s+$NAME_RE))?(?!\\s*(?:and\\s+$UC|from|[0-9])))";
+
+# Subroutine to extract the names from this list
+sub list_names( $ ) {
+    die 'usage: list_names(English string listing names)'
+      if @_ != 1;
+    local $_ = shift; die if not defined;
+    my @r;
+
+    s/^($NAME_RE)\s*// or die "bad 'names' '$_'";
+    push @r, $1;
+
+    while (s/^,?\s*(?:and)?\s+($NAME_RE)\s*//) {
+	push @r, $1;
+    }
+    die "unmatched bit of names $_" unless $_ eq '';
+
+    return @r;
+}
+
+my @tests =
+  (
+   [ 'Richard Whiteley and Carol Vorderman', [ 'Richard Whiteley', 'Carol Vorderman' ] ],
+   [ 'show presented by Jonathan Ross, with', [ 'Jonathan Ross' ] ],
+   [ 'Shane Richie, Michael Starke and Scott Wright',
+     [ 'Shane Richie', 'Michael Starke', 'Scott Wright' ] ],
+  );
+foreach (@tests) {
+    my ($in, $expected) = @$_;
+    for ($in) {
+	/($NAMES_RE)/o or die "$in doesn't match \$NAMES_RE";
+	my @out = list_names($1);
+	local $Log::TraceMessages::On = 1;
+	if (d(\@out) ne d($expected)) {
+	    die "$in split into " . d(\@out);
+	}
+    }
+}
+
+
+####
+# Date handling stuff.
+#
+# This loses any information on partial dates (FIXME).
+#
+sub pd( $ ) {
+    for ($_[0]) {
+	return undef if not defined;
+	my $r = ParseDate($_);
+	die "bad date $_" if not defined $r;
+	return $r;
+    }
+}
+sub ud( $ ) {
+    for ($_[0]) {
+	return undef if not defined;
+	return UnixDate($_, '%P');
+    }
+}
+sub nd( $ ) {
+    for ($_[0]) {
+	return undef if not defined;
+	return ud(pd($_));
+    }
+}
+
+# Memoize some subroutines if possible
+my $memoize_avail;
+eval { require Memoize };
+if ($@) {
+    warn "could not load Memoize module, things will run slowly";
+    $memoize_avail = 0;
+}
+else {
+    foreach (qw(list_names ParseDate UnixDate Date_Cmp list_names
+		clocks_poss time12to24)) {
+	Memoize::memoize($_) or die "cannot memoize $_: $!";
+    }
+    $memoize_avail = 1;
+}
+
+# bn(): memoized wrapper for best_name() with hardcoded language.  We
+# can't use ordinary Memoize on best_name() because it takes undef
+# arguments.  Memoization is not 100% correct because the function
+# takes references and looks at what they point to - but we assume
+# that this pointed-to storage won't change significantly.
+#
+my %bn;
+sub bn( $ ) {
+    my $pairs = shift;
+    return undef if not defined $pairs;
+    die 'bn(): expected ref to list of [text,lang] pairs'
+      if ref $pairs ne 'ARRAY';
+    for ($bn{$pairs}) {
+	return $_ if defined;
+	foreach (@$pairs) {
+	    carp "found bad [text,lang] pair: $_" if ref ne 'ARRAY';
+	}
+	return $_ = best_name(['en'], $pairs);
+    }
+}
+
+
+# Special-case mungers for various programme types.  Each of these
+# should take a single programme and return: a reference to a list of
+# programmes, if successful; undef, if the programme is to be left
+# alone.  Most special-case handlers will not break up a programme
+# into several others, so the returned list will have only one
+# element.
+#
+# A handler may modify the programme passed in iff it returns a list
+# of munged programmes.
+#
+# Ones earlier in the list get the chance to run first, so in general
+# things like splitting programmes (which may be relied on by other
+# handlers) should come at the top and last-chance guesswork (such as
+# parsing English text) at the bottom.
+#
+my @special_handlers =
+  (
+   \&special_multipart,
+   \&special_category,
+   \&special_credits,
+
+   # There are three handlers specific to Ananova / UK listings.  I
+   # haven't yet decided what to do with them: should they be in this
+   # program and enabled with a special flag, or moved into the
+   # Ananova grabber?  special_multipart() is also somewhat
+   # Ananova-specific.
+   #
+   # They haven't been ported to the new XMLTV.pm data structures, so
+   # leave them commented for now.
+   #
+#   \&special_radio4,
+#   \&special_split_title,
+#   \&special_film,
+  );
+
+# Make a relation grouping together programmes sharing a clump.
+my $related = new_relation();
+my %todo;
+foreach (@$progs) {
+    my $clumpidx = $_->{clumpidx};
+    next if not defined $clumpidx or $clumpidx eq '0/1';
+    push @{$todo{$_->{channel}, pd($_->{start})}}, $_;
+}
+t 'updating $related from todo list';
+foreach (keys %todo) {
+    t 'todo list for ' . d($_);
+    my @l = @{$todo{$_}};
+    t 'list of programmes: ' . d(\@l);
+    foreach my $ai (0 .. $#l) {
+	foreach my $bi ($ai+1 .. $#l) {
+	    my $a = $l[$ai]; my $b = $l[$bi];
+	    t "$a and $b related";
+	    die if "$a" eq "$b";
+	    warn "$a, $b over-related" if related($related, $a, $b);
+	    relate($related, $a, $b);
+	}
+    }
+}
+
+# Apply all handlers.  We just haphazardly
+# run one after the other; when a programme has been run
+# through all of them in sequence without any changes, we
+# move it to @progs_done.
+#
+# The reason for using _lists_ is that some handlers turn
+# a single programme into several.
+#
+my @progs_done = ();
+my $bar = new Term::ProgressBar('munging programmes', scalar @$progs);
+while (@$progs) {
+    no_shared_scalars($progs) if $SLOW;
+
+    local $^W = 0;
+    # Deal with one more programme from the input, it may transform
+    # itself into one or more programmes which need processing in
+    # turn.  When all the offspring are dealt with we have finally
+    # finished with that input and can update the progress bar.
+    #
+
+    my @todo = shift @$progs;
+  PROG: while (@todo) {
+#	local $Log::TraceMessages::On = 1;
+	my $prog = shift @todo;
+	t('running handlers for prog: ' . d($prog));
+	my $prog_length;
+	if (defined $prog->{stop}) {
+	    $prog_length = DateCalc($prog->{start}, $prog->{stop});
+	}
+	foreach (@special_handlers) {
+	    t('running handler: ' . d($_));
+	    my $out = $_->($prog);
+	    if (defined $out) {
+		t('gave new list of progs: ' . d($out));
+		die if ref($out) ne 'ARRAY';
+		if ($SLOW) { cst $_ foreach @$out }
+		check_time_fits($prog, $out);
+		check_same_channel([ $prog, @$out ]);
+		check_same_channel([ $prog, @{relatives($related, $prog)} ]);
+		if ($SLOW) { cst $_ foreach @$out }
+		fix_clumps($prog, $out, $related);
+		foreach (@$out) {
+		    cst $_ if $SLOW;
+		    # Sanity check that length hasn't increased.
+		    if (defined $_->{stop}) {
+			my $delta = DateCalc($_->{start}, $_->{stop});
+			if (defined $prog_length and ($prog_length cmp $delta) < 0) {
+			    die 'split into programme longer than the original';
+			}
+		    }
+		}
+		push @todo, @$out;
+		next PROG;
+	    }
+	    t('gave undef');
+	}
+	cst $prog if $SLOW;
+	t 'none of the handlers fired, finished with this prog';
+	nuke_from_rel($related, $prog); # shouldn't be needed, but
+                                        # can't hurt
+	cst $prog if $SLOW;
+	push @progs_done, $prog;
+    }
+    update $bar;
+}
+if ($SLOW) { cst $_ foreach @progs_done }
+XMLTV::write_data([ $encoding, $credits, $ch, \@progs_done ]);
+exit();
+
+# Routines to handle a symmmetric 'relation'.  This is used to keep
+# track of which programmes are sharing a clump so that fix_clumps()
+# can sort them out if needed.
+#
+# FIXME make this into a module.
+#
+sub new_relation() {
+    die 'usage: new_relation()' if @_;
+    my %h; tie %h, 'Tie::RefHash';
+    return \%h;
+}
+sub related( $$$ ) {
+    die 'usage: related(relation, a, b)' if @_ != 3;
+    my ($rel, $a, $b) = @_;
+    my $list = $rel->{$a};
+    return 0 if not defined $list;
+    foreach (@$list) {
+	return 1 if "$_" eq "$b";
+    }
+    return 0;
+}
+sub relate( $$$ ) {
+    die 'usage: related(relation, a, b)' if @_ != 3;
+    my ($rel, $a, $b) = @_;
+    unless (related($rel, $a, $b)) {
+	check_same_channel([$a, $b]);
+	push @{$rel->{$a}}, $b;
+	push @{$rel->{$b}}, $a;
+    }
+}
+sub unrelate( $$$ ) {
+    die 'usage: related(relation, a, b)' if @_ != 3;
+    my ($rel, $a, $b) = @_;
+    die unless related($rel, $a, $b) and related($rel, $b, $a);
+    @{$rel->{$a}} = grep { "$_" ne "$b" } @{$rel->{$a}};
+    @{$rel->{$b}} = grep { "$_" ne "$a" } @{$rel->{$b}};
+}
+sub nuke_from_rel( $$ ) {
+    die 'usage: nuke_from_rel(relation, a)' if @_ != 2;
+    my ($rel, $a) = @_;
+    die unless ref($rel) eq 'HASH';
+    foreach (@{relatives($rel, $a)}) {
+	die unless related($rel, $a, $_);
+	unrelate($rel, $a, $_);
+    }
+
+    # Tidy up by removing from hash
+    die if defined $rel->{$a} and @{$rel->{$a}};
+    delete $rel->{$a};
+}
+sub relatives( $$ ) {
+    die 'usage: relatives(relation, a)' if @_ != 2;
+    my ($rel, $a) = @_;
+    die unless ref($rel) eq 'HASH';
+    if ($rel->{$a}) {
+	return [ @{$rel->{$a}} ]; # make a copy
+    }
+    else {
+	return [];
+    }
+}
+
+
+# All the special handlers
+
+# special_category()
+#
+# If a show has title 'News', it's pretty likely to be a news show.
+# Set the category if it doesn't have one already.  This category
+# information could then be used by other special handlers.
+#
+sub special_category( $ ) {
+    t 'special_category() ENTRY';
+    my $p = shift;
+    return undef if not defined $p->{title};
+    return undef if defined $p->{category} and @{$p->{category}};
+
+    foreach (qw(title desc)) {
+	my $pair = bn($p->{$_});
+	next if not $pair;
+	t "pair for $_: " . d $pair;
+	if ($pair->[0] =~ /\bnews/i) {
+	    t 'matches "news"';
+	    $p->{category} = [ [ 'news', $pair->[1] ] ];
+	    cst $p if $SLOW;
+	    return [ $p ];
+	}
+    }
+    return undef;
+}
+
+
+# special_multipart()
+#
+# Channel Four's '4Learning' is a collection of several programmes
+# stuffed into one entry.  Times and titles are given as part of the
+# description.  This attempts to decode the description and make
+# individual programmes.  Other shows follow the same pattern, eg
+# 'GMTV'.
+#
+# Parameters: a 'programme' hash reference
+# Returns: reference to list of sub-programmes, or undef if programme
+#          was not split
+#
+# We find the title using best_name(), in other words we look only at
+# the first title.  Similarly we use only the first description.  But
+# it should work.  FIXME should split the secondary title as well!
+#
+sub special_multipart( $ ) {
+#    local $Log::TraceMessages::On = 1;
+    die "usage: special_multipart(hashref of programme details)"
+      if @_ != 1;
+    my $p = shift;
+    cst $p if $SLOW;
+    t 'special_multipart() ENTRY';
+    t 'checking programme descs: ' . d $p->{desc};
+    my $best_desc = bn($p->{desc});
+    t 'got best desc: ' . d $best_desc;
+    return undef if not $best_desc;
+    my ($desc, $desc_lang) = @$best_desc;
+#    local $Log::TraceMessages::On;
+#    $Log$
+#    Revision 1.1  2002/01/31 15:39:31  epaepa
+#    Added tv_extractinfo_en, which reads English-language programme
+#    descriptions and attempts to sniff out information which could better
+#    be stored in machine-readable form.  This is mostly code which used to
+#    live in the old scrapped_getlistings_uk_ananova in the attic/
+#    directory, I've just ported it to the new data structures and tidied
+#    it up.
+#
+#    This sort of regular expression matching works well on the long
+#    detailed descriptions Ananova provides.  It's not so good on the North
+#    American listings because they have shorter descriptions.  But it did
+#    manage to extract the names of quiz show hosts.
+#desc =~ /biology/i;
+    t 'testing description for multipart: ' . d $desc;
+    local $_ = $desc;
+    my @words = split;
+    my @r;
+    my ($p_start, $p_stop) = (pd($p->{start}), pd($p->{stop}));
+    my $day = pd(UnixDate($p_start, '%Q'));
+    t "day is $day";
+    # FIXME won't be correct when split programme spans days.
+
+    # Sanity check for a time, that it is within the main programme's
+    # timespan.
+    #
+    my $within_time_period = sub {
+	my $t = shift;
+	if (Date_Cmp($t, $p_start) < 0) {
+	    # Before start of programme, that makes no sense.
+	    return 0;
+	}
+	if (defined $p_stop and Date_Cmp($p_stop, $t) < 0) {
+	    # After end of programme, likewise.
+	    return 0;
+	}
+	return 1;
+    };
+
+    # Three different ways of interpreting a time.  Return undef if
+    # not valid under that system, a 24 hour hh:mm otherwise.
+    #
+    # FIXME doesn't handle multiparts bridging noon or midnight.
+    #
+    my $as_12h_am = sub {
+	clocks_poss($_[0])->[0] || return undef;
+	return time12to24("$_[0]am");
+    };
+    my $as_12h_pm = sub {
+	clocks_poss($_[0])->[0] || return undef;
+	return time12to24("$_[0]pm");
+    };
+    my $as_24h = sub {
+	clocks_poss($_[0])->[1] || return undef;
+	(my $tmp = $_[0]) =~ tr/./:/;
+	return $tmp;
+    };
+
+    my ($best_interp, $best_count);
+  INTERP: foreach my $interp ($as_24h, $as_12h_am, $as_12h_pm) {
+	t 'testing an interpretation of times';
+	my $count = 0;
+	my $prev;
+	foreach (@words) {
+	    my $i = $interp->($_);
+	    next if not defined $i;
+	    die "bad 24h returned time: $i" unless $i =~ /^\d?\d:\d\d$/;
+	    t "found a time that interprets: $i";
+	    my $t = Date_SetTime($day, $i);
+	    die if not defined $t;
+	    t "taken as day $day, gets time $t";
+	    if (not $within_time_period->($t)) {
+		# Obviously wrong.  One bad time is enough to abandon
+		# this whole interpretation and try another.
+		#
+		t "not within time period, whole interpretation wrong";
+		next INTERP;
+	    }
+	    if (defined $prev and not (Date_Cmp($prev, $t) < 0)) {
+		# Not after the previous time.  Likewise.
+		t "not after previous time $prev, whole interpretation wrong";
+		next INTERP;
+	    }
+	    $prev = $t;
+	    ++ $count;
+	}
+	t "found $count matching times and nothing badly wrong";
+	
+	if (not defined $best_interp
+	    or $count > $best_count) {
+	    t 'best so far';
+	    $best_interp = $interp;
+	    $best_count = $count;
+	}
+    }
+
+    # Heuristic.  We require at least three valid times to split.
+    return undef if ((not defined $best_interp) or ($best_count < 3));
+#    local $Log::TraceMessages::On = 1;
+    t 'at least three valid times, proceed';
+
+    my $split = multipart_split_desc(\@words, $best_interp);
+    use vars '@progs'; local *progs = $split->[0];
+    t 'got list of pseudo-programmes: ' . d \@progs;
+    my $common = $split->[1];
+    use vars '@errors'; local *errors = $split->[2];
+
+    # We split the first description, and only after checking it did
+    # look like a plausible multipart.  So if anything went wrong we
+    # should warn about it.
+    #
+    foreach (@errors) {
+	warn $_;
+    }
+
+    # What was returned is a list of pseudo-programmes, these have
+    # main_desc instead of real [text, lang] descriptions, and hh:mm
+    # 'time' instead of real start time+date.
+    #
+    foreach (@progs) {
+	my $time = delete $_->{time};
+	my $start = Date_SetTime($day, $time);
+	die if not defined $start;
+	die "subprogramme starts before main one" if Date_Cmp($start, $p->{start}) < 0;
+	if (defined $p->{stop}) {
+	    die "subprogramme starts after main one stops" if Date_Cmp($p->{stop}, $start) < 0;
+	}
+	$_->{start} = ud($start);
+	if ($_->{start} eq '2002020512:30:00') {
+	    die "subprogramme starts at 2002020512:30:00 (ud'd from $start), main at $p->{start}";
+	}
+
+	die if not defined $_->{main_title};
+	foreach my $key (qw(desc title sub-title)) {
+	    my $v = delete $_->{"main_$key"};
+	    next if not defined $v;
+	    $_->{$key} = [ [ $v, $desc_lang ] ];
+	}
+
+	if (defined $common) {
+	    # Add the common text to this programme.  So far it has at
+	    # most one description in language $desc_lang.
+	    #
+	    $_->{desc}->[0]->[0] .= $common;
+	    $_->{desc}->[0]->[1] = $desc_lang;
+	}
+
+	$_->{channel} = $p->{channel};
+	t "set channel of split programme to $_->{channel}";
+    }
+
+    # The last subprogramme should stop at the same time as the
+    # multipart programme stopped.
+    #
+    if (defined $p->{stop}) {
+	t "setting stop time of last subprog to stop time of main prog ($p->{stop})";
+	set_stop_time($progs[-1], $p->{stop});
+    } else { t 'main prog had no stop time, not adding to last subprog' }
+
+    # And similarly, the first should start at the same time as the
+    # multipart programme.  Add a dummy prog to fill the gap if
+    # necessary.
+    #
+    my $first_sub_start = $progs[0]->{start};
+    die "first subprog $progs[0]->{title}->[0]->[0] starts at 2002020512:30:00"
+      if $first_sub_start eq '2002020512:30:00';
+    my $cmp = Date_Cmp(pd($first_sub_start), $p_start);
+    if ($cmp < 0) {
+	# Should have caught this already.
+	die 'first subprogramme starts _before_ main programme';
+    }
+    elsif ($cmp == 0) {
+	# Okay.
+    }
+    elsif ($cmp > 0) {
+	die "first subprog $progs[0]->{title}->[0]->[0] starts at 2002020512:30:00"
+	  if $first_sub_start eq '2002020512:30:00';
+	my $dummy = { title   => $p->{title},
+		      channel => $p->{channel},
+		      start   => $p->{start},
+		      stop    => $first_sub_start };
+	t 'inserting dummy subprogramme: ' . d $dummy;
+	cst $dummy if $SLOW;
+	unshift @progs, $dummy;
+    }
+    else { die }
+
+    if ($SLOW) { cst $_ foreach @progs }
+    t 'returning new list of programmes: ' . d \@progs;
+    return \@progs;
+}
+# Given a programme description split into a list of words, and a
+# subroutine to interpret times, return a list of the subprogrammes
+# (assuming it is a multipart).
+#
+# Returns [pps, common, errs] where pps is a list of 'pseudo-programmes',
+# hashes containing some of:
+#
+#  time: 24h time within the main programme's day,
+#  main_title, main_desc, main_sub-title: text in the same language as
+#  the desc passed in,
+#
+# and where common is text which belongs to the description of every
+# subprogramme, and errs is a list of errors found (probably quite
+# large if the description was not multipart).
+#
+sub multipart_split_desc( $$ ) {
+    use vars '@words'; local *words = shift;
+    my $interp = shift;
+    my @r;
+    my @errors;
+
+    # First extract any 'common text' at the start of the programme,
+    # before any sub-programmes.
+    #
+    my $common;
+    while (@words) {
+	my $first = shift @words;
+	if (defined $interp->($first)) {
+	    unshift @words, $first;
+	    last;
+	}
+	$common .= " $first";
+    }
+    t 'common text: ' . d $common;
+
+    while (@words) {
+	my $time = shift @words;
+	my $i = $interp->($time);
+	if (defined $i) {
+	    my (@title_words, @desc_words);
+
+	    # Build up a current 'pseudo-programme' with title,
+	    # description and time.  It's up to our caller to
+	    # manipulate these simple data structures into real
+	    # programmes.
+	    #
+	    my $curr_pp;
+	    $curr_pp->{time} = $i;
+	    my $done_title = 0;
+	    while (@words) {
+		my $word = shift @words;
+
+		if (defined $interp->($word)) {
+		    # Finished this bit of multipart.
+		    unshift @words, $word;
+		    last;
+		}
+		elsif (not $done_title) {
+		    if ($word =~ s/[.?]$//) {
+			# Finished the title, move on to description.
+			$done_title = 1;
+		    }
+		    push @title_words, $word;
+		}
+		else {
+		    push @desc_words, $word;
+		}
+	    }
+
+	    # The title sometimes looks like 'History in Action: Women
+	    # in the 20th Century'; this should be broken into main
+	    # title and secondary title.  But not 'GNVQ: Is It For You
+	    # 2'.  So arbitrarily we check that the main title has at
+	    # least two words.
+	    #
+	    if (@title_words) {
+		my (@main_title_words, @sub_title_words);
+		while (@title_words) {
+		    my $word = shift @title_words;
+		    my $main_title_length = @main_title_words + 1;
+		    if ($main_title_length >= 2 and $word =~ s/:$//) {
+			push @main_title_words, $word;
+			@sub_title_words = @title_words;
+			last;
+		    }
+		    else {
+			push @main_title_words, $word;
+		    }
+		}
+
+		# To set the title of the new programme we use the
+		# language of the old description that it was pieced
+		# together from.  We know it's going to be English
+		# anyway, but it's just nicer this way.
+		#
+		$curr_pp->{main_title} = join(' ', @main_title_words);
+		$curr_pp->{'main_sub-title'} = join(' ', @sub_title_words)
+		  if @sub_title_words;
+	    }
+
+	    $curr_pp->{main_desc} = join(' ', @desc_words) if @desc_words;
+	    t 'built sub-programme: ' . d $curr_pp;
+	    push @r, $curr_pp;
+	}
+	else {
+	    push @errors, "expected time in multipart description, got $time";
+	    # Add it to the previous programme, so it doesn't get lost
+	    if (@r) {
+		my $prev = $r[-1];
+		$prev->{main_desc} = '' if not defined $prev->{main_desc};
+		$prev->{main_desc} .= $time;
+	    }
+	    else {
+		# Cannot happen.  If @r is empty, this must be the
+		# first word.
+		#
+		warn 'first word of desc is not time, but checked this before';
+		# Not worthy of @errors, this is a bug in the code.
+	    }
+	}
+    }
+    t 'returning list of pseudo-programmes: ' . d \@r;
+    t '...and common text: ' . d $common;
+    t '...and errors: ' . d \@errors;
+    return [\@r, $common, \@errors];
+}
+# Is a time string using the 12 hour or 24 hour clock?  Returns a pair
+# of two booleans: the first means it could be 12h, the seecond that
+# it could be 24h.  Expects an h.mm or hh.mm time string.  If the
+# string is not a valid time under either clock, returns [0, 0].
+#
+# Allows eg '5:30' to be a 24 hour time (05:30).
+#
+sub clocks_poss( $ ) {
+    local $_ = shift;
+    if (not /^(\d\d?)\.(\d\d)$/) {
+	return [0, 0];
+    }
+    my ($hh, $mm) = ($1, $2);
+    return [0, 1] if $hh =~ /^0/;
+    return [1, 1] if 1 <= $hh && $hh < 13;
+    return [0, 1] if 13 <= $hh && $hh < 24;
+
+    # Do not accept '24:00', '24:01' etc - not until it's proved we
+    # need to.
+    #
+    return [0, 0];
+}
+
+# time12to24()
+#
+# Convert a 12 hour time string to a 24 hour one, without anything too
+# fancy.  In particular the timezone is passed through unchanged.
+#
+sub time12to24( $ ) {
+    die 'usage: time12to24(12 hour time string)' if @_ != 1;
+    local $_ = shift;
+    die if not defined;
+
+#    # Remove the timezone and stick it back on afterwards.
+#    my $tz = gettz($_);
+#    s/\Q$tz\E// if defined $tz;
+
+    s/\s+//;
+    my ($hours, $mins, $ampm) = /^(\d\d?)[.:]?(\d\d)(am|pm)$/
+      or die "bad time $_";
+    if ($ampm eq 'am') {
+	if (1 <= $hours and $hours < 12) {
+	    $hours = $hours;      # 5am = 05:00
+	}
+	elsif ($hours == 12) {
+	    $hours = 0;           # 12am = 00:00
+	}
+	else { die "bad number of hours $hours" }
+    }
+    elsif ($ampm eq 'pm') {
+	if ($hours == 12) {
+	    $hours = 12;          # 12pm = 12:00
+	}
+	elsif (1 <= $hours and $hours < 12) {
+	    $hours = 12 + $hours; # 5pm = 17:00
+	}
+	else { die "bad number of hours $hours" }
+    }
+    else { die }
+
+    my $r = sprintf('%02d:%02d', $hours, $mins);
+#    $r .= " $tz" if defined $tz;
+    return $r;
+}
+
+
+
+
+# special_credits()
+#
+# Try to sniff out presenter, actor or guest info from the start of the
+# description and put it into the credits section instead.
+#
+# Parameters: one programme (hashref)
+# Returns: [ modified programme ], or undef
+#
+# May modify the programme passed in, if return value is not undef.
+# But that's okay for a special-case handler.
+#
+sub special_credits( $ ) {
+    die 'usage: special_credits(programme hashref)' if @_ != 1;
+    my $p = shift;
+    t 'special_credits() ENTRY';
+
+    my $best_desc = bn($p->{desc});
+    return undef if not $best_desc;
+    for ($best_desc->[0]) {
+	die if not defined;
+	t "testing desc: $_";
+
+	if (s/\b([pP])resenteed\b/$1resented/g) {
+	    t "fixing spelling mistake!";
+	    return [ $p ];
+	}
+	
+	# Regexps to apply to the description (currently only the
+	# first English-language description is matched).  The first
+	# element is a subroutine which should alter $_ and return a
+	# name or string of names if it succeeds, undef if it fails to
+	# match.
+	#
+	# The first argument of the subroutine is the programme
+	# itself, but this usually isn't used.  In any case, it should
+	# not be modified except by altering $_.
+	#
+ 	my @extractors =
+ 	  (
+ 	   [ sub {
+		 return undef if has($_[0], 'category', 'comedy', 'drama');
+ s{((?:guest|virtual|new)\s+presenters?)\s+($NAMES_RE)}{$1}o                                   && return $2;
+ s{^\s*([hH]eadlines?(?:\s+\S+)?),?\s*[wW]ith\s+($NAMES_RE)(?:\.\s*)?}{$1}o                    && return $2;
+ s{^\s*,?\s*[wW]ith\s+($NAMES_RE)(?:(?:\.\s*)?$)?}{}o                                          && return $1;
+ s{^\s*(?:[hH]ost\s+)?($NAME_RE) (?:introduces|conducts) (\w)(?![^[:punct:]]*\bto\b)}{uc $2}oe && return $1;
+ s{,?\s*[pP]resented by\s+($NAMES_RE)\b\s*(.|,?\s+\w|\Z)}{uc $2}oe                             && return $1;
+ s{\s*($NAMES_RE)\s+presents?\b(\s*(?:\.|,|\w|\Z))}{uc $2}oe                                   && return $1;
+ s{[pP]resenters?\s+($NAMES_RE)}{$1}o                                                          && return $1;
+ s{,?\s*[cC]o-?presenters?\s+($NAMES_RE)}{}o                                                   && return $1;
+ s{,?\s*(?:[iI]ntroduced|[cC]haired)\s+by\s+($NAMES_RE)}{}o                                    && return $1;
+ s{^\s*(?:[hH]ost\s+)?($NAME_RE)\s+(?:explores|examines)\s*}{}o                                && return $1;
+		 return undef;
+	     }, 'presenter' ],
+	   # Leave 'virtual presenter', 'aquatic presenter',
+	   # 'new presenter' alone for now
+	   #
+
+	   # 'with' in quiz shows is guest (maybe)
+	   [ sub {
+		 return undef unless has($_[0], 'category', 'quiz', 'sport');
+		 s{(?:^|,|\.)\s*[wW]ith\s*($NAMES_RE)(\.\s*\S)}{$2}o && return $1;
+		 s{(?:^|,|\.)\s*[wW]ith\s*($NAMES_RE)(?:\.\s*$)?}{}o && return $1;
+		 return undef;
+	     }, 'guest' ],
+
+	   # 'with' in news/children shows is presenter (equally dubious)
+	   [ sub {
+		 return undef unless has($_[0], 'category', 'news', 'business', 'factual', 'children');
+		 s{(?:^|,|\.)\s*[wW]ith\s*($NAMES_RE)(?:\.\s*)?}{}o && return $1;
+		 return undef;
+	     }, 'presenter' ],
+
+	   [ sub {
+		 s{[gG]uest\s+star\s+($NAMES_RE)\s*[,;.]?\s*}{}o           && return $1;
+		 s{^($NAMES_RE) (?:co-)?stars? in\s+(?:this\s+)?}{uc $2}oe && return $1;
+		 s{($NAMES_RE) (?:co-)?stars?\.?\s*$}{}o                   && return $1;
+		 s{(?:^|\.)\s*($NAMES_RE)\s+(?:co-)?stars?\s+as\s*$}{}o    && return $1;
+		 return undef;
+	     }, 'actor' ],
+
+	   [ sub {
+		 # A discussion of 'a film starring Robin Williams'
+		 # does not itself feature that actor.
+		 #
+		 return undef if has($_[0], 'category', 'arts');
+		 s{(?:^|,|\.)\s*[wW]ith\s*($NAMES_RE)\b(?:,|\.|;|$)?}{}o                 && return $1;
+		 s{,?\s*(?:(?:[Aa]lso|[Aa]nd)\s+)?(?:co-|guest\s+)?starring\s+($NAMES_RE)\s*$}{}o && return $1;
+		 return undef;
+	     }, 'actor' ],
+
+	   [ sub {
+		 s{,?\s*[wW]ith\s+guests\s+($NAMES_RE)(?:\.\s*)?}{}o && return $1;
+		 return undef;
+	     }, 'guest' ],
+	  );
+
+	# Run our own little hog-butchering algorithm to match each of
+	# the subroutines in turn.
+	#
+	my $matched = 0;
+	EXTRACTORS: foreach my $e (@extractors) {
+	    my ($sub, $person) = @$e;
+	    t "running extractor for role $person";
+	    if (defined (my $match = $sub->($p))) {
+		# Found one or more $person called $_.  We add them to
+		# the list unless they're already in there.  We use a
+		# per-programme cache of this information to avoid
+		# going through the list each time (basically because
+		# hashes are more Perlish).
+		#
+		t "got list of people: $match";
+		t 'programme updated to: ' . d $p;
+		for my $credits ($p->{credits}) {
+		    for my $cache ($credits->{"_seen_$person"}) {
+			for my $people ($credits->{$person}) {
+			    if (not defined $cache) {
+				foreach (@$people) {
+				    $cache->{$_}++ && warn "$person $_ seen twice";
+				}
+			    }
+			    foreach (list_names($match)) {
+				push @$people, $_ unless $cache->{$_}++;
+			    }
+			}
+		    }
+		}
+
+		if ($_ eq '') {
+ 		    t 'description whittled down to nothing, remove';
+ 		    $p->{desc} = [ grep { $_ ne $best_desc } @{$p->{desc}} ];
+ 		    t 'new list of descs: ' . d $p->{desc};
+ 		    last EXTRACTORS;
+		}
+
+		$matched = 1;
+		goto EXTRACTORS; # start again from beginning of loop
+	    }
+	}
+	return [ $p ] if $matched;
+    }
+    return undef;
+}
+# has()
+#
+# Check whether some attribute of a programme matches a particular
+# string.  For example, does the programme have the category 'quiz'?
+# This means checking all categories of acceptable language.
+#
+#   has($programme, 'category', 'quiz');
+#
+sub has( $$@ ) {
+    my ($p, $attr, @allowed) = @_;
+    my $list = $p->{$attr};
+    return 0 if not defined $list;
+    foreach (@$list) {
+	my ($text, $lang) = @$_;
+	# Another place for hardcoded 'en'.
+	next unless (not defined $lang or $lang =~ /^en(?:_\w+)?$/);
+	foreach (@allowed) {
+	    return 1 if lc $text eq $_;
+	}
+    }
+    return 0;
+}
+
+
+# special_radio4()
+#
+# Split Radio 4 into FM and LW.
+#
+sub special_radio4( $ ) {
+    die 'usage: special_radio4(programme)' if @_ != 1;
+    my $p = shift;
+    return undef if $p->{channel} ne 'radio4';
+
+    for ($p->{title}) {
+	if (s/^\(FM\)\s+//) {
+	    $p->{channel} = 'radio4-fm';
+	    return [ $p ];
+	}
+	if (s/^\(LW\)\s+//) {
+	    $p->{channel} = 'radio4-lw';
+	    return [ $p ];
+	}
+	
+	my %fm = ( %$p, channel => 'radio4-fm' );
+	my %lw = ( %$p, channel => 'radio4-lw' );
+	return [ \%fm, \%lw ];
+    }
+}
+
+
+# special_split_title()
+#
+# In addition to the 'programme tacked onto the end of another'
+# handled by add_clumpidx, you also sometimes see two programmes
+# totally sharing an entry.  For example 'News; Shipping Forecast'.
+#
+sub special_split_title( $ ) {
+    die 'usage: special_split_title(programme)' if @_ != 1;
+    my $p = shift;
+    return undef if $p->{title} !~ tr/;//;
+
+    # Split the title at ; and make N identical programmes one with
+    # each title.  The programme details are given to only the last of
+    # the programmes - in the listings data we're getting, normally
+    # the insignificant programme comes first with the main feature
+    # last, as in 'News; Radio 3 Lunchtime Concert'.
+    #
+
+    # List of elements which are meta-data and should be kept for all
+    # the programmes we split into - the rest are given only to the
+    # last programme.
+    #
+    my %meta = (start => 1, stop => 1, 'pdc-start' => 1,
+		'vps-start' => 1, showview => 1, videoplus => 1,
+		channel => 1);
+    # but not clumpidx!
+
+    my %p_meta;
+    foreach (grep { $meta{$_} } keys %$p) {
+	$p_meta{$_} = $p->{$_};
+    }
+
+    my @r;
+    my @titles = split /\s*;+\s*/, $p->{title};
+    for (my $i = 0; $i < @titles - 1; $i++) {
+	push @r, { %p_meta,
+		   title => $titles[$i],
+		   clumpidx => ( "$i/" . scalar @titles ) };
+    }
+    push @r, { %$p,
+	       title => $titles[-1],
+	       clumpidx => ("$#titles/" . scalar @titles) };
+
+    return \@r;
+}
+
+
+# special_film()
+#
+sub special_film( $ ) {
+    die 'usage: special_film(programme)' if @_ != 1;
+    my $p = shift;
+    if (not defined $p->{'sub-title'} or $p->{'sub-title'} ne '(Film)') {
+	return undef;
+    }
+
+    warn "replacing category $p->{category} with 'film'"
+      if defined $p->{category};
+    $p->{category} = 'film';
+    undef $p->{'sub-title'};
+
+    if (defined $p->{desc} and $p->{desc} =~ s/^(\d{4})\s+//) {
+	warn "found year $1 in description, replacing date $p->{date}"
+	  if defined $p->{date};
+	$p->{date} = $1;
+    }
+
+    return [ $p ];
+}
+
+
+# fix_clumps()
+#
+# When a programme sharing a clump has been modified by one of the
+# 'special handler' kludges, patch things up so that other things in
+# the clump are consistent.
+#
+# This is to handle one particular problem - a compound '4Learning'
+# programme followed (without giving a new time) by 'Driven'.  Ugh.
+# But it should do something sensible most of the time, or moan that
+# it cannot.  You can just ignore this whole subroutine.
+#
+sub fix_clumps( $$$ ) {
+    die 'usage: fix_clumps(old programme, listref of replacements, clump relation)' if @_ != 3;
+    my ($orig, $new, $rel) = @_;
+    die if ref($rel) ne 'HASH';
+    die if ref($new) ne 'ARRAY';
+    use vars '@new'; local *new = $new;
+
+    sub by_start { Date_Cmp(pd($a->{start}), pd($b->{start})) }
+    sub by_clumpidx {
+	$a->{clumpidx} =~ m!^(\d+)/(\d+)$! or die;
+	my ($ac, $n) = ($1, $2);
+	$b->{clumpidx} =~ m!^(\d+)/$n$! or die;
+	my $bc = $1;
+	if ($ac == $bc) {
+	    t 'do not sort: ' . d($a) . ' and ' . d($b);
+	    warn "$a->{clumpidx} and $b->{clumpidx} do not sort";
+	}
+	$ac <=> $bc;
+    }
+    sub by_date {
+	by_start($a, $b)
+	  || by_clumpidx($a, $b)
+	    || die "programmes do not sort";
+    }
+
+    my @relatives = @{relatives($rel, $orig)};
+    check_same_channel(\@relatives);
+    @relatives = sort by_date @relatives;
+    t 'relatives of orig (sorted): ' . d \@relatives;
+    check_same_channel(\@new); # could relax this later
+    t 'orig turned into: ' . d \@new;
+
+    t 'how many programmes has $prog been split into?';
+    if (@new == 0) {
+	t 'deleted programme entirely!';
+	if (@relatives) {
+	    warn "programme sharing a clump ($orig->{title}->[0]->[0]) was deleted, "
+	      . "this isn't handled";
+	
+	    nuke_from_rel($rel, $orig);
+	}
+    }
+    elsif (@new == 1) {
+	t 'still exactly one programme';
+	if (@relatives and "$new[0]" ne "$orig") {
+	    t "programme sharing a clump was replaced, this isn't handled";
+	    nuke_from_rel($rel, $orig);
+	}
+	else {
+	    # Was _altered_ rather than replaced.  Keep in relation.
+	}
+    }
+    elsif (@new >= 2) {
+#	local $Log::TraceMessages::On = 1;
+	t 'split into multiple programmes';
+	@new = sort by_date @$new;
+	nuke_from_rel($rel, $orig);
+	
+	if (@relatives) {
+	    # Find where the original programme slotted into the clump
+	    # and insert the new programmes there.
+	    #
+	    my @old_all = sort by_date ($orig, @relatives);
+	    check_same_channel(\@old_all);
+	    t 'old clump sorted by date (incl. orig): ' . d \@old_all;
+	    @new = sort by_date @new;
+	    t 'new shows sorted by date: ' . d \@new;
+
+	    # Fix the start and end times of the other shows in the
+	    # clump.  The shows in @new may give different (narrower)
+	    # times to the one show they came from, so that we have
+	    # more information about the start and end times of the
+	    # other shows in the clump.  Eg 09:30 0/2 '09:30 AAA,
+	    # 10:00 BBB' sharing a clump with 09:30 1/2 'CCC'.  When
+	    # the first programme gets split into two, we know that
+	    # the start time for C must be 10:00 at the earliest.
+	    # Clear?
+	    #
+	    my $start_new = pd($new[0]->{start});
+	    t "new shows start at $start_new";
+
+	    # The known stop time for @new is the last date
+	    # mentioned.  Eg if the last show ends at 10:00 we know
+	    # @new as a whole ends at 10:00.  But if the last show has
+	    # no stop time but starts at 09:30 then we know @new as a
+	    # whole ends at *at the earliest* 09:30.
+	    #
+	    my $stop_new;
+	    foreach (reverse @new) {
+		foreach (pd($_->{start}), pd($_->{stop})) {
+		    next if not defined;
+		    if (not defined $stop_new
+			or Date_Cmp($_, $stop_new) > 0) {
+			$stop_new = $_;
+		    }
+		}
+	    }
+	    t "lub of new shows is $stop_new";
+
+	    # However if other shows shared a clump, they do not start
+	    # at the stop time of @new!  They overlap with it.  The
+	    # shows coming later in the clump will have the same start
+	    # time as the last show of @new.
+	    #
+	    # For example, two shows in a clump from 10:00 to 11:00.
+	    # The first is split into something at 10:00 and something
+	    # at 10:30.  The second part of the original clump will
+	    # now 'start' at 10:30 and overlap with the last of the
+	    # new shows.
+	    #
+	    my $start_last_new = pd($new[-1]->{start});
+
+	    # Add the programmes coming before @new to the output.
+	    # These should have stop times before @new's start.
+	    #
+	    my @new_all;
+	    t 'add shows coming before replaced one';
+	    while (@old_all) {
+		my $old = shift @old_all;
+		last if $old eq $orig;
+		t "adding 'before' show: " . d $old;
+		die if not defined $old->{start};
+		die if not defined $start_new;
+		die unless Date_Cmp(pd($old->{start}), $start_new) <= 0;
+		my $old_stop = pd($old->{stop});
+		t 'has stop time: ' . d $old_stop;
+		if (defined $old_stop) {
+		    die if not defined $stop_new;
+		    die unless Date_Cmp($old_stop, $stop_new) >= 0;
+		    die unless Date_Cmp($old_stop, $start_new) >= 0;
+		}
+		set_stop_time($old, ud($start_new));
+		t "set stop time to $old->{stop}";
+
+		push @new_all, $old;
+	    }
+
+	    # Slot in the new programmes.
+	    t 'got to orig show, slot in new programmes';
+	    push @new_all, @new;
+
+	    # Now the shows at the end, after the programme which was
+	    # split.
+	    #
+	    t 'do shows coming after the orig one';
+	    while (@old_all) {
+		my $old = shift @old_all;
+		t "doing 'after' show: " . d $old;
+		my $old_start = pd($old->{start});
+		die if not defined $old_start;
+		t "current start time: $old_start";
+		die if not defined $start_new;
+		die if not defined $stop_new;
+		die unless Date_Cmp($start_new, $old_start) <= 0;
+		die unless Date_Cmp($old_start, $stop_new) <= 0;
+
+		# These shows overlapped with the old programme.  So
+		# now they will overlap with the last of the shows it
+		# was split into.
+		#
+		$old->{start} = ud($start_last_new);
+		t "set start time to $old->{start}";
+
+		push @new_all, $old;
+	    }
+
+	    t 'new list of programmes from original clump: ' . d \@new_all;
+	    check_same_channel(\@new_all);
+
+	    t 'now regenerate the clumpidxes';
+	    while (@new_all) {
+		my $first = shift @new_all;
+		t 'taking first programme from list: ' . d $first;
+		t 'building clump for this programme';
+		my @clump = ($first);
+		my $start = pd($first->{start});
+		die if not defined $start;
+		while (@new_all) {
+		    my $next = shift @new_all;
+		    die if not defined $next->{start};
+		    if (not Date_Cmp(pd($next->{start}), $start)) {
+			push @clump, $next;
+		    }
+		    else {
+			unshift @new_all, $next;
+			last;
+		    }
+		}
+		t 'clump is: ' . d \@clump;
+		my $clump_size = scalar @clump;
+		t "$clump_size shows in clump";
+		for (my $i = 0; $i < $clump_size; $i++) {
+		    my $c = $clump[$i];
+		    if ($clump_size == 1) {
+			t 'deleting clumpidx from programme';
+			delete $c->{clumpidx};
+		    }
+		    else {
+			$c->{clumpidx} = "$i/$clump_size";
+			t "set clumpidx for programme to $c->{clumpidx}";
+		    }
+		}
+
+		t 're-relating programmes in this clump (if more than one)';
+		foreach my $a (@clump) {
+		    foreach my $b (@clump) {
+			next if $a == $b;
+			relate($rel, $a, $b);
+		    }
+		}
+	    }
+	    t 'finished regenerating clumpidxes';
+	}
+    }
+}
+
+
+# Make sure that a programme altered by a special handler does not
+# spill outside its alotted timespan.  This is just a sanity check
+# before fix_clumps() does its stuff.  In a future version we might
+# remove this restriction and allow special handlers to move
+# programmes outside their original timeslot.
+#
+# Parameters:
+#   original programme
+#   ref to list of new programmes
+#
+sub check_time_fits( $$ ) {
+    my $orig = shift;
+    my @new = @{shift()};
+    my $o_start = pd($orig->{start});
+    die if not defined $o_start;
+    my $o_stop = pd($orig->{stop});
+    foreach (@new) {
+	my $start = pd($_->{start});
+	die if not defined $start;
+	if (Date_Cmp($start, $o_start) < 0) {
+	    die "programme starting at $o_start was split into one starting at $start";
+	}
+
+	if (defined $o_stop) {
+	    my $stop = pd($_->{stop});
+	    if (defined $stop and Date_Cmp($o_stop, $stop) < 0) {
+		die "programme stopping at $o_stop was split into one stopping at $stop";
+	    }
+	}
+    }
+}
+
+# Another sanity check.
+sub check_same_channel( $ ) {
+    my $progs = shift;
+    my $ch;
+    foreach my $prog (@$progs) {
+	for ($prog->{channel}) {
+	    if (not defined) {
+		t 'no channel! ' . d $prog;
+		croak 'programme has no channel';
+	    }
+	    if (not defined $ch) {
+		$ch = $_;
+	    }
+	    elsif ($ch eq $_) {
+		# Okay.
+	    }
+	    else {
+		# Cannot use croak() due to this error message:
+		#
+		# Bizarre copy of ARRAY in aassign at /usr/lib/perl5/5.6.0/Carp/Heavy.pm line 79.
+		#
+		local $Log::TraceMessages::On = 1;
+		t 'same clump, different channels: ' . d($progs->[0]) . ' and ' . d($prog);
+		die "programmes in same clump have different channels: $_, $ch";
+	    }
+	}
+    }
+}
+
+# There is a very hard to track down bug where stop times mysteriously
+# get set to something ridiculous.  It varies from one perl version to
+# another (hence the version check at the top) but still occurs even
+# with 5.6.1.  To track it down I have isolated all code that sets
+# stop times in this subroutine.
+#
+sub set_stop_time( $$ ) {
+    my $p = shift;
+    my $s = shift;
+
+    if ($SLOW) {
+	# Another mysterious-bug-preventing line, see no_shared_scalars().
+	my $dummy = "$s";
+
+	$p->{stop} = $s;
+    }
+    else {
+	# Don't set stop times at all.
+	delete $p->{stop};
+    }
+}
+
+# More debugging aids.
+sub cst( $ ) {
+    my $p = shift;
+    croak "prog $p->{title}->[0]->[0] has bogus stop time"
+      if exists $p->{stop} and $p->{stop} eq 'boogus FIXME XXX';
+}
+
+sub no_shared_scalars( $ ) {
+    my %seen;
+    foreach my $h (@{$_[0]}) {
+	foreach my $k (keys %$h) {
+	    my $ref = \ ($h->{$k});
+	    my $addr = "$ref";
+	    $seen{$addr}++ && die "scalar $addr seen twice";
+	}
+    }
+}
