@@ -31,8 +31,8 @@ BEGIN {
 # removed from @ARGV and caching will be turned on.  The optional
 # argument to --cache gives the filename to use.
 #
-# Currently only does SCALAR_CACHE memoization, but more could be
-# added if needed.
+# Currently it is assumed that the function gives the same result in
+# both scalar and list context.
 #
 # Note that the Memoize module is not loaded unless --cache options
 # are found.
@@ -93,13 +93,17 @@ sub check_argv( @ ) {
 	tie %cache, 'DB_File', $filename,
 	  POSIX::O_RDWR() | POSIX::O_CREAT(), 0666;
 	foreach (@_) {
-	    Memoize::memoize("${caller}::$_", SCALAR_CACHE => [ HASH => \%cache ]);
+	    Memoize::memoize("${caller}::$_",
+			     SCALAR_CACHE => [ HASH => \%cache ],
+			     LIST_CACHE => 'MERGE');
 	}
     }
     else {
 	# Old version of Memoize.
 	foreach (@_) {
-	    Memoize::memoize("${caller}::$_", SCALAR_CACHE => [ 'TIE', @tie_args ]);
+	    Memoize::memoize("${caller}::$_",
+			     SCALAR_CACHE => [ 'TIE', @tie_args ],
+			     LIST_CACHE => 'MERGE');
 	}
     }
     return 1;
