@@ -83,8 +83,10 @@ sub check_argv( @ ) {
     };
 
     my @r;
-    if ($Memoize::VERSION > 0.62) {
-	# Use HASH instead of deprecated TIE.
+    if ($Memoize::VERSION !~ /^[0-9.]+$/ or $Memoize::VERSION > 0.62) {
+	# It's a newer-than-0.62 or just plain wacky version of
+	# Memoize.  Use HASH instead of deprecated TIE.
+	#
 	my %cache;
 
 	# Annoyingly tie(%cache, @tie_args) doesn't work
