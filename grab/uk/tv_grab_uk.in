@@ -579,33 +579,54 @@ sub grab( @ ) {
 	update $bar if $have_bar;
     }
 
-    my %w_args = ();
-    if (defined $opt_output) {
-	my $fh = new IO::File ">$opt_output";
-	die "cannot write to $opt_output\n" if not $fh;
-	%w_args = (OUTPUT => $fh);
-    }
-    my $catted = XMLTV::cat(@listingses);
-
-    # We need to reconcile the channels data with the Ananova_Channel
-    # objects that are lying around.  FIXME this information should be
-    # in a single place - perhaps the Ananova_Channel package should
-    # go.
+    # Join together all the listings files: but for scalability we
+    # don't join the programmes.  (Putting them all into a big list in
+    # channel order gave very poor locality of memory use, so
+    # thrashing.)
     #
+    my $catted = XMLTV::cat_noprogrammes(@listingses);
+    my $encoding = $catted->[0];
+    use vars '%credits'; local *credits = $catted->[1];
     use vars '%ch'; local *ch = $catted->[2];
-    use vars '@progs'; local *progs = $catted->[3];
-    fix_xmltv_ids(\%ch, \@progs);
+    # Nut programmes are not included.
+
+    # Convert Ananova channel ids to XMLTV ids.  Ananova serves the pages
+    # with its own internal numeric ids.
+    #
+    foreach (keys %ch) {
+	die if not defined;
+	my $xid = XMLTV::Ananova_Channel->ananova_id_to_xmltv_id($_);
+	if (not defined $xid) {
+	    # Shouldn't happen as we read the allchannels page before.
+ 	    warn "in channels, cannot convert Ananova id $_->{channel} to XMLTV id";
+	}
+	else {
+	    warn "channel with XMLTV id $xid seen twice"
+	      if defined $ch{$xid};
+	    ($ch{$xid} = delete $ch{$_})->{id} = $xid;
+	}
+    }
     add_display_names(\%ch);
 
-    # A couple of fixes to make, on a per-channel basis.
-    my %by_ch;
-    foreach (@progs) {
-	die if not defined;
-	push @{$by_ch{$_->{channel}}}, $_;
+    foreach (@listingses) {
+	foreach (@{$_->[3]}) {
+	    my $xid = XMLTV::Ananova_Channel->ananova_id_to_xmltv_id($_->{channel});
+	    if (not defined $xid) {
+		warn "in programme, cannot convert Ananova id $_->{channel} to XMLTV id";
+	    }
+	    else {
+		$_->{channel} = $xid;
+	    }
+	}
     }
-#    local $Log::TraceMessages::On = 1;
+
+    my %by_ch;
+    foreach (@listingses) {
+	foreach (@{$_->[3]}) {
+	    push @{$by_ch{$_->{channel}}}, $_;
+	}
+    }
     t '\%by_ch: ' . d \%by_ch;
-    @progs = ();
     $bar = new Term::ProgressBar('miscellaneous fixes', scalar keys %by_ch)
       if $have_bar;
     foreach (keys %by_ch) {
@@ -625,66 +646,27 @@ sub grab( @ ) {
 	#
 	fix_zero_length($progs);
 
-	push @progs, @$progs;
 	update $bar if $have_bar;
     }
 
-    # Warn about occasional bug where blank titles are generated.
-    PROG: foreach my $p (@progs) {
-	foreach (@{$p->{title}}) {
-	    if (not length $_->[0]) {
-		warn "programme at $p->{start} on $p->{channel} has blank title";
-		last PROG; # don't warn any more
-	    }
+    my %w_args = ();
+    if (defined $opt_output) {
+	my $fh = new IO::File ">$opt_output";
+	die "cannot write to $opt_output\n" if not $fh;
+	%w_args = (OUTPUT => $fh);
+    }
+    my $w = new XMLTV::Writer(%w_args, encoding => $encoding);
+    $w->start(\%credits);
+    $w->comment($copyright);
+    $w->write_channels(\%ch);
+    foreach (@listingses) {
+	foreach (@{$_->[3]}) {
+	    $w->write_programme($_);
 	}
     }
-
-    XMLTV::write_data($catted, %w_args, comment => $copyright);
+    $w->end();
 }
 
-
-# Convert Ananova channel ids to XMLTV ids.  Ananova serves the pages
-# with its own internal numeric ids.
-#
-# Parameters:
-#   reference to list of channels
-#   reference to list of programmes
-#
-# Modifies the data passed in.
-#
-sub fix_xmltv_ids( $$ ) {
-    my ($ch, $progs) = @_;
-
-    my %new_ch;
-    foreach (keys %$ch) {
-	die if not defined;
-	my $xid = XMLTV::Ananova_Channel->ananova_id_to_xmltv_id($_);
-	if (not defined $xid) {
-	    # Shouldn't happen as we read the allchannels page before.
- 	    warn "cannot convert Ananova id $_->{channel} to XMLTV id";
-	}
-	else {
-	    warn "channel with XMLTV id $xid seen twice"
-	      if defined $new_ch{$xid};
-	    ($new_ch{$xid} = $ch->{$_})->{id} = $xid;
-	}
-    }
-#    local $Log::TraceMessages::On = 1;
-    t 'old channels: ' . d $ch;
-    t 'new channels: ' . d \%new_ch;
-    %$ch = %new_ch;
-    t 'updated old channels: ' . d $ch;
-
-    foreach (@$progs) {
-	my $xid = XMLTV::Ananova_Channel->ananova_id_to_xmltv_id($_->{channel});
-	if (not defined $xid) {
-	    warn "cannot convert Ananova id $_ to XMLTV id";
-	}
-	else {
-	    $_->{channel} = $xid;
-	}
-    }
-}
 
 # Add extra display names to channels, based on the display names
 # stored in Ananova_Channel objects.
