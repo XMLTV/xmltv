@@ -145,26 +145,35 @@ sub basicVerificationOfIndexes($)
     # check that the imdbdir is invalid and up and running
     my $title="Army of Darkness";
     my $year=1993;
+
+    $self->openMovieIndex() || return("basic verification of indexes failed\n".
+				      "database index isn't readable");
+
     my $res=$self->getMovieMatches($title, $year);
     if ( !defined($res) ) {
+	$self->closeMovieIndex();
 	return("basic verification of indexes failed\n".
 	       "no match for basic verification of movie \"$title, $year\"\n");
     }
     if ( !defined($res->{exactMatch}) ) {
+	$self->closeMovieIndex();
 	return("basic verification of indexes failed\n".
 	       "no exact match for movie \"$title, $year\"\n");
     }
     if ( scalar(@{$res->{exactMatch}})!= 1) {
+	$self->closeMovieIndex();
 	return("basic verification of indexes failed\n".
 	       "got more than one exact match for movie \"$title, $year\"\n");
     }
     my @exact=@{$res->{exactMatch}};
     if ( $exact[0]->{title} ne $title ) {
+	$self->closeMovieIndex();
 	return("basic verification of indexes failed\n".
 	       "title associated with key \"$title, $year\" is bad\n");
     }
 
     if ( $exact[0]->{year} ne "$year" ) {
+	$self->closeMovieIndex();
 	return("basic verification of indexes failed\n".
 	       "year associated with key \"$title, $year\" is bad\n");
     }
@@ -172,26 +181,32 @@ sub basicVerificationOfIndexes($)
     my $id=$exact[0]->{id};
     $res=$self->getMovieIdDetails($id);
     if ( !defined($res) ) {
+	$self->closeMovieIndex();
 	return("basic verification of indexes failed\n".
 	       "no movie details for movie \"$title, $year\" (id=$id)\n");
     }
     
     if ( !defined($res->{directors}) ) {
+	$self->closeMovieIndex();
 	return("basic verification of indexes failed\n".
 	       "movie details didn't provide any director for movie \"$title, $year\" (id=$id)\n");
     }
     if ( !$res->{directors}[0]=~m/Raimi/o ) {
+	$self->closeMovieIndex();
 	return("basic verification of indexes failed\n".
 	       "movie details didn't show Raimi as the main director for movie \"$title, $year\" (id=$id)\n");
     }
     if ( !defined($res->{actors}) ) {
+	$self->closeMovieIndex();
 	return("basic verification of indexes failed\n".
 	       "movie details didn't provide any cast movie \"$title, $year\" (id=$id)\n");
     }
     if ( !$res->{actors}[0]=~m/Campbell/o ) {
+	$self->closeMovieIndex();
 	return("basic verification of indexes failed\n".
 	       "movie details didn't show Bruce Campbell as the main actor in movie \"$title, $year\" (id=$id)\n");
     }
+    $self->closeMovieIndex();
     return(undef);
 
 }
@@ -233,6 +248,33 @@ sub debug($$)
 
 use Search::Dict;
 
+sub openMovieIndex($)
+{
+    my $self=shift;
+
+    if ( !open($self->{INDEX_FD}, "< $self->{moviedbIndex}") ) {
+	return(undef);
+    }
+    if ( !open($self->{DBASE_FD}, "< $self->{moviedbData}") ) {
+	close($self->{INDEX_FD});
+	return(undef);
+    }
+    return(1);
+}
+
+sub closeMovieIndex($)
+{
+    my $self=shift;
+
+    close($self->{INDEX_FD});
+    delete($self->{INDEX_FD});
+
+    close($self->{DBASE_FD});
+    delete($self->{DBASE_FD});
+
+    return(1);
+}
+
 # moviedbIndex file has the format:
 # title:lineno
 # where key is a url encoded title followed by the year of production and a colon
@@ -258,13 +300,14 @@ sub getMovieMatches($$$)
     $match=~s/([^a-zA-Z0-9_.-])/uc sprintf("%%%02x",ord($1))/oeg;
     
     $self->debug("looking for \"$match\" in $self->{moviedbIndex}");
-    if ( !open(FD, "< $self->{moviedbIndex}") ) {
-	return(undef);
+    if ( !$self->{INDEX_FD} ) {
+	die "internal error: index not open";
     }
-    
-    Search::Dict::look(*FD, $match, 0, 0);
+
+    my $FD=$self->{INDEX_FD};
+    Search::Dict::look(*{$FD}, $match, 0, 0);
     my $results;
-    while (<FD>) {
+    while (<$FD>) {
 	last if ( !m/^$match/ );
 
 	chop();
@@ -300,7 +343,7 @@ sub getMovieMatches($$$)
 					     'id'=>$arr[4]});
 	}
     }
-    close(FD);
+    #close(FD);
     #print "MovieMatches on ($match) = ".Dumper($results)."\n";
     return($results);
 }
@@ -343,12 +386,13 @@ sub getMovieIdDetails($$)
     my $self=shift;
     my $id=shift;
 
-    if ( !open(FD, "< $self->{moviedbData}") ) {
-	return(undef);
+    if ( !$self->{DBASE_FD} ) {
+	die "internal error: index not open";
     }
     my $results;
-    Search::Dict::look(*FD, "$id:", 0, 0);
-    while (<FD>) {
+    my $FD=$self->{DBASE_FD};
+    Search::Dict::look(*{$FD}, "$id:", 0, 0);
+    while (<$FD>) {
 	last if ( !m/^$id:/ );
 	chop();
 	if ( s/^$id:// ) {
@@ -376,7 +420,7 @@ sub getMovieIdDetails($$)
 	    warn "lookup of movie (id=$id) resulted in garbage ($_)";
 	}
     }
-    close(FD);
+    #close(FD);
     if ( !defined($results) ) {
 	# some movies we don't have any details for
 	$results->{noDetails}=1;
