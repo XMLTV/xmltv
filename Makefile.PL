@@ -1,4 +1,7 @@
 #!/usr/bin/perl -w
+
+# FIXME use ExtUtils::Command not rm(1).
+
 use ExtUtils::MakeMaker;
 use Config;
 use File::Basename ();
@@ -613,6 +616,12 @@ windows_dist ::
 	mv $(INSTALLPLAINDOC) $(PREFIX)/doc/
 	rmdir $(PREFIX)/share/doc
 	mkdir -p $(PREFIX)/doc/man
+
+        # Convert the manual pages to plain text.  A bit roundabout,
+        # this, we could just use pod2text to start with.  But since
+        # 'make' generates troff documentation anyway this code is
+        # easier.
+        #
 	set -e; for i in $(INST_MAN1DIR)/*; do \
 	        b=`basename $$i .1`; \
 	        if test "$$b" = '*'; then \
@@ -621,8 +630,20 @@ windows_dist ::
 	        fi; \
 	        echo Converting $$i to plain text; \
 	        troff -mandoc -Tascii $$i | grotty -buo \
+	            | perl -pe 's/Date::Manip[(]3[)]/date_formats.txt/g' \
 	            >$(PREFIX)/doc/man/`basename $$i .1`.txt; \
 	done
+	set -e; \
+	out=$(PREFIX)/doc/man/date_formats.txt; \
+	echo Extracting part of Date::Manip manual page into $$out; \
+	echo "This is an extract from the documentation of Perl's" \
+	     "Date::Manip module, describing the different format" \
+	     "strings that may be used for dates.  Bear in mind that" \
+	     "depending on your Windows version you will need to quote" \
+	     "the % characters on the command line somehow (see" \
+	     "README.win32)." | fmt >$$out; \
+        echo >>$$out; \
+	(perldoc -u Date::Manip | perl -ne 'BEGIN { print "\n=pod\n\n" } print if (/^The format options are:/ .. /^=/) and not /^=/' | pod2text) >>$$out
 	rm -rfv $(INSTALLBIN) $(PREFIX)/lib/ $(INST_MAN1DIR) $(INSTALLMAN3DIR)
 	cp -avi xmltv.dtd $(PREFIX)
 	# The following command will not be necessary when the source
