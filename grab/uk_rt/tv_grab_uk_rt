@@ -29,9 +29,9 @@ BEGIN {
 }
 
 sub get_url( $ );
-sub human_date( $ );
 sub get_programmes( $$$$ );
 sub get_programme_details( $$$$ );
+sub do_cast( $$ );
 sub get_channels();
 sub get_categories();
 sub get_available_dates();
@@ -336,6 +336,9 @@ sub grab( @ ) {
 
     #write out the programmes
     foreach (@programmes) {
+	foreach my $k (keys %$_) {
+	    die "undef $_->{$k}" if not defined $_->{$k};
+	}
 	$writer->write_programme($_);
     }
     $writer->end();
@@ -357,20 +360,6 @@ sub get_url( $ ) {
     }
 }
 
-
-sub human_date( $ ) {
-    #
-    # produce a human readable date string
-    # Usage human_date($seconds_since_epoch)
-    #
-    my $date = shift; die if not defined $date;
-    my ($year,$month,$day,$hour,$minute,$second)
-      = (localtime($date))[5,4,3,2,1,0];
-    $year += 1900;
-    $month++;
-    return sprintf '%2.2d%2.2d%2.2d%2.2d:%2.2d:%2.2d',
-      $year,$month,$day,$hour,$minute,$second;
-}
 
 # Function to find all the programmes on a channel (at a given date +
 # time).
@@ -415,8 +404,14 @@ sub get_programmes( $$$$ ) {
 	unless ($encounted_progs{"$channelId$programmeId"}) {
 	    $encounted_progs{"$channelId$programmeId"} = 1;
 	    #print STDERR "ChannelId:$channelId ProgrammeId:$programmeId\n";
-	    my %r = get_programme_details($channelId, $programmeId, $prog_to_cat, $categories);
-	    push @p, \%r;
+	    my $p = get_programme_details($channelId, $programmeId,
+					  $prog_to_cat, $categories);
+	    if (not defined $p) {
+		warn "could not get programme $programmeId on channel $channelId";
+	    }
+	    else {
+		push @p, $p;
+	    }
 	}
     }
     return @p;
@@ -429,6 +424,8 @@ sub get_programmes( $$$$ ) {
 #   RT id of programme
 #   hash mapping 'channelidprogrammeid' to RT category id
 #   hash of categories
+#
+# Returns a reference to a programme hash.
 #
 sub get_programme_details( $$$$ ) {
 #    local $Log::TraceMessages::On = 1;
@@ -453,11 +450,21 @@ sub get_programme_details( $$$$ ) {
     $url .= 'jspLocation=/jsp/prog_details.jsp';
     my $prog_details_string = get_url($url);
     $prog_details_string  =~ tr/\r//d;
-    t 'whole page: ' . d $prog_details_string;
+#    t 'whole page: ' . d $prog_details_string;
     $prog_details_string  =~ m{</script>\s*(<table .*?)<!-- end main table -->}s
       or die "cannot main table in HTML $_";
     my $prog_details = $1;
-    t 'programme details from page: ' . d $prog_details;
+#    t 'programme details from page: ' . d $prog_details;
+#    local $Log$
+#    local Revision 1.6  2002/10/02 10:02:56  epaepa
+#    local get_programme_details(): instead of munging the HTML into a big string
+#    local with | characters and using regexps on it, split the string into a
+#    local list of 'bits' and process each individually.  This has made some
+#    local things like sub-title and description more robust, previously they
+#    local might not get noticed.  I've also added warning messages for when some
+#    local information is discarded or ignored; each of these represents a to-do
+#    local item.
+#    localprog_details =~ /Addams/);
 
     for ($prog_details) {
 	# We use pipe characters as a delimiter between bits of text.  So
@@ -470,192 +477,288 @@ sub get_programme_details( $$$$ ) {
 	s/<[ ]*[^0-9][^>]*?>/\|/g;
 	
 	# Tidy up the pipes and whitespace.  Hey, ASCII art!
-	$_ = "|$_|";
 	s/&nbsp;/ /g;
         s/\s+/ /g;
 	s/\s+\|/\|/g;
 	s/\|\s+/\|/g;
 	tr/|/|/s;
+	s/^\|//;
+	s/\|$//;
 	
 	t 'after barification: ' . d $_;
     }
 
-    # chop of related features or related websites
+    # chop of related features or related websites.  FIXME do better.
     $prog_details =~ s/Related Features\|.*//;
     $prog_details =~ s/Related Websites\|.*//;
 
-    $prog_details =~ /\|(.*?)\|Channel:/
-      or die "cannot find title in HTML $prog_details";
-    my $title = $1;
+    my @bits = split /\|/, $prog_details;
+    (warn('no programme details found in HTML'), return undef)
+      if not @bits;
+
+    my $title = shift @bits;
     my $sub_title;
-    if ($title =~ s/\|(.*)//) {
-	$sub_title = $1;
+    if (@bits and $bits[0] ne 'Channel:') {
+	$sub_title = shift @bits;
     }
-    for ($title) {
-	s/^\s+//; s/\s+$//;
-    }
+
     $p{title} = [ [ $title, $LANG ] ];
 
-    $prog_details =~ /Channel:\|(.*?)\|/
-      or die "cannot find channel name in HTML $prog_details";
-    my $channel_name = $1;
+    my ($channel_name, $date, $times, $cert, $sub_title_1, $desc,
+	$director, $filmed_in, $cast);
+    # Map heading to [ where to put it, multiplicity ].
+    my %fields = (Channel       => [ \$channel_name, '1' ],
+		  Date          => [ \$date,         '1' ],
+		  Time          => [ \$times,        '1' ],
+		  Certificate   => [ \$cert,         '?' ],
+		  Episode       => [ \$sub_title_1,  '?' ],
+		  Review        => [ \$desc,         '?' ], # hmm
+		  'Directed by' => [ \$director,     '?' ],
+		  'Filmed in'   => [ \$filmed_in,    '?' ],
+		 );
+    FIELD: foreach my $f (sort keys %fields) {
+	  my ($var, $mult) = @{$fields{$f}};
+	  for (my $i = 0; $i < @bits; $i++) {
+	      die if not defined $bits[$i];
+	      if ($bits[$i] =~ /^$f:? *$/) {
+		  my $val = $bits[$i + 1];
+		  (warn("found $f: but nothing after it"), return undef)
+		    if not defined $val;
+		  $$var = $val;
+		  splice @bits, $i, 2;
+		  next FIELD;
+	      }
+	  }
 
-    $prog_details =~ /Date:\|([^|]+)\|/
-      or die "cannot find date in HTML $prog_details";
-    my $date = $1; die if not defined $date;
+	  if ($mult eq '1') {
+	      # Mandatory item, and we didn't find it.
+	      warn "could not find $f: in programme details";
+	      return undef;
+	  }
+	  elsif ($mult eq '?') {
+	      # No worry.
+	  }
+	  else {
+	      die "bad multiplicity specifier $mult";
+	  }
+      }
 
-    $prog_details =~ /Time:\|([0-9,a,m,p,:]*) to ([0-9,a,m,p,:]*)/
-      or die "cannot find time in HTML $prog_details";
-    my $start_time = $1; die if not defined $start_time;
-    my $stop_time = $2; die if not defined $stop_time;
-    my $start = UnixDate(ParseDate("$date $start_time"), '%s');
-    die if not defined $start;
-    my $stop = UnixDate(ParseDate("$date $stop_time"), '%s');
-    die if not defined $stop;
+    # Should check that this matches the channel.
+    warn "discarding channel name $channel_name\n";
 
+    my ($start, $stop);
+    if ($times =~ /^(.*) to (.*)$/) {
+	$start = ParseDate("$date $1");
+	(warn("cannot parse date $date with start time $1"), return undef)
+	  if not defined $start;
+	$stop = ParseDate("$date $2");
+	(warn("cannot parse date $date with stop time $2"), return undef)
+	  if not defined $stop;
+    }
+    else {
+	warn "bad Time value $times";
+	return undef;
+    }
     # Some programmes have thir stop time on the next day
-    if (($start_time =~ /pm$/) and ($stop_time =~ /am$/)) {
-	$stop += 86400;
+    if (Date_Cmp($start, $stop) > 0) {
+	$stop = DateCalc($stop, '+ 1 day');
+	die if not defined $stop;
+    }
+    $p{start} = $start;
+    $p{stop} = $stop;
+
+    if (defined $cert) {
+	for ($cert) {
+	    s/^\[//;
+	    s/\]$//;
+	    warn "ignoring certificate $_\n";
+	}
     }
 
-    my $start_string = human_date($start);
-    my $stop_string = human_date($stop);
+    if (not defined $sub_title and not defined $sub_title_1) {
+	# No secondary title.
+    }
+    elsif (not defined $sub_title and defined $sub_title_1) {
+	$p{'sub-title'} = [ [ $sub_title_1, $LANG ] ];
+    }
+    elsif (defined $sub_title and not defined $sub_title_1) {
+	$p{'sub-title'} = [ [ $sub_title, $LANG ] ];
+    }
+    elsif (defined $sub_title and defined $sub_title_1) {
+	warn "two sub-titles: $sub_title, $sub_title_1";
+	$p{'sub-title'} = [ [ $sub_title, $LANG ],
+			    [ $sub_title_1, $LANG ] ];
+    }
+    else { die }
 
-    $p{start} = $start_string;
-    $p{stop} = $stop_string;
-
-    #chop of all the stuff we have parsed
-    $prog_details =~ s/.*Time:\|$start_time to $stop_time\|//;
-
-    my ($options,$subtitles,$widescreen,$repeat,$black_and_white,
-	$certificate,$episode,$review,$director,$filmed_in,$cast);
-
-    if ($prog_details =~ /(.*?)\|/) {
-	# FIXME warn about options other than these.
-	$options = $1;
-	if ($options eq 'Review') {
-	    $options ='';
-	}
-	if ($options eq 'Episode') {
-	    $options ='';
-	}
-	if ($options eq 'Certificate:') {
-	    $options ='';
-	}
-
-	if ($options =~m/Subtitled/) {
-	    $subtitles = 'yes';
-	    $p{subtitles} = [ { type => 'teletext' } ];
-	}
-	if ($options =~m/Widescreen/) {
-	    # FIXME I think this can be handled under <video>.
-	    $widescreen = 'yes';
-	    $p{_widescreen} = 'yes';
-	}
-	if ($options =~m/Repeat/) {
-	    $repeat = 'yes';
-	    $p{'previously-shown'} = {}
-	}
-	if ($options =~m/Black and White/) {
-	    $black_and_white = 'yes';
-	    $p{video}{present} = 1;
-	    $p{video}{colour} = 0;
-	}
-
-	$prog_details =~ s/$options\|//;
+    if (defined $desc) {
+	$p{'desc'} = [ [ $desc, $LANG ] ];
+    }
+    if (defined $director) {
+	push @{$p{credits}{director}}, $director;
+    }
+    if (defined $filmed_in) {
+	warn "discarding filmed in $filmed_in\n";
     }
 
-    if ($prog_details =~ /Certificate:\|\[(.*?)\]\|/) {
-	$certificate = $1;
-	$p{_certificate} = $1;
-    }
-
-    # episode corresponds to badly named 'sub -title'
-    if ($prog_details =~ /Episode\|(.*?)\|/) {
-	$episode = $1;
-	$p{'sub-title'} = [ [ $1, $LANG ] ];
-    }
-
-    # Review corresponds to description
-    if ($prog_details =~ /Review\|(.*?)\|/) {
-	$review = $1;
-	for ($review) {
-	    s/^\s+//; s/\s+$//;
-	}
-	$p{desc} = [ [ $review, $LANG ] ];
-    }
-
-    #chop of all the stuff we have parsed
-    # FIXME should have removed this while parsing.
-    $prog_details =~ s/.*Certificate:\|(.*?)\|//;
-    $prog_details =~ s/.*Episode\|(.*?)\|//;
-    $prog_details =~ s/.*Review\|(.*?)\|//;
-
-    if ($prog_details =~ /Directed by:\|(.*?)\|/) {
-	$director = $1;
-	push @{$p{credits}{director}}, $1;
-    }
-    if ($prog_details =~ /Filmed in:\|(.*?)\|/) {
-	$filmed_in = $1;$p{'_filmed_in'} = $1;
-    }
-    if ($prog_details =~ /Cast List\|(.*)/) {
-	$cast = $1;
-	$cast =~ s/\s*\|$//;
-
-	if ($cast =~ /\|\.\.\.\.\.\|/) {
-	    $cast =~ s/(\|\.\.\.\.\.)+/\@/;
-	    #$cast =~ s/\@+/\@/g;
-	    my @splitter = split /\@\|/, $cast;
-	    my $roles_string = shift @splitter;
-	    my $names_string = shift @splitter;
-	    my @act_roles = split /\|/, $roles_string;
-	    my @act_names = split /\|/, $names_string;
-	    $cast = '';
-	    foreach my $act_name (@act_names) {
-		my $act_role = shift @act_roles;
-		$cast .= "|$act_name,$act_role";
-	    }
-	    $cast =~ s/^\|//;
+    if (defined $cast) {
+	if ($cast =~ /(?:\.){5}/) {
+	    # The style giving part.....actor.  There used to be code
+	    # for this, but it seems the website has stopped producing
+	    # it.
+	    #
+	    warn "discarding cast $cast";
 	}
 	else {
-	    $cast =~ s/\|/,actor\|/g;
-	    $cast =~ s/,/,actor\|/g;
-	    $cast =~ s/\|\s/\|/g;
-	    $cast =~ s/$/,actor/;
-	}
-
-	my @cast_list = split /\|/, $cast;
-	foreach (@cast_list) {
-	    /^([^,]*),([^,]*)$/;
-	    my $name = $1;
-	    my $role = $2;
-
-	    # FIXME The XMLTV doesnt seem to allow anything but actor or
-	    # director so we must just ignore role for now
-	    push @{$p{credits}{actor}}, $name;
+	    $p{credits}->{actor} = [ split /,\s*/, $cast ];
 	}
     }
 
-    #print STDERR "Title: $title\n";
-    #print STDERR "Sub Title: $sub_title\n";
-    #print STDERR "Channel: $channel_name\n";
-    #print STDERR "Date: $date\n";
-    #print STDERR "Start: $start_string\n";
-    #print STDERR "Stop: $stop_string\n";
-    #print STDERR "Subtitles: $subtitles\n";
-    #print STDERR "WideScreen: $widescreen\n";
-    #print STDERR "Repeat: $repeat\n";
-    #print STDERR "Black and White: $black_and_white\n";
-    #print STDERR "Certificate: $certificate\n";
-    #print STDERR "Episode: $episode\n";
-    #print STDERR "Review: $review\n";
-    #print STDERR "Directed By: $director\n";
-    #print STDERR "Filmed in: $filmed_in\n";
-    #print STDERR "Cast List: $cast\n";
-    #print STDERR "\n";
+    my ($options,$subtitles,$widescreen,$repeat,$black_and_white,
+	$episode,$review);
+  BIT: while (@bits) {
+	my $bit = shift @bits;
+	if ($bit eq 'Cast List') {
+	    # All of the rest is the cast, we hope.
+	    my @cast = @bits;
+	    @bits = ();
+	    do_cast(\%p, \@cast);
+	    next;
+	}
 
-    return %p;
+	while (length $bit) {
+	    if ($bit =~ s/^Subtitled,?\s*//) {
+		warn 'seen subtitling twice' if defined $p{subtitles};
+		$p{subtitles} = [ { type => 'teletext' } ];
+	    }
+	    elsif ($bit =~ s/^Widescreen,?\s*//) {
+		warn 'seen widescreen twice' if defined $widescreen;
+		# FIXME I think this can be handled under <video>.
+		$widescreen = 'yes';
+		$p{_widescreen} = 'yes';
+	    }
+	    elsif ($bit =~ s/^Repeat,?\s*//) {
+		warn 'seen repeat twice' if defined $p{'previously-shown'};
+		$repeat = 'yes';
+		$p{'previously-shown'} = {};
+	    }
+	    elsif ($bit =~ s/^Black (?:and|&) White,?\s*//) {
+		warn 'seen black-and-white twice' if defined $p{video}{colour};
+		warn "assuming $bit is 'Black and White'\n";
+		$black_and_white = 'yes';
+		$p{video}{present} = 1;
+		$p{video}{colour} = 0;
+	    }
+	    elsif ($bit =~ s/^Followed by ([^,]+),?\s*//) {
+		warn "discarding follow-on programme $1\n";
+	    }
+	    elsif ($bit =~ s/^Including ([^,]+),?\s*//) {
+		warn "discarding in-the-middle programme $1\n";
+	    }
+	    elsif ($bit =~ s/^Deaf Signed,?\s*//) {
+		warn "discarding deaf-signed\n";
+	    }
+	    else {
+		warn "unknown remnant bit $bit";
+		last;
+	    }
+	}
+    }
+
+    foreach (keys %p) {
+	die "undef $_" if not defined $p{$_};
+    }
+
+    return \%p;
 }
+# Process a list of bits and store them in the {credits} part of a
+# programme hash.
+#
+# Parameters:
+#   (ref to) programme hash to modify,
+#   list of 'bits' of text which is probably a cast list (may modify
+#       this too).
+#
+sub do_cast( $$ ) {
+    my $prog = shift;
+    use vars '@bits'; local *bits = shift;
+    t 'got cast list bits: ' . d \@bits;
+
+    # Magic string that the site uses between part name and actor.
+    my $DOTS = '.....';
+
+    my $has_dots = 0;
+    foreach (@bits) {
+	if ($_ eq $DOTS) {
+	    $has_dots = 1;
+	    last;
+	}
+    }
+
+    if ($has_dots) {
+	# Gives the name of the part and of the actor.
+	if (@bits % 3) {
+	    warn "got cast list with dots, but strange number of items";
+	    return;
+	}
+	my ($t1, $t2) = (int(@bits / 3), int(@bits * 2 / 3));
+
+	my @parts  = @bits[0   .. $t1 - 1];
+	my @dots   = @bits[$t1 .. $t2 - 1];
+	my @actors = @bits[$t2 .. $#bits];
+	foreach (@parts) {
+	    if (not /\w/) {
+		warn "bad part name $_";
+		return;
+	    }
+	}
+	foreach (@dots) {
+	    if ($_ ne $DOTS) {
+		warn "got cast list with $DOTS, but some middle string was $_";
+		return;
+	    }
+	}
+	foreach (@actors) {
+	    if (not /\w/) {
+		warn "bad actor name $_";
+	    }
+	}
+
+	while (@parts) {
+	    my $p = shift @parts;
+	    my $a = shift @actors;
+	    warn "discarding information that $p is played by $a\n";
+	    push @{$prog->{credits}->{actor}}, $a;
+	}
+    }
+    else {
+	t 'just a list of actors';
+	if (@bits == 1 and $bits[0] =~ tr/,//) {
+	    # Comma-separated list.
+	    for ($bits[0]) {
+		while (length) {
+		    if (s/^([^,]+),?\s*//) {
+			push @{$prog->{credits}->{actor}}, $1;
+		    }
+		    else {
+			warn "weird bit in comma-separated cast list: $_";
+			last;
+		    }
+		}
+	    }
+	}
+	else {
+	    # Separated by markup (not sure if this ever happens).
+	    foreach (@bits) {
+		if (not /\w/) {
+		    warn "bad actor name $_";
+		}
+	    }
+	    push @{$prog->{credits}->{actor}}, @bits;
+	}
+    }
+}
+
 
 # Function which will locate all the available channels and return a hash
 # with channelId as the key and a chanel description
