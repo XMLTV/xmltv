@@ -140,6 +140,7 @@ use HTTP::Request::Common;
 # include LWP separately to verify minimal requirements on version #
 use LWP 5.62;
 use base 'LWP::UserAgent';
+use XMLTV;
 
 #
 # add env_proxy flag to constructed UserAgent.
@@ -152,7 +153,7 @@ sub new
 				  env_proxy => 1,
 				  timeout => 180);
     bless ($self, $class);
-    $self->agent('xmltv/0.5.25');
+    $self->agent("xmltv/$XMLTV::VERSION");
     return $self;
 }
 

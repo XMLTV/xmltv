@@ -15,7 +15,9 @@
 package XMLTV::Get_nice;
 use base 'Exporter';
 our @EXPORT = qw(get_nice);
-use LWP::Simple;
+use LWP::Simple qw($ua);
+use XMLTV;
+$ua->agent("xmltv/$XMLTV::VERSION");
 our $Delay = 5; # in seconds
 
 sub get_nice( $ ) {
