@@ -21,7 +21,7 @@ use XML::DOM;
 use IO::File;
 use Date::Manip;
 use POSIX 'tmpnam';
-use XMLTV;
+use XMLTV qw(best_name);
 use UK_TZ;
 use Log::TraceMessages qw(t d); Log::TraceMessages::check_argv();
 use Lingua::Preferred qw(which_lang);
@@ -32,7 +32,6 @@ sub start_date( $ );
 sub get_u8_to_latin1();
 sub quote( $ );
 sub find_channel_names( $ );
-sub best_name( $ );
 
 die "usage: $0 [filename]" if @ARGV >= 2;
 
@@ -46,9 +45,22 @@ my $WIDTH = '0.7\textwidth';
 # Number of programmes in each table (should fit onto a page)
 my $CHUNK_SIZE = 30;
 
+# List of preferred languages.  Hopefully the environment variable
+# $LANG will be set.
+#
+my @PREF_LANGS;
+my $el = $ENV{LANG};
+if (defined $el and $el =~ /\S/) {
+    $el =~ s/\..+$//; # remove character set
+    @PREF_LANGS = ($el);
+}
+else {
+    @PREF_LANGS = ('en'); # change for your language - or just set $LANG
+}
+
 ########
 # End of configuration
-# 
+#
 
 # Memoize some subroutines if possible
 my $memoize_avail;
@@ -63,6 +75,9 @@ else {
     }
     $memoize_avail = 1;
 }
+
+# Comparison function for choosing what string to use in the printout.
+my $shorter = sub { length($_[0]) <=> length($_[1]) };
 
 # Reference to sub converting UTF-8 to Latin-1
 my $u8_to_latin1 = get_u8_to_latin1();
@@ -79,7 +94,7 @@ END
 
 # Parse stdin and make it into chunks of programmes
 my $filename = @ARGV ? $ARGV[0] : '-';
-my ($encoding, $credits, $ch, $progs) = @{read_data($filename)};
+my ($encoding, $credits, $ch, $progs) = @{XMLTV::read_data($filename)};
 die if $encoding ne 'UTF-8';
 my $ch_name = find_channel_names($ch);
 t 'preferred names: ' . d $ch_name;
@@ -105,7 +120,7 @@ foreach (@chunks) {
 	my ($start, $stop, $channel) = @h{qw(start stop channel)};
 
 	t 'possible titles: ' . d $h{title};
-	my $title = best_name($h{title});
+	my $title = best_name(\@PREF_LANGS, $h{title}, $shorter);
 	t 'chosen: ' . d $title;
 	warn "programme has no title" if not defined $title;
 
@@ -114,7 +129,7 @@ foreach (@chunks) {
 	    if (defined) {
 		t 'possible sub-titles: ' . d $h{'sub-title'};
 		warn "list of sub-titles but empty" if not @$_;
-		$sub_title = best_name($_);
+		$sub_title = best_name(\@PREF_LANGS, $_, $shorter);
 		t 'chosen: ' . d $sub_title;
 		warn "could not find sub-title" if not defined $sub_title;
 	    }
@@ -380,7 +395,7 @@ sub find_channel_names( $ ) {
 	    warn "channels hash has no name for $id";
 	    next;
 	}
-	my $best = best_name(\@names);
+	my $best = best_name(\@PREF_LANGS, \@names, $shorter);
 	t 'best name: ' . d $best;
 	if (not defined $best) {
 	    warn "couldn't get name for channel $id";
@@ -398,47 +413,4 @@ sub find_channel_names( $ ) {
 	$r{$id} = $best;
     }
     return \%r;
-}
-
-
-# best_name()
-#
-# Given a list of [language, string] pairs, find the best one to use.
-# This means first finding the appropriate language and then picking
-# the shortest string in that language.  We want shortest because
-# we're making hardcopy listings; other applications would probably
-# pick the first (most canonical) name in that language.
-#
-# There could be some more fancy scheme where both length and language
-# are combined into some kind of goodness measure, rather than
-# filtering by language first and then length, but that's overkill for
-# now.
-#
-sub best_name( $ ) {
-    my $wanted_langs = (defined $ENV{LANG}) ? [ $ENV{LANG} ] : [];
-    my @pairs = @{shift()};
-    my @avail_langs;
-    my (%seen_lang, $seen_undef);
-    foreach (map { $_->[1] } @pairs) {
-	if (defined) {
-	    next if $seen_lang{$_}++;
-	} else {
-	    next if $seen_undef++;
-	}
-	push @avail_langs, $_;
-    }
-    my $pref_lang = which_lang($wanted_langs, \@avail_langs);
-    my ($shortest_so_far, $shortest_so_far_length);
-    foreach (@pairs) {
-	my ($text, $lang) = @$_;
-	next unless ((not defined $lang)
-		     or (defined $pref_lang and $lang eq $pref_lang));
-	my $length = length $text;
-	if (not defined $shortest_so_far
-	    or $length < $shortest_so_far_length) {
-	    $shortest_so_far = $text;
-	    $shortest_so_far_length = $length;
-	}
-    }
-    return $shortest_so_far;
 }

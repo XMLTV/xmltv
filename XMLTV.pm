@@ -2,10 +2,9 @@
 # $Id$
 #
 # Routines for reading and writing XMLTV files from Perl.
-# 
+#
 # See release notes and/or cvs logs entries for module history
 #
-# 
 
 package XMLTV;
 use strict;
@@ -15,9 +14,11 @@ use Log::TraceMessages qw(t d);
 use Date::Manip;
 use UK_TZ;
 use Memoize;
+use Lingua::Preferred qw(which_lang);
 
-use base 'Exporter'; use vars '@EXPORT';
+use base 'Exporter'; use vars qw(@EXPORT @EXPORT_OK);
 @EXPORT = qw(read_data write_data);
+@EXPORT_OK = qw(best_name);
 
 # Handlers for different subelements of programme.  First value is the
 # name of the element, second is a subroutine which turns the DOM node
@@ -836,6 +837,65 @@ sub write_with_lang( $$$ ) {
 }
 
 
+# best_name()
+#
+# Given a list of acceptable languages and a list of [language,
+# string] pairs, find the best one to use.  This means first finding
+# the appropriate language and then picking the 'best' string in that
+# language.  The best is normally defined as the first one found in a
+# usable language, since the XMLTV format puts the most canonical
+# versions first.  But you can pass in your own comparison function.
+#
+# Parameters:
+#     reference to list of languages (in Lingua::Preferred format),
+#     reference to list of [language, string] pairs.
+#     (optional) comparison function that returns 1 if
+#       its first argument is better than its second argument, or 0
+#       if equally good, or -1 if first argument worse.
+#
+# Returns: the best of the strings to use.
+#
+# There could be some more fancy scheme where both length and language
+# are combined into some kind of goodness measure, rather than
+# filtering by language first and then length, but that's overkill for
+# now.
+#
+sub best_name( $$;$ ) {
+    my $wanted_langs = shift;
+    my @pairs = @{shift()};
+    my $compare = shift;
+
+    my @avail_langs;
+    my (%seen_lang, $seen_undef);
+    foreach (map { $_->[1] } @pairs) {
+	if (defined) {
+	    next if $seen_lang{$_}++;
+	} else {
+	    next if $seen_undef++;
+	}
+	push @avail_langs, $_;
+    }
+
+    my $pref_lang = which_lang($wanted_langs, \@avail_langs);
+    my @candidates;
+    foreach (@pairs) {
+	my ($text, $lang) = @$_;
+	next unless ((not defined $lang)
+		     or (defined $pref_lang and $lang eq $pref_lang));
+	push @candidates, $text;
+    }
+
+    return undef if not @candidates;
+    if (not defined $compare) {
+	return $candidates[0];
+    }
+
+    # Some unnecessary comparisons, but who cares.
+    @candidates = sort { $compare->($a, $b) } @candidates;
+    return $candidates[0];
+}
+
+
 ####
 # XMLTV::Writer
 #
@@ -908,6 +968,8 @@ sub write_channels {
 	    my ($text, $lang) = @$_;
 	    my %attrs;
 	    $attrs{lang} = $lang if defined $lang;
+	    warn "writing undefined channel name for channel $id"
+	      if not defined $text;
 	    $w->dataElement('display-name', $text, %attrs);
 	}
 	$w->endTag('channel');
@@ -1078,5 +1140,6 @@ sub order_attrs {
 
     return @r;
 }
+
 
 1;

@@ -1,85 +1,85 @@
 #!/usr/bin/perl -wT
-# 
+#
 # $Id$
 #
 # pick.cgi
-# 
+#
 # Web page for the user to pick which programmes he wants to watch.
-# 
+#
 # The idea is to get TV listings for the next few days and store them
 # as XML in the file $LISTINGS.  Then 'run' this program (install it
 # as a CGI script and view it in a web browser, or use Lynx's
 # CGI emulation) to pick which programmes you want to watch.
-# 
+#
 # Your preferences will be stored in the file $PREFS_FILE, and if a
 # programme title is listed in there, you won't be asked about it.  So
 # although you may get hundreds of programmes to wade through the
 # first time, the second time round most of them will be listed in the
 # preferences file and you'll be asked only about new ones.
-# 
+#
 # The final list of programmes to watch is stored in $TOWATCH.
 # Unfortunately at the moment this needs post-processing with
 # pick_process, due to sloppiness in writing this program.  I will do
 # things properly soon.
-# 
+#
 # So to use this CGI script to plan your TV viewing, here's what
 # you'll typically need to do:
 #
 # - Get listings for the next few days using the appropriate backend,
 # for example if you want British listings do:
-# 
+#
 # % getlistings_uk_ananova >tv.xml
-# 
+#
 # - Optionally, filter these listings to remove programmes which have
 # already been broadcast:
-# 
+#
 # % filter_shown <tv.xml >tmp; mv tmp tv.xml
-# 
+#
 # - Install this file as a CGI script, and make sure that the
 # Configuration section below points to the correct filenames.
-# 
+#
 # - View the page from a web browser, and choose your preferences for
 # the shows listed.  If you choose 'never' or 'always' as your
 # preference, you won't be asked about that programme ever again, so
 # 'no' or 'yes' would be a more cautious choice, since that will mean
 # you are asked again next time.
-# 
+#
 # - Submit the form and go on to the next page.  Repeat until you have
 # got to the end of the listings ('Finished').
-# 
+#
 # - Now the numbers of programmes you want to watch are stored in
 # $TOWATCH.  Process it to get an XML listing:
-# 
+#
 # % pick_process <towatch >towatch.xml
-# 
+#
 # and you might want to print out this XML file:
-# 
+#
 # % listings_to_latex <towatch.xml >towatch.tex
 # % latex towatch.tex
 # % dvips towatch.dvi
-# 
+#
 # - Also look at $PREFS_FILE to see all the programmes you have
 # killfiled (including those you 'always' want to see without
 # prompting).  This list can only get bigger, there's currently no way
 # to unkill a programme except by editing the file by hand.
-# 
+#
 # The first time you do this, you might find that you accidentally say
 # 'never' to a programme you wanted to watch.  So it would be best to
 # print out a full copy of the TV listings from tv.xml and
 # double-check that everything you want is listed in towatch.xml.
 # Remember, once you've said 'never' to watch a programme, it becomes
 # as if it does not exist at all!
-# 
+#
 # See release notes and/or cvs logs entries for module history
-# 
+#
 # -- Ed Avis, epa98@doc.ic.ac.uk
-#  
+#
 
 # Since this program runs with taint mode on, it won't pick up changes
 # in PERL5LIB.  So if you have installed modules somewhere
 # non-standard (such as your home directory), you have to add the
 # paths here explicitly.
-# 
+#
 #use lib '/homes/epa98/lib/perl5/5.00503';
 #use lib '/homes/epa98/lib/perl5/site_perl';
 #use lib '/homes/epa98/lib/perl5/site_perl/5.005';
@@ -87,7 +87,7 @@
 use strict;
 use CGI qw<:standard -newstyle_urls>;
 use CGI::Carp qw<fatalsToBrowser carpout>; BEGIN { carpout(\*STDOUT) }
-use XML::Simple;
+use XMLTV qw<best_name>;
 use Fcntl ':flock';
 use Date::Manip;
 use File::Copy;
@@ -95,7 +95,6 @@ use Lingua::Preferred qw<which_lang>;
 use Log::TraceMessages qw<t d>; Log::TraceMessages::check_argv();
 $Log::TraceMessages::CGI = 1;
 use Lingua::EN::Numbers::Ordinate;
-use XML::DOM;
 
 ########
 # Configuration
@@ -115,7 +114,9 @@ my $PREFS_FILE = 'tvprefs';
 # Preferred languages - if information is available in several
 # languages, the ones in this list are used if possible.  List in
 # order of preference.  Passed to Lingua::Preferred::which_lang().
-# 
+#
+# FIXME should find this out from HTTP headers.
+#
 my @PREF_LANGS;
 
 # Hopefully the environment variable $LANG will be set
@@ -134,11 +135,8 @@ else {
 # Prototype declarations
 sub store_prefs($$);
 sub display_form($);
-sub print_date_for($;$);                                                 
-sub get_text($);
-sub get_text1($);
+sub print_date_for($;$);
 sub clumpidx_to_english($);
-sub read_programmes();
 sub download_xml();
 
 # Keep the taint checking happy (the Cwd module runs pwd(1))
@@ -151,7 +149,7 @@ if (url_param('download')) {
 
 # Newer versions of CGI.pm have support for <meta http-equiv> stuff.
 # But for the moment, we'll keep compatibility with older ones.
-# 
+#
 print header({ expires => 'now',
 	       'Content-Type' => 'text/html; charset=UTF-8' });
 
@@ -175,26 +173,27 @@ print <<END
 END
 ;
 
-my @programmes = read_programmes();
+my $data = read_data($LISTINGS);
+my @programmes = @{$data->[3]};
 
 # %wanted
-# 
+#
 # Does the user wish to watch a programme?
-# 
+#
 # Maps title to:
 #   undef     -  this programme is not known
 #   'never'   -  no, the user never watches this programme
 #   'no'      -  probably not, but ask
 #   'yes'     -  probably, but ask
 #   'always'  -  yes, the user always watches this programme
-# 
+#
 # Read in from the file $PREFS_FILE.
-# 
+#
 my %wanted = ();
 
 # Open for 'appending' - but really we just want to create an empty
 # file if needed.
-# 
+#
 open(PREFS, "+>>$PREFS_FILE") or die "cannot open $PREFS_FILE: $!";
 flock(PREFS, LOCK_SH);
 seek PREFS, 0, 0;
@@ -224,8 +223,8 @@ if (defined $skip and defined $next) {
 }
 elsif (defined $skip and not defined $next) {
     # This is one of the form pages, skipping some programmes already
-    # seen. 
-    # 
+    # seen.
+    #
     close PREFS;
     display_form($skip);
 }
@@ -251,18 +250,18 @@ END
       or die "cannot append to $TOWATCH: $!";
     print TOWATCH <<END
 # 'towatch' file
-# 
+#
 # This file was created by $0 and contains the numbers of programmes
 # that the user has chosen to watch, either by giving a preference of
 # 'yes' or 'always', or because the stored preference for that
 # programme was 'always'.
-# 
+#
 # The format is 'filename/number' on each line.
-# 
+#
 # Process this file with pick_process to get the actual XML listings.
 # Note that if the XML file referenced changes, then so will the
 # results from processing this file.
-# 
+#
 
 END
   ;
@@ -275,14 +274,14 @@ else { die 'bad URL parameters' }
 
 
 # store_prefs()
-# 
+#
 # Store the user's preferences for $CHUNK_SIZE programmes starting
 # from 'skip'.
-# 
+#
 # Parameters:
 #   number of programmes to skip from the beginning of @programmes
 #   the new value of 'skip' for the next page in the list
-# 
+#
 sub store_prefs($$) {
     die 'usage: store_prefs(skip, next)' if @_ != 2;
     my ($skip, $next) = @_;
@@ -292,11 +291,11 @@ sub store_prefs($$) {
 	if (defined $val) {
 	    # Check that this programme really did appear in the
 	    # previous page.
-	    # 
+	    #
 	    die "bad programme number $i for skip $skip, next $next"
 	      unless $skip <= $i and $i < $next;
-	    
-	    my $title = get_text($programmes[$i]->{title});
+
+	    my $title = best_name(\@PREF_LANGS, $programmes[$i]->{title});
 	    print "$title: $val<br>\n";
 
 	    my $found = 0;
@@ -314,25 +313,25 @@ sub store_prefs($$) {
     # Update $PREFS_FILE with preferences.  'yes' or 'no' preferences
     # are still worth storing because they let us pick the default
     # radio button next time.
-    # 
+    #
     copy($PREFS_FILE, "$PREFS_FILE.old")
       or die "cannot copy $PREFS_FILE to $PREFS_FILE.old: $!";
     flock(PREFS, LOCK_EX);
     truncate PREFS, 0 or die "cannot truncate $PREFS_FILE: $!";
     print PREFS <<END
 # 'prefs' file
-# 
+#
 # This file contains stored preferences for programme titles, so that
 # the user need never be bothered about these shows again.  It's like
 # a killfile.  But as well as saying you 'never' want to watch 'That's
 # Esther', you can have a preference of 'always' watching some
 # programmes, without being asked.
-# 
+#
 # A 'yes' or 'no' preference will change the default choice, but the
 # user will be asked again to check.
-# 
+#
 # Generated by $0.
-# 
+#
 
 END
   ;
@@ -340,21 +339,18 @@ END
 	my $pref = $wanted{$_};
 	print PREFS "$pref: $_\n";
     }
-    
+
     print p(strong("Preferences saved in $PREFS_FILE"));
 
     # Write out the list of programmes that the user wants to watch
     # this week.  For the time being, we do this as a list of numbers
-    # that must be processed later - but really we should write out
-    # XML programme details.  To do this we'd need to dump XML::Simple
-    # and perhaps use XML::DOM both for reading programme details and
-    # writing out selected programmes.
-    # 
+    # that must be processed later.
+    #
     open(TOWATCH, ">>$TOWATCH") or die "cannot append to $TOWATCH: $!";
     flock(TOWATCH, LOCK_EX);
     for (my $i = $skip; $i < $next; $i++) {
 	my $val = param("prog$i");
-	my $title = get_text($programmes[$i]->{title});
+	my $title = best_name(\@PREF_LANGS, $programmes[$i]->{title});
 	if ((defined $wanted{$title} and $wanted{$title} eq 'always')
             or (defined $val and $val eq 'yes') )
         {
@@ -382,10 +378,10 @@ END
 
 
 # display_form()
-# 
+#
 # Parameters:
 #   number of programmes to skip at start of @programmes
-# 
+#
 sub display_form($) {
     die 'usage: display_form(skip)' if @_ != 1;
     my $skip = shift;
@@ -397,7 +393,7 @@ sub display_form($) {
 	 $i++ )
     {
 	my $prog = $programmes[$i];
-	my $title = get_text($prog->{title});
+	my $title = best_name(\@PREF_LANGS, $prog->{title});
 	for ($wanted{$title}) {
 	    if (not defined or $_ eq 'no' or $_ eq 'yes') {
 		push @nums_to_show, $i;
@@ -411,7 +407,7 @@ sub display_form($) {
 
     # Now actually print the things, we had to leave it until now
     # because we didn't know what the new 'skip' would be.
-    # 
+    #
     print start_form(-action => url(-relative => 1) .
 		     "?skip=$skip;next=$i");
 
@@ -421,12 +417,12 @@ sub display_form($) {
 	my %h = %{$programmes[$n]};
 	my ($start, $stop, $channel) = @h{qw(start stop channel)};
 	$stop = '' if not defined $stop;
-	my $title     = get_text($h{title});
+	my $title     = best_name(\@PREF_LANGS, $h{title});
 	my $display_title = $title;
 	$display_title .= " (@{$h{date}})" if defined $h{date};
-	my $category  = get_text($h{category})  if $h{category};
-	my $sub_title = get_text($h{'sub-title'}) if $h{'sub-title'};
-	my $desc      = get_text($h{desc})      if $h{desc};
+	my $category  = best_name(\@PREF_LANGS, $h{category})  if $h{category};
+	my $sub_title = best_name(\@PREF_LANGS, $h{'sub-title'}) if $h{'sub-title'};
+	my $desc      = best_name(\@PREF_LANGS, $h{desc})      if $h{desc};
 	
 	if (defined $prev) {
 	    print_date_for(\%h, $prev);
@@ -446,7 +442,7 @@ sub display_form($) {
 	if ($h{credits}) {
 	    # Gather up the data structure from XML::Simple into a
 	    # single hash mapping job to person.
-	    # 
+	    #
 	    my %credits;
 	    foreach my $h (@{$h{credits}}) {
 		foreach my $job (sort keys %$h) {
@@ -497,7 +493,7 @@ sub display_form($) {
 	print "</tr>\n";
 	$prev = \%h;
     }
-    
+
     print "</table>\n";
     print submit();
     print end_form();
@@ -506,24 +502,24 @@ sub display_form($) {
 
 
 # print_date_for()
-# 
+#
 # Print the date for a programme as part of the form, so that the
 # reader will have some idea of when the programmes will be shown.
-# 
+#
 # Printing the date ends the current table, prints the date, and then
 # starts a new table.  But it won't happen unless it is needed, ie the
 # date has changed since the previous programme.
-# 
+#
 # Parameters:
 #   (ref to) programme to print
 #   (optional) (ref to) previous programme
-# 
+#
 # If the previous programme is not given, the date will always be
 # printed.
-# 
+#
 # Printing the date also (at least ATM) ends the current HTML table
 # and begins a new one after the date.
-# 
+#
 sub print_date_for($;$) {
     local $Log::TraceMessages::On = 0;
     die 'usage: print_date_for(programme, [prev programme])'
@@ -547,101 +543,19 @@ sub print_date_for($;$) {
 }
 
 
-# get_text()
-#
-# This is specific to XML::Simple and the file format we use.  Given a
-# reference to a list of XML elements (maybe with just one element),
-# pick the correct text based on the user's preferred language.  Each
-# element may be a hashref with 'lang' and 'content', or it may just
-# be a string, in which case the lang is taken as unknown.
-#
-sub get_text($) {
-    die 'usage: get_text(gunk from XML::Simple)' if @_ != 1;
-    die if not $_[0];
-    my @bits = @{$_[0]};
-
-    my @bits1;
-    foreach (@bits) {
-	if (not ref) {
-	    push @bits1, { lang => '', content => $_ };
-	}
-	elsif (ref eq 'HASH') {
-	    push @bits1, $_;
-	}
-	else { die }
-    }
-    return get_text1(\@bits1);
-}
-
-
-# get_text1()
-#
-# This does the real work for get_text(); it relies on a hashref with
-# 'lang' and 'content' fields.
-#
-sub get_text1($) {
-    die 'usage: get_text1(hashref with lang and content)' if @_ != 1;
-    die if not $_[0];
-    my @bits = @{$_[0]};
-    t 'get_text1() ENTRY';
-    my @langs;
-
-    # Collect a list of all languages.
-    my %seen;
-    foreach (@bits) {
-	t 'doing bit: ' . d $_;
-	my $lang = $_->{lang};
-	$lang = '' if not defined $lang;
-	push @langs, $lang unless $seen{$lang}++;
-    }
-
-    # Now find the first bit that has the desired language.  We can't
-    # assume that languages are unique: there may be two bits of text
-    # with the same language (eg a long description and a short
-    # description).  The XMLTV file format says that the text
-    # occurring earlier is more official in some way, so we use that.
-    #
-    my $which = which_lang(\@PREF_LANGS, \@langs);
-    foreach (@bits) {
-	if ($_->{lang} eq $which) {
-	    t 'found bit with lang ' . d($which) . ': ' . d($_);
-	    my $content = $_->{content};
-
-	    # XML::Simple 1.04 and below had a bug with the
-	    # 'forcearray' option making text content into an array
-	    # (with one element, I think).
-	    #
-	    my $type = ref($content);
-	    if ($type eq 'ARRAY') {
-		die 'expected exactly one element in text content array'
-		  if @$content != 1;
-		return $content->[0];
-	    }
-	    elsif (not $type) {
-		return $content;
-	    }
-	    else {
-		die "unexpected structure $type for text content";
-	    }
-	}
-    }
-    die;
-}
-
-
 # clumpidx_to_english()
-# 
+#
 # Convert a series-episode-part number like '2/3 . 4/10 . 0/2' to an
 # English description like '3rd series of 3; 5th episode of 10; 1st
 # part of 2'.
-# 
+#
 sub clumpidx_to_english($) {
     local $_ = shift;
     s/\s+//g;
     my @bits = split /\./;
     unshift @bits, undef until @bits >= 3;
     my ($series, $episode, $part) = @bits;
-    
+
     sub of($$) {
 	my $name = shift;
 	local $_ = shift;
@@ -665,30 +579,17 @@ sub clumpidx_to_english($) {
 }
 
 
-# read_programmes()
-# 
-# Read the listings file and return a list of programme details.
-# 
-# FIXME: what if we read one XML file to display the form, and then it
-# has changed by the time the user submits the form?
-# 
-sub read_programmes() {
-    die 'usage: read_programmes()' if @_;
-    @{XMLin($LISTINGS, forcearray => 1)->{programme}}
-}
-
-
 # download_xml()
-# 
+#
 # After all the programmes have been picked, convert the 'towatch'
 # file (which is really just a list of numbers) to an XML document for
 # the user to download.
-# 
+#
 sub download_xml() {
     die 'usage: download_xml()' if @_;
     print header({ expires => 'now',
 		   'Content-Type' => 'text/xml; charset=UTF-8' });
-    
+
     # Find programme numbers to keep
     my %nums;
     open(TOWATCH, $TOWATCH) or die "cannot open $TOWATCH: $!";
@@ -700,21 +601,10 @@ sub download_xml() {
 	$nums{$1}++ && die "$TOWATCH:$.: already seen number $1";
     }
 
-    # We read the original XML file and use DOM to weed out the
-    # <programme> elements.
-    # 
-    my $p = new XML::DOM::Parser;
-    my $doc = $p->parsefile($LISTINGS);
-    my $nodes = $doc->getElementsByTagName('programme');
-    my $n = $nodes->getLength();
-
-    for (my $i = 0; $i < $n; $i++) {
-	my $node = $nodes->item($i);
-	unless ($nums{$i}) {
-	    # This subelement wasn't chosen
-	    $doc->getDocumentElement()->removeChild($node);
-	}
+    # We read the original XML file and weed out <programme> elements.
+    my @new_programmes;
+    for (my $i = 0; $i < @$programmes; $i++) {
+	push @new_programmes, $programmes->[$i] if $nums{$i};
     }
-
-    $doc->printToFileHandle(\*STDOUT);
+    write_data($data->[0], $data->[1], $data->[2], \@new_programmes);
 }
