@@ -1376,6 +1376,9 @@ sub readSchedule($$$$$)
 		print FD $content;
 		close(FD);
 	    }
+	    else {
+		warn("unable to write to cache file: $cacheFile");
+	    }
 	}
     }
 
