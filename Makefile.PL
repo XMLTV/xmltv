@@ -2,6 +2,7 @@
 use ExtUtils::MakeMaker;
 use Config;
 use File::Basename ();
+use File::Find;
 use strict;
 
 sub test_module( $$ );
@@ -533,12 +534,16 @@ sub MY::installbin {
     my %share_files = ('grab/uk/channel_ids' => 'tv_grab_uk/channel_ids',
 		       'grab/uk_rt/channel_ids' => 'tv_grab_uk_rt/channel_ids',
 		      );
-    foreach (<grab/uk/channel_pkgs/*>) {
-	next if -d;
-	die if defined $share_files{$_};
-	(my $inst = $_) =~ s!^grab/uk/!tv_grab_uk/! or die;
-	$share_files{$_} = $inst;
-    }
+    my $ch_pkgs_dir= 'grab/uk/channel_pkgs';
+    my $wanted = sub {
+	return if -d;
+	return if $File::Find::name =~ m!/CVS/!; # handy in working copy
+	die if defined $share_files{$File::Find::name};
+	(my $inst = $File::Find::name) =~ s!^grab/uk/!tv_grab_uk/! or die;
+	$share_files{$File::Find::name} = $inst;
+    };
+    File::Find::find($wanted, $ch_pkgs_dir);
+
     my %new_filetypes = (plaindoc => \%doc_files, share => \%share_files);
     my %seen_dir;
     foreach my $filetype (sort keys %new_filetypes) {
