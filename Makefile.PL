@@ -52,13 +52,14 @@ END
 
 # A couple of undocumented options to help with building the Windows
 # distribution even on hosts that don't have all the necessary
-# modules.
+# modules.  By default, we only warn if dependencies are missing.
+# If --strict-deps is passed in, then the whole process fails.
 #
-my $opt_nodeps = 0;
+my $opt_strictdeps = 0;
 my $opt_yes = 0;
 my $opt_components;
-GetOptions(nodeps         => \$opt_nodeps,
-	   yes            => \$opt_yes,
+GetOptions('strict-deps'  => \$opt_strictdeps,	# be strict about dependencies
+	   yes            => \$opt_yes,		# answer yes to all questions
 	   'components=s' => \$opt_components,
 	  );
 
@@ -647,8 +648,13 @@ foreach my $p ((sort keys %prereqs), (sort keys %recommended)) {
     }
     else { die }
 }
-if ($err and not $opt_nodeps) {
-    warn "Required modules missing, 'make' is unlikely to work\n";
+if ($err) {
+    if ($opt_strictdeps) {
+	die "Required modules missing.  Makefile will not be created.\n";
+    }
+    else {
+	warn "Required modules missing, 'make' is unlikely to work\n";
+    }
 }
 
 WriteMakefile
