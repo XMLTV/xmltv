@@ -7,9 +7,12 @@ use base 'Exporter'; use vars qw(@EXPORT @EXPORT_OK);
 @EXPORT_OK = qw(read_data parse parsefile write_data
 		best_name list_channel_keys list_programme_keys);
 
-# FIXME store version number centrally.
+# For the time being the version of this library is tied to that of
+# the xmltv package as a whole.  This number should be checked by the
+# mkdist tool.
+#
 use vars qw($VERSION);
-$VERSION = '0.5';
+$VERSION = '0.5.1';
 
 # Work around changing behaviour of XML::Twig.  On some systems (like
 # mine) it always returns UTF-8 data unless KeepEncoding is specified.
@@ -255,7 +258,7 @@ sub parsefile( $ ) {
 
 =pod
 
-=item parse_callback(document, [ \$encoding, \$credits ],
+=item parse_callback(document, encoding_callback, credits_callback,
                      channel_callback, programme_callback)
 
 An alternative interface.  Whereas C<parse()> reads the whole document
@@ -263,23 +266,37 @@ and then returns a finished data structure, with this routine you
 specify a subroutine to be called as each <channel> element is read
 and another for each <programme> element.
 
-The first argument is the document to parse.  The second argument is a
-pair of two references to variables where encoding and credits
-information will be stored (this data appears once at the beginning
-of the file and isnE<39>t worth handling through callbacks).  The next
-argument will be called with the Perl data structure for each channel
-as it is parsed, and likewise the fourth argument handles programmes.
+The first argument is the document to parse.  The remaining arguments
+are code references, one for each part of the document.  The callback
+for encoding will be called once with a string giving the encoding;
+that for credits will be called once with a hash reference.  For channels
+and programmes, the appropriate function will be called zero or more
+times depending on how many channels / programmes are found in the file.
 
-The four things will be filled in or called in order, that is, the
-encoding and credits will be set before the channel handler is called
-and all the channels will be dealt with before the first programme
-handler is called.
+The four subroutines will be called in order, that is, the encoding
+and credits will be done before the channel handler is called and all
+the channels will be dealt with before the first programme handler is
+called.
+
+If any of the code references is undef, nothing is called for that part
+of the file.
+
+For backwards compatibility, if the value for 'encoding callback' is
+not a code reference but a scalar reference, then the encoding found
+will be stored in that scalar.  Similarly if the 'credits callback'
+is a scalar reference, the scalar it points to will be set to point
+to the hash of credits.  This style of interface is deprecated: new
+code should just use four callbacks.
 
 For example:
 
     my $document = '<tv>...</tv>';
+
     my $encoding;
-    my %credits;
+    sub encoding_cb( $ ) { $encoding = shift }
+
+    my $credits;
+    sub credits_cb( $ ) { $credits = shift }
 
     # The callback for each channel populates this hash.
     my %channels;
@@ -300,28 +317,53 @@ For example:
     }
 
     # Let's go.
-    XMLTV::parse_callback($document, [ \$encoding, \%credits ],
+    XMLTV::parse_callback($document, \&encoding_cb, \&credits_cb,
                           \&channel_cb, \&programme_cb);
 
 =cut
 # Private.
-sub new_doc_callback( $$$ ) {
-    my ($data, $ch_cb, $p_cb) = @_;
+sub new_doc_callback( $$$$ ) {
+    my ($enc_cb, $cred_cb, $ch_cb, $p_cb) = @_;
     new XML::Twig(StartTagHandlers =>
 		  { '/tv' => sub {
 			my ($t, $node) = @_;
-			use vars qw($encoding $credits);
-			local (*encoding, *credits) = $data->[0, 1];
+			my $enc;
 			if ($KEEP_ENCODING) {
-			    $encoding = $t->encoding();
-			    t 'got encoding: ' . d $encoding;
+			    t 'KeepEncoding on, get original encoding';
+			    $enc = $t->encoding();
 			}
 			else {
-			    $encoding = 'UTF-8';
 			    t 'assuming UTF-8 encoding';
+			    $enc = 'UTF-8';
 			}
-			$credits = get_attrs($node);
-			t 'got attrs: ' . d $credits;
+
+			for (ref $enc_cb) {
+			    if ($_ eq 'CODE') {
+				$enc_cb->($enc);
+			    }
+			    elsif ($_ eq 'SCALAR') {
+				$$enc_cb = $enc;
+			    }
+			    else {
+				die "encoding callback should be code ref or scalar ref";
+			    }
+			}
+
+			my $cred = get_attrs($node);
+			for (ref $cred_cb) {
+			    if ($_ eq 'CODE') {
+				$cred_cb->($cred);
+			    }
+			    elsif ($_ eq 'SCALAR') {
+				$$cred_cb = $cred;
+			    }
+			    else {
+				die "credits callback should be code ref or scalar ref";
+			    }
+			}
+			# Most of the above code can be removed in the
+			# next release.
+			#
 		    },
 		  },
 
@@ -344,23 +386,103 @@ sub new_doc_callback( $$$ ) {
 }
 
 sub parse_callback( $$$$ ) {
-    my ($str, $data, $ch_cb, $p_cb) = @_;
+    my ($str, $enc_cb, $cred_cb, $ch_cb, $p_cb) = @_;
     sanity($str);
-    new_doc_callback($data, $ch_cb, $p_cb)->parse($str);
+    new_doc_callback($enc_cb, $cred_cb, $ch_cb, $p_cb)->parse($str);
 }
 
 =pod
 
-=item parsefile_callback(filename, [ \$encoding, \$credits ],
-			 channel_callback, programme_callback)
+=item parsefiles_callback(encoding_callback, credits_callback,
+                          channel_callback, programme_callback,
+                          filenames...)
 
-As C<parse_callback()> but takes a filename instead of a document.
+As C<parse_callback()> but takes one or more filenames to open.  The
+data returned is the merging of those file contents: the programmes
+will be concatenated in their original order, the channels just put
+together in arbitrary order (ordering of channels should not matter).
+
+It is necessary that each file have the same character encoding, if
+not, an exception is thrown.  Ideally the credits information would
+also be the same between all the files, since there is no obvious way to
+merge it - but if the credits information differs from one file to the
+next, one file is picked arbitrarily to provide credits and a warning
+is printed.
+
+For compatibility, there is an alias C<parsefile_callback()> which is
+the same but takes only a single filename, B<before> the callback
+arguments.  This is deprecated.
 
 =cut
-sub parsefile_callback( $$$$ ) {
-    my ($f, $data, $ch_cb, $p_cb) = @_;
-    new_doc_callback($data, $ch_cb, $p_cb)->parsefile($f);
+sub parsefile_callback( $$$$$ ) {
+    my ($f, $enc_cb, $cred_cb, $ch_cb, $p_cb) = @_;
+    parsefiles_callback($enc_cb, $cred_cb, $ch_cb, $p_cb, $f);
 }
+
+sub parsefiles_callback( $$$$@ ) {
+    my ($enc_cb, $cred_cb, $ch_cb, $p_cb, @files) = @_;
+    die "one or more files required" if not @files;
+    my $all_encoding;
+    my $all_credits;
+    my %all_channels;
+
+    my $do_next_file; # to be defined below
+    my $my_enc_cb = sub( $ ) {
+	my $e = shift;
+	if (defined $all_encoding) {
+	    if ($all_encoding ne $e) {
+		die "different files have different encodings, aborting\n";
+	    }
+	} else {
+	    $enc_cb->($e) if $enc_cb;
+	    $all_encoding = $e;
+	}
+    };
+
+    my $my_cred_cb = sub( $ ) {
+	my $c = shift;
+	if (defined $all_credits) {
+	    if (Dumper($all_credits) ne Dumper($c)) {
+		warn "different files have different credits, picking one arbitrarily\n";
+		# In fact, we pick the last file in the list since this is the
+		# first to be opened.
+		#
+	    }
+	} else {
+	    $cred_cb->($c) if $cred_cb;
+	    $all_credits = $c;
+	}
+    };
+
+    my $my_ch_cb = sub( $ ) {
+	my $c = shift;
+	my $id = $c->{id};
+	if (defined $all_channels{$id} and Dumper($all_channels{$id}) ne Dumper($c)) {
+	    warn "differing channels with id $id, picking one arbitrarily\n";
+	}
+	else {
+	    $all_channels{$id} = $c;
+	    $ch_cb->($c) if $ch_cb;
+	}
+    };
+
+    my $my_p_cb = sub( $ ) {
+	$do_next_file->();	# if there is one
+	$p_cb->(@_) if $p_cb;
+    };
+
+    $do_next_file = sub() {
+	if (@files) {
+	    # Last first.
+	    my $t = new_doc_callback($my_enc_cb, $my_cred_cb, $my_ch_cb, $my_p_cb);
+	    $t->parsefile(pop @files);
+	}
+    };
+
+    # Let's go.
+    $do_next_file->();
+}
+
 
 # Private.  Three handlers indirectly called by XML::Twig.  First arg
 # is the XMLTV data structure, remaining args those passed by
@@ -684,7 +806,8 @@ Concatenate (and merge) listings data.  Programmes are catenated
 together, channels are merged, for credits we just take the first
 and warn if the others differ.
 
-See L<tv_cat(1)> which is just a wrapper around this routine.
+See also C<parsefiles_callback()> which provides a scalable way to
+read from several input files.
 
 =cut
 sub cat( @ ) { cat_aux(1, @_) }
