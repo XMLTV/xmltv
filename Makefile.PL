@@ -265,9 +265,13 @@ my @opt_components
        prereqs => {},
        special_prereqs =>
        [ [ sub {
-	       my $p = `python -c 'import sys; print sys.hexversion'`;
-	       chomp $p;
-	       return $p;
+	       # This command line should work on Unix and NT, I hope.
+	       my $p = `python -c "import sys; print sys.hexversion" 2>&1`;
+	       for ($p) {
+		   s/^\s+//; s/\s+$//;
+		   return $_ if /^\d+$/;
+		   return undef;
+	       }
 	   },
 	   'Python', '17105648', '1.5.2' ] ] },
 
