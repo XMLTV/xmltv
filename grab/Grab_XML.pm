@@ -4,8 +4,16 @@ use Getopt::Long;
 use LWP::Simple qw();
 use Date::Manip;
 use XMLTV;
-use XMLTV::Memoize;
 use XMLTV::Usage;
+
+# Memoize a function from LWP::Simple (_not_ our own get() method but
+# the thing it calls).  I can't persuade Memoize to do this without
+# temporarily switching back to package main.
+#
+{
+    package main;
+    use XMLTV::Memoize; XMLTV::Memoize::check_argv('LWP::Simple::get');
+}
 
 # Use Log::TraceMessages if installed.
 BEGIN {
@@ -156,7 +164,6 @@ The main program.  Parse command line options, fetch and write data.
 sub go( $ ) {
     my $pkg = shift;
     # Get options.
-    XMLTV::Memoize::check_argv('get');
     my ($opt_days,
 	$opt_help,
 	$opt_output,
