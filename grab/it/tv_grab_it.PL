@@ -6,5 +6,6 @@
 #
 # $Id$
 #
-use vars '$in'; $in = 'grab/it/tv_grab_it.in';
+die "usage: $_ output_file share_dir" if @ARGV != 2;
 require 'lib/set_share_dir.pl';
+set_share_dir('grab/it/tv_grab_it.in', $ARGV[0], $ARGV[1]);
