@@ -652,11 +652,13 @@ sub special_multipart( $ ) {
     if (defined $tz) { t "using timezone $tz for interpreting times" }
     else { t "interpreting times with no timezone (ie UTC)" }
 
-    my ($best_interp, $best_count, $best_first_word_is_time);
+    my ($best_interp, $best_count,
+	$best_first_word_is_time, $best_including_at_time);
   INTERP: foreach my $interp ($as_24h, $as_12h_am, $as_12h_pm) {
 	t 'testing an interpretation of times';
 	my $count = 0;
 	my $first_word_is_time = 0;
+	my $including_at_time = 0;
 	my $prev;
 	for (my $pos = 0; $pos < @poss_times; $pos++) {
 	    t "testing word $poss_times[$pos] at position $pos";
@@ -691,6 +693,12 @@ sub special_multipart( $ ) {
 	    if ($pos == 0) {
 		$first_word_is_time = 1;
 	    }
+	    if ($pos >= 2
+		and $poss_times[$pos - 2] =~ /^[Ii]ncluding$/
+		and $poss_times[$pos - 1] eq 'at') {
+		$including_at_time = 1;
+		t 'previous words are "including at", setting $including_at_time true';
+	    }
 	}
 	t "found $count matching times and nothing badly wrong";
 	
@@ -700,6 +708,7 @@ sub special_multipart( $ ) {
 	    $best_interp = $interp;
 	    $best_count = $count;
 	    $best_first_word_is_time = $first_word_is_time;
+	    $best_including_at_time = $including_at_time;
 	}
     }
 
@@ -712,13 +721,16 @@ sub special_multipart( $ ) {
 
     # Heuristic.  We require at least three valid times to split - or
     # when the programme description begins with a time, that's also
-    # good enough.
+    # good enough.  Also when the description contains 'including at'
+    # followed by a time.
     #
     return undef if not defined $best_interp;
-    return undef if ($best_count < 3 and not $best_first_word_is_time);
+    return undef unless ($best_count >= 3
+			 or $best_first_word_is_time
+			 or $best_including_at_time);
 
 #    local $Log::TraceMessages::On = 1;
-    t 'at least three valid times, proceed';
+    t 'looks reasonable, proceed';
 
     my $split = multipart_split_desc(\@words, $best_interp);
     die if not defined $split->[0];
@@ -748,34 +760,45 @@ sub special_multipart( $ ) {
     # main_desc instead of real [text, lang] descriptions, and hh:mm
     # 'time' instead of real start time+date.
     #
+    # At most one of them is allowed to have time undefined; this is
+    # the 'rump' of the parent programme.  Whether such a rump exists
+    # depends on what kind of splitting was done.
+    #
+    my $seen_rump = 0;
     foreach (@pps) {
-	my $time = delete $_->{time}; die if not defined $time;
-	my $start = Date_SetTime($day, $time);
-	die if not defined $start;
-	$start = Date_ConvTZ($start, $tz, 'UTC') if defined $tz;
-	if (Date_Cmp($start, $p->{start}) < 0) {
-	    my $dump = dump_pseudo_programme($_);
-	    die "subprogramme ($dump, has 'time' $time) "
-	      . "starts before main programme ($p->{start}, $p->{title}->[0]->[0])";
-	}
-	if (defined $p->{stop} and Date_Cmp($p->{stop}, $start) < 0) {
-	    my $dump = dump_pseudo_programme($_);
-	    die "subprogramme ($dump, has 'time' $time) starts after main one stops";
-	}
+	my $time = delete $_->{time};
+	die if not defined $time and $seen_rump++;
+	if (defined $time) {
+	    my $start = Date_SetTime($day, $time);
+	    die if not defined $start;
+	    $start = Date_ConvTZ($start, $tz, 'UTC') if defined $tz;
+	    if (Date_Cmp($start, $p->{start}) < 0) {
+		my $dump = dump_pseudo_programme($_);
+		die "subprogramme ($dump, has 'time' $time) "
+		  . "starts before main programme ($p->{start}, $p->{title}->[0]->[0])";
+	    }
+	    if (defined $p->{stop} and Date_Cmp($p->{stop}, $start) < 0) {
+		my $dump = dump_pseudo_programme($_);
+		die "subprogramme ($dump, has 'time' $time) starts after main one stops";
+	    }
 
-	# Now we store the time in the official 'start' key.  But
-	# convert back to the original timezone to look nice.
-	#
-	if (defined $tz) {
-	    $_->{start} = ud(Date_ConvTZ($start, 'UTC', $tz)) . " $tz";
+	    # Now we store the time in the official 'start' key.  But
+	    # convert back to the original timezone to look nice.
+	    #
+	    if (defined $tz) {
+		$_->{start} = ud(Date_ConvTZ($start, 'UTC', $tz)) . " $tz";
+	    }
+	    else {
+		$_->{start} = ud($start);
+	    }
 	}
 	else {
-	    $_->{start} = ud($start);
+	    $_->{start} = $p->{start};
 	}
 
 	if (not defined $_->{main_title}) {
-	    # A title is compulsory, normally splitting will find one,
-	    # but in case it didn't...
+	    # A title is needed, normally splitting will find one, but
+	    # in case it didn't...
 	    #
 	    $_->{title} = $p->{title};
 	}
@@ -874,11 +897,21 @@ sub multipart_split_desc( $$ ) {
     # parse.  We use some heuristics to work out which it is and call
     # the appropriate 'parsing' routine.
     #
+    t "testing for 'Including at'";
+    foreach my $i (0 .. $#words - 1) {
+	t "looking at pos $i, word is $words[$i]";
+	if ($words[$i] =~ /^[Ii]ncluding$/ and $words[$i + 1] eq 'at') {
+	    t 'yup, calling multipart_split_desc_including_at()';
+	    return multipart_split_desc_including_at(\@words, $interp);
+	}
+    }
+
+    t "testing for 'With X at T0, T1; ...'";
     if (@words >= 4 and $words[0] =~ /^with$/i) {
 	return multipart_split_desc_rt(\@words, $interp);
     }
 
-    # Look for two times in a row, or separated only by 'and'.
+    t "looking for two times in a row, or separated only by 'and'";
     my $prev_was_time = 0;
     foreach (@words) {
 	if (defined $interp->($_)) {
@@ -896,7 +929,7 @@ sub multipart_split_desc( $$ ) {
 	}
     }
 
-    # Look for pairs of times 'from-to'.
+    t "looking for pairs of times 'from-to'";
     foreach (@words) {
 	if (/^([0-9.:]+)-([0-9.:]+)$/) {
 	    my ($from, $to) = ($1, $2);
@@ -906,9 +939,7 @@ sub multipart_split_desc( $$ ) {
 	}
     }
 
-    # If it doesn't look like any of those, then it should be the old
-    # style of 'time title. description'.
-    #
+    t "must be old style of 'time title. description'";
     return multipart_split_desc_ananova(\@words, $interp);
 }
 # And these routines handle the different styles.
@@ -1222,6 +1253,45 @@ sub multipart_split_desc_fromto( $$ ) {
     }
 
     return [ \@r, undef, [] ];
+}
+# Really an 'including at' programme should be sandwiched in the
+# middle of its parent, but the format doesn't allow that so for
+# simplicity we treat as a multipart.
+#
+sub multipart_split_desc_including_at( $$ ) {
+    use vars '@words'; local *words = shift;
+    my $interp = shift;
+    my @r;
+    my @rump;
+
+    while (@words) {
+	my $t;
+	if (@words >= 4
+	    and $words[0] =~ /^[Ii]ncluding$/
+	    and $words[1] eq 'at'
+	    and defined ($t = $interp->($words[2]))
+	    and $words[3] =~ /^[A-Z]/) {
+	    shift @words; shift @words; shift @words;
+	    my @title;
+	    while (@words and $words[0] =~ /^[A-Z]/) {
+		my $w = shift @words;
+		if ($w =~ s/[.,;]$//) {
+		    push @title, $w;
+		    last;
+		}
+		else {
+		    push @title, $w;
+		}
+	    }
+	    push @r, { time => $t, main_title => join(' ', @title) };
+	}
+	else {
+	    push @rump, shift @words;
+	}
+    }
+
+    unshift @r, { main_desc => join(' ', @rump) };
+    return [ \@r, '', [] ];
 }
 # Is a time string using the 12 hour or 24 hour clock?  Returns a pair
 # of two booleans: the first means it could be 12h, the seecond that
