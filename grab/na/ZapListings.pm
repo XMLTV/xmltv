@@ -1336,7 +1336,7 @@ sub scrapehtml($$$)
 			  French
 			  German
 			  Greek
-			  Gujarati # spelling ?
+			  Gujarati
 			  Gujrati
 			  Hindi
 			  Hmong
