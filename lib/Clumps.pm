@@ -145,20 +145,24 @@ sub clump_relation( $ ) {
     foreach (@$progs) {
 	my $clumpidx = $_->{clumpidx};
 	next if not defined $clumpidx or $clumpidx eq '0/1';
-	push @{$todo{$_->{channel}, pd($_->{start})}}, $_;
+	push @{$todo{$_->{channel}}->{pd($_->{start})}}, $_;
     }
     t 'updating $related from todo list';
-    foreach (keys %todo) {
-	t 'todo list for ' . d($_);
-	my @l = @{$todo{$_}};
-	t 'list of programmes: ' . d(\@l);
-	foreach my $ai (0 .. $#l) {
-	    foreach my $bi ($ai+1 .. $#l) {
-		my $a = $l[$ai]; my $b = $l[$bi];
-		t "$a and $b related";
-		die if "$a" eq "$b";
-		warn "$a, $b over-related" if related($related, $a, $b);
-		relate($related, $a, $b);
+    foreach my $ch (keys %todo) {
+	use vars '%times'; local *times = $todo{$ch};
+	my $times = $todo{$ch};
+	foreach my $t (keys %times) {
+	    t "todo list for channel $ch, time $t";
+	    my @l = @{$times{$t}};
+	    t 'list of programmes: ' . d(\@l);
+	    foreach my $ai (0 .. $#l) {
+		foreach my $bi ($ai+1 .. $#l) {
+		    my $a = $l[$ai]; my $b = $l[$bi];
+		    t "$a and $b related";
+		    die if "$a" eq "$b";
+		    warn "$a, $b over-related" if related($related, $a, $b);
+		    relate($related, $a, $b);
+		}
 	    }
 	}
     }
@@ -212,6 +216,8 @@ sub fix_clumps( $$$ ) {
 
     my @relatives = @{relatives($rel, $orig)};
     if (not @relatives) {
+	local $Log::TraceMessages::On = 1;
+	t 'programme without relatives: ' . d $orig;
 	warn "programme has clumpidx of $orig->{clumpidx}, but cannot find others in same clump\n";
 	return;
     }
@@ -435,7 +441,6 @@ sub check_same_channel( $ ) {
 		# Okay.
 	    }
 	    else {
-		local $Log::TraceMessages::On = 1;
 		t 'same clump, different channels: ' . d($progs->[0]) . ' and ' . d($prog);
 		die "programmes in same clump have different channels: $_, $ch";
 	    }
