@@ -66,13 +66,28 @@ sub askMyQuestion( $$$@ )
 	my $optnum = 0;
 	my (%num_to_choice, %choice_to_num);
 	foreach (@options) {
-	    print "$optnum: $_";
+	    print "$optnum: $_\n";
 	    $num_to_choice{$optnum} = $_;
 	    $choice_to_num{$_} = $optnum;
 	    ++ $optnum;
 	}
-	my $r = askQuestion('Select one:', $choice_to_num{$default}, 0 .. $optnum);
-	return $num_to_choice{$r};
+	$optnum--;
+	my $r=undef;
+	if ( $validate ) {
+	    while (!defined($r) ) {
+		$r = askQuestion('Select one:', $choice_to_num{$default}, 0 .. $optnum);
+		if ( defined($r) && defined($num_to_choice{$r}) ) {
+		    return $num_to_choice{$r};
+		}
+		print STDERR "invalid response, please choose one of ".0 .. $optnum."\n";
+		print STDERR "\n";
+		$r=undef;
+	    }
+	}
+	else {
+	    $r = askQuestion('Select one:', $choice_to_num{$default}, 0 .. $optnum);
+	    return $num_to_choice{$r};
+	}
     }
 }
 
