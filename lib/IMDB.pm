@@ -1411,7 +1411,7 @@ sub invokeStage($$)
     my $startTime=time();
     if ( $stage == 1 ) {
 	$self->status("starting prep stage $stage (parsing movies.list)..");
-	my $countEstimate=341000;
+	my $countEstimate=370000;
 	my $num=$self->readMovies($countEstimate, "$self->{imdbListFiles}->{movies}");
 	if ( $num < 0 ) {
 	    if ( $num == -2 ) {
@@ -1420,7 +1420,7 @@ sub invokeStage($$)
 	    return(1);
 	}
 	elsif ( abs($num - $countEstimate) > $countEstimate*.05 ) {
-	    $self->status("ARG estimate of $countEstimate for movies needs updating, I read $num");
+	    $self->status("ARG estimate of $countEstimate for movies needs updating, found $num");
 	}
 	$self->dbinfoAdd("db_stat_movie_count", "$num");
 
@@ -1459,7 +1459,7 @@ sub invokeStage($$)
     elsif ( $stage == 2 ) {
 	$self->status("starting prep stage $stage (parsing directors.list)..");
 
-	my $countEstimate=69000;
+	my $countEstimate=75500;
 	my $num=$self->readCastOrDirectors("Directors", $countEstimate, "$self->{imdbListFiles}->{directors}");
 	if ( $num < 0 ) {
 	    if ( $num == -2 ) {
@@ -1468,7 +1468,7 @@ sub invokeStage($$)
 	    return(1);
 	}
 	elsif ( abs($num - $countEstimate) > $countEstimate*.05 ) {
-	    $self->status("ARG estimate of $countEstimate for directors needs updating, I read $num");
+	    $self->status("ARG estimate of $countEstimate for directors needs updating, found $num");
 	}
 	$self->dbinfoAdd("db_stat_director_count", "$num");
 
@@ -1523,7 +1523,7 @@ sub invokeStage($$)
 	$self->status("starting prep stage $stage (parsing actors.list)..");
 
 	#print "re-reading movies into memory for reverse lookup..\n";
-	my $countEstimate=430000;
+	my $countEstimate=460000;
 	my $num=$self->readCastOrDirectors("Actors", $countEstimate, "$self->{imdbListFiles}->{actors}");
 	if ( $num < 0 ) {
 	    if ( $num == -2 ) {
@@ -1532,7 +1532,7 @@ sub invokeStage($$)
 	    return(1);
 	}
 	elsif ( abs($num - $countEstimate) > $countEstimate*.05 ) {
-	    $self->status("ARG estimate of $countEstimate for actors needs updating, I read $num");
+	    $self->status("ARG estimate of $countEstimate for actors needs updating, found $num");
 	}
 	$self->dbinfoAdd("db_stat_actor_count", "$num");
 
@@ -1571,7 +1571,7 @@ sub invokeStage($$)
     elsif ( $stage == 4 ) {
 	$self->status("starting prep stage $stage (parsing actresses.list)..");
 
-	my $countEstimate=260000;
+	my $countEstimate=280000;
 	my $num=$self->readCastOrDirectors("Actresses", $countEstimate, "$self->{imdbListFiles}->{actresses}");
 	if ( $num < 0 ) {
 	    if ( $num == -2 ) {
@@ -1580,7 +1580,7 @@ sub invokeStage($$)
 	    return(1);
 	}
 	elsif ( abs($num - $countEstimate) > $countEstimate*.05 ) {
-	    $self->status("ARG estimate of $countEstimate for actresses needs updating, I read $num");
+	    $self->status("ARG estimate of $countEstimate for actresses needs updating, found $num");
 	}
 	$self->dbinfoAdd("db_stat_actress_count", "$num");
 
