@@ -122,21 +122,24 @@ sub getProviders($$$)
 	}
     }
 
-    my $providers;
+    my @providers;
     while ( $content=~s/<SELECT(.*)(?=<\/SELECT>)//os ) {
         my $options=$1;
         while ( $options=~s/<OPTION value="(\d+)">([^<]+)<\/OPTION>//os ) {
-	    $providers->{$2}=$1;
-            #print STDERR "provider $2 ($1)\n";
+	    my $p;
+	    $p->{id}=$1;
+	    $p->{description}=$2;
+            #print STDERR "provider $1 ($2)\n";
+	    push(@providers, $p);
         }
     }
-    if ( !defined($providers) ) {
+    if ( !@providers ) {
 	print STDERR "zap2it gave us a page with no service provider options\n";
 	print STDERR "check postal/zip code or www site (maybe they're down)\n";
 	print STDERR "(LWP::UserAgent version is ".$ua->_agent().")\n";
 	return(undef);
     }
-    return($providers);
+    return(@providers);
 }
 
 sub getChannelList($$$$)
