@@ -75,12 +75,21 @@ sub ParseDate_PreservingTZ($) {
 sub tz_to_num( $ ) {
     my $tz = shift;
 
+    # It should be possible to use numeric timezones and have them
+    # come out unchanged.  But due to a bug in Date::Manip, '+0100' is
+    # treated as equivalent to 'UTC' by (WTF?) and we have to
+    # special-case numeric timezones.
+    #
+    return $tz if $tz =~ /^[+-]?\d\d:?(?:\d\d)?$/;
+
     # To convert to a number we parse a date with this timezone and
     # then compare against the same date with UTC.
     #
     my $date_str = '2000-01-01 00:00:00'; # arbitrary
     my $base = ParseDate("$date_str UTC"); die if not defined $base;
+    t "parsed '$date_str UTC' as $base";
     my $d = ParseDate("$date_str $tz"); return undef if not defined $d;
+    t "parsed '$date_str $tz' as $base";
     my $err;
     my $delta = DateCalc($d, $base, \$err);
     die "error code from DateCalc: $err" if defined $err;
@@ -89,6 +98,7 @@ sub tz_to_num( $ ) {
     # whole number of minutes.
     #
     $delta =~ /^([+-])0:0:0:0:(\d\d?):(\d\d?):0$/ or die "bad delta $delta";
+    t "turned timezone $tz into delta $1 $2 $3";
     return sprintf('%s%02d%02d', $1, $2, $3);
 }
 
