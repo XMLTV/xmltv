@@ -2,7 +2,6 @@
 
 use IO::Socket;
 use strict;
-use Time::ParseDate;
 use LWP::Simple;
 use XMLTV;
 use Date::Manip;
@@ -22,17 +21,32 @@ BEGIN {
     }
 }
 
+sub get_url( $ );
+sub human_date( $ );
+sub get_programmes( $$$ );
+sub get_programme_details( $$ );
+sub get_channels();
+sub get_categories();
+sub get_available_dates();
+sub get_progs_in_cat( $$$ );
+sub rt_to_xmltv( $ );
+sub xmltv_to_rt( $ );
+
 # GLOBAL CONSTANTS
 my $TIME_INTERVAL = 120;
-my $MAX_RETRYS = 3;
-my $LANG = "en";
-my $host="www.radiotimes.beeb.com";
+my $LANG = 'en';
+my $host='www.radiotimes.beeb.com';
 my $domain = $host; $domain =~ s/^www\.//;
 
 # Whether to fetch categories (makes everything slower)
 my $GET_CATEGORIES = 0;
 
-my %ch_to_output =
+# Tables to convert between Radio Times and XMLTV ids of channels.
+# The way to access these is through the routines rt_to_xmltv() and
+# xmltv_to_rt(), not directly.  Those will deal sensibly with a new RT
+# channel that isn't mentioned here.
+#
+my %rt_to_xmltv =
   (
    '39' => 'animalplanet.discoveryeurope.com', # Animal Planet (Digital)
    '92' => 'south-east.bbc1.bbc.co.uk', # BBC1 South East
@@ -81,47 +95,41 @@ my %ch_to_output =
    '290' => 'uk-horizons.flextech.telewest.co.uk', # UK Horizons
    '272' => 'wcw.tcm.turner.com ' # TCM/WCW
   );
+my %xmltv_to_rt = reverse %rt_to_xmltv;
 
 # get the channel options. Channels can be entered as a commar separated list
 #     eg 92,105
 # if no channels are specifed then listings for terestrial channels will be fetched
 # if 'ALL' is specified then all available channels will be fetched
 
-# default channels are BBC1, BBC2, Carlton, Channel 4, Channel 5
-my @DEFAULT_CHANS = (92,105,26,132,134);
-
-print STDERR "Finding Channels:";
+print STDERR 'Finding Channels:';
 my %channels = get_channels();
 print STDERR "\n";
 
-my @channels_specified = ();
-my @channels_to_get = ();
-my @dates_specified = ();
-my @dates_to_get = ();
+my @dates_specified;
+my @dates_to_get;
 
-GetOptions ("dates:s" => \@dates_specified, "channels:s" => \@channels_specified);
-@channels_specified = split(/,/,join(',',@channels_specified));
-foreach (@channels_specified) {
+my $channels = '92,105,26,132,134'; # default: 5 terrestrial
+GetOptions ('dates:s' => \@dates_specified, 'channels:s' => \$channels);
+my %write_channels; # to be written as <channel> elements
+foreach (split /,/, $channels) {
     if (m/ALL/) {
 	# Get all available channels
 	foreach (keys %channels) {
-	    push (@channels_to_get, $_);
+	    $write_channels{$_} = $channels{$_};
 	}
     }
-    if (m/^[0-9]*$/) {
-	push (@channels_to_get, $_);
+    elsif (not tr/0-9//c) {
+	my $xmltv_id = rt_to_xmltv($_);
+	if (not defined $channels{$xmltv_id}) {
+	    die "no channel with RT id $_";
+	}
+	$write_channels{$xmltv_id} = $channels{$xmltv_id};
+    }
+    else {
+	die "bad channel specification $_";
     }
 }
-#push (@channels_to_get, @channels_specified);
-
-unless (@channels_specified) {
-    push (@channels_to_get, @DEFAULT_CHANS);
-}
-
-my $channels_to_get_string = "";
-foreach my $chan (@channels_to_get) { $channels_to_get_string .= "$chan,"; }
-$channels_to_get_string =~ s/,$//;
-
 
 # Get the dates options. Dates can be specified as a commar sperated list
 #     eg 03/02/2002,04/02/2002
@@ -133,29 +141,31 @@ $channels_to_get_string =~ s/,$//;
 @dates_specified = split(/,/,join(',',@dates_specified));
 foreach (@dates_specified) {
 	if (m/ALL/) {
-		print STDERR "Finding available dates:";
+		print STDERR 'Finding available dates:';
 		my @available_dates = get_available_dates ();
 		print STDERR "\n";
 		push (@dates_to_get, @available_dates);
 	}
-	if (m/LATEST/) {
-		print STDERR "Finding available dates:";
+	elsif (m/LATEST/) {
+		print STDERR 'Finding available dates:';
                 my @available_dates = get_available_dates ();
                 print STDERR "\n";
 		my $latest_date = pop @available_dates;
 		push (@dates_to_get, $latest_date);
 	}
-	if (m/^[0-9]{2}\/[0-9]{2}\/[0-9]{4}$/) {
+	elsif (m/^[0-9]{2}\/[0-9]{2}\/[0-9]{4}$/) {
 		push (@dates_to_get, $_);
+	}
+	else {
+	    die "bad date specification $_";
 	}
 }
 #push (@dates_to_get, @dates_specified);
 
-unless (@dates_specified) { 
+unless (@dates_specified) {
 	# Get todays date
-	Date_Init('TZ=UT');
-	my $today = ParseDate('today'); die if not defined $today;
-	$today =~ s/^([0-9]{4})([0-9]{2})([0-9]{2}).*$/$3\/$2\/$1/i;
+	my $today = UnixDate(ParseDate('today'), '%d/%m/%Y');
+	die if not defined $today;
 	push (@dates_to_get, $today);
 }
 
@@ -164,15 +174,14 @@ my $writer = new XMLTV::Writer(encoding => 'ISO-8859-1');
 $writer->start({ 'source-info-url'     =>
           'http://http://www.radiotimes.co.uk/',
                  'source-info-name'    => 'RadioTimes',
-                 'source-data-url'     => "",
-                 'generator-info-name' => 'XMLTV/0.4',
+                 'generator-info-name' => 'XMLTV',
                  'generator-info-url'  =>
           'http://membled.com/work/apps/xmltv/',
                });
 
 
 # Find all the categories
-print STDERR "Finding Categories:";
+print STDERR 'Finding Categories:';
 my %categories = get_categories ();
 print STDERR "\n";
 
@@ -183,468 +192,502 @@ my %encounted_progs;
 # get the listings for each date
 my @programmes;
 foreach my $date (@dates_to_get) {
+    # Create the time string according to the TIME_INTERVAL
+    my $hrs = 0;
+    my $mns = 0;
+    while ($hrs < 24) {
+	my $time_str = "$hrs:$mns";
+	$time_str =~ s/^([0-9]:)/0$1/;
+	$time_str =~ s/:([0-9])$/:0$1/;
+	$mns += $TIME_INTERVAL;
+	$hrs += $mns / 60;
+	$mns = $mns % 60;
 
+	# first find all the new programmes for this time slot
+	my @new_programmes;
 
-	# Create the time string according to the TIME_INTERVAL 
-	my $hrs = 0;
-	my $mns = 0;
-	while ($hrs < 24) {
-		my $time_str = "$hrs:$mns";
-		$time_str =~ s/^([0-9]:)/0$1/;
-		$time_str =~ s/:([0-9])$/:0$1/;
-		$mns += $TIME_INTERVAL;
-        	$hrs += $mns / 60;
-        	$mns = $mns % 60;
+	foreach my $chan (sort keys %write_channels) {
+	    print STDERR "Finding the programmes on $chan at $date $time_str:";
+	    push @new_programmes, get_programmes($chan, $date, $time_str);
+	    print STDERR "\n";
+	}
 
-		# first find all the new programmes for this time slot
-		my @new_programmes;
+	# Next find all the programes in each category (if there are new progs
+	# FIX ME we dont need to check all channels only those with new progs
+	# FIX ME we also need to check if there are more than 100 results and
+	# search over less channels
+	if (@new_programmes) {
+	    if ($GET_CATEGORIES) {
+		print STDERR "Finding the categories at $time_str:";
+		%prog_to_cat =
+		  get_progs_in_cat([ sort keys %write_channels ], $date, $time_str);
+		print STDERR "\n";
+	    }
+	}
 
-		foreach my $chan (@channels_to_get) {
-                	print STDERR "Finding the programmes on $chan at $date $time_str:";
-                	my @this_chan_new_programmes = get_programmes($chan,$date,$time_str);
-                	push (@new_programmes, @this_chan_new_programmes);
-                	print STDERR "\n";
-        	}
-
-		# Next find all the programes in each category (if there are new progs
-		# FIX ME we dont need to check all channels only those with new progs
-		# FIX ME we also need to check if there are more than 100 results and
-		# search over less channels
-		if (@new_programmes) {
-		    if ($GET_CATEGORIES) {
-			print STDERR "Finding the categories for $channels_to_get_string at $time_str:";
-			%prog_to_cat =
-			get_progs_in_cat($channels_to_get_string,$date,$time_str); 
-			print STDERR "\n";
-		    }
+	# Set the category for each new programme
+	foreach my $new_prog (@new_programmes) {
+	    my $channelId = $new_prog->{_chanID};
+	    my $programmeId = $new_prog->{_progID};
+	    if ($GET_CATEGORIES) {
+		my $cat_ID = $prog_to_cat{"$channelId$programmeId"};
+		my $cat = $categories{$cat_ID};
+		if (defined $cat) {
+		    push @{$new_prog->{category}}, [ lc $cat ];
 		}
-
-		#foreach my $chan (@channels_to_get) {
-		#        print STDERR "Finding the programmes on $chan at $time_str:";
-        	#	my @new_programmes = get_programmes($chan,$date,$time_str);
-        	#	push (@programmes, @new_programmes);
-        	#	print STDERR "\n";
-		#}
-	
-		# Set the category for each new programme 
-		foreach my $new_prog (@new_programmes) {
-			my $channelId = $new_prog->{chanID};
-			my $programmeId = $new_prog->{progID};
-			if ($GET_CATEGORIES) {
-			    my $cat_ID = $prog_to_cat{"$channelId$programmeId"};
-			    my $cat = $categories{$cat_ID};
-			    if (defined $cat) {
-				push @{$new_prog->{category}}, [ lc $cat ];
-			    }
-			    else {
-				warn "unknown category id $cat\n";
-			    }
-			}
-
+		else {
+		    warn "unknown category id $cat\n";
 		}
+	    }
+	}
 
-		# push the new channels into the completlist
-		push (@programmes, @new_programmes);
-	} 
+	# push the new channels into the completlist
+	push (@programmes, @new_programmes);
+    }
 }
 
 # write out the xml
 # write out the channels
-$writer->write_channels(\%channels);
+$writer->write_channels(\%write_channels);
 
 #write out the programmes
 foreach (@programmes) {
-        $writer->write_programme($_);
+    $writer->write_programme($_);
 }
 $writer->end();
 
 exit;
 
 
-
-
-# Function to get a url 
-sub get_url {
-	my $url= shift;
-	my $data;
-	my $trys = 0;
-	
-	while ((!$data) and ($trys < $MAX_RETRYS)) {
-		($data = get $url) or $trys++;
-		print STDERR "#";
-	}
-	
-	return $data;
+# Function to get a url.  This also seems like a sensible place to do
+# HTML-demoronizing.  I've removed the automatic retrying because it
+# won't interact well with memozing LWP::get() and I'd prefer to be
+# warned whenever a page fails to download.  Could add it back later.
+#
+sub get_url( $ ) {
+    my $url = shift;
+    for (my $data = get($url)) {
+	die "cannot get $url\n" if not defined;
+	tr/\222\222\226/''-/;
+	# There could be other illegal chars but I haven't seen them.
+	return $_;
+    }
 }
 
-sub human_date {
-#
-# produce a human readable date string
-# Usage human_date($seconds_since_epoch)
-#
-        my $date = shift;
-        my ($year,$month,$day,$hour,$minute,$second) 
-			= (localtime($date))[5,4,3,2,1,0];
-        $year += 1900;
-	$month++;
-        return sprintf "%2.2d%2.2d%2.2d%2.2d:%2.2d:%2.2d",
-			$year,$month,$day,$hour,$minute,$second;
+
+sub human_date( $ ) {
+    #
+    # produce a human readable date string
+    # Usage human_date($seconds_since_epoch)
+    #
+    my $date = shift;
+    my ($year,$month,$day,$hour,$minute,$second)
+      = (localtime($date))[5,4,3,2,1,0];
+    $year += 1900;
+    $month++;
+    return sprintf '%2.2d%2.2d%2.2d%2.2d:%2.2d:%2.2d',
+      $year,$month,$day,$hour,$minute,$second;
 }
 
 # Function to find all the programmes on a channel (at a given date + time)
-sub get_programmes {
-	my $channelId = shift;
-	my $searchDate = shift;
-	my $searchTime = shift;
+sub get_programmes( $$$ ) {
+    my $channelId = xmltv_to_rt(shift);
+    my $searchDate = shift;
+    my $searchTime = shift;
 
-	my @p;
+    my @p;
 
-	my $url = "http://$host/ListingsServlet?event=4&";
-        $url .= "jspGridLocation=%2Fjsp%2Ftv_listings_grid.jsp&";
-        $url .= "jspListLocation=%2Fjsp%2Ftv_listings_single.jsp&";
-        $url .= "jspError=%2Fjsp%2Ferror.jsp&";
-        $url .= "searchDate=$searchDate&";
-        $url .= "searchTime=$searchTime&";
-        $url .= "channels=$channelId";
-	my $data = get_url($url);
+    my $url = "http://$host/ListingsServlet?event=4&";
+    $url .= 'jspGridLocation=%2Fjsp%2Ftv_listings_grid.jsp&';
+    $url .= 'jspListLocation=%2Fjsp%2Ftv_listings_single.jsp&';
+    $url .= 'jspError=%2Fjsp%2Ferror.jsp&';
+    $url .= "searchDate=$searchDate&";
+    $url .= "searchTime=$searchTime&";
+    $url .= "channels=$channelId";
+    my $data = get_url($url);
+    $data =~ tr/\n//d;
 
-	$data =~ s/\n//g;
+    my @results = ($data =~ m/<!-- start of a result -->.*?<!-- end of a result -->/ig);
+    warn 'no results found in HTML' if not @results;
 
-	my @results = ($data =~ m/<!-- start of a result -->.*?<!-- end of a result -->/ig);
+    # print STDERR "$channelId $searchDate $searchTime\n";
 
-	# print STDERR "$channelId $searchDate $searchTime\n";
+    foreach (@results) {
+	m/programmeId=([0-9]+)/ or die "cannot find programmeId= in $_";
+	my $programmeId = $1;
 
-	foreach (@results) {
-
-        	m/programmeId=([0-9]+)/;
-        	my $programmeId = $1;
-	
-		unless ($encounted_progs{"$channelId$programmeId"}) {
-			$encounted_progs{"$channelId$programmeId"} = 1;
-
-			#print STDERR "ChannelId:$channelId ProgrammeId:$programmeId\n";
-		
-			my %r = get_programme_details ($channelId, $programmeId);
-	
-			push @p, \%r;
-		}
+	unless ($encounted_progs{"$channelId$programmeId"}) {
+	    $encounted_progs{"$channelId$programmeId"} = 1;
+	    #print STDERR "ChannelId:$channelId ProgrammeId:$programmeId\n";
+	    my %r = get_programme_details ($channelId, $programmeId);
+	    push @p, \%r;
 	}
-	return @p;
+    }
+    return @p;
 }
 
 # Function to parse the HTML and get all the info we need
-sub get_programme_details {
+sub get_programme_details( $$ ) {
+    my $channelId = shift;
+    my $programmeId = shift;
 
-	my $channelId = shift;
-	my $programmeId = shift;
+    my %p;
+    $p{channel} = rt_to_xmltv($channelId);
+    $p{_chanID} = $channelId;
+    $p{_progID} = $programmeId;
+    if ($GET_CATEGORIES) {
+	my $cat_ID = $prog_to_cat{"$channelId$programmeId"};
+	my $cat = $categories{$cat_ID};
+	push @{$p{category}}, [ lc $cat ];
+    }
 
-	my %p;
-	$p{channel} = chan_to_output($channelId);
-	$p{chanID} = $channelId;
-	$p{progID} = $programmeId;
-	if ($GET_CATEGORIES) {
-	    my $cat_ID = $prog_to_cat{"$channelId$programmeId"};
-	    my $cat = $categories{$cat_ID};
-	    push @{$p{category}}, [ lc $cat ];
+    my $url = "http://$host/ListingsServlet?event=10&";
+    $url .= "channelId=$channelId&";
+    $url .= "programmeId=$programmeId&";
+    $url .= 'jspLocation=/jsp/prog_details.jsp';
+    my $prog_details_string = get_url($url);
+    $prog_details_string  =~ s/\n//g;
+    $prog_details_string  =~ m/\/\/-->(.*?)<!-- end main table -->/
+      or die "cannot find /-->.*<!-- end main table/ in $_";
+    my $prog_details = $1;
+    #chop off anything before //-->
+    $prog_details =~ s/.*\/\/-->//;
+    #get rid of the tag which messes things up
+    $prog_details =~ s/<!--.*?-->/\|/g;
+    # replace html tags with pipes
+    $prog_details =~ s/<[ ]*[^0-9][^>]*?>/\|/g;
+    #replace multiple spaces
+    $prog_details =~ s/\s+/ /g;
+    #replace pipe followed by space
+    $prog_details =~ s/\|\s/\|/g;
+    #replace multiple pipes
+    $prog_details =~ s/\|+/\|/g;
+    $prog_details =~ s/&nbsp;//g;
+
+    # chop of related features or related websites
+    $prog_details =~ s/Related Features\|.*//;
+    $prog_details =~ s/Related Websites\|.*//;
+
+    $prog_details =~ m/ \|(.*?)\|Channel:/
+      or die "cannot find title in HTML $_";
+    my $title = $1;
+    my $sub_title;
+    if ($title =~ s/\|(.*)//) {
+	$sub_title = $1;
+    }
+    for ($title) {
+	s/^\s+//; s/\s+$//;
+    }
+    $p{title} = [ [ $title, $LANG ] ];
+
+    $prog_details =~ m/Channel:\|(.*?)\|/
+      or die "cannot find channel name in HTML $_";
+    my $channel_name = $1;
+
+    $prog_details =~ m/Date:\|.*? ([0-9]*? .*?)\|/
+      or die "cannot find date in HTML $_";
+    my $date = $1;
+
+    $prog_details =~ m/Time:\|([0-9,a,m,p,:]*) to ([0-9,a,m,p,:]*)/
+      or die "cannot find time in HTML $_";
+    my $start_time = $1;
+    my $stop_time = $2;
+    my $start = UnixDate(ParseDate("$date $start_time"), '%s');
+    my $stop = UnixDate(ParseDate("$date $stop_time"), '%s');
+
+    # Some programmes have thir stop time on the next day
+    if (($start_time =~ m/pm$/) and ($stop_time =~ m/am$/)) {
+	$stop += 86400;
+    }
+
+    my $start_string = human_date($start);
+    my $stop_string = human_date($stop);
+
+    $p{start} = $start_string;
+    $p{stop} = $stop_string;
+
+    #chop of all the stuff we have parsed
+    $prog_details =~ s/.*Time:\|$start_time to $stop_time\|//;
+
+    my ($options,$subtitles,$widescreen,$repeat,$black_and_white,
+	$certificate,$episode,$review,$director,$filmed_in,$cast);
+
+    if ($prog_details =~ m/(.*?)\|/) {
+	# FIXME warn about options other than these.
+	$options = $1;
+	if ($options eq 'Review') {
+	    $options ='';
+	}
+	if ($options eq 'Episode') {
+	    $options ='';
+	}
+	if ($options eq 'Certificate:') {
+	    $options ='';
 	}
 
-	my $url = "http://$host/ListingsServlet?event=10&";
-        $url .= "channelId=$channelId&";
-        $url .= "programmeId=$programmeId&";
-        $url .= "jspLocation=/jsp/prog_details.jsp";
-	my $prog_details_string = get_url($url);
-	$prog_details_string  =~ s/\n//g;
-	$prog_details_string  =~ m/\/\/-->(.*?)<!-- end main table -->/;
-	my $prog_details = $1;
-	#chop off anything before //-->
-	$prog_details =~ s/.*\/\/-->//;
-	#get rid of the tag which messes things up
-	$prog_details =~ s/<!--.*?-->/\|/g;
-	# replace html tags with pipes
-	$prog_details =~ s/<[ ]*[^0-9][^>]*?>/\|/g;
-	#replace multiple spaces
-	$prog_details =~ s/\s+/ /g;
-	#replace pipe followed by space
-	$prog_details =~ s/\|\s/\|/g;
-	#replace multiple pipes
-	$prog_details =~ s/\|+/\|/g;
-	$prog_details =~ s/&nbsp;//g;
+	if ($options =~m/Subtitled/) {
+	    $subtitles = 'yes';
+	    $p{subtitles} = [ { type => 'teletext' } ];
+	}
+	if ($options =~m/Widescreen/) {
+	    # FIXME I think this can be handled under <video>.
+	    $widescreen = 'yes';
+	    $p{_widescreen} = 'yes';
+	}
+	if ($options =~m/Repeat/) {
+	    $repeat = 'yes';
+	    $p{'previously-shown'} = {}
+	}
+	if ($options =~m/Black and White/) {
+	    $black_and_white = 'yes';
+	    $p{video}{present} = 1;
+	    $p{video}{colour} = 0;
+	}
 
-	# chop of related features or related websites
-	$prog_details =~ s/Related Features\|.*//;
-	$prog_details =~ s/Related Websites\|.*//;
+	$prog_details =~ s/$options\|//;
+    }
 
-	$prog_details =~ m/ \|(.*?)\|Channel:/;
-	my $title = $1;
+    if ($prog_details =~ m/Certificate:\|\[(.*?)\]\|/) {
+	$certificate = $1;
+	$p{_certificate} = $1;
+    }
 
-	my $sub_title;
-	if ($title =~ s/\|(.*)//) {$sub_title = $1;}
-	
-	$p{title} = [ [ $title, $LANG ] ];
+    # episode corresponds to badly named 'sub -title'
+    if ($prog_details =~ m/Episode\|(.*?)\|/) {
+	$episode = $1;
+	$p{'sub-title'} = [ [ $1, $LANG ] ];
+    }
 
-	$prog_details =~ m/Channel:\|(.*?)\|/;
-	my $channel_name = $1;
+    # Review corresponds to description
+    if ($prog_details =~ m/Review\|(.*?)\|/) {
+	$review = $1;
+	for ($review) {
+	    s/^\s+//; s/\s+$//;
+	}
+	$p{desc} = [ [ $review, $LANG ] ];
+    }
 
-	$prog_details =~ m/Date:\|.*? ([0-9]*? .*?)\|/;
-	my $date = $1;
+    #chop of all the stuff we have parsed
+    # FIXME should have removed this while parsing.
+    $prog_details =~ s/.*Certificate:\|(.*?)\|//;
+    $prog_details =~ s/.*Episode\|(.*?)\|//;
+    $prog_details =~ s/.*Review\|(.*?)\|//;
 
-	$prog_details =~ m/Time:\|([0-9,a,m,p,:]*) to ([0-9,a,m,p,:]*)/;
-        my $start_time = $1;
-	my $stop_time = $2;
-	my $start = parsedate("$date $start_time");
-	my $stop = parsedate("$date $stop_time");
-	
-	# Some programmes have thir stop time on the next day
-        if (($start_time =~ m/pm$/) and ($stop_time =~ m/am$/)) {$stop += 86400;}
+    if ($prog_details =~ m/Directed by:\|(.*?)\|/) {
+	$director = $1;
+	push @{$p{credits}{director}}, $1;
+    }
+    if ($prog_details =~ m/Filmed in:\|(.*?)\|/) {
+	$filmed_in = $1;$p{'_filmed_in'} = $1;
+    }
+    if ($prog_details =~ m/Cast List\|(.*)/) {
+	$cast = $1;
+	$cast =~ s/\s*\|$//;
 
-	my $start_string = human_date($start);
-	my $stop_string = human_date($stop);
-
-	$p{start} = $start_string;
-	$p{stop} = $stop_string;
-
-	#chop of all the stuff we have parsed
-	$prog_details =~ s/.*Time:\|$start_time to $stop_time\|//;
-
-	my ($options,$subtitles,$widescreen,$repeat,$black_and_white,
-	    $certificate,$episode,$review,$director,$filmed_in,$cast);
-
-	if ($prog_details =~ m/(.*?)\|/) {
-	    $options = $1;
-	    if ($options eq "Review") {$options ='';}
-	    if ($options eq "Episode") {$options ='';} 
-	    if ($options eq "Certificate:") {$options ='';}
-	    
-	    if ($options =~m/Subtitled/) {
-		$subtitles = "yes";
-		$p{subtitles} = [ { type => 'teletext' } ];
+	if ($cast =~ m/\|\.\.\.\.\.\|/) {
+	    $cast =~ s/(\|\.\.\.\.\.)+/\@/;
+	    #$cast =~ s/\@+/\@/g;
+	    my @splitter = split /\@\|/, $cast;
+	    my $roles_string = shift @splitter;
+	    my $names_string = shift @splitter;
+	    my @act_roles = split /\|/, $roles_string;
+	    my @act_names = split /\|/, $names_string;
+	    $cast = '';
+	    foreach my $act_name (@act_names) {
+		my $act_role = shift @act_roles;
+		$cast .= "|$act_name,$act_role";
 	    }
-	    if ($options =~m/Widescreen/) {
-		$widescreen = "yes";
-		$p{widescreen} = "yes";
-	    }
-	    if ($options =~m/Repeat/) {
-		$repeat = "yes";
-		$p{'previously-shown'} = {}
-	    }
-	    if ($options =~m/Black and White/) {
-		$black_and_white = "yes";
-		$p{video}{present} = 1;
-	    	$p{video}{colour} = 0;
-	    }
-
-	    $prog_details =~ s/$options\|//;
+	    $cast =~ s/^\|//;
 	}
-	
-	if ($prog_details =~ m/Certificate:\|\[(.*?)\]\|/) {
-		$certificate = $1;
-		$p{'certificate'} = $1;
-	}
-		
-	# episode corresponds to badly named 'sub -title'
-	if ($prog_details =~ m/Episode\|(.*?)\|/) {
-		$episode = $1;
-		$p{'sub-title'} = [ [ $1, $LANG ] ];
-	}
-		
-	# Review corresponds to description
-	if ($prog_details =~ m/Review\|(.*?)\|/) {
-		$review = $1;
-		$p{desc} = [ [ $1, $LANG ] ];
+	else {
+	    $cast =~ s/\|/,actor\|/g;
+	    $cast =~ s/,/,actor\|/g;
+	    $cast =~ s/\|\s/\|/g;
+	    $cast =~ s/$/,actor/;
 	}
 
-	#chop of all the stuff we have parsed
-	$prog_details =~ s/.*Certificate:\|(.*?)\|//;
-	$prog_details =~ s/.*Episode\|(.*?)\|//;
-        $prog_details =~ s/.*Review\|(.*?)\|//;
+	my @cast_list = split /\|/, $cast;
+	foreach (@cast_list) {
+	    m/^([^,]*),([^,]*)$/;
+	    my $name = $1;
+	    my $role = $2;
 
-	if ($prog_details =~ m/Directed by:\|(.*?)\|/) {
-		$director = $1; 
-		push @{$p{credits}{director}}, $1;
+	    # FIXME The XMLTV doesnt seem to allow anything but actor or
+	    # director so we must just ignore role for now
+	    push @{$p{credits}{actor}}, $name;
 	}
-	if ($prog_details =~ m/Filmed in:\|(.*?)\|/) {
-		$filmed_in = $1;$p{'filmed-in'} = $1;
-	}
-	if ($prog_details =~ m/Cast List\|(.*)/) {
-		$cast = $1;
-		$cast =~ s/\s*\|$//;
-		
-		if ($cast =~ m/\|\.\.\.\.\.\|/) {
-			$cast =~ s/(\|\.\.\.\.\.)+/\@/;
-			#$cast =~ s/\@+/\@/g;
-			my @splitter = split /\@\|/, $cast;
-			my $roles_string = shift @splitter;
-			my $names_string = shift @splitter;
-			my @act_roles = split /\|/, $roles_string;
-			my @act_names = split /\|/, $names_string;
-			$cast = "";
-			foreach my $act_name (@act_names) {
-				my $act_role = shift @act_roles;
-				$cast .= "|$act_name,$act_role";
-			}
-			$cast =~ s/^\|//;
+    }
 
-			
-		}
-		else { 
-			$cast =~ s/\|/,actor\|/g;
-			$cast =~ s/,/,actor\|/g;
-			$cast =~ s/\|\s/\|/g;
-			$cast =~ s/$/,actor/;
-		}
+    #print STDERR "Title: $title\n";
+    #print STDERR "Sub Title: $sub_title\n";
+    #print STDERR "Channel: $channel_name\n";
+    #print STDERR "Date: $date\n";
+    #print STDERR "Start: $start_string\n";
+    #print STDERR "Stop: $stop_string\n";
+    #print STDERR "Subtitles: $subtitles\n";
+    #print STDERR "WideScreen: $widescreen\n";
+    #print STDERR "Repeat: $repeat\n";
+    #print STDERR "Black and White: $black_and_white\n";
+    #print STDERR "Certificate: $certificate\n";
+    #print STDERR "Episode: $episode\n";
+    #print STDERR "Review: $review\n";
+    #print STDERR "Directed By: $director\n";
+    #print STDERR "Filmed in: $filmed_in\n";
+    #print STDERR "Cast List: $cast\n";
+    #print STDERR "\n";
 
-		my @cast_list = split /\|/, $cast;
-		foreach (@cast_list) {
-		    m/^([^,]*),([^,]*)$/;
-		    my $name = $1;
-		    my $role = $2;
-		    
-		    # FIXME The XMLTV doesnt seem to allow anything but actor or 
-		    # director so we must just ignore role for now
-		    push @{$p{credits}{actor}}, $name;
-		}
-	    }
-
-	#print STDERR "Title: $title\n";
-	#print STDERR "Sub Title: $sub_title\n";
-	#print STDERR "Channel: $channel_name\n";
-	#print STDERR "Date: $date\n";
-	#print STDERR "Start: $start_string\n";
-	#print STDERR "Stop: $stop_string\n";
-	#print STDERR "Subtitles: $subtitles\n";
-        #print STDERR "WideScreen: $widescreen\n";
-        #print STDERR "Repeat: $repeat\n";
-	#print STDERR "Black and White: $black_and_white\n";
-	#print STDERR "Certificate: $certificate\n";
-	#print STDERR "Episode: $episode\n";
-	#print STDERR "Review: $review\n";
-	#print STDERR "Directed By: $director\n";
-	#print STDERR "Filmed in: $filmed_in\n";
-	#print STDERR "Cast List: $cast\n";
-	#print STDERR "\n";
-	
-	return %p;
+    return %p;
 }
 
 # Function which will locate all the available channels and return a hash
 # with channelId as the key and a chanel description
-sub get_channels {
-	my $data = get_url("http://$host/");
-	$data =~ s/\n//g;
-	$data =~ m/<select name="channels"[^>]*?>(.*?)<\/select>/;
-	my $channel_string = $1;
-	$channel_string =~ s/\s+/ /g;
-	my @channels = ($channel_string =~ m/<option value="[0-9]+" >[^<]*/ig);
-	my %c;
-	
-	foreach (@channels) {
-		m/"([0-9]*)"/;
-		my $channelId = $1;
-		m/>(.*)/;
-		my $channelDesc = $1;
-		# print  STDERR "Found Channel: ChannelId: $channelId"; 
-		# print  STDERR " ChannelDes: $channelDesc\n";
-		my $chanID_to_output = chan_to_output($channelId);
-		die if not defined $chanID_to_output;
-		die if not defined $domain;
-		die if not defined $channelId;
-		$c{$chanID_to_output}
-		  = { 'display-name' => [ [ $channelDesc, $LANG ] ],
-		      'id' => "$channelId.$domain" };
-	}
+sub get_channels() {
+    my $data = get_url("http://$host/");
+    $data =~ tr/\n\r/\n/ds;
+    t 'got channels page: ' . d $data;
+    $data =~ s/\n//g;
+    $data =~ m/<select name="channels"[^>]*?>(.*?)<\/select>/
+      or die "cannot find channel string in HTML $_";
+    my $channel_string = $1;
+    t 'got string of channels: ' . d $channel_string;
+    $channel_string =~ s/\s+/ /g;
+    my @channels = ($channel_string =~ m/<option value="[0-9]+" >[^<]*/ig);
+    t 'channels in string: ' . d @channels;
+    warn "no channels found in $channel_string" if not @channels;
+    my %c;
 
-	return %c;
+    foreach (@channels) {
+	t 'doing channel string: ' . d $_;
+	m/"([0-9]*)"/ or die "cannot find numeric channel id in $_";
+	my $channelId = $1;
+	t 'got numeric id: ' . d $channelId;
+	m/>(.*)/ or die "cannot find channel description in $_";
+	my $channelDesc = $1;
+	for ($channelDesc) {
+	    s/^\s+//; s/\s+$//;
+	}
+	t 'got description: ' . d $channelDesc;
+	my $chanID_to_output = rt_to_xmltv($channelId);
+	t 'XMLTV id to use: ' . d $chanID_to_output;
+	die if not defined $chanID_to_output;
+	die if not defined $domain;
+	die if not defined $channelId;
+	my $ch = { 'display-name' => [ [ $channelDesc, $LANG ] ],
+		   'id' => $chanID_to_output };
+	t 'channel object: ' . d $ch;
+	$c{$chanID_to_output} = $ch;
+	t "added to channels hash under key $chanID_to_output";
+    }
+
+    t 'returning hash: ' . d \%c;
+    return %c;
 }
 
 # Function which will locate all the available categories and return a hash
 # with categoryId as the key and a category description
-sub get_categories {
-	my $data = get_url("http://$host/jsp/listings_search.jsp");
-	$data =~ s/\n//g;
-	$data =~ m/<select name="genres"[^>]*?>(.*?)<\/select>/;
-	my $category_string = $1;
-	$category_string =~ s/\s+/ /g;
-	my @categories = 
-		($category_string =~ m/<option value="[0-9]+">[^<]*/ig);
-	my %c;
+sub get_categories() {
+    my $data = get_url("http://$host/jsp/listings_search.jsp");
+    $data =~ s/\n//g;
+    $data =~ m/<select name="genres"[^>]*?>(.*?)<\/select>/
+      or die "cannot find category in HTML $_";
+    my $category_string = $1;
+    $category_string =~ s/\s+/ /g;
+    my @categories =
+      ($category_string =~ m/<option value="[0-9]+">[^<]*/ig);
+    warn "cannot find categories in $category_string" if not @categories;
+    my %c;
 
-	foreach (@categories) {
-        	m/"([0-9]*)"/;
-        	my $categoryId = $1;
-        	m/>(.*)/;
-        	my $categoryDesc = $1;
-        	#print STDERR "Found Category: $categoryId CategoryDesc: $categoryDesc\n";
+    foreach (@categories) {
+	m/"([0-9]*)"/
+	  or die "cannot find number in category $_";
+	my $categoryId = $1;
+	m/>(.*)/
+	  or die "cannot find description in category $_";
+	my $categoryDesc = $1;
+	#print STDERR "Found Category: $categoryId CategoryDesc: $categoryDesc\n";
 	my $cast;
 
-		$c{$categoryId} = $categoryDesc;
-	}
-
-	return %c;
-}
-
-# Function which will locate all the available dates and return a list 
-sub get_available_dates {
-        my $data = get_url("http://$host/jsp/listings_search.jsp");
-        $data =~ s/\n//g;
-        $data =~ m/<select name="searchDate"[^>]*?>(.*?)<\/select>/;
-        my $dates_string = $1;
-        $dates_string =~ s/\s+/ /g;
-        my @dates =
-                ($dates_string =~ m/[0-9]{2}\/[0-9]{2}\/[0-9]{4}/ig);
-        return @dates;
-}
-
-
-# Function which will locate all the programes in a category 
-# (at a given date and time)
-# will return a hash with "chanIDProgID" as the key 
-sub get_progs_in_cat {
-	my $channels_to_search = shift;
-        my $searchDate = shift;
-        my $searchTime = shift;
-
-	my %cats;
-	
-	# For each category find all the programmes in that category
-	foreach my $category (keys %categories) {
-		my $url = "http://$host/ListingsServlet?event=7&";
-                $url .= "jspGridLocation=%2Fjsp%2Ftv_listings_grid.jsp&";
-                $url .= "jspListLocation=%2Fjsp%2Ftv_listings_list.jsp&";
-                $url .= "jspError=%2Fjsp%2Ferror.jsp&";
-                $url .= "channels=$channels_to_search&";
-                $url .= "genres=$category&";
-                $url .= "searchDate=$searchDate&";
-                $url .= "searchTime=$searchTime";
-		my $data = get_url($url);
-        
-                #print STDERR "$url\n";
-
-		$data =~ s/\n//g;
-	
-		my @results = ($data =~ m/<!-- start of a result -->.*?<!-- end of a result -->/ig);
-
-		#print STDERR "$category $searchDate $searchTime\n";
-
-        	foreach (@results) {
-
-                	m/channelId=([0-9]+)/;
-                	my $channelId = $1;
-
-                	m/programmeId=([0-9]+)/;
-                	my $programmeId = $1;
-
-			$cats{"$channelId$programmeId"} = $category;
-                	#print STDERR "ChannelId:$channelId ProgrammeId:$programmeId\n";
-        	}
-	}
-	return %cats;
-}
-
-sub chan_to_output() {
-    my $n = shift;
-    if (not defined $ch_to_output{$n}) {
-	$ch_to_output{$n} = "$n.radiotimes.beeb.com";
+	$c{$categoryId} = $categoryDesc;
     }
-    return $ch_to_output{$n};
+
+    return %c;
 }
 
+# Function which will locate all the available dates and return a list
+sub get_available_dates() {
+    my $data = get_url("http://$host/jsp/listings_search.jsp");
+    $data =~ s/\n//g;
+    $data =~ m/<select name="searchDate"[^>]*?>(.*?)<\/select>/
+      or die "cannot find searchDate string in HTML $_";
+    my $dates_string = $1;
+    $dates_string =~ s/\s+/ /g;
+    my @dates =
+      ($dates_string =~ m/[0-9]{2}\/[0-9]{2}\/[0-9]{4}/ig);
+    warn "cannot find dates in $dates_string" if not @dates;
+    return @dates;
+}
+
+
+# Function which will locate all the programes in a category
+# (at a given date and time)
+# will return a hash with "chanIDProgID" as the key
+sub get_progs_in_cat( $$$ ) {
+    my @channels_to_search = map { xmltv_to_rt($_) } @{shift()};
+    my $searchDate = shift;
+    my $searchTime = shift;
+
+    my %cats;
+
+    # For each category find all the programmes in that category
+    foreach my $category (keys %categories) {
+	my $url = "http://$host/ListingsServlet?event=7&";
+	$url .= 'jspGridLocation=%2Fjsp%2Ftv_listings_grid.jsp&';
+	$url .= 'jspListLocation=%2Fjsp%2Ftv_listings_list.jsp&';
+	$url .= 'jspError=%2Fjsp%2Ferror.jsp&';
+	$url .= 'channels=' . join(',', @channels_to_search) . '&';
+	$url .= "genres=$category&";
+	$url .= "searchDate=$searchDate&";
+	$url .= "searchTime=$searchTime";
+	#print STDERR "$url\n";
+	my $data = get_url($url);
+	$data =~ s/\n//g;
+
+	my @results = ($data =~ m/<!-- start of a result -->.*?<!-- end of a result -->/ig);
+	warn "cannot find results in $data" if not @results;
+
+	#print STDERR "$category $searchDate $searchTime\n";
+
+	foreach (@results) {
+
+	    m/channelId=([0-9]+)/
+	      or die "cannot find channelId= in $_";
+	    my $channelId = $1;
+
+	    m/programmeId=([0-9]+)/
+	      or die "cannot find programmeId= in $_";
+	    my $programmeId = $1;
+
+	    $cats{"$channelId$programmeId"} = $category;
+	    #print STDERR "ChannelId:$channelId ProgrammeId:$programmeId\n";
+	}
+    }
+    return %cats;
+}
+
+sub rt_to_xmltv( $ ) {
+    my $n = shift;
+    if (not defined $rt_to_xmltv{$n}) {
+	my $new = "$n.radiotimes.beeb.com";
+	die "channel id $new already exists" if defined $xmltv_to_rt{$new};
+	$rt_to_xmltv{$n} = $new;
+	$xmltv_to_rt{$new} = $n;
+    }
+    return $rt_to_xmltv{$n};
+}
+sub xmltv_to_rt( $ ) {
+    my $x = shift;
+    for ($xmltv_to_rt{$x}) {
+	die "no RT id known for $x" if not defined;
+	return $_;
+    }
+}
