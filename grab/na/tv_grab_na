@@ -91,6 +91,15 @@ B<--retry-limit X> Specify retry limit on www site failures.
 B<--retry-delay X> Specify number of seconds to delay before retrying
 www site failures.
 
+B<--gzip-command X> Specify the command line for .gz output files.
+The default is "gzip".
+
+B<--zip-command X> Specify the command line for .zip output files.
+The default is "zip".
+
+B<--bzip2-command X> Specify the command line for .bz2 output files.
+The default is "bzip2".
+
 =head1 SEE ALSO
 
 L<xmltv(5)>, L<http://www.zap2it.com/>
@@ -593,7 +602,17 @@ sub Usage($)
     print $fp "   --retry-delay <seconds>\n";
     print $fp "       number of seconds to sleep between retries (default 30).\n";
     print $fp "\n";
+    print $fp "   --gzip-command <command>\n";
+    print $fp "       specify the command line for .zip output files.(default is \"gzip\")\n";
+    print $fp "\n";
+    print $fp "   --zip-command <command>\n";
+    print $fp "       specify the command line for .zip output files.(default is \"zip\")\n";
+    print $fp "\n";
+    print $fp "   --bzip2-command <command>\n";
+    print $fp "       specify the command line for .bz2 output files.(default is \"bzip2\")\n";
+    print $fp "\n";
 }
+
 
 # First lets check to see if someone asked for help.
 # this is easier to do here than later.
@@ -1103,11 +1122,15 @@ if ( $configure ) {
 # in grabber mode - yeah !
 
 use vars qw/$opt_help $opt_config_file $opt_debug $opt_programs $opt_channels $opt_listings $opt_output $opt_days $opt_debuglistings $opt_offset $opt_retry_limit $opt_retry_delay/;
+use vars qw/$opt_gzip_command $opt_zip_command $opt_bzip2_command/;
 
 $opt_debug=0;
 $opt_debuglistings=0;
+$opt_gzip_command="gzip";
+$opt_zip_command="zip";
+$opt_bzip2_command="bzip2";
 
-if ( ! GetOptions('help', 'config-file=s', 'debug', 'programs=s', 'channels=s', 'listings=s', 'output=s', 'days=i', 'debuglistings', 'offset=i', 'retry-limit=i', 'retry-delay=i') ) {
+if ( ! GetOptions('help', 'config-file=s', 'debug', 'programs=s', 'channels=s', 'listings=s', 'output=s', 'days=i', 'debuglistings', 'offset=i', 'retry-limit=i', 'retry-delay=i',  'gzip-command=s', 'zip-command=s', 'bzip2-command=s' ) ) {
     Usage(0);
     exit(1);
 }
@@ -1190,6 +1213,29 @@ sub writeListingsXMLFooter($)
 {
     my $writer=shift;
     $writer->endTag('tv');
+}
+
+sub openOutputFileFD($)
+{
+    my $filename=$_[0];
+
+    if ( $filename=~m/\.gz$/o ) {
+	return(new IO::File("| $opt_gzip_command > $filename"));
+    }
+    elsif ( $filename=~m/\.zip$/o ) {
+	return(new IO::File("| $opt_zip_command > $filename"));
+    }
+    elsif ( $filename=~m/\.bz2$/o ) {
+	return(new IO::File("| $opt_bzip2_command > $filename"));
+    }
+    else {
+	return(new IO::File("> $filename"));
+    }
+}
+
+sub closeOutputFileFD($)
+{
+    $_[0]->close() if ( defined($_[0]) );
 }
 
 sub grab
@@ -1398,7 +1444,7 @@ sub grab
     elsif ( UnixDate("now","$opt_listings") eq $opt_listings ) {
 	mkpathtofile($opt_listings, $opt_debug) || die "mkdir $opt_listings:$!";
 	print STDERR "writing listings to $opt_listings\n";
-	$output_g = new IO::File("> $opt_listings") || die "$opt_listings: $!";
+	$output_g = openOutputFileFD($opt_listings) || die "$opt_listings: $!";
 	push(@FilesWeOpened_g, $opt_listings);
 	$writer_g = new XML::Writer(OUTPUT=>$output_g,
 				     DATA_MODE => 1, DATA_INDENT => 2 );
@@ -1445,7 +1491,7 @@ sub grab
 	    
 	    mkpathtofile($filename, $opt_debug) || die "mkdir $opt_listings:$!";
 	    print STDERR "writing listings to $filename\n";
-	    $output = new IO::File("> $filename") || die "$filename: $!";
+	    $output = openOutputFileFD($filename) || die "$filename: $!";
 	    push(@FilesWeOpened_g, $filename);
 	    $writer = new XML::Writer(OUTPUT=>$output,
 					 DATA_MODE => 1, DATA_INDENT => 2 );
@@ -1453,11 +1499,11 @@ sub grab
 	    $stats->{num_channels}=writeOutChannels($config, $writer);
 	}
 	
-	my $lg=new XMLTV::ZapListings::Scraper('PostalCode'=> $config->{option_postalcode},
+	my $lg=new XMLTV::ZapListings::Scraper('PostalCode'=>$config->{option_postalcode},
 					       'ZipCode'   =>$config->{option_zipcode},
 					       'ProviderID'=>$config->{option_provider},
 					       'Debug'     =>$opt_debug,
-					       'DebugListings'     =>$opt_debuglistings);
+					       'DebugListings'=>$opt_debuglistings);
 
 	foreach my $station ($config->stationsInDisplayOrder()) {
 	    
@@ -1494,6 +1540,16 @@ sub grab
 	    }
 
 	    if ( $failedCount ) {
+		if ( !defined($writer_g) || $writer != $writer_g ) {
+		    writeListingsXMLFooter($writer);
+		    $writer->end();
+		    closeOutputFileFD($output);
+		}
+		if ( defined($writer_g) ) {
+		    writeListingsXMLFooter($writer_g);
+		    $writer_g->end();
+		    closeOutputFileFD($output_g) if ( defined($output_g) );
+		}
 		return($failedCount);
 	    }
 
@@ -1507,14 +1563,14 @@ sub grab
 	if ( !defined($writer_g) || $writer != $writer_g ) {
 	    writeListingsXMLFooter($writer);
 	    $writer->end();
-	    $output->close();
+	    closeOutputFileFD($output);
 	}
     }
 
     if ( defined($writer_g) ) {
 	writeListingsXMLFooter($writer_g);
 	$writer_g->end();
-	$output_g->close() if ( defined($output_g) );
+	closeOutputFileFD($output_g) if ( defined($output_g) );
     }
 
     my $endTime=time();
@@ -1528,7 +1584,7 @@ sub grab
 	   $stats->{num_programs}/($endTime-$startTime),
 	   ($endTime-$startTime)/($stats->{num_days}*$stats->{num_channels}));
 	    
-    return($failedCount);
+    return(0);
 }
 
 # create a conversion string
