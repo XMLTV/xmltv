@@ -48,6 +48,7 @@ my @exes
        filter/tv_grep
        filter/tv_sort
        filter/tv_to_latex
+       filter/tv_to_text
        filter/tv_cat
        filter/tv_split
       );

@@ -57,6 +57,7 @@ my @cmds
      [ [ 'tv_grep', '--previously-shown', ''                     ], 1 ],
      [ [ 'tv_sort'                                               ], 1 ],
      [ [ 'tv_to_latex'                                           ], 0 ],
+     [ [ 'tv_to_text'                                            ], 0 ],
     );
 
 if ($full) {
