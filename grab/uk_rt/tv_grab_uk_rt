@@ -1,11 +1,18 @@
 #!/usr/bin/perl -w
 
-use IO::Socket;
 use strict;
+use IO::Socket;
 use LWP::Simple;
-use XMLTV;
 use Date::Manip;
 use Getopt::Long;
+use XMLTV;
+use XMLTV::Memoize;
+use XMLTV::Ask;
+use XMLTV::Usage <<END
+To configure: $0 --configure [--config-file FILE]
+To grab listings: $0 [--config-file FILE] [--output FILE] [--days N]
+END
+  ;
 
 # Use Log::TraceMessages if installed.
 BEGIN {
@@ -23,20 +30,22 @@ BEGIN {
 
 sub get_url( $ );
 sub human_date( $ );
-sub get_programmes( $$$ );
-sub get_programme_details( $$ );
+sub get_programmes( $$$$ );
+sub get_programme_details( $$$$ );
 sub get_channels();
 sub get_categories();
 sub get_available_dates();
 sub get_progs_in_cat( $$$ );
 sub rt_to_xmltv( $ );
 sub xmltv_to_rt( $ );
+sub grab( @ );
+sub configure();
 
 # GLOBAL CONSTANTS
 my $TIME_INTERVAL = 120;
 my $LANG = 'en';
-my $host='www.radiotimes.beeb.com';
-my $domain = $host; $domain =~ s/^www\.//;
+my $DOMAIN = 'radiotimes.beeb.com';
+my $BASE_URL = "http://www.$DOMAIN";
 
 # Whether to fetch categories (makes everything slower)
 my $GET_CATEGORIES = 0;
@@ -48,215 +57,289 @@ my $GET_CATEGORIES = 0;
 #
 my %rt_to_xmltv =
   (
-   '39' => 'animalplanet.discoveryeurope.com', # Animal Planet (Digital)
-   '92' => 'south-east.bbc1.bbc.co.uk', # BBC1 South East
-   '105' => 'south-east.bbc2.bbc.co.uk', # BBC2 South East
-   '45' => 'choice.bbc.co.uk',	# BBC Choice
-   '47' => 'knowledge.bbc.co.uk', # BBC Knowledge
-   '48' => 'news-24.bbc.co.uk', # BBC News 24
-   '49' => 'parliament.bbc.co.uk', # BBC Parliament
-   '123' => 'british.eurosport.com', # British Eurosport
-   '26' => 'carlton.com',	# Carlton
-   '127' => 'cinema.carlton.com', # Carlton Cinema
-   '132' => 'channel4.com',	# Channel 4
-   '134' => 'channel5.co.uk',	# Channel 5
-   '147' => 'discoveryeurope.com', # Discovery (Digital)
-   '158' => 'e4.channel4.com',	# E4
-   '160' => 'filmfour.channel4.com', # Film on Four
-   '177' => 'plus.granadatv.co.uk', # Granada Plus
-   '182' => 'thehistorychannel.co.uk', # History Channel (Digital)
-   '185' => 'itv2.itv.co.uk',	# ITV2
-   '213' => 'nationalgeographic.co.uk', # National Geographic (Digital)
-   '224' => 'paramountcomedy.com', # Paramount Comedy
-   '225' => 'performancetv.co.uk', # Performance
-   '248' => 'sky-one.sky.com',	# Sky One
-   '252' => '2.moviemax.sky.com', # Sky Moviemax 2
-   '253' => '3.moviemax.sky.com', # Sky Moviemax 3
-   '254' => '4.moviemax.sky.com', # Sky Moviemax 4
-   '255' => '5.moviemax.sky.com', # Sky Moviemax 5
-   '251' => 'moviemax.sky.com', # Sky Moviemax
-   '249' => 'cinema.sky.com',	# Sky Cinema (Digital)
-   '248' => 'ondigital.sky-one.sky.com', # Sky One (Ondigital)
-   '258' => '2.premier.sky.com', # Sky Premier 2
-   '259' => '3.premier.sky.com', # Sky Premier 3
-   '260' => '4.premier.sky.com', # Sky Premier 4
-   '257' => 'ondigital.premier.sky.com', # Sky Premier - Ondigital
-   '261' => 'widescreen.premier.sky.com', # Sky Premier - Widescreen
-   '264' => '2.sports.sky.com', # Sky Sports 2
-   '265' => '3.sports.sky.com', # Sky Sports 3
-   '250' => '2.cinema.sky.com', # Sky Cinema 2
-   '262' => '1.sports.sky.com', # Sky Sports 1 (ITV Digital)
-   '119' => 'biography-channel.biography.com', # Biography Channel
-   '40' => 'artsworld.com',	# Artsworld
-   '283' => 'studio.com',	# Studio
-   '271' => 'tcm.turner.com',	# TCM (Digital)
-   '292' => 'uk-drama.flextech.telewest.co.uk', # UK Drama
-   '288' => 'uk-gold.flextech.telewest.co.uk', # UK Gold
-   '290' => 'uk-horizons.flextech.telewest.co.uk', # UK Horizons
-   '272' => 'wcw.tcm.turner.com ' # TCM/WCW
+   26  => 'carlton.com',                         # Carlton
+   39  => 'animalplanet.discoveryeurope.com',    # Animal Planet (Digital)
+   40  => 'artsworld.com',                       # Artsworld
+   45  => 'choice.bbc.co.uk',                    # BBC Choice
+   47  => 'knowledge.bbc.co.uk',                 # BBC Knowledge
+   48  => 'news-24.bbc.co.uk',                   # BBC News 24
+   49  => 'parliament.bbc.co.uk',                # BBC Parliament
+   92  => 'south-east.bbc1.bbc.co.uk',           # BBC1 South East
+   105 => 'south-east.bbc2.bbc.co.uk',           # BBC2 South East
+   119 => 'biography-channel.biography.com',     # Biography Channel
+   123 => 'british.eurosport.com',               # British Eurosport
+   127 => 'cinema.carlton.com',                  # Carlton Cinema
+   132 => 'channel4.com',                        # Channel 4
+   134 => 'channel5.co.uk',                      # Channel 5
+   147 => 'discoveryeurope.com',                 # Discovery (Digital)
+   158 => 'e4.channel4.com',                     # E4
+   160 => 'filmfour.channel4.com',               # Film on Four
+   177 => 'plus.granadatv.co.uk',                # Granada Plus
+   182 => 'thehistorychannel.co.uk',             # History Channel (Digital)
+   185 => 'itv2.itv.co.uk',                      # ITV2
+   213 => 'nationalgeographic.co.uk',            # National Geographic (Digital)
+   224 => 'paramountcomedy.com',                 # Paramount Comedy
+   225 => 'performancetv.co.uk',                 # Performance
+   248 => 'ondigital.sky-one.sky.com',           # Sky One (Ondigital)
+   248 => 'sky-one.sky.com',                     # Sky One
+   249 => 'cinema.sky.com',                      # Sky Cinema (Digital)
+   250 => '2.cinema.sky.com',                    # Sky Cinema 2
+   251 => 'moviemax.sky.com',                    # Sky Moviemax
+   252 => '2.moviemax.sky.com',                  # Sky Moviemax 2
+   253 => '3.moviemax.sky.com',                  # Sky Moviemax 3
+   254 => '4.moviemax.sky.com',                  # Sky Moviemax 4
+   255 => '5.moviemax.sky.com',                  # Sky Moviemax 5
+   257 => 'ondigital.premier.sky.com',           # Sky Premier - Ondigital
+   258 => '2.premier.sky.com',                   # Sky Premier 2
+   259 => '3.premier.sky.com',                   # Sky Premier 3
+   260 => '4.premier.sky.com',                   # Sky Premier 4
+   261 => 'widescreen.premier.sky.com',          # Sky Premier - Widescreen
+   262 => '1.sports.sky.com',                    # Sky Sports 1 (ITV Digital)
+   264 => '2.sports.sky.com',                    # Sky Sports 2
+   265 => '3.sports.sky.com',                    # Sky Sports 3
+   271 => 'tcm.turner.com',                      # TCM (Digital)
+   272 => 'wcw.tcm.turner.com',                  # TCM/WCW
+   283 => 'studio.com',                          # Studio
+   288 => 'uk-gold.flextech.telewest.co.uk',     # UK Gold
+   290 => 'uk-horizons.flextech.telewest.co.uk', # UK Horizons
+   292 => 'uk-drama.flextech.telewest.co.uk',    # UK Drama
   );
 my %xmltv_to_rt = reverse %rt_to_xmltv;
 
-# get the channel options. Channels can be entered as a commar separated list
-#     eg 92,105
-# if no channels are specifed then listings for terestrial channels will be fetched
-# if 'ALL' is specified then all available channels will be fetched
+# Check options.  First do the undocumented --cache option (to cache
+# get(), which retrieves web pages), then the normal ones.
+#
+my $using_cache = XMLTV::Memoize::check_argv('get');
+my ($opt_days, $opt_help, $opt_output, $opt_share,
+    $opt_configure, $opt_config_file);
+# No default for $opt_days, we determine it from the site.
+GetOptions('days=i'        => \$opt_days,
+	   'help'          => \$opt_help,
+	   'configure'     => \$opt_configure,
+	   'config-file=s' => \$opt_config_file,
+	   'output=s'      => \$opt_output,
+	   'share=s'       => \$opt_share, # also undocumented
+	  )
+  or usage(0);
+die 'number of days must not be negative'
+  if (defined $opt_days && $opt_days < 0);
+if ($opt_help) {
+    usage(1);
+}
+if ($opt_configure) {
+    print STDERR "Going to configure channels to download, please wait\n";
+}
+die if defined $opt_share; # TODO
+die if defined $opt_output; # TODO
+
+# File that stores which channels to download.
+my $CONFIG_FILE = $opt_config_file;
+my $PROGNAME = 'tv_grab_uk_rt'; # too confusing to use $0
+if (not defined $CONFIG_FILE) {
+    if (defined($ENV{HOME})) {
+	my $conf_dir = "$ENV{HOME}/.xmltv";
+	(-d $conf_dir) or mkdir($conf_dir, 0777)
+	  or die "cannot mkdir $conf_dir: $!";
+	$CONFIG_FILE = "$conf_dir/$PROGNAME";
+    }
+    else {
+	# $HOME not set, use current directory.
+	$CONFIG_FILE = $PROGNAME;
+    }
+}
+
+if ($opt_configure) {
+    if (-e $CONFIG_FILE) {
+	print <<END
+The configuration file $CONFIG_FILE already exists.  There is
+currently no support for altering an existing configuration, you have
+to reconfigure from scratch.
+
+END
+  ;
+	if (not askBooleanQuestion
+	    ('Do you wish to overwrite the old configuration?', 0)) {
+	    print "Exiting.\n";
+	    exit 0;
+	}
+    }
+}
+else {
+    if (-e $CONFIG_FILE) {
+	print STDERR "using config file $CONFIG_FILE\n";
+    }
+    else {
+	die "config file $CONFIG_FILE does not exist, run me with --configure\n";
+    }
+}
 
 print STDERR 'Finding Channels:';
 my %channels = get_channels();
 print STDERR "\n";
 
-my @dates_specified;
-my @dates_to_get;
-
-my $channels = '92,105,26,132,134'; # default: 5 terrestrial
-GetOptions ('dates:s' => \@dates_specified, 'channels:s' => \$channels);
-my %write_channels; # to be written as <channel> elements
-foreach (split /,/, $channels) {
-    if (m/ALL/) {
-	# Get all available channels
-	foreach (keys %channels) {
-	    $write_channels{$_} = $channels{$_};
-	}
-    }
-    elsif (not tr/0-9//c) {
-	my $xmltv_id = rt_to_xmltv($_);
-	if (not defined $channels{$xmltv_id}) {
-	    die "no channel with RT id $_";
-	}
-	$write_channels{$xmltv_id} = $channels{$xmltv_id};
-    }
-    else {
-	die "bad channel specification $_";
-    }
+if ($opt_configure) {
+    configure();
 }
+else {
+    my %g_args = ();
+    if (defined $opt_output) {
+	my $fh = new IO::File ">$opt_output";
+	die "cannot write to $opt_output\n" if not $fh;
+	%g_args = (OUTPUT => $fh);
+    }
+    grab(%g_args);
+}
+exit();
 
-# Get the dates options. Dates can be specified as a commar sperated list
-#     eg 03/02/2002,04/02/2002
-# if no dates are specifed then todays listings will be fetched
-# if 'ALL' is specified then all available dates will be specifed
-# if 'LATEST' is specified the listings for the latest available  day
-# will be fetched
+# Grab listings and write them in XML.  Arguments are to be passed to
+# XMLTV::Writer (but encoding is always ISO-8859-1).
+#
+sub grab( @ ) {
+    my $writer = new XMLTV::Writer(@_, encoding => 'ISO-8859-1');
+    my %write_channels;		# to be written as <channel> elements
 
-@dates_specified = split(/,/,join(',',@dates_specified));
-foreach (@dates_specified) {
-	if (m/ALL/) {
-		print STDERR 'Finding available dates:';
-		my @available_dates = get_available_dates ();
-		print STDERR "\n";
-		push (@dates_to_get, @available_dates);
+    # Read the configuration file.  At present the lines must be one
+    # of two forms:
+    #
+    # channel <xmltv id>
+    # ALL
+    #
+    open(CONF, $CONFIG_FILE)
+      or die "cannot read $CONFIG_FILE: $!\n";
+    while (<CONF>) {
+	s/\#.*//; s/^\s+//; s/\s+$//;
+	next if not length;
+	t "got line from config file: $_";
+	if ($_ eq 'ALL') {
+	    %write_channels = %channels;
 	}
-	elsif (m/LATEST/) {
-		print STDERR 'Finding available dates:';
-                my @available_dates = get_available_dates ();
-                print STDERR "\n";
-		my $latest_date = pop @available_dates;
-		push (@dates_to_get, $latest_date);
+	elsif (/^channel\s+(.+)/) {
+	    my $xmltv_id = $1;
+	    if (not defined $channels{$xmltv_id}) {
+		warn "$CONFIG_FILE:$.: no channel with XMLTV id $xmltv_id, skipping\n";
+		next;
+	    }
+	    $write_channels{$xmltv_id} = $channels{$xmltv_id};
 	}
-	elsif (m/^[0-9]{2}\/[0-9]{2}\/[0-9]{4}$/) {
-		push (@dates_to_get, $_);
+	else { die "$CONFIG_FILE:$.: bad line\n" }
+    }
+
+    my @available_dates = get_available_dates();
+    t 'available dates: ' . d \@available_dates;
+    die 'apparently, there are no days of listings on the site'
+      if not @available_dates;
+    my $today = ParseDate('today midnight');
+
+    my $is_available = sub( $ ) {
+	my $d = shift;
+	foreach (@available_dates) {
+	    return 1 if not Date_Cmp($d, $_);
+	}
+	return 0;
+    };
+
+    my @dates_to_get;
+    for (my $d = $today; $is_available->($d); $d = DateCalc($d, '+ 1 day')) {
+	push @dates_to_get, $d;
+    }
+    die "listings for today ($today) not available" if not @dates_to_get;
+    my $last_day = $dates_to_get[-1];
+    foreach (@available_dates) {
+	if (Date_Cmp($last_day, $_) < 0) {
+	    warn "strangely, day $_ is available but there are gaps before it";
+	}
+    }
+
+    if (defined $opt_days) {
+	if ($opt_days > @dates_to_get) {
+	    warn 'only ' . (scalar @dates_to_get)
+	      . ' days of consecutive listings available';
 	}
 	else {
-	    die "bad date specification $_";
+	    @dates_to_get = @dates_to_get[0 .. $opt_days - 1];
 	}
-}
-#push (@dates_to_get, @dates_specified);
-
-unless (@dates_specified) {
-	# Get todays date
-	my $today = UnixDate(ParseDate('today'), '%d/%m/%Y');
-	die if not defined $today;
-	push (@dates_to_get, $today);
-}
-
-# set up the XML writer
-my $writer = new XMLTV::Writer(encoding => 'ISO-8859-1');
-$writer->start({ 'source-info-url'     =>
-          'http://http://www.radiotimes.co.uk/',
-                 'source-info-name'    => 'RadioTimes',
-                 'generator-info-name' => 'XMLTV',
-                 'generator-info-url'  =>
-          'http://membled.com/work/apps/xmltv/',
-               });
-
-
-# Find all the categories
-print STDERR 'Finding Categories:';
-my %categories = get_categories ();
-print STDERR "\n";
-
-# Find all the programes on the channels
-my %prog_to_cat;
-my %encounted_progs;
-
-# get the listings for each date
-my @programmes;
-foreach my $date (@dates_to_get) {
-    # Create the time string according to the TIME_INTERVAL
-    my $hrs = 0;
-    my $mns = 0;
-    while ($hrs < 24) {
-	my $time_str = "$hrs:$mns";
-	$time_str =~ s/^([0-9]:)/0$1/;
-	$time_str =~ s/:([0-9])$/:0$1/;
-	$mns += $TIME_INTERVAL;
-	$hrs += $mns / 60;
-	$mns = $mns % 60;
-
-	# first find all the new programmes for this time slot
-	my @new_programmes;
-
-	foreach my $chan (sort keys %write_channels) {
-	    print STDERR "Finding the programmes on $chan at $date $time_str:";
-	    push @new_programmes, get_programmes($chan, $date, $time_str);
-	    print STDERR "\n";
-	}
-
-	# Next find all the programes in each category (if there are new progs
-	# FIX ME we dont need to check all channels only those with new progs
-	# FIX ME we also need to check if there are more than 100 results and
-	# search over less channels
-	if (@new_programmes) {
-	    if ($GET_CATEGORIES) {
-		print STDERR "Finding the categories at $time_str:";
-		%prog_to_cat =
-		  get_progs_in_cat([ sort keys %write_channels ], $date, $time_str);
-		print STDERR "\n";
-	    }
-	}
-
-	# Set the category for each new programme
-	foreach my $new_prog (@new_programmes) {
-	    my $channelId = $new_prog->{_chanID};
-	    my $programmeId = $new_prog->{_progID};
-	    if ($GET_CATEGORIES) {
-		my $cat_ID = $prog_to_cat{"$channelId$programmeId"};
-		my $cat = $categories{$cat_ID};
-		if (defined $cat) {
-		    push @{$new_prog->{category}}, [ lc $cat ];
-		}
-		else {
-		    warn "unknown category id $cat\n";
-		}
-	    }
-	}
-
-	# push the new channels into the completlist
-	push (@programmes, @new_programmes);
     }
+    my $days = @dates_to_get > 1 ? 'days' : 'day';
+    print STDERR 'getting ' . (scalar @dates_to_get) . " $days of listings\n";
+    t 'getting dates:' . d \@dates_to_get;
+
+    $writer->start({ 'source-info-url'     => "$BASE_URL/",
+		     'source-info-name'    => 'Radio Times',
+		     'generator-info-name' => 'XMLTV',
+		     'generator-info-url'  =>
+		     'http://membled.com/work/apps/xmltv/',
+		   });
+
+
+    # Find all the categories
+    print STDERR 'Finding Categories:';
+    my %categories = get_categories ();
+    print STDERR "\n";
+
+    # Find all the programes on the channels
+    my %prog_to_cat;
+
+    # get the listings for each date
+    my @programmes;
+    foreach my $date (@dates_to_get) {
+	# Create the time string according to the TIME_INTERVAL
+	my $mns = 0;
+	while ($mns < 24 * 60) {
+	    my $time = DateCalc($date, "+ $mns minutes");
+	    $mns += $TIME_INTERVAL;
+
+	    # first find all the new programmes for this time slot
+	    my @new_programmes;
+
+	    foreach my $chan (sort keys %write_channels) {
+		t "Finding the programmes on $chan at $time:";
+		push @new_programmes, get_programmes($chan, $time, \%prog_to_cat, \%categories);
+	    }
+
+	    # Next find all the programes in each category (if there are new progs
+	    # FIX ME we dont need to check all channels only those with new progs
+	    # FIX ME we also need to check if there are more than 100 results and
+	    # search over less channels
+	    if (@new_programmes) {
+		if ($GET_CATEGORIES) {
+		    print STDERR "Finding the categories at $time:";
+		    %prog_to_cat =
+		      get_progs_in_cat([ sort keys %write_channels ], $time, \%categories);
+		    print STDERR "\n";
+		}
+	    }
+
+	    # Set the category for each new programme
+	    foreach my $new_prog (@new_programmes) {
+		my $channelId = $new_prog->{_chanID};
+		my $programmeId = $new_prog->{_progID};
+		if ($GET_CATEGORIES) {
+		    my $cat_ID = $prog_to_cat{"$channelId$programmeId"};
+		    my $cat = $categories{$cat_ID};
+		    if (defined $cat) {
+			push @{$new_prog->{category}}, [ lc $cat ];
+		    }
+		    else {
+			warn "unknown category id $cat\n";
+		    }
+		}
+	    }
+
+	    # push the new channels into the completlist
+	    push (@programmes, @new_programmes);
+	}
+    }
+
+    # write out the xml
+    # write out the channels
+    $writer->write_channels(\%write_channels);
+
+    #write out the programmes
+    foreach (@programmes) {
+	$writer->write_programme($_);
+    }
+    $writer->end();
 }
-
-# write out the xml
-# write out the channels
-$writer->write_channels(\%write_channels);
-
-#write out the programmes
-foreach (@programmes) {
-    $writer->write_programme($_);
-}
-$writer->end();
-
-exit;
 
 
 # Function to get a url.  This also seems like a sensible place to do
@@ -289,20 +372,33 @@ sub human_date( $ ) {
       $year,$month,$day,$hour,$minute,$second;
 }
 
-# Function to find all the programmes on a channel (at a given date + time)
-sub get_programmes( $$$ ) {
+# Function to find all the programmes on a channel (at a given date +
+# time).
+#
+# Parameters:
+#   XMLTV id of channel
+#   Date::Manip object giving date and time
+#   prog_to_cat hash (see elsewhere for details)
+#   categories hash
+#
+# I think this relies on the page returning exactly $TIME_INTERVAL
+# worth of listings.
+#
+my %encounted_progs;
+sub get_programmes( $$$$ ) {
     my $channelId = xmltv_to_rt(shift);
-    my $searchDate = shift;
-    my $searchTime = shift;
+    my $time = shift;
+    my $prog_to_cat = shift;
+    my $categories = shift;
 
     my @p;
 
-    my $url = "http://$host/ListingsServlet?event=4&";
+    my $url = "$BASE_URL/ListingsServlet?event=4&";
     $url .= 'jspGridLocation=%2Fjsp%2Ftv_listings_grid.jsp&';
     $url .= 'jspListLocation=%2Fjsp%2Ftv_listings_single.jsp&';
     $url .= 'jspError=%2Fjsp%2Ferror.jsp&';
-    $url .= "searchDate=$searchDate&";
-    $url .= "searchTime=$searchTime&";
+    $url .= 'searchDate=' . UnixDate($time, '%d/%m/%Y') . '&';
+    $url .= 'searchTime=' . UnixDate($time, '%R') . '&';
     $url .= "channels=$channelId";
     my $data = get_url($url);
     $data =~ tr/\n//d;
@@ -319,7 +415,7 @@ sub get_programmes( $$$ ) {
 	unless ($encounted_progs{"$channelId$programmeId"}) {
 	    $encounted_progs{"$channelId$programmeId"} = 1;
 	    #print STDERR "ChannelId:$channelId ProgrammeId:$programmeId\n";
-	    my %r = get_programme_details ($channelId, $programmeId);
+	    my %r = get_programme_details($channelId, $programmeId, $prog_to_cat, $categories);
 	    push @p, \%r;
 	}
     }
@@ -327,9 +423,18 @@ sub get_programmes( $$$ ) {
 }
 
 # Function to parse the HTML and get all the info we need
-sub get_programme_details( $$ ) {
+#
+# Parameters:
+#   XMLTV id of channel
+#   RT id of programme
+#   hash mapping 'channelidprogrammeid' to RT category id
+#   hash of categories
+#
+sub get_programme_details( $$$$ ) {
     my $channelId = shift;
     my $programmeId = shift;
+    use vars '%prog_to_cat'; local *prog_to_cat = shift;
+    use vars '%categories'; local *categories = shift;
 
     my %p;
     $p{channel} = rt_to_xmltv($channelId);
@@ -341,7 +446,7 @@ sub get_programme_details( $$ ) {
 	push @{$p{category}}, [ lc $cat ];
     }
 
-    my $url = "http://$host/ListingsServlet?event=10&";
+    my $url = "$BASE_URL/ListingsServlet?event=10&";
     $url .= "channelId=$channelId&";
     $url .= "programmeId=$programmeId&";
     $url .= 'jspLocation=/jsp/prog_details.jsp';
@@ -369,7 +474,7 @@ sub get_programme_details( $$ ) {
     $prog_details =~ s/Related Websites\|.*//;
 
     $prog_details =~ m/ \|(.*?)\|Channel:/
-      or die "cannot find title in HTML $_";
+      or die "cannot find title in HTML $prog_details";
     my $title = $1;
     my $sub_title;
     if ($title =~ s/\|(.*)//) {
@@ -381,15 +486,15 @@ sub get_programme_details( $$ ) {
     $p{title} = [ [ $title, $LANG ] ];
 
     $prog_details =~ m/Channel:\|(.*?)\|/
-      or die "cannot find channel name in HTML $_";
+      or die "cannot find channel name in HTML $prog_details";
     my $channel_name = $1;
 
     $prog_details =~ m/Date:\|.*? ([0-9]*? .*?)\|/
-      or die "cannot find date in HTML $_";
+      or die "cannot find date in HTML $prog_details";
     my $date = $1;
 
     $prog_details =~ m/Time:\|([0-9,a,m,p,:]*) to ([0-9,a,m,p,:]*)/
-      or die "cannot find time in HTML $_";
+      or die "cannot find time in HTML $prog_details";
     my $start_time = $1;
     my $stop_time = $2;
     my $start = UnixDate(ParseDate("$date $start_time"), '%s');
@@ -542,12 +647,12 @@ sub get_programme_details( $$ ) {
 # Function which will locate all the available channels and return a hash
 # with channelId as the key and a chanel description
 sub get_channels() {
-    my $data = get_url("http://$host/");
+    my $data = get_url("$BASE_URL/");
     $data =~ tr/\n\r/\n/ds;
     t 'got channels page: ' . d $data;
     $data =~ s/\n//g;
     $data =~ m/<select name="channels"[^>]*?>(.*?)<\/select>/
-      or die "cannot find channel string in HTML $_";
+      or die "cannot find channel string in HTML $data";
     my $channel_string = $1;
     t 'got string of channels: ' . d $channel_string;
     $channel_string =~ s/\s+/ /g;
@@ -570,7 +675,6 @@ sub get_channels() {
 	my $chanID_to_output = rt_to_xmltv($channelId);
 	t 'XMLTV id to use: ' . d $chanID_to_output;
 	die if not defined $chanID_to_output;
-	die if not defined $domain;
 	die if not defined $channelId;
 	my $ch = { 'display-name' => [ [ $channelDesc, $LANG ] ],
 		   'id' => $chanID_to_output };
@@ -586,10 +690,10 @@ sub get_channels() {
 # Function which will locate all the available categories and return a hash
 # with categoryId as the key and a category description
 sub get_categories() {
-    my $data = get_url("http://$host/jsp/listings_search.jsp");
+    my $data = get_url("$BASE_URL/jsp/listings_search.jsp");
     $data =~ s/\n//g;
     $data =~ m/<select name="genres"[^>]*?>(.*?)<\/select>/
-      or die "cannot find category in HTML $_";
+      or die "cannot find category in HTML $data";
     my $category_string = $1;
     $category_string =~ s/\s+/ /g;
     my @categories =
@@ -614,40 +718,79 @@ sub get_categories() {
 }
 
 # Function which will locate all the available dates and return a list
+# of Date::Manip objects, one for each day.
+#
+# (I was tempted to make this a hash (so you could say $available{$d}
+# to see if a day exists) but string equality is a bit dirty for
+# comparing two Date::Manip objects.  There needs to be a tied hash
+# class which can use a specified equality operation.)
+#
 sub get_available_dates() {
-    my $data = get_url("http://$host/jsp/listings_search.jsp");
+    my @r;
+    my $data = get_url("$BASE_URL/jsp/listings_search.jsp");
     $data =~ s/\n//g;
     $data =~ m/<select name="searchDate"[^>]*?>(.*?)<\/select>/
-      or die "cannot find searchDate string in HTML $_";
-    my $dates_string = $1;
-    $dates_string =~ s/\s+/ /g;
-    my @dates =
-      ($dates_string =~ m/[0-9]{2}\/[0-9]{2}\/[0-9]{4}/ig);
-    warn "cannot find dates in $dates_string" if not @dates;
-    return @dates;
+      or die "cannot find searchDate string in HTML $data";
+    local $_ = $1;
+    s/&nbsp;/ /g;
+    s/\s+/ /g;
+    s/^\s*//;
+    t 'date string: ' . d $_;
+    while (length) {
+	if (not s!<option value="(\d\d)/(\d\d)/(\d{4})" ?(?:selected)?>([^<]+)!!) {
+	    warn "remnant junk in date string: $_";
+	    return @r;
+	}
+
+	my $parsed_val = ParseDate("$3-$2-$1");
+	die "cannot parse option value $1/$2/$3"
+	  if not defined $parsed_val;
+
+	# Paranoia, or 'use all the information'.
+	my $parsed_text = ParseDate($4);
+	if (defined $parsed_text) {
+	    warn "dates '$1/$2/$3' and '$4' from same option differ"
+	      if Date_Cmp($parsed_val, $parsed_text);
+	}
+	else {
+	    warn "cannot parse option text $4";
+	}
+
+	push @r, $parsed_val;
+    }
+    return @r;
 }
 
 
 # Function which will locate all the programes in a category
 # (at a given date and time)
 # will return a hash with "chanIDProgID" as the key
+#
+# Parameters:
+#   (reference to) list of XMLTV ids of channels to search
+#   Date::Manip object giving date and time
+#   (reference to) hash of categories
+#
+# I think this searches $TIME_INTERVAL time starting from the time
+# given.
+#
 sub get_progs_in_cat( $$$ ) {
     my @channels_to_search = map { xmltv_to_rt($_) } @{shift()};
-    my $searchDate = shift;
-    my $searchTime = shift;
+    my $time = shift;
+    use vars '%categories'; local *categories = shift;
 
     my %cats;
 
     # For each category find all the programmes in that category
     foreach my $category (keys %categories) {
-	my $url = "http://$host/ListingsServlet?event=7&";
+	my $url = "$BASE_URL/ListingsServlet?event=7&";
 	$url .= 'jspGridLocation=%2Fjsp%2Ftv_listings_grid.jsp&';
 	$url .= 'jspListLocation=%2Fjsp%2Ftv_listings_list.jsp&';
 	$url .= 'jspError=%2Fjsp%2Ferror.jsp&';
 	$url .= 'channels=' . join(',', @channels_to_search) . '&';
 	$url .= "genres=$category&";
-	$url .= "searchDate=$searchDate&";
-	$url .= "searchTime=$searchTime";
+	$url .= 'searchDate=' . UnixDate($time, '%d/%m/%Y') . '&';
+	$url .= 'searchTime=' . UnixDate($time, '%R');
 	#print STDERR "$url\n";
 	my $data = get_url($url);
 	$data =~ s/\n//g;
@@ -677,7 +820,7 @@ sub get_progs_in_cat( $$$ ) {
 sub rt_to_xmltv( $ ) {
     my $n = shift;
     if (not defined $rt_to_xmltv{$n}) {
-	my $new = "$n.radiotimes.beeb.com";
+	my $new = "$n.$DOMAIN";
 	die "channel id $new already exists" if defined $xmltv_to_rt{$new};
 	$rt_to_xmltv{$n} = $new;
 	$xmltv_to_rt{$new} = $n;
@@ -690,4 +833,92 @@ sub xmltv_to_rt( $ ) {
 	die "no RT id known for $x" if not defined;
 	return $_;
     }
+}
+
+
+# Ask the user which channels to download, and write $CONFIG_FILE.
+#
+# Uses global %channels hash.
+#
+# FIXME commonize the whole damn configure routine with tv_grab_uk!
+#
+sub configure() {
+#    local $Log::TraceMessages::On = 1;
+    # FIXME need to make directory
+    open(CONF, ">$CONFIG_FILE") or die "cannot write to $CONFIG_FILE: $!";
+    my %chose_ch;
+    t 'channels: ' . d \%channels;
+
+    # For now we just let the user pick among the 'standard' channels.
+    for (;;) {
+	print "Enter the name of a channel, or '.' to finish: ";
+	my $in = <STDIN>;
+	$in =~ s/^\s+//; $in =~ s/\s+$//;
+	last if $in eq '.';
+
+	# FIXME commonize this matching by display name.  To do that I
+	# think you'd have to eliminate the silly Ananova_Channel
+	# stuff from tv_grab_uk and just use ordinary channel hashes.
+	#
+	my @poss;
+      CH: foreach my $k (sort keys %channels) {
+	    my $ch = $channels{$k};
+	    my $dns = $ch->{'display-name'};
+	    unless ($dns and @$dns) {
+		warn "channel with id $ch->{id} has no display name, so cannot be configured\n";
+		next CH;
+	    }
+	    foreach (map { $_->[0] } @$dns) {
+		if (/$in/i) {
+		    push @poss, $ch;
+		    next CH;
+		}
+	    }
+	}
+
+	# We only matched based on display names, so we can assume
+	# that each possible channel has at least one.
+	#
+	if (@poss == 0) {
+	    print "No channel matching that.\n";
+	}
+	elsif (@poss == 1) {
+	    my $ch = $poss[0];
+	    if (askBooleanQuestion('Add channel ' .
+				   $ch->{'display-name'}->[0]->[0] . '?', 1)) {
+		my $xmltv_id = $ch->{id};
+		unless ($chose_ch{$xmltv_id}++) {
+		    print CONF "channel $xmltv_id\n";
+		}
+	    }
+	}
+	elsif (1 <= @poss and @poss < 25) {
+	    my %dn_to_ch;
+	    foreach (@poss) {
+		my $dn = $_->{'display-name'}->[0]->[0];
+		warn "more than one channel called $dn"
+		  if exists $dn_to_ch{$dn};
+		$dn_to_ch{$dn} = $_;
+	    }
+	    my $none_option = 'None of the above are what I wanted';
+	    die 'silly channel name' if exists $dn_to_ch{$none_option};
+	    my $r = askQuestion('Which channel to add?',
+				$poss[0]->{'display-name'}->[0]->[0],
+				(sort keys %dn_to_ch), $none_option);
+	    next if $r eq $none_option;
+	    my $ch = $dn_to_ch{$r}; die if not defined $ch;
+	    my $xmltv_id = $ch->{id};
+	    unless ($chose_ch{$xmltv_id}++) {
+		print CONF "channel $xmltv_id\n";
+	    }
+	}
+	elsif (25 <= @poss) {
+	    print "'$in' matches lots of channels, be more specific.\n";
+	}
+	else { die }
+    }
+
+    close CONF or warn "cannot close $CONFIG_FILE: $!";
+    print "All done, run with no arguments to grab a week's listings.\n";
+    exit();
 }
