@@ -5,7 +5,7 @@
 package XMLTV::Ananova_Channel;
 use Carp ();
 use strict;
-use Tie::RefHash; # 5.6 version required
+use Tie::RefHash;
 
 # Use Log::TraceMessages if installed.
 BEGIN {
@@ -19,6 +19,27 @@ BEGIN {
 	*d = \&Log::TraceMessages::d;
     }
 }
+
+# If 5.6, then Tie::RefHash::Nestable is available.  Otherwise roll
+# our own.
+#
+package Tie::RefHash::MyNestable;
+our @ISA = qw(Tie::RefHash);
+sub STORE {
+    my($s, $k, $v) = @_;
+    if (ref($v) eq 'HASH' and not tied %$v) {
+	my @elems = %$v;
+	tie %$v, ref($s), @elems;
+    }
+    $s->SUPER::STORE($k, $v);
+}
+package XMLTV::Ananova_Channel;
+BEGIN {
+    if (not @Tie::RefHash::Nestable::ISA) {
+	*Tie::RefHash::Nestable = *Tie::RefHash::MyNestable;
+    }
+}
+
 
 my @all;
 my %idx_a; # index by Ananova id, to 'set' of objects
