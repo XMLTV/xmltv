@@ -607,7 +607,8 @@ xmltv.exe :: $(EXE_FILES) lib/exe_wrap.pl lib/exe_opt.pl
 	echo -exe  xmltv.exe                         >>exe_opt.txt
 	perlapp @exe_opt.txt lib/exe_wrap.pl
 	$(RM_F) exe_files.txt
-
+	$(RM_F) exe_opt.txt
+	
 windows_dist ::
 	@if test -e $(PREFIX); then \
 	        echo To build a Windows distribution, please rerun Makefile.PL with >&2; \
