@@ -108,9 +108,7 @@ sub init_cache
 
         my($key, $value) = split(/\s+/, $line, 2);
         if (index(" BasePath Verbose ", " $key ") == -1) {
-            print STDERR "Unknown configuration key $key in $conffile.\n";
-            close(IN);
-            exit 1;
+            die "Unknown configuration key $key in $conffile.\n";
         }
 
         $data{$key} = $value;
@@ -125,8 +123,7 @@ sub init_cache
     delete($data{DisableCache});
 
     if (not defined($data{BasePath})) {
-        print STDERR "No BasePath specified in $conffile.\n";
-        exit 1;
+	die "No BasePath specified in $conffile.\n";
     }
 
     (-d $data{BasePath}) or mkdir($data{BasePath}, 0777)
