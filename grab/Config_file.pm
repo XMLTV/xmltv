@@ -40,16 +40,13 @@ sub filename( $$;$ ) {
 sub check_no_overwrite( $ ) {
     my $f = shift;
     if (-e $f) {
-	print <<END
-The configuration file $f already exists.  There is
-currently no support for altering an existing configuration, you have
+	if (not askBooleanQuestion
+	    ("The configuration file $f already exists.  There is
+currently no support for altering an existing configuration: you have
 to reconfigure from scratch.
 
-END
-  ;
-	if (not askBooleanQuestion
-	    ('Do you wish to overwrite the old configuration?', 0)) {
-	    print "Exiting.\n";
+Do you wish to overwrite the old configuration?", 0)) {
+	    say( "Exiting since you don't want to overwrite the old configuration." );
 	    exit 0;
 	}
     }

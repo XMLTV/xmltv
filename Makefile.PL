@@ -83,6 +83,8 @@ my %pm
      'lib/Usage.pm'               => '$(INST_LIBDIR)/XMLTV/Usage.pm',
      'lib/Version.pm'             => '$(INST_LIBDIR)/XMLTV/Version.pm',
      'lib/Ask.pm'                 => '$(INST_LIBDIR)/XMLTV/Ask.pm',
+     'lib/AskTk.pm'               => '$(INST_LIBDIR)/XMLTV/AskTk.pm',
+     'lib/AskTerm.pm'             => '$(INST_LIBDIR)/XMLTV/AskTerm.pm',
      'lib/Summarize.pm'           => '$(INST_LIBDIR)/XMLTV/Summarize.pm',
      'lib/IMDB.pm'                => '$(INST_LIBDIR)/XMLTV/IMDB.pm',
      'lib/Gunzip.pm'              => '$(INST_LIBDIR)/XMLTV/Gunzip.pm',
@@ -152,8 +154,8 @@ if ($opt_yes) {
     *ask = sub { print "$_[0] yes\n"; 1 };
 }
 else {
-    do 'lib/Ask.pm' or die 'could not load lib/Ask.pm, aborting';
-    *ask = \&XMLTV::Ask::askBooleanQuestion;
+    do 'lib/AskTerm.pm' or die 'could not load lib/AskTerm.pm, aborting';
+    *ask = \&XMLTV::AskTerm::askBooleanQuestion;
 }
 
 # Weird shit happens when you change things like PREFIX without
