@@ -1,13 +1,13 @@
-# Miscellaneous timezone routines.  The code in UK_TZ.pm builds on
-# these for handling UK (actually, EU) summer time conventions.  This
-# should probably be moved into Date::Manip somehow.
+# Miscellaneous timezone routines.  The code in Europe_TZ.pm builds on
+# these for handling European summer time conventions.  This should
+# probably be moved into Date::Manip somehow.
 #
 
 package XMLTV::TZ;
 use Date::Manip; # no Date_Init(), that can be done by the app
 # Won't Memoize, you can do that yourself.
 use base 'Exporter'; use vars '@EXPORT_OK';
-@EXPORT_OK = qw(gettz ParseDate_PreservingTZ);
+@EXPORT_OK = qw(gettz ParseDate_PreservingTZ tz_to_num);
 
 
 # gettz()
@@ -47,5 +47,35 @@ sub ParseDate_PreservingTZ($) {
     return $p;
 }
 
+
+# tz_to_num()
+#
+# Turn a timezone string into a numeric form.  For example turns 'CET'
+# into '+0100'.  If the timezone is already numeric it's unchanged.
+#
+# Returns undef if the timezone is not recognized.  (OK, throwing an
+# exception would probably make more sense, but Date::Manip has its
+# peculiar interface style where you have to manually check the result
+# of every call and we might as well fit into that.)
+#
+sub tz_to_num( $ ) {
+    my $tz = shift;
+
+    # To convert to a number we parse a date with this timezone and
+    # then compare against the same date with UTC.
+    #
+    my $date_str = '2000-01-01 00:00:00'; # arbitrary
+    my $base = ParseDate("$date_str UTC"); die if not defined $base;
+    my $d = ParseDate("$date_str $tz"); return undef if not defined $d;
+    my $err;
+    my $delta = DateCalc($d, $base, \$err);
+    die "error code from DateCalc: $err" if defined $err;
+
+    # A timezone difference must be less than one day, and must be a
+    # whole number of minutes.
+    #
+    $delta =~ /^([+-])0:0:0:0:(\d\d?):(\d\d?):0$/ or die "bad delta $delta";
+    return sprintf('%s%02d%02d', $1, $2, $3);
+}
 
 1;

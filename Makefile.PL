@@ -75,12 +75,12 @@ my %pm
      'lib/Clumps.pm'              => '$(INST_LIBDIR)/XMLTV/Clumps.pm',
      'lib/Usage.pm'               => '$(INST_LIBDIR)/XMLTV/Usage.pm',
      'lib/Ask.pm'                 => '$(INST_LIBDIR)/XMLTV/Ask.pm',
-     'lib/UK_TZ.pm'               => '$(INST_LIBDIR)/XMLTV/UK_TZ.pm',
      'lib/Summarize.pm'           => '$(INST_LIBDIR)/XMLTV/Summarize.pm',
      'lib/IMDB.pm'                => '$(INST_LIBDIR)/XMLTV/IMDB.pm',
      'filter/Grep.pm'             => '$(INST_LIBDIR)/XMLTV/Grep.pm',
      'grab/Memoize.pm'            => '$(INST_LIBDIR)/XMLTV/Memoize.pm',
      'grab/Grab_XML.pm'           => '$(INST_LIBDIR)/XMLTV/Grab_XML.pm',
+     'grab/Europe_TZ.pm'          => '$(INST_LIBDIR)/XMLTV/Europe_TZ.pm',
     );
 
 # Modules required to install.
@@ -707,6 +707,7 @@ sub MY::manifypods {
     package MY;
     my $inherited = shift->SUPER::manifypods(@_);
     $inherited =~ s!\$\(INST_MAN3DIR\)/grab::Grab_XML.\$\(MAN3EXT\)!"\$(INST_MAN3DIR)/XMLTV::Grab_XML.\$(MAN3EXT)"!;
+    $inherited =~ s!\$\(INST_MAN3DIR\)/grab::Europe_TZ.\$\(MAN3EXT\)!"\$(INST_MAN3DIR)/XMLTV::Europe_TZ.\$(MAN3EXT)"!;
     $inherited =~ s!\$\(INST_MAN3DIR\)/Summarize.\$\(MAN3EXT\)!"\$(INST_MAN3DIR)/XMLTV::Summarize.\$(MAN3EXT)"!;
     return $inherited;
 }
