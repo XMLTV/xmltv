@@ -167,7 +167,7 @@ sub MY::installbin {
     # Add a target for each documentation file.  NB this means the
     # list of docs is stored here.
     #
-    my @docs = qw(doc/COPYING doc/QuickStart doc/README
+    my @docs = qw(doc/COPYING doc/QuickStart README
 		  choose/tv_check/README.tv_check
 		  choose/tv_check/tv_check_doc.html
 		  choose/tv_check/tv_check_doc.jpg);
