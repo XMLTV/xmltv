@@ -620,7 +620,7 @@ windows_dist ::
         # 'make' generates troff documentation anyway this code is
         # easier.
         #
-	set -e; for i in $(INST_MAN1DIR)/*; do \
+	set -e; for i in $(INSTALLMAN1DIR)/*; do \
 	        b=`basename $$i .1`; \
 	        if test "$$b" = '*'; then \
 	                echo cannot find manpages in $(INSTALLMAN1DIR) >&2; \
@@ -630,6 +630,18 @@ windows_dist ::
 	        troff -mandoc -Tascii $$i | grotty -buo \
 	            | perl -pe 's/Date::Manip[(]3[)]/date_formats.txt/g' \
 	            >$(PREFIX)/doc/man/`basename $$i .1`.txt; \
+
+	set -e; for i in $(INSTALLMAN3DIR)/*; do \
+	        b=`basename $$i .1`; \
+	        if test "$$b" = '*'; then \
+	                echo cannot find manpages in $(INSTALLMAN1DIR) >&2; \
+	                exit 1; \
+	        fi; \
+	        echo Converting $$i to plain text; \
+	        troff -mandoc -Tascii $$i | grotty -buo \
+	            | perl -pe 's/Date::Manip[(]3[)]/date_formats.txt/g' \
+	            >$(PREFIX)/doc/man/`basename $$i .1`.txt; \
+
 	done
 	set -e; \
 	out=$(PREFIX)/doc/man/date_formats.txt; \
@@ -642,7 +654,7 @@ windows_dist ::
 	     "README.win32)." | fmt >$$out; \
         echo >>$$out; \
 	(perldoc -u Date::Manip | perl -ne 'BEGIN { print "\n=pod\n\n" } print if (/^The format options are:/ .. /^=/) and not /^=/' | pod2text) >>$$out
-	perl -MExtUtils::Command -e rm_rf $(INSTALLBIN) $(PREFIX)/lib/ $(INST_MAN1DIR) $(INSTALLMAN3DIR)
+	perl -MExtUtils::Command -e rm_rf $(INSTALLBIN) $(PREFIX)/lib/ $(INSTMANDIR) $(INSTALLMAN3DIR)
 	perl -MExtUtils::Command -e cp xmltv.dtd $(PREFIX)
 	# The following command will not be necessary when the source
 	# tree was checked out on a DOSish system.
@@ -801,9 +813,9 @@ sub MY::manifypods {
     package MY;
     for (my $inherited = shift->SUPER::manifypods(@_)) {
 	foreach my $s (qw(Grab_XML Europe_TZ Config_file Get_nice Mode)) {
-	    s!\$\(INST_MAN3DIR\)/grab::$s[.]\$\(MAN3EXT\)!"\$(INST_MAN3DIR)/XMLTV::$s.\$(MAN3EXT)"!;
+	    s!\$\(INSTALLMAN3DIR\)/grab::$s[.]\$\(MAN3EXT\)!"\$(INSTALLMAN3DIR)/XMLTV::$s.\$(MAN3EXT)"!;
 	}
-	s!\$\(INST_MAN3DIR\)/Summarize.\$\(MAN3EXT\)!"\$(INST_MAN3DIR)/XMLTV::Summarize.\$(MAN3EXT)"!;
+	s!\$\(INSTALLMAN3DIR\)/Summarize.\$\(MAN3EXT\)!"\$(INSTALLMAN3DIR)/XMLTV::Summarize.\$(MAN3EXT)"!;
 	return $_;
     }
 }
