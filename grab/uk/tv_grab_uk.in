@@ -90,6 +90,7 @@ sub read_file( $$$$$ );
 sub page_date_diff( $$ );
 sub date_programmes( $$ );
 sub add_clumpidx( $ );
+sub extract_variant( $$ );
 sub get_channel_pkgs();
 sub init_channels();
 sub write_channels( $$ );
@@ -475,60 +476,59 @@ sub grab( @ ) {
 	    return 1;
 	}
 
-	my $ch = XMLTV::Ananova_Channel->find_by_ananova_id($aid);
-	t 'looked up by Ananova id: ' . d $ch;
-	if (not defined $ch) {
+	my @chs = XMLTV::Ananova_Channel->find_by_ananova_id($aid);
+	t 'looked up by Ananova id: ' . d \@chs;
+	if (not @chs) {
 	    warn "cannot lookup $aid";
 	    return 0;
 	}
 
-	# The same channels may be available as two different
-	# files.  We want only the first Ananova set of pages
-	# for this channel.
-	#
-	if ($ch->get_first_ananova_id() eq $aid) {
-	    t 'is first Ananova id, continuing';
-	}
-	else {
-	    t 'a secondary Ananova page for this channel, skipping';
+	foreach my $ch (@chs) {
+	    # The same channels may be available as two different
+	    # files.  We want only the first Ananova set of pages
+	    # for this channel.
+	    #
+	    if ($ch->get_first_ananova_id() eq $aid) {
+		t 'is first Ananova id, continuing';
+	    } else {
+		t 'a secondary Ananova page for this channel, skipping';
+		return 0;
+	    }
+
+	    my $type = $ch->get_type();
+	    if (defined $type) {
+		if ($wanted_type{$type}) {
+		    t "wanted by type $type";
+		    return 1;
+		}
+	    } else {
+		warn 'channel ' . $ch->stringify() . ' has no type';
+		return 0;
+	    }
+
+	    foreach my $wr (keys %wanted_region) {
+		if ($ch->is_region($wr)) {
+		    t "belongs to wanted region $wr";
+		    return 1;
+		}
+	    }
+
+	    my $xmltv_id = $ch->get_xmltv_id();
+	    t 'channel has XMLTV id: ' . d $xmltv_id;
+	    if (defined $xmltv_id) {
+		if ($wanted_xmltv_id{$xmltv_id}) {
+		    t 'this id is wanted';
+		    $used_xmltv_id{$xmltv_id}++;
+		    return 1;
+		}
+	    } else {
+		warn 'channel has no XMLTV id: ' . $ch->stringify();
+		return 0;
+	    }
+
+	    t 'nothing matched';
 	    return 0;
 	}
-
-	my $type = $ch->get_type();
-	if (defined $type) {
-	    if ($wanted_type{$type}) {
-		t "wanted by type $type";
-		return 1;
-	    }
-	}
-	else {
-	    warn 'channel ' . $ch->stringify() . ' has no type';
-	    return 0;
-	}
-
-	foreach my $wr (keys %wanted_region) {
-	    if ($ch->is_region($wr)) {
-		t "belongs to wanted region $wr";
-		return 1;
-	    }
-	}
-
-	my $xmltv_id = $ch->get_xmltv_id();
-	t 'channel has XMLTV id: ' . d $xmltv_id;
-	if (defined $xmltv_id) {
-	    if ($wanted_xmltv_id{$xmltv_id}) {
-		t 'this id is wanted';
-		$used_xmltv_id{$xmltv_id}++;
-		return 1;
-	    }
-	}
-	else {
-	    warn 'channel has no XMLTV id: ' . $ch->stringify();
-	    return 0;
-	}
-
-	t 'nothing matched';
-	return 0;
     };
 
     @files = grep { $wanted_file->($_) } @files;
@@ -560,6 +560,12 @@ sub grab( @ ) {
                                                     # hashrefs not lists
 	my ($filename, $day, $ananova_id) = @$_;
 	t "getting file for day $day, Ananova id $ananova_id, filename $filename";
+
+	# FIXME either we get a file or we don't.  But this makes it
+	# impossible to get just one variant - eg Radio 4 LW but not
+	# FM.
+	#
+
 	die if defined $opt_days and $day > $opt_days;
 	$first_day = $day if not defined $first_day;
 
@@ -582,26 +588,35 @@ sub grab( @ ) {
 	# Get a list of programmes from this filename, fix the dates and
 	# add clumpidxes.
 	#
-	my $ch = XMLTV::Ananova_Channel->find_by_ananova_id($ananova_id);
-	die if not defined $ch;
+	my @chs = XMLTV::Ananova_Channel->find_by_ananova_id($ananova_id);
+	die if not @chs;
 	my $g = $got->{$filename};
-	my $progs = read_files_and_jump_around(\$day_date, $ch, $got, $filename,
-					      \%prev, \%next);
-	if (defined $progs) {
-	    date_programmes($progs, $day_date);
-	    add_clumpidx($progs);
-	    push @progs_todo, @$progs;
+	foreach my $ch (@chs) {
+	    my $progs = read_files_and_jump_around(\$day_date, $ch, $got, $filename,
+						   \%prev, \%next);
+	    if (defined $progs) {
+		date_programmes($progs, $day_date);
+		add_clumpidx($progs);
 
-	    # Add the channel to the list of channels to output.  Well
-	    # actually it's a hash because in the case of grabbing ALL
-	    # files on Ananova we may grab the same channel twice (but
-	    # it should be written as a <channel> element only once).
-	    #
-	    ++$chans_todo{$ch};
-	}
-	else {
-	    my $chd = $ch->get_a_display_name();
-	    warn "not writing any programmes for channel $chd, day $day_date\n";
+		# Split Radio 4 (and maybe others) into MW and LW.
+		my $variant = $ch->get_variant(); # 'MW', 'FM', etc
+		if (defined $variant) {
+		    extract_variant($progs, $variant);
+		}
+
+		push @progs_todo, @$progs;
+
+		# Add the channel to the list of channels to output.  Well
+		# actually it's a hash because in the case of grabbing ALL
+		# files on Ananova we may grab the same channel twice (but
+		# it should be written as a <channel> element only once).
+		#
+		++$chans_todo{$ch};
+	    }
+	    else {
+		my $chd = $ch->get_a_display_name();
+		warn "not writing any programmes for channel $chd, day $day_date\n";
+	    }
 	}
 
 	# Check to see if we have to write channels data first.
@@ -744,27 +759,32 @@ sub read_channels_page( $ ) {
 	    next;
 	}
 	my ($ananova_id, $display) = ($1, $2);
-	t "ch=$ananova_id, display=$display";
-	my $ch = XMLTV::Ananova_Channel->find_by_ananova_id($ananova_id);
-	$ch = new XMLTV::Ananova_Channel() if not defined $ch;
-	$ch->add_ananova_id($ananova_id);
-
-	# Only set the display name based on the first (ie,
-	# best) Ananova id for this channel.  Otherwise we'd
-	# have a conflict between say 'Border' and 'Border
-	# (Scottish viewers)'.  Only the first of the two should
-	# have a chance to set the display name.
-	#
-	if ($ch->get_first_ananova_id() eq $ananova_id) {
-	    $ch->set_main_display_name($display);
+	t "ananova_id=$ananova_id, display=$display";
+	my @chs = XMLTV::Ananova_Channel->find_by_ananova_id($ananova_id);
+	if (not @chs) {
+	    my $ch = new XMLTV::Ananova_Channel();
+	    $ch->add_ananova_id($ananova_id);
+	    @chs = ($ch);
 	}
-	# Additional display names are added from the channel_ids file
-	# but *not* from Ananova's extra names.
-	#
-	# No warning for duplicate display names, that often happens.
-	#
 
-	$ch->guess_type() if not defined $ch->get_type();
+	foreach my $ch (@chs) {
+	    # Only set the display name based on the first (ie,
+	    # best) Ananova id for this channel.  Otherwise we'd
+	    # have a conflict between say 'Border' and 'Border
+	    # (Scottish viewers)'.  Only the first of the two should
+	    # have a chance to set the display name.
+	    #
+	    if ($ch->get_first_ananova_id() eq $ananova_id) {
+		$ch->set_main_display_name($display);
+	    }
+	    # Additional display names are added from the channel_ids file
+	    # but *not* from Ananova's extra names.
+	    #
+	    # No warning for duplicate display names, that often happens.
+	    #
+
+	    $ch->guess_type() if not defined $ch->get_type();
+	}
     }
 }
 
@@ -1589,6 +1609,79 @@ END
     t 'add_clumpidx() EXIT';
 }
 
+
+# extract_variant()
+#
+# Some channels are really two channels in one, for example Radio 4 FM
+# and Radio 4 LW.  Programmes on the channel have titles prefixed with
+# '(FM)', etc.  This routine filters out all programmes for a
+# particular 'variant'.
+#
+# Parameters:
+#   Reference to list of programmes (all on same channel)
+#   Transmission method (variant) to look for, eg 'FM'.
+#
+# Side effects: programmes in the list which are not from this variant
+# will be deleted.
+#
+# BTW: this supersedes the old special_radio4() handler in
+# tv_extractinfo_en.  It seems more appropriate to handle it here
+# since it is a pecularity of British listings and not English
+# TV/radio listings in general.
+#
+sub extract_variant( $$ ) {
+    use vars '@progs'; local *progs = shift;
+    my $tr = shift;
+
+    my @progs_new;
+    foreach (@progs) {
+	my $titles = $_->{title}; die if not defined $titles;
+
+	# Find whether one (and only one) transmission method is mentioned.
+	my $tr_this;
+
+	foreach (@$titles) {
+	    for my $text ($_->[0]) {
+		t "trying to match text $text for (Something) at start...";
+		if ($text =~ s/^\s*\(([A-Z]+)\)\s*//) {
+		    t 'matches';
+		    if (not defined $tr_this) {
+			$tr_this = $1;
+			t '$tr_this set to: ' . d $tr_this;
+		    }
+		    elsif (defined $tr_this and $tr_this eq $1) {
+			# Okay, agrees with other titles.
+		    }
+		    elsif (defined $tr_this and $tr_this ne $1) {
+			warn "titles disagree, giving both ($tr_this) and ($1)";
+			# Just discard this value.
+		    }
+		    else { die }
+		}
+	    }
+	}
+
+	if (defined $tr_this) {
+	    t "found a transmission method: $tr_this";
+	    if ($tr_this eq $tr) {
+		t 'matches, keep';
+		push @progs_new, $_;
+	    }
+	    else {
+		t "does not match $tr, discard this programme";
+	    }
+	}
+	else {
+	    t 'no transmission method given, assume programme on all variants';
+	    push @progs_new, $_;
+	}
+    }
+
+    @progs = @progs_new;
+}
+	
+
+
 # Write channels as XMLTV.
 #
 # Parameters:
@@ -1649,12 +1742,35 @@ sub init_channels() {
 	die "$channel_names_file:$.: no Ananova ids"
 	  if not @aids;
 
+	# Look for the notation X/V for a 'transmission variant' of an
+	# Ananova channel, for example radio4/FM is Ananova channel
+	# radio4, programmes listed as '(FM)' or without transmission
+	# details.
+	#
+	# We do not support multiple Ananova channels here: just one
+	# 'variant' per channel object.  It ought to be done properly,
+	# with each variant associated with an Ananova id, but it
+	# isn't.
+	#
+	my $variant;
+	foreach (@aids) {
+	    if (s!/(.+)$!!) {
+		$variant = $1;
+		warn "multiple Ananova ids not supported when one has variant"
+		  if @aids > 1;
+	    }
+	}
+
 	t "initializing channel with id $xmltv_id";
 	my $ch = new XMLTV::Ananova_Channel();
 	$ch->set_xmltv_id($xmltv_id);
 	foreach (@aids) {
 	    t "adding Ananova id $_";
 	    $ch->add_ananova_id($_);
+	}
+	if (defined $variant) {
+	    t "setting variant $variant";
+	    $ch->set_variant($variant);
 	}
 	t 'setting type: ' . d $type;
 	$ch->set_type($type);

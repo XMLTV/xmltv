@@ -5,9 +5,11 @@
 package XMLTV::Ananova_Channel;
 use Carp ();
 use Log::TraceMessages qw(t d);
+use Tie::RefHash; # 5.6 version required
 
 my @all;
-my %idx_a; # index by Ananova id
+my %idx_a; # index by Ananova id, to 'set' of objects
+tie %idx_a, 'Tie::RefHash::Nestable';
 my %idx_x; # index by XMLTV id
 my %known_regions;
 sub new {
@@ -16,15 +18,17 @@ sub new {
     my $self = {};
     bless $self, $class;
     push @all, $self;
+    die if not ref $self;
     return $self;
 }
 sub del {
     my $self = shift;
     @all = grep { $_ ne $self } @all;
-    foreach my $h (\%idx_a, \%idx_x) {
-	foreach (keys %$h) {
-	    delete $h->{$_} if $h->{$_} eq $self;
-	}
+    foreach (keys %idx_a) {
+	delete $idx_a{$_}->{$self};
+    }
+    foreach (keys %idx_x) {
+	delete $idx_x{$_} if $idx_x{$_} eq $self;
     }
     # Okay the object still exists, but it's not referenced anywhere.
 }
@@ -50,13 +54,33 @@ sub del {
 sub add_ananova_id {
     my $self = shift;
     my $id = shift;
-    if (defined $idx_a{$id} and $idx_a{$id} ne $self) {
-	$self->carp("a channel with Ananova id $id already exists");
+
+    # Warn about things that shouldn't happen.
+    if (defined $self->get_variant() and defined $self->{ananova_ids} and keys %{$self->{ananova_ids}}) {
+	$self->carp('cannot add another Ananova id, have variant set');
     }
+    if (defined $idx_a{$id}) {
+	my $v = $self->get_variant();
+	foreach (keys %{$idx_a{$id}}) {
+	    next if $_ eq $self;
+	    my $ov = $_->get_variant();
+	    next if defined $v and not defined $ov;
+	    next if not defined $v and defined $ov;
+	    next if $v ne $ov;
+
+	    if (defined $v) {
+		$self->carp("a channel with Ananova id $id, variant $v already exists");
+	    }
+	    else {
+		$self->carp("a channel with Ananova id $id already exists");
+	    }
+	}
+    }
+
     ++ $self->{ananova_ids}->{$id};
     $self->{first_ananova_id} = $id
       if not defined $self->{first_ananova_id};
-    $idx_a{$id} = $self;
+    ++ $idx_a{$id}->{$self};
 
     if ($id =~ /_(\d+)$/) {
 	$self->add_region($1);
@@ -82,6 +106,23 @@ sub is_ananova_id {
     return $self->{ananova_ids}->{$id};
 }
 # get_ananova_ids() not needed?
+
+# A channel may correspond to slightly less than one Ananova id, in
+# the sense that the Ananova listings contain programmes for multiple
+# 'variants'.  So the XMLTV channel is given by Ananova id plus
+# variant.
+#
+sub set_variant {
+    my $self = shift;
+    my $variant = shift;
+    $self->carp('cannot have variant when more than one Ananova id')
+      if defined $self->{ananova_ids} and keys %{$self->{ananova_ids}} > 1;
+    $self->{variant} = $variant;
+}
+sub get_variant {
+    my $self = shift;
+    return $self->{variant};
+}
 
 sub set_xmltv_id {
     my $self = shift;
@@ -197,6 +238,13 @@ sub set_main_display_name {
     my $self = shift;
     my $new_name = shift;
     die if @_;
+
+    my $v = $self->get_variant();
+    if (defined $v) {
+	# Magically append the variant to the name.
+	$new_name .= " ($v)";
+    }
+
     $self->{main_display_name} = $new_name;
     return $self;
 }
@@ -255,11 +303,16 @@ sub get_a_display_name {
     $self->carp('channel with no name whatsoever'); return '(unknown)';
 }
 
-# Channel finding
+# Channel finding.  Looking up by Ananova id can give several channel
+# objects in the case that one Ananova page has several 'variants'.
+#
 sub find_by_ananova_id {
     my $class = shift;
     my $id = shift;
-    return $idx_a{$id};
+    for ($idx_a{$id}) {
+	return () if not defined;
+	return keys %$_;
+    }
 }
 sub find_by_xmltv_id {
     my $class = shift;
@@ -289,9 +342,11 @@ sub stringify {
     my $self = shift;
     my @r;
     push @r, $self->{xmltv_id} if defined $self->{xmltv_id};
-    foreach (sort keys %{$self->{ananova_ids}}) {
-	push @r, $_;
-	last; # let's just have the first one eh?
+    if (defined $self->{ananova_ids}) {
+	foreach (sort keys %{$self->{ananova_ids}}) {
+	    push @r, $_;
+	    last; # let's just have the first one eh?
+	}
     }
     push @r, $self->{main_display_name}
       if defined $self->{main_display_name};
