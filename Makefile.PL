@@ -76,6 +76,7 @@ WriteMakefile
 		 },
    'PM'            => { 'lib/XMLTV.pm'               => '$(INST_LIBDIR)/XMLTV.pm',
 			'lib/TZ.pm'                  => '$(INST_LIBDIR)/XMLTV/TZ.pm',
+			'lib/Clumps.pm'              => '$(INST_LIBDIR)/XMLTV/Clumps.pm',
 			'lib/Usage.pm'               => '$(INST_LIBDIR)/XMLTV/Usage.pm',
 			'grab/Ask.pm'                => '$(INST_LIBDIR)/XMLTV/Ask.pm',
 			'grab/Memoize.pm'            => '$(INST_LIBDIR)/XMLTV/Memoize.pm',
