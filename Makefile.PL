@@ -57,6 +57,7 @@ my @exes
        grab/uk/tv_grab_uk
        grab/uk_rt/tv_grab_uk_rt
        grab/it/tv_grab_it
+       grab/us_gist/tv_grab_us_gist
        filter/tv_extractinfo_en
        filter/tv_grep
        filter/tv_sort

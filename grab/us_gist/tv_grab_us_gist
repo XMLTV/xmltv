@@ -1,0 +1,164 @@
+#!/usr/bin/perl -w
+# $Id$
+
+=head1 NAME
+
+tv_grab_us_gist - Grab TV listings for the USA, from an alternative
+source.
+
+=head1 SYNOPSIS
+
+tv_grab_us_gist [--help] [--output FILE] [--days N] [--offset N] [--quiet]
+
+=head1 DESCRIPTION
+
+Output TV listings for a particular user account at the US listings
+site gist.com.  At the moment you need to manually register for an
+account at that site and choose the channels to download using their
+web interface.
+
+The normal grabber for US listings is B<tv_grab_na>, but you might
+prefer the data returned by this one.
+
+=head1 SETUP
+
+At the moment to set up this grabber you must register by hand at the
+site.  Once you have logged in, find your user id by doing 'view
+source' in your web browser and look near the bottom of the file for a
+line such as
+
+    <font COLOR=WHITE>Userid=5094954 profileid=1</font><br>
+
+FIXME at the moment the user id is hardcoded into the script!  No
+--configure stage.
+
+Then run B<tv_grab_us_gist --configure> and enter the number shown, in
+this case, 5094954.  The channels fetched by the grabber will be those
+you set up during registration.
+
+I donE<39>t know what the difference is between the ordinary,
+free-of-charge gist.com subscription and the pay 'Gist Gold' service.
+ItE<39>s possible that to customize the list of channels you must take
+the pay service - otherwise you may be stuck with the default setting
+of all channels for the region you selected.  Also, it may be that
+Gold subscribers can fetch listings for more days.
+
+Once you have set up the account and configured the grabber, no more
+manual intervention should be necessary.
+
+=head1 OPTIONS
+
+B<--output FILE> write to FILE rather than standard output.
+
+B<--days N> grab N days starting from today, rather than as many as
+possible.
+
+B<--offset N> start grabbing N days from today, rather than starting
+today.  N may be negative.
+
+B<--quiet> suppress the progress messages normally written to standard
+error.
+
+=head1 SEE ALSO
+
+L<xmltv(5)>, L<http://www.gist.com/tv/>
+
+=head1 AUTHOR
+
+Ed Avis, ed@membled.com
+
+=head1 BUGS
+
+It should be possible to fully automate the registration process.
+
+=cut
+
+use strict;
+
+# of We work by inheriting from XMLTV::Grab_XML and overriding certain
+# methods.
+#
+use XMLTV::Grab_XML;
+package Grab_XML_us_gist;
+use base 'XMLTV::Grab_XML';
+
+use Date::Manip;
+use LWP::Simple;
+
+# Todo: perhaps we should internationalize messages and docs?
+sub country( $ ) {
+    my $pkg = shift;
+    return 'USA';
+}
+
+# Returns a hash mapping YYYMMDD to URL.
+my $userid = 5094954;
+sub urls_by_date( $ ) {
+    my $pkg = shift;
+    my $num_days = 5; # guess
+    my $date = UnixDate(ParseDate('today'), '%Q');
+    my %urls;
+    while ($num_days--) {
+	$urls{$date} = "http://www.gist.com/tv/xmltv/?userid=$userid&date=$date";
+	$date = $pkg->nextday($date);
+    }
+    return %urls;
+}
+
+# Given some data downloaded for a particular day, turn it into XML.
+sub xml_from_data( $$ ) {
+    my $pkg = shift;
+    my @lines = split /\n/, shift;
+    my @r;
+    while (@lines) {
+	local $_ = shift @lines;
+	push @r, $_;
+	if (/<credits>/) {
+	    my @l;
+	    my $end_line;
+	    while (@lines) {
+		local $_ = shift @lines;
+		if (m!</credits>!) {
+		    $end_line = $_;
+		    last;
+		}
+		push @l, $_;
+	    }
+	    die 'EOF before </credits> line' if not defined $end_line;
+	    my %correct = (host => 'presenter',
+			   executive_producer => 'producer',
+			   guest_star => 'guest',
+			  );
+	    foreach (@l) {
+		foreach my $from (keys %correct) {
+		    my $to = $correct{$from};
+		    if (s/<$from>/<$to>/) {
+			s!</$from>!</$to>!
+			  or warn "didn't see </$from> on same line as <$from>\n";
+		    }
+		}
+	    }
+	    my @sorted;
+	    foreach my $person (qw(director actor writer adapter producer
+				   presenter commentator guest)) {
+		my @new_l;
+		foreach (@l) {
+		    if (index($_, "<$person>") != -1) {
+			push @sorted, $_;
+		    } else {
+			push @new_l, $_;
+		    }
+		}
+		@l = @new_l;
+	    }
+	    foreach (@l) {
+		warn "ignoring unknown credit: $_";
+	    }
+	    push @r, (@sorted, $end_line);
+	}
+    }
+
+    return join("\n", @r);
+}
+
+Grab_XML_us_gist->go();
