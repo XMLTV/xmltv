@@ -27,11 +27,12 @@
 #   (optional) timezone to assume if ambiguous (defaults to BST if not
 #   given or 'false')
 # 
-# Returns: parsed date
+# Returns: parsed date, or undef if error
 # 
-# There's a one hour window where dates are ambigous; we assume UT
-# for these and print a warning.  Similarly there's a one hour window
-# where dates without a timezone are impossible; we die on those.
+# There's a one hour window where dates are ambigous; we assume UT for
+# these.  Similarly there's a one hour window
+# where dates without a timezone are impossible; we return undef on
+# those.
 # 
 sub parse_uk_date($;$) {
     die 'usage: parse_uk_date(unparsed date [, default tz])'
@@ -72,8 +73,10 @@ sub parse_uk_date($;$) {
 	return $dp;
     }
     elsif (Date_Cmp($dp, $start_bst_skipto) < 0) {
-	die("$date is impossible "
-	    . "(time goes from from $start_bst UT to $start_bst_skipto BST)" );
+	# Date is impossible (time goes from from $start_bst UT to
+	# $start_bst_skipto BST).
+	# 
+	return undef;
     }
     elsif (Date_Cmp($dp, $end_bst) < 0) {
 	# During summer time.

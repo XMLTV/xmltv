@@ -26,7 +26,7 @@
 # - Get listings for the next few days using the appropriate backend,
 # for example if you want British listings do:
 # 
-# % getlistings_uk_ananova >tv.xml
+# % getlistings_pa >tv.xml
 # 
 # - Optionally, filter these listings to remove programmes which have
 # already been broadcast:
@@ -68,7 +68,7 @@
 # Remember, once you've said 'never' to watch a programme, it becomes
 # as if it does not exist at all!
 # 
-# -- Ed Avis, epa98@doc.ic.ac.uk
+# -- Ed Avis, epa98@doc.ic.ac.uk, 2000-06-30
 #  
 
 # Since this program runs with taint mode on, it won't pick up changes
@@ -76,9 +76,11 @@
 # non-standard (such as your home directory), you have to add the
 # paths here explicitly.
 # 
-#use lib '/homes/epa98/lib/perl5/5.00503';
-#use lib '/homes/epa98/lib/perl5/site_perl';
-#use lib '/homes/epa98/lib/perl5/site_perl/5.005';
+# For example, the following lines :-)
+# 
+use lib '/homes/epa98/lib/perl5/5.00503';
+use lib '/homes/epa98/lib/perl5/site_perl';
+use lib '/homes/epa98/lib/perl5/site_perl/5.005';
 
 use strict;
 use CGI qw<:standard -newstyle_urls>;
@@ -87,7 +89,6 @@ use XML::Simple;
 use Fcntl ':flock';
 use Date::Manip;
 use File::Copy;
-use Lingua::Preferred qw<which_lang>;
 use Log::TraceMessages qw<t d>; Log::TraceMessages::check_argv();
 $Log::TraceMessages::CGI = 1;
 
@@ -108,7 +109,9 @@ my $PREFS_FILE = 'tvprefs';
 
 # Preferred languages - if information is available in several
 # languages, the ones in this list are used if possible.  List in
-# order of preference.  Passed to Lingua::Preferred::which_lang().
+# order of preference.  Devious things happen with different dialects
+# of the same language, eg 'en' vs 'en_GB', 'en_CA' and so on - see
+# which_lang() for details. 
 # 
 my @PREF_LANGS;
 
@@ -129,8 +132,8 @@ else {
 sub store_prefs($$);
 sub display_form($);
 sub print_date_for($;$);                                                 
+sub which_lang($$);
 sub get_text($);
-sub get_text1($);
 
 # Keep the taint checking happy (the Cwd module runs pwd(1))
 $ENV{PATH} = '/bin:/usr/bin';
@@ -480,47 +483,116 @@ sub print_date_for($;$) {
 }
 
 
+# which_lang()
+# 
+# Parameters:
+#   reference to list of preferred languages (first is
+#     best).  Here, a language is a string like 'en' or 'fr_CA', or
+#     'fr_*' which is any dialect of French except plain 'fr'.
+# 
+#   reference to non-empty list of available languages.  Here, a
+#     language can be like 'en', 'en_CA', or '' meaning 'unknown'.
+# 
+# Returns: which language to use.  Can be 'en', 'fr_CA' or ''.
+# 
+# So for example:
+#   You know English and prefer US English:
+#     [ 'en_US' ]
+# 
+#   You know English and German, German/Germany is preferred:
+#     [ 'en', 'de_DE' ]
+# 
+#   You know English and German, but preferably not Swiss German:
+#     [ 'en', 'de', 'de_*', 'de_CH' ]
+#   Here any dialect of German (eg de_DE, de_AT) is preferable to de_CH.
+# 
+sub which_lang($$) {
+    die 'usage: which_lang(listref of preferred langs, listref of available)'
+      if @_ != 2;
+    my ($pref, $avail) = @_;
+
+    my (%explicit, %implicit);
+    my $pos = 0;
+    my $add_explicit = sub {
+	die "preferred language $_ listed twice"
+	  if defined $explicit{$_[0]};
+	delete $implicit{$_[0]};
+	$explicit{$_[0]} = $pos++;
+    };
+    my $add_implicit = sub {
+	$implicit{$_[0]} = $pos++ unless defined $explicit{$_[0]};
+    };
+    
+    foreach (@$pref) {
+	$add_explicit->($_);
+
+	if (/^[a-z][a-z]$/) {
+	    $add_implicit->($_ . '_*');
+	}
+	elsif (/^([a-z][a-z])_([A-Z][A-Z])$/) {
+	    $add_implicit->($1);
+	    $add_implicit->($1 . '_*');
+	}
+	elsif (/^([a-z][a-z])_\*$/) {
+	    $add_implicit->($1);
+	}
+	else { die "bad language '$_'" } # FIXME support 'English' etc
+    }
+
+    my %ranking = (reverse(%explicit), reverse(%implicit));
+    my @langs = @ranking{sort { $a <=> $b } keys %ranking};
+    my %avail;
+    foreach (@$avail) {
+	$avail{$_}++ && die "available language $_ listed twice";
+    }
+
+    while (defined (my $lang = shift @langs)) {
+	if ($lang =~ /^([a-z][a-z])_\*$/) {
+	    # Any dialect of $1 (but not standard).  Work through all
+	    # of @$avail in order trying to find a match.  (So there
+	    # is a slight bias towards languages appearing earlier in
+	    # @$avail.)
+	    # 
+	    my $base_lang = $1;
+	    AVAIL: foreach (@$avail) {
+		if (/^\Q$base_lang\E_/) {
+		    # Well, it matched... but maybe this dialect was
+		    # explicitly specified with a lower priority.
+		    # 
+		    foreach my $lower_lang (@langs) {
+			next AVAIL if (/^\Q$lower_lang\E$/);
+		    }
+			
+		    return $_;
+		}
+	    }
+	}
+	else {
+	    # Exact match
+	    return $lang if $avail{$lang};
+	}
+    }
+    
+    # Couldn't find anything - pick first available language.
+    return $avail->[0];
+}
+
+
 # get_text()
 # 
 # This is specific to XML::Simple and the file format we use.  Given a
-# reference to a list of XML elements (maybe with just one element),
-# pick the correct text based on the user's preferred language.  Each
-# element may be a hashref with 'lang' and 'content', or it may just
-# be a string, in which case the lang is taken as unknown.
+# reference to a list of XML elements (maybe with just one element)
+# each of which is a hash with 'content' and maybe 'lang', pick the
+# correct text based on the user's preferred language.
 # 
 sub get_text($) {
     die 'usage: get_text(gunk from XML::Simple)' if @_ != 1;
     die if not $_[0];
     my @bits = @{$_[0]};
-    
-    my @bits1;
-    foreach (@bits) {
-	if (not ref) {
-	    push @bits1, { lang => '', content => $_ };
-	}
-	elsif (ref eq 'HASH') {
-	    push @bits1, $_;
-	}
-	else { die }
-    }
-    return get_text1(\@bits1);
-}
-
-
-# get_text1()
-# 
-# This does the real work for get_text(); it relies on a hashref with
-# 'lang' and 'content' fields.
-# 
-sub get_text1($) {
-    die 'usage: get_text1(hashref with lang and content)' if @_ != 1;
-    die if not $_[0];
-    my @bits = @{$_[0]};
-    t 'get_text1() ENTRY';
+    t 'get_text(), bits are: ' . d(\@bits);
     my @langs;
     my %seen;
     foreach (@bits) {
-	t 'doing bit: ' . d $_;
 	my $lang = $_->{lang};
 	if (defined $lang) {
 	    die "two bits of text both with lang '$lang'"
