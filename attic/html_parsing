@@ -1,0 +1,150 @@
+# Leftover HTML parsing routines.
+
+
+
+# get_text()
+#
+# Extract bits of text from some HTML.  Each 'bit' is a hashref with a
+# key CONTENT, the actual text, and additional keys you specify.  The
+# value of each extra key is whatever was set as an HTML attribute by
+# the innermost enclosing element of the text that set this attribute.
+#
+# Parameters:
+#   HTML string
+#   listref of attributes to look for
+#
+sub get_text($$) {
+    local $Log::TraceMessages::On = 0;
+    my $html = shift;
+    local *attrs = shift; use vars '@attrs';
+    t 'attrs: ' . d \@attrs;
+
+    my %attrs;
+    foreach (@attrs) {
+	$attrs{$_}++ && warn "attr $_ mentioned twice";
+    }
+
+    my @stack;
+    my %default; # default is nothing for anything
+    push @stack, \%default;
+
+    my @r;
+
+    my $start_h = sub {
+	local *v = shift; use vars '%v';
+	my %new_state = %{$stack[-1]};
+	foreach (keys %attrs) {
+	    if (defined $v{$_}) {
+		$new_state{$_} = $v{$_};
+	    }
+	}
+	push @stack, \%new_state;
+	t 'pushed new state onto stack, now: ' . d \@stack;
+    };
+
+    my $end_h = sub {
+	pop @stack;
+	t 'popped stack, now: ' . d \@stack;
+	if (not @stack) {
+	    warn "mismatched tags in input\n";
+	    push @stack, \%default;
+	}
+    };
+
+    my $text_h = sub {
+	local $_ = shift;
+	s/\000//g; s/\240//g; s/^\s+//; s/\s+$//;
+	return if not length;
+	my %h = %{$stack[-1]};
+	$h{CONTENT} = kludge_text($_);
+	t 'text bit: ' . d \%h;
+	push @r, \%h;
+    };
+
+    my $p = HTML::Parser->new(api_version => 3,
+			      start_h => [ $start_h, 'attr'  ],
+			      end_h   => [ $end_h,   ''      ],
+			      text_h  => [ $text_h,  'dtext' ],
+			     );
+    $p->unbroken_text(1);
+    $p->parse($html);
+    $p->eof();
+    return \@r;
+}
+
+
+# arrange_text_by_type()
+#
+sub arrange_text_by_type($) {
+    local *bits = shift; use vars '@bits';
+
+    # Try to match each bit against each of these in turn to find out
+    # what 'type' it is.  They are matched top to bottom, so the more
+    # specific ones come first.
+    # 
+    my @types = ([ 'time_and_channel', { bgcolor => '#FFFFFF',
+					 class   => 'helvsmall',
+					 color   => '#990099' } ],
+		 [ 'title_and_stuff',  { bgcolor => '#cccccc',
+					 class  => 'helvsmall' } ],
+		 [ 'desc',             { bgcolor => '#FFFFFF',
+					 class => 'helvsmallnobold' } ],
+		 [ 'page_title',       {} ]);
+
+    my %bits_of_type;
+    foreach my $bit (@bits) {
+	t 'trying to match bit: ' . d $bit;
+	my $found_type;
+	TYPE: foreach my $type (@types) {
+	    my $type_name = $type->[0];
+	    local *attrs = $type->[1]; use vars '%attrs';
+	    foreach (keys %attrs) {
+		t 'testing attr: ' . d $_;
+		# Undefined attrs as part of the type template are not
+		# allowed.
+		# 
+		if (not defined $bit->{$_}) {
+		    t 'nope, does not have this attr defined';
+		    next TYPE;
+		}
+		if ($bit->{$_} ne $attrs{$_}) {
+		    t 'nope, has ' . d($bit->{$_}) . ' rather than ' . d($attrs{$_});
+		    next TYPE;
+		}
+	    }
+	    t 'match successful';
+	    $found_type = $type_name;
+	    last;
+	}
+	if (not defined $found_type) {
+	    # This won't happen with the types I defined, since
+	    # 'title' matches everything.
+	    # 
+	    local $Log::TraceMessages::On = 1;
+	    warn "unknown bit: " . d $bit;
+	}
+	else {
+	    push @{$bits_of_type{$found_type}}, $bit->{CONTENT};
+	}
+    }
+
+    return \%bits_of_type;
+}
+
+
+# links()
+#
+# Return a list of all links in an HTML document.  Based on the
+# example in the HTML::TokeParser documentation :-).
+#
+sub links($) {
+    my $html = shift;
+    my @r;
+    my $p = HTML::TokeParser->new(\$html)
+      or die 'cannot instantiate HTML::TokeParser';
+    while (my $t = $p->get_tag('a')) {
+	my $href = $t->[1]{href};
+	push @r, $href if defined $href;
+    }
+    return @r;
+}
