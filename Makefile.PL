@@ -323,6 +323,11 @@ my @opt_components
 		    'HTML::TreeBuilder' => 0 },
      },
 
+     { name => 'tv_grab_se',
+       blurb => 'Grabber for Sweden',
+       exes => [ 'grab/se/tv_grab_se' ],
+       prereqs => { 'XML::LibXML' => 0 } },
+
      { name => 'tv_check',
        blurb => 'Program to report exceptions and changes in a schedule',
        exes => [ 'choose/tv_check/tv_check' ],

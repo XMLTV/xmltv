@@ -1,0 +1,669 @@
+#!/usr/bin/perl -w
+
+=pod
+
+=head1 NAME
+
+tv_grab_se - Grab TV listings for Sweden.
+
+=head1 SYNOPSIS
+
+tv_grab_se --help
+
+tv_grab_se [--config-file FILE] --configure
+
+tv_grab_se [--config-file FILE] [--output FILE] [--days N]
+           [--offset N] [--quiet] [--debug]
+
+=head1 DESCRIPTION
+
+Output TV and listings in XMLTV format for many stations
+available in Sweden.  The data comes from the website of each
+respective TV-station.
+
+First you must run B<tv_grab_se --configure> to choose which stations
+you want to receive.
+
+Then running B<tv_grab_se> with no arguments will get a listings for
+the stations you chose for five days including today.
+
+B<--configure> Prompt for which stations to download and write the
+configuration file.
+
+B<--config-file FILE> Set the name of the configuration file, the
+default is B<~/.xmltv/tv_grab_se.conf>.  This is the file written by
+B<--configure> and read when grabbing.
+
+B<--output FILE> When grabbing, write output to FILE rather than
+standard output.
+
+B<--days N> When grabbing, grab N days rather than 5.
+
+B<--offset N> Start grabbing at today + N days.  N may be negative.
+
+B<--quiet> suppress the progress-bar normally shown on standard error.
+
+B<--debug> provide more information on progress to stderr to help in
+debugging.
+
+=head1 SUPPORTED CHANNELS
+
+tv_grab_se can currently fetch data for the following channels:
+
+  SVT1, SVT2, Barnkanalen, SVT24,
+  TV4, TV4+.
+  TV3, TV8, ZTV
+
+=head1 SEE ALSO
+
+L<xmltv(5)>
+
+=head1 AUTHOR
+
+Mattias Holmlund, mattias -at- holmlund -dot- se. This documentation
+and parts of the code copied from tv_grab_uk by
+Ed Avis, ed -at- membled -dot- com.
+=head1 BUGS
+
+The grabber for Viasat (TV3, TV8 and ZTV) does not fetch any desriptions
+for the programmes, since it would then have to fetch one html-page
+per programme. It does however store a url for each programme where the
+description can be found.
+
+=cut
+
+use strict;
+
+use XMLTV;
+use XMLTV::Ask;
+use XMLTV::Config_file;
+use XMLTV::Get_nice qw(get_nice);
+use XMLTV::Memoize;
+XMLTV::Memoize::check_argv('XMLTV::Get_nice::get_nice_aux');
+
+use XMLTV::Europe_TZ;
+
+use XML::LibXML;
+use Date::Manip;
+use Getopt::Long;
+
+# Use Term::ProgressBar if installed.
+use constant Have_bar => eval { require Term::ProgressBar; 1 };
+
+# The timezone for Sweden during wintertime.
+use constant LOCAL_TZ => "+0100";
+
+# List all available channels along with the grabber for them
+# and the parameters to send to the grabber.
+my %channels = (
+                 'svt1.svt.se' =>
+                 [ "SVT1", \&get_data_svt,
+                   8759, "SgSVT1BG", "SgSVT1Title"  ],
+
+                 'svt2.svt.se' =>
+                 [ "SVT2", \&get_data_svt,
+                   8760, "SgSVT2BG", "SgSVT2Title"  ],
+
+                 'svt24.svt.se' =>
+                 [ "SVT24", \&get_data_svt,
+                   8761, "Sg24BG", "Sg24Title"  ],
+
+                 'barnkanalen.svt.se' =>
+                 [ "Barnkanalen", \&get_data_svt,
+                   8762, "SgBARNKANALENBG",
+                   "SgBARNKANALENTitle"  ],
+
+                 'tv4.se' =>
+                 [ "TV4", \&get_data_tv4,
+                   1  ],
+
+                 'plus.tv4.se' =>
+                 [ "TV4+", \&get_data_tv4,
+                   3  ],
+
+                 'tv3.se' =>
+                 [ "TV3", \&get_data_viasat,
+                   "www.tv3.se" ],
+
+                 'tv8.se' =>
+                 [ "TV8", \&get_data_viasat,
+                   "www.tv8.se" ],
+
+                 'ztv.se' =>
+                 [ "ZTV", \&get_data_viasat,
+                   "www.ztv.se" ],
+
+                 );
+
+my $opt = { days => 5,
+            offset => 0,
+            "config-file" => undef,
+            configure => 0,
+            help => 0,
+            quiet => 0,
+            output => undef,
+            debug => 0,
+          };
+
+my $res = GetOptions( $opt, qw/
+                      days=i
+                      offset=i
+                      config-file=s
+                      configure
+                      help|h
+                      quiet
+                      output=s
+                      debug
+                      / );
+
+sub t;
+
+if( (not $res) or scalar(@ARGV) or $opt->{help} )
+{
+  print << 'EOH';
+tv_grab_se --help
+
+tv_grab_se [--config-file FILE] --configure
+
+tv_grab_se [--config-file FILE] [--output FILE] [--days N]
+           [--offset N] [--quiet] [--debug]
+
+EOH
+
+  exit(1);
+}
+
+# XMLTV::Europe_TZ says that we should do this...
+Date_Init('TZ=UTC');
+
+# File that stores which channels to download.
+my $config_file
+  = XMLTV::Config_file::filename($opt->{'config-file' },
+                                 'tv_grab_se', not $opt->{debug} );
+
+if( $opt->{configure} )
+{
+    configure( $config_file );
+    exit;
+}
+
+# List of the ids of all channels that should be loaded.
+# This is loaded from the configuration file.
+my @channel_list = ();
+
+load_config( $config_file );
+
+my( $odoc, $root );
+my $warnings = 0;
+
+my %w_args = ( encoding => 'ISO-8859-1' );
+
+if (defined $opt->{output})
+{
+    t "Sending output to $opt->{output}.";
+    my $fh = new IO::File "> $opt->{output}";
+    die "cannot write to $opt->{output}" if not $fh;
+    $w_args{OUTPUT} = $fh;
+}
+
+my $w = new XMLTV::Writer( %w_args );
+# $w->comment("Hello from XML::Writer's comment() method");
+$w->start({ 'generator-info-name' => 'tv_grab_se' });
+
+# Write list of channels.
+t 'Writing list of channels.';
+
+foreach my $channel_id (@channel_list)
+{
+    my( $channel_name, $get_sub, @param ) = @{$channels{$channel_id}};
+    $w->write_channel( {
+        id => $channel_id,
+        'display-name' => [[ $channel_name, 'se' ]],
+    } );
+}
+
+my $now = ParseDate( 'now' );
+my $today = UnixDate( $now, "%Y%m%d" );
+
+my $date = increase_date( $today, $opt->{offset} );
+
+my $bar = undef;
+$bar = new Term::ProgressBar( {
+    name => 'downloading listings',
+    count => $opt->{days} * @channel_list
+    }) if Have_bar && (not $opt->{quiet}) && (not $opt->{debug});
+
+for( my $i=0; $i < $opt->{days}; $i++ )
+{
+    t "Date: $date";
+    foreach my $channel_id (@channel_list)
+    {
+        t "  $channel_id";
+        my( $channel_name, $get_sub, @param ) = @{$channels{$channel_id}};
+        &{$get_sub}( $w, $channel_id, $date, @param );
+        update $bar if defined( $bar );
+    }
+
+    $date = increase_date( $date, 1 );
+}
+
+$w->end();
+
+# Signal that something went wrong if there were warnings.
+exit(1) if $warnings;
+
+# All data fetched ok.
+t "Exiting without warnings.";
+exit(0);
+
+##########################################
+#
+# Routines common for all channels.
+#
+##########################################
+
+sub parse_xml
+{
+    my( $html ) = @_;
+
+    my $doc;
+
+    # Stupid XML::LibXML writes to STDERR. Redirect it temporarily.
+    open(SAVERR, ">&STDERR"); # save the stderr fhandle
+    print SAVERR "Nothing\n" if 0;
+    open(STDERR,"> /dev/null");
+
+    eval
+    {
+        my $xml = XML::LibXML->new;
+        $xml->recover(1);
+
+        $doc = $xml->parse_html_string($html);
+    };
+
+    warning( "Error from eval: $@" ) if $@;
+
+    # Restore STDERR
+    open( STDERR, ">&SAVERR" );
+
+    warning( "Failed to parse html" ) unless defined( $doc );
+    return $doc;
+}
+
+sub increase_date
+{
+    my( $datestr, $delta ) = @_;
+
+    my( $year, $month, $day ) = ( $datestr =~ /(\d\d\d\d)(\d\d)(\d\d)/ );
+
+    my $date = ParseDate( "$year-$month-$day" );
+
+    my $newdate = DateCalc( $date, "+ $delta days" );
+
+    return UnixDate( $newdate, "%Y%m%d" );
+}
+
+#
+# Error handling
+#
+
+sub t
+{
+    my( $message ) = @_;
+    print STDERR $message . "\n" if $opt->{debug};
+}
+
+sub warning
+{
+    my( $message ) = @_;
+    print STDERR $message . "\n";
+    $warnings++;
+}
+
+#
+# Configuration
+#
+
+sub load_config
+{
+    my( $config_file ) = @_;
+
+    my @lines = XMLTV::Config_file::read_lines( $config_file );
+
+    foreach my $line (@lines)
+    {
+        next unless defined $line;
+        my( $command, $param ) = split( /\s+/, $line );
+        die "Unknown command $command in config-file $config_file"
+            unless $command =~ /^\s*channel\s*$/;
+
+        $param =~ tr/\n\r //d;
+
+        push @channel_list, $param;
+    }
+}
+
+sub configure
+{
+    my( $config_file ) = @_;
+
+    XMLTV::Config_file::check_no_overwrite( $config_file );
+
+    # FIXME need to make directory
+    open(CONF, ">$config_file") or die "cannot write to $config_file: $!";
+
+    my @all = sort keys %channels;
+    my @wanted = askManyBooleanQuestions(1,
+                                         map { "get channel $_?" }
+                                         @all );
+    foreach (@all) {
+        print CONF '# ' if not shift @wanted;
+        print CONF "channel $_\n";
+    }
+    close CONF or warn "cannot close $config_file: $!";
+    say("Finished configuration.");
+}
+
+
+##########################################
+#
+# svt.se
+#
+##########################################
+
+sub get_data_svt
+{
+    my( $w, $channel, $date, $id, $bgclass, $titleclass ) = @_;
+
+    my $html = get_html_svt( $id, $date );
+    if( not defined( $html ) )
+    {
+        warning( "Failed to fetch html for $channel on $date." );
+        return;
+    }
+
+    my $doc = parse_xml( $html );
+
+    my $lasttime = "0000";
+
+    my $ns = $doc->find( "//tr[td/\@class='$bgclass']" );
+
+    if( $ns->size() == 0 )
+    {
+        warning "No data available for $channel on $date.";
+        return;
+    }
+
+    foreach my $node ($ns->get_nodelist)
+    {
+        my $time = $node->findvalue( "td[\@class='$bgclass']" );
+        my( $starttime, $stoptime ) = ($time =~ /(\d+\.\d+)\s*-\s*(\d+\.\d+)/ );
+        $starttime = $time unless defined $starttime;
+
+        $starttime =~ tr/\.//d;
+        $stoptime =~ tr/\.//d if defined $stoptime;
+
+        my $title = $node->findvalue( ".//*[\@class='$titleclass']" );
+
+        # Delete character that SVT uses to signify a link.
+        $title =~ tr/»//d;
+
+        my $description = "";
+
+        my $ns2 = $node->find( './/div[@class="SgZText"]/div/text()' );
+
+        foreach my $desc ($ns2->get_nodelist)
+        {
+            $description .= $desc->findvalue('.');
+        }
+
+        # Delete character that SVT uses to signify a link.
+        $description =~ tr/»//d;
+
+        if( $starttime < $lasttime )
+        {
+            $date = increase_date( $date, 1 );
+        }
+
+        my %d = (
+                 channel => $channel,
+                 start   => utc_offset( "$date$starttime", LOCAL_TZ ),
+                 title   => [ [ $title, 'se' ] ],
+                 );
+
+        if( defined $stoptime )
+        {
+            my $stopdate = $date;
+
+            if( $stoptime < $starttime )
+            {
+                $stopdate = increase_date( $stopdate, 1 );
+            }
+
+            $d{stop} = utc_offset( "$stopdate$stoptime", LOCAL_TZ );
+        }
+
+        $d{desc} = [ [ $description, 'se' ] ] if $description =~ /\S/;
+
+        $w->write_programme( \%d );
+
+        $lasttime = $starttime;
+    }
+}
+
+sub get_html_svt
+{
+    my( $id, $date ) = @_;
+
+    my $url = "http://svt.se/svt/jsp/polopoly.jsp?" .
+              "d=$id\&selectedDate=$date\&shortVersion=false\&x=31\&y=8";
+
+    return get_nice( $url );
+}
+
+##########################################
+#
+# tv4.se
+#
+##########################################
+
+sub get_html_tv4
+{
+    my( $id, $date ) = @_;
+
+    $date =~ s/(\d{4})(\d{2})(\d{2})/$1-$2-$3/;
+
+    my $url = "http://www.tv4.se/program/tabla.aspx?date=$date";
+    $url .= "\&ch=$id"; # unless $id==1;
+
+    return get_nice( $url );
+}
+
+sub get_data_tv4
+{
+    my( $w, $channel, $date, $id ) = @_;
+
+    my $html = get_html_tv4( $id, $date );
+    if( not defined( $html ) )
+    {
+        warning( "Failed to fetch html for $channel on $date." );
+        return;
+    }
+
+    my $doc = parse_xml( $html );
+    if( not defined( $doc ) )
+    {
+        warning( "Failed to parse html for $channel on $date." );
+        return;
+    }
+
+    # Every odd tr contains the starttime and title. Every even tr contains
+    # the description if it exists. The description can be found since it has
+    # an empty first td.
+
+    my( $starttime, $title, $description );
+    my $lasttime = "0000";
+
+    my $ns = $doc->find( "//span[\@id='LabelResults']/tr" );
+
+    if( $ns->size() <= 2 )
+    {
+        warning "No data available for $channel on $date.";
+        return;
+    }
+
+    foreach my $node ($ns->get_nodelist)
+    {
+        my $time = $node->findvalue( "td[1]" );
+        $time =~ tr/\n\r //d;
+
+        my $text = $node->findvalue( "td[2]" );
+        $text =~ tr/\n\r /   /s;
+        $text =~ s/^\s+//;
+        $text =~ s/\s+$//;
+
+        if( $time =~ /^\s*\d\d:\d\d\s*$/ )
+        {
+            $starttime = $time;
+            $title = $text;
+        }
+        elsif( defined( $starttime ) )
+        {
+            $description = $text;
+
+            $starttime =~ s/^\s*(\d\d):(\d\d)\s*/$1$2/;
+
+            if( $starttime < $lasttime )
+            {
+                $date = increase_date( $date, 1 );
+            }
+
+            # Delete character that TV4 uses to signify a link.
+            $title =~ tr/»//d;
+            $description =~ tr/»//d;
+
+            my %d = (
+                     channel => $channel,
+                     start   => utc_offset( "$date$starttime", LOCAL_TZ ),
+                     title   => [ [ $title, 'se' ] ],
+                     );
+
+            $d{desc} = [ [ $description, 'se' ] ] if $description =~ /\S/;
+
+            $w->write_programme( \%d );
+
+            $lasttime = $starttime;
+            $starttime = undef;
+            $description = "";
+        }
+    }
+
+    # Write the last entry in case it had no description.
+    $w->write_programme( {
+        channel => $channel,
+        start   => utc_offset( "$date$starttime", LOCAL_TZ ),
+        title   => [ [ $title, 'se' ] ],
+    } ) if defined( $starttime );
+}
+
+##########################################
+#
+# viasat
+#
+##########################################
+
+sub get_html_viasat
+{
+    my( $site, $date ) = @_;
+
+    my( $year, $month, $day ) = ($date =~ /(\d{4})(\d{2})(\d{2})/);
+
+    my $url = "http://$site/index.phtml?page_type=tvchart\&" .
+              "start_year=$year\&start_month=$month\&start_day=$day";
+
+    return get_nice( $url );
+}
+
+sub get_data_viasat
+{
+    my( $w, $channel, $date, $site ) = @_;
+
+    my $html = get_html_viasat( $site, $date );
+    if( not defined( $html ) )
+    {
+        warning( "Failed to fetch html for $channel on $date." );
+        return;
+    }
+
+    my $doc = parse_xml( $html );
+    if( not defined( $doc ) )
+    {
+        warning( "Failed to parse html for $channel on $date." );
+        return;
+    }
+
+    my $ns = $doc->find(
+     '//table/tr[@class="bgcolorBoxGeneral" or @class="bgcolorBoxGeneral2"]' );
+
+    if( $ns->size() == 0 )
+    {
+        warning "No data available for $channel on $date.";
+        return;
+    }
+
+    my $lasttime = "0000";
+
+    foreach my $node ($ns->get_nodelist)
+    {
+        my $starttime = $node->findvalue( "td[1]" );
+        $starttime =~ tr/\n\r //d;
+
+        my $title = $node->findvalue( "td[2]/a" );
+
+        # Fallback in case there is no link for this programme.
+        $title = $node->findvalue( "td[2]" ) if ($title =~ /^\s*$/);
+
+        $title =~ tr/\n\r /   /s;
+        $title =~ s/^\s+//;
+        $title =~ s/\s+$//;
+
+        my $url = $node->findvalue( 'td[2]/a/@href' );
+
+        $starttime =~ tr/\://d;
+
+        if( $starttime < $lasttime )
+        {
+            $date = increase_date( $date, 1 );
+        }
+
+        my %d = (
+                 channel => $channel,
+                 start   => utc_offset( "$date$starttime", LOCAL_TZ ),
+                 title   => [ [ $title, 'se' ] ],
+                 );
+
+        $d{url} = ["http://$site$url"] if $url =~ /\S/;
+
+        $w->write_programme( \%d );
+
+        $lasttime = $starttime;
+    }
+}
+
+### Setup indentation in Emacs
+## Local Variables:
+## perl-indent-level: 4
+## perl-continued-statement-offset: 4
+## perl-continued-brace-offset: 0
+## perl-brace-offset: -4
+## perl-brace-imaginary-offset: 0
+## perl-label-offset: -2
+## cperl-indent-level: 2
+## cperl-brace-offset: 0
+## cperl-continued-brace-offset: 0
+## cperl-label-offset: -2
+## cperl-extra-newline-before-brace: t
+## cperl-merge-trailing-else: nil
+## cperl-continued-statement-offset: 2
+## End:
+
