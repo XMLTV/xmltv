@@ -1223,7 +1223,14 @@ sub new
 	die "invalid usage - no $_" if ( !defined($self->{$_}));
     }
     if ( ! -d "$self->{imdbDir}" ) {
-	die "$self->{imdbDir}:does not exist" ;
+	if ( $self->{downloadMissingFiles} ) {
+	    warn "creating directory $self->{imdbDir}\n";
+	    mkdir $self->{imdbDir}, 0777
+	      or die "cannot mkdir $self->{imdbDir}: $!";
+	}
+	else {
+	    die "$self->{imdbDir}:does not exist";
+	}
     }
     my $listsDir = "$self->{imdbDir}/lists";
     if ( ! -d $listsDir ) {
@@ -1281,6 +1288,7 @@ sub new
 		    die <<END
 $partial already exists, remove it or try renaming to $filename and
 resuming the download of <$url> by hand.
+
 END
   ;
 		}
@@ -1291,28 +1299,30 @@ Trying to download <$url>.
 With a slow network link this could fail; it might be better to
 download the file by hand and save it as
 $filename.
+
 END
   ;
 	    # For downloading we use LWP::Simple::getstore() to write
 	    # to a file.
 	    #
-	    my $success = getstore($url, $filename);
-	    if (not $success) {
-		warn "failed to download $url to $filename, renaming to $partial\n";
-		rename $filename, $partial
-		  or die "cannot rename $filename to $partial: $!";
-		warn "You might try continuing the download of <$url> manually.\n";
+	    my $resp = getstore($url, $filename);
+	    my $got_size = -s $filename;
+	    if (defined $resp and is_success($resp)) {
+		die if not $got_size;
+		print STDERR "<$url>\n\t-> $filename, success\n\n";
+	    }
+	    else {
+		my $msg = "failed to download $url to $filename";
+		$msg .= ", http response code: $resp" if defined $resp;
+		warn $msg;
+		if ($got_size) {
+		    warn "renaming $filename -> $partial\n";
+		    rename $filename, $partial
+		      or die "cannot rename $filename to $partial: $!";
+		    warn "You might try continuing the download of <$url> manually.\n";
+		}
 		exit(1);
 	    }
-	    if (not -e $filename) {
-		die <<END
-strange, getstore() claimed to have created $filename, but it did not.
-Please report this to the xmltv-devel list; in the meantime download
-the file manually.
-END
-  ;
-	    }
-	    print STDERR "<$url>\n\t-> $filename, success\n\n";
 	}
 	$self->{downloadMissingFiles} = 0;
 	goto CHECK_FILES;
