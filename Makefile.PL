@@ -124,9 +124,12 @@ are present.",
 foreach my $info (@opt_components) {
     my $name = $info->{name};
     print STDERR "* $info->{blurb}\n\n";
-    my @prereqs_names = keys %{$info->{prereqs}};
+    use vars '%p'; local *p = $info->{prereqs};
+    my @prereqs_names = grep { test_prereq($_, $p{$_})->[0] ne 'OK' } keys %p;
+    my $default;
     if (not @prereqs_names) {
-	# Nothing to print.
+	# Everything already installed.
+	$default = 1;
     }
     elsif (@prereqs_names == 1) {
 	my $mod = $prereqs_names[0];
@@ -136,6 +139,7 @@ foreach my $info (@opt_components) {
 	    print STDERR " (version $min_ver or higher)";
 	}
 	print STDERR "\n\n";
+	$default = 0;
     }
     else {
 	print STDERR "To install $name, you will need the following modules:\n\n";
@@ -148,9 +152,10 @@ foreach my $info (@opt_components) {
 	    print STDERR "\n";
 	}
 	print STDERR "\n";
+	$default = 0;
     }
 
-    if (XMLTV::Ask::askBooleanQuestion("Do you wish to install $name?")) {
+    if (XMLTV::Ask::askBooleanQuestion("Do you wish to install $name?", $default)) {
 	push @exes, @{$info->{exes}};
 	push @docs, @{$info->{docs}};
 	%pm = (%pm, %{$info->{pm}});
@@ -160,6 +165,47 @@ foreach my $info (@opt_components) {
 }
 
 my $warned_uninstall_broken = 1;
+
+
+# Test the installed version of a module.
+#
+# Parameters:
+#   Name of module
+#   Version required, or 0 for don't care
+#
+# Returns a tuple of two scalars: the first scalar is one of
+#
+# OK            - a recent enough version is installed.
+# NOT_INSTALLED - the module is not installed.
+# FAILED        - the second scalar contains an error message.
+# TOO_OLD       - the second scalar contains the version found.
+#
+sub test_prereq( $$ ) {
+    my ($mod, $minver) = @_;
+    die if not defined $mod; die if not defined $minver;
+    eval "require $mod";
+    if (defined $@) {
+	# This if-test is separate to suppress spurious 'Use of
+	# uninitialized value in numeric lt (<)' warning.
+	#
+	if ($@ ne '') {
+	    if ($@ =~ /^Can\'t locate \S+\.pm in \@INC/) {
+		return [ 'NOT_INSTALLED', undef ];
+	    }
+	    else {
+		return [ 'FAILED', $@ ];
+	    }
+	}
+    }
+
+    my $ver = $mod->VERSION;
+    if ($minver != 0) {
+	return [ 'TOO_OLD', undef ] if not defined $ver;
+	return [ 'TOO_OLD', $ver ] if $ver < $minver;
+    }
+
+    return [ 'OK', undef ];
+}
 
 # MakeMaker's warning message can be intimidating, check ourselves
 # first.  This code can later be replaced with a less demanding
@@ -174,25 +220,30 @@ foreach my $p ((sort keys %prereqs), (sort keys %recommended)) {
     my $required = (defined $prereqs{$p});
     my $verbed = $required ? 'required' : 'recommended';
     my $Verbed = uc(substr($verbed, 0, 1)) . substr($verbed, 1);
-    eval "require $p";
-    if (defined $@) {
-	# This if-test is separate to suppress spurious 'Use of
-	# uninitialized value in numeric lt (<)' warning.
-	#
-	if ($@ ne '') {
-	    if ($@ =~ /^Can\'t locate \S+\.pm in \@INC/) {
-		warn "$Verbed module $p seems not to be installed.\n";
-	    }
-	    else {
-		warn "$Verbed module $p failed to load: $@";
-	    }
-	    ++ $err if $required;
-	}
+    my $minver = $required ? $prereqs{$p} : $recommended{$p};
+    die "bad minver for $p" if not defined $minver;
+    my ($r, $more) = @{test_prereq($p, $minver)};
+    if ($r eq 'OK') {
+	# Installed and recent enough.
     }
-    elsif ($p->VERSION < $prereqs{$p}) {
-	warn "Version $prereqs{$p} or later of module $p $verbed\n";
+    elsif ($r eq 'NOT_INSTALLED') {
+	warn "$Verbed module $p seems not to be installed.\n";
 	++ $err if $required;
     }
+    elsif ($r eq 'FAILED') {
+	warn "$Verbed module $p failed to load: $more\n";
+	++ $err if $required;
+    }
+    elsif ($r eq 'TOO_OLD') {
+	if (defined $more) {
+	    warn "$p-$minver is $verbed, but $more is installed\n";
+	}
+	else {
+	    warn "$p-$minver is $verbed, but an unknown version is installed\n";
+	}
+	++ $err if $required;
+    }
+    else { die }
 }
 die "Required modules missing, not writing Makefile\n" if $err;
 
