@@ -136,12 +136,23 @@ sub get_matcher( $$ ) {
 	} 
 	else { die }
     }
-    else {
+    elsif ($handler eq 'icon'
+	   or $handler eq 'credits'
+	   or $handler eq 'length'      # TODO
+	   or $handler eq 'episode-num' # TODO
+	   or $handler eq 'video'
+	   or $handler eq 'audio'
+	   or $handler eq 'previously-shown'
+	   or $handler eq 'subtitles'
+	   or $handler eq 'rating'      # TODO
+	   or $handler eq 'star-rating' # TODO
+	  ) {
 	# Cannot query on this except for presence.  But empty string
 	# argument for future expansion.
 	#
 	return [ 'empty', sub { exists $_->{$key} } ];
     }
+    else { die }
 }
 
 1;
