@@ -86,7 +86,14 @@ END
 $cmd=shift || "blank";
 if (! exists $cmds{$cmd} )
 {
-    die "$cmd is not a valid command. Valid commands are:\n".join(" ",keys(%cmds))."\n";
+    if ($cmd =~ /-/)
+    {
+	die "you must specify the program to run, for example: $0 tv_grab_fi --configure\n";
+    }
+    else
+    {
+	die "$cmd is not a valid command. Valid commands are:\n".join(" ",keys(%cmds))."\n";
+    }
 }
 
 #
