@@ -100,6 +100,10 @@ The default is "zip".
 B<--bzip2-command X> Specify the command line for .bz2 output files.
 The default is "bzip2".
 
+B<--overwrite X> Should tv_grab_na overwrite existing --listings output
+files or skip the ones that exist? (default=false - don't overwrite
+ already grabbed listings files)
+
 =head1 SEE ALSO
 
 L<xmltv(5)>, L<http://www.zap2it.com/>
@@ -610,6 +614,10 @@ sub Usage($)
     print $fp "\n";
     print $fp "   --bzip2-command <command>\n";
     print $fp "       specify the command line for .bz2 output files.(default is \"bzip2\")\n";
+    print $fp "\n";
+    print $fp "   --overwrite <boolean>\n";
+    print $fp "       should tv_grab_na overwrite existing --listings output files or skip the\n";
+    print $fp "       ones that exist? (default=false - don't overwrite already grabbed listings files)\n";
     print $fp "\n";
 }
 
@@ -1122,20 +1130,23 @@ if ( $configure ) {
 # in grabber mode - yeah !
 
 use vars qw/$opt_help $opt_config_file $opt_debug $opt_programs $opt_channels $opt_listings $opt_output $opt_days $opt_debuglistings $opt_offset $opt_retry_limit $opt_retry_delay/;
-use vars qw/$opt_gzip_command $opt_zip_command $opt_bzip2_command/;
+use vars qw/$opt_gzip_command $opt_zip_command $opt_bzip2_command $opt_overwrite/;
 
 $opt_debug=0;
 $opt_debuglistings=0;
 $opt_gzip_command="gzip";
 $opt_zip_command="zip";
 $opt_bzip2_command="bzip2";
+$opt_overwrite="false";
 
-if ( ! GetOptions('help', 'config-file=s', 'debug', 'programs=s', 'channels=s', 'listings=s', 'output=s', 'days=i', 'debuglistings', 'offset=i', 'retry-limit=i', 'retry-delay=i',  'gzip-command=s', 'zip-command=s', 'bzip2-command=s' ) ) {
+if ( ! GetOptions('help', 'config-file=s', 'debug', 'programs=s', 'channels=s', 'listings=s', 'output=s', 'days=i', 'debuglistings', 'offset=i', 'retry-limit=i', 'retry-delay=i',  'gzip-command=s', 'zip-command=s', 'bzip2-command=s', 'overwrite=s') ) {
     Usage(0);
     exit(1);
 }
 die 'number of days must not be negative'
   if (defined $opt_days && $opt_days < 0);
+
+$opt_overwrite=($opt_overwrite eq "true");
 
 # throw error for invalid use of both --listings and --output
 if ( defined($opt_output) && defined($opt_listings) ) {
@@ -1184,7 +1195,6 @@ if ( $failed ) {
     if ( @FilesWeOpened_g ) {
 	for my $file (@FilesWeOpened_g) {
 	    if ( -f $file ) {
-		#print STDERR "   removing $file\n";
 		print STDERR "removing $file after failure..\n";
 		unlink($file);
 	    }
@@ -1220,12 +1230,15 @@ sub openOutputFileFD($)
     my $filename=$_[0];
 
     if ( $filename=~m/\.gz$/o ) {
+        print STDERR "output filter: $opt_gzip_command\n" if ( $opt_debug );
 	return(new IO::File("| $opt_gzip_command > $filename"));
     }
     elsif ( $filename=~m/\.zip$/o ) {
+        print STDERR "output filter: $opt_zip_command\n" if ( $opt_debug );
 	return(new IO::File("| $opt_zip_command > $filename"));
     }
     elsif ( $filename=~m/\.bz2$/o ) {
+        print STDERR "output filter: $opt_bzip2_command\n" if ( $opt_debug );
 	return(new IO::File("| $opt_bzip2_command > $filename"));
     }
     else {
@@ -1421,6 +1434,8 @@ sub grab
     $stats->{num_channels}=0;
     $stats->{num_programs}=0;
     $stats->{num_days}=0;
+    $stats->{num_readScheduleFailed}=0;
+    $stats->{num_alreadyHad}=0;
 
     # start time only includes programming grabs, no channel detail grab
     my $startTime=time();
@@ -1437,133 +1452,184 @@ sub grab
 	$opt_listings=~s/%(postal|zip)code//og;
     }
 
+    my $skipAllGrabs;
     if ( !length($opt_listings) ) {
 	print STDERR "writing listings to stdout\n";
 	$writer_g = new XML::Writer(DATA_MODE => 1, DATA_INDENT => 2 );
-    }
-    elsif ( UnixDate("now","$opt_listings") eq $opt_listings ) {
-	mkpathtofile($opt_listings, $opt_debug) || die "mkdir $opt_listings:$!";
-	print STDERR "writing listings to $opt_listings\n";
-	$output_g = openOutputFileFD($opt_listings) || die "$opt_listings: $!";
-	push(@FilesWeOpened_g, $opt_listings);
-	$writer_g = new XML::Writer(OUTPUT=>$output_g,
-				     DATA_MODE => 1, DATA_INDENT => 2 );
-    }
-    
-    if ( defined($writer_g) ) {
 	writeListingsXMLHeader($writer_g);
 	$stats->{num_channels}=writeOutChannels($config, $writer_g);
+	$skipAllGrabs=0;
     }
-
-    my $failedCount=0;
-    my ($y,$m,$d,$h,$mn,$s)=Date::Manip::Date_Split(ParseDateString("now"));
-    my $startNDay=Date_DayOfYear($m,$d,$y);
-    my $tz=Date_TimeZone();
-
-    #
-    # So that the output a day at a time, this allows for separate files per day
-    #
-    my $year=$y;
-    my $runNDayOfYear=$startNDay + $opt_offset;
-    for (my $nday=0; $nday<$opt_days ; $nday++) {
-	my $writer;
-	my $output;
-
-	# handle cross-year listings
-	while ( $runNDayOfYear+$nday > Date_DaysInYear($year) ) {
-	    $runNDayOfYear-=Date_DaysInYear($year);
-	    $year++;
-	}
-	
-
-	$stats->{num_days}++;;
-
-	my $dateStr=createDateString(0, $runNDayOfYear+$nday, $year, 0, $tz);
-
-	if ( defined($writer_g) ) {
-	    $writer=$writer_g;
+    elsif ( UnixDate("now","$opt_listings") eq $opt_listings ) {
+	if ( !$opt_overwrite && -f $opt_listings ) {
+	    print STDERR "listings in $opt_listings exist, skipping\n";
+	    $stats->{num_alreadyHad}++;
+	    $skipAllGrabs=1;
 	}
 	else {
-	    my $filename=UnixDate($dateStr, "$opt_listings");
-	    if ( $opt_listings eq $filename ) {
-		die "This case should have been caught before here";
-	    }
-	    
-	    mkpathtofile($filename, $opt_debug) || die "mkdir $opt_listings:$!";
-	    print STDERR "writing listings to $filename\n";
-	    $output = openOutputFileFD($filename) || die "$filename: $!";
-	    push(@FilesWeOpened_g, $filename);
-	    $writer = new XML::Writer(OUTPUT=>$output,
-					 DATA_MODE => 1, DATA_INDENT => 2 );
-	    writeListingsXMLHeader($writer);
-	    $stats->{num_channels}=writeOutChannels($config, $writer);
+	    mkpathtofile($opt_listings, $opt_debug) || die "mkdir $opt_listings:$!";
+	    print STDERR "writing listings to $opt_listings\n";
+	    $output_g = openOutputFileFD($opt_listings) || die "$opt_listings: $!";
+	    push(@FilesWeOpened_g, $opt_listings);
+	    $writer_g = new XML::Writer(OUTPUT=>$output_g,
+					DATA_MODE => 1, DATA_INDENT => 2 );
+	    writeListingsXMLHeader($writer_g);
+	    $stats->{num_channels}=writeOutChannels($config, $writer_g);
+	    $skipAllGrabs=0;
 	}
+    }
+
+    if ( !$skipAllGrabs ) {
+ 	my $failedCount=0;
+	my ($y,$m,$d,$h,$mn,$s)=Date::Manip::Date_Split(ParseDateString("now"));
+	my $startNDay=Date_DayOfYear($m,$d,$y);
+	my $tz=Date_TimeZone();
 	
-	my $lg=new XMLTV::ZapListings::Scraper('PostalCode'=>$config->{option_postalcode},
-					       'ZipCode'   =>$config->{option_zipcode},
-					       'ProviderID'=>$config->{option_provider},
-					       'Debug'     =>$opt_debug,
-					       'DebugListings'=>$opt_debuglistings);
+	my $failHardOnReadScheduleFailure=0;
+	
+	#
+	# So that the output a day at a time, this allows for separate files per day
+	#
+	my $year=$y;
+	my $runNDayOfYear=$startNDay + $opt_offset;
+	for (my $nday=0; $nday<$opt_days ; $nday++) {
+	    my $writer;
+	    my $output;
 
-	foreach my $station ($config->stationsInDisplayOrder()) {
-	    
-	    next if ( !$config->stationIncluded($station) );
-	    
-	    if ( defined($config->getStationTransientFlag($station, 'notavailable')) ) {
-		print STDERR "skipping unavailable channel $station\n";
-		next;
+	    # handle cross-year listings
+	    while ( $runNDayOfYear+$nday > Date_DaysInYear($year) ) {
+		$runNDayOfYear-=Date_DaysInYear($year);
+		$year++;
 	    }
+	
+	    $stats->{num_days}++;;
 
-	    if ( !defined($config->getStationTransientFlag($station, 'zap2it-id')) ) {
-		warn "ignoring channel without zap2it channel id $station\n";
-		next;
+	    my $dateStr=createDateString(0, $runNDayOfYear+$nday, $year, 0, $tz);
+
+	    my $dayFilename;
+	    my $skipGrabThisFileExists;
+	    if ( defined($writer_g) ) {
+		$writer=$writer_g;
+		$skipGrabThisFileExists=0;
 	    }
-
-	    my ($Year,$month,$day,$hr,$min,$sec)=Date::Manip::Date_NthDayOfYear($year, $runNDayOfYear+$nday);
-	    
-	    for (my $retry=0 ; $retry<=$opt_retry_limit; $retry++ ) {
-		if ( $retry != 0 ) {
-		    print STDERR "failed $retry times, will retry after $opt_retry_delay seconds..\n";
-		    sleep($opt_retry_delay) if ( $opt_retry_delay > 0 );
+	    else {
+		$dayFilename=UnixDate($dateStr, "$opt_listings");
+		if ( $opt_listings eq $dayFilename ) {
+		    die "This case should have been caught before here";
 		}
-		if ( $lg->readSchedule($config->getStationTransientFlag($station, 'zap2it-id'),
-				       $station,
-				       $day, $month, $Year) == -1) {
-		    warn("readSchedule failed for $Year-$month-$day for station $station");
-		    # fail hard on first failure
-		    $failedCount++;
+		if ( !$opt_overwrite && -f $dayFilename ) {
+		    print STDERR "listings in $dayFilename exist, skipping\n";
+		    $stats->{num_alreadyHad}++;
+		    $skipGrabThisFileExists=1;
 		}
 		else {
-		    $failedCount=0;
-		    last;
+		    mkpathtofile($dayFilename, $opt_debug) || die "mkdir $opt_listings:$!";
+		    print STDERR "writing listings to $dayFilename\n";
+		    $output = openOutputFileFD($dayFilename) || die "$dayFilename: $!";
+		    $writer = new XML::Writer(OUTPUT=>$output,
+					      DATA_MODE => 1, DATA_INDENT => 2 );
+		    writeListingsXMLHeader($writer);
+		    $stats->{num_channels}=writeOutChannels($config, $writer);
+		    $skipGrabThisFileExists=0;
 		}
 	    }
+	    
+	    if ( !$skipGrabThisFileExists ) {
+		my $failEntireDay=0;
 
-	    if ( $failedCount ) {
+		my $lg=new XMLTV::ZapListings::Scraper('PostalCode'=>$config->{option_postalcode},
+						       'ZipCode'   =>$config->{option_zipcode},
+						       'ProviderID'=>$config->{option_provider},
+						       'Debug'     =>$opt_debug,
+						       'DebugListings'=>$opt_debuglistings);
+		
+		foreach my $station ($config->stationsInDisplayOrder()) {
+		    
+		    next if ( !$config->stationIncluded($station) );
+		    
+		    if ( defined($config->getStationTransientFlag($station, 'notavailable')) ) {
+			print STDERR "skipping unavailable channel $station\n";
+			next;
+		    }
+		    
+		    if ( !defined($config->getStationTransientFlag($station, 'zap2it-id')) ) {
+			warn "ignoring channel without zap2it channel id $station\n";
+			next;
+		    }
+		    
+		    my ($Year,$month,$day,$hr,$min,$sec)=Date::Manip::Date_NthDayOfYear($year, $runNDayOfYear+$nday);
+		    
+		    for (my $retry=0 ; $retry<=$opt_retry_limit; $retry++ ) {
+			if ( $retry != 0 ) {
+			    print STDERR "failed $retry times, will retry after $opt_retry_delay seconds..\n";
+			    sleep($opt_retry_delay) if ( $opt_retry_delay > 0 );
+			}
+			if ( $lg->readSchedule($config->getStationTransientFlag($station, 'zap2it-id'),
+					       $station,
+					       $day, $month, $Year) == -1) {
+			    print STDERR "failed to read schedule for $Year-$month-$day for station $station\n";
+			    # fail hard on first failure
+			    $failedCount++;
+			}
+			else {
+			    $failedCount=0;
+			    last;
+			}
+		    }
+		    
+		    if ( $failedCount ) {
+			# hard failure means fail the entire grab when any channel's
+			# schedule fails to come
+			if ( $failHardOnReadScheduleFailure ) {
+			    if ( !defined($writer_g) || $writer != $writer_g ) {
+				writeListingsXMLFooter($writer);
+				$writer->end();
+				closeOutputFileFD($output);
+			    }
+			    if ( defined($writer_g) ) {
+				writeListingsXMLFooter($writer_g);
+				$writer_g->end();
+				closeOutputFileFD($output_g) if ( defined($output_g) );
+			    }
+			    unlink($dayFilename) if ( defined($dayFilename) );
+			    return($failedCount);
+			}
+			else {
+			    # if we're writting to files, one per day, fail entire
+			    # day (the file) if any channel fails
+			    if ( !defined($writer_g) || $writer != $writer_g ) {
+				$failEntireDay=1;
+			    }
+			    else {
+				# writting to stdout, so just track these
+				$stats->{num_readScheduleFailed}++;
+			    }
+			}
+		    }
+		    else {
+			# set time zone for date conversions
+			#Date::Manip::Date_SetConfigVariable('TZ', $lg->{TimeZone});
+			#Date::Manip::Date_Init();
+			
+			$stats->{num_programs}+=writeOutPrograms($lg, $runNDayOfYear+$nday, $Year, $tz, $writer, $station);
+		    }
+		}
+
 		if ( !defined($writer_g) || $writer != $writer_g ) {
 		    writeListingsXMLFooter($writer);
 		    $writer->end();
 		    closeOutputFileFD($output);
 		}
-		if ( defined($writer_g) ) {
-		    writeListingsXMLFooter($writer_g);
-		    $writer_g->end();
-		    closeOutputFileFD($output_g) if ( defined($output_g) );
+		if ( $failEntireDay ) {
+		    if ( defined($dayFilename) ) {
+			print STDERR "channel schedule failed, so we're removing $dayFilename\n";
+			unlink($dayFilename);
+		    }
 		}
-		return($failedCount);
+		else {
+		    push(@FilesWeOpened_g, $dayFilename) if ( defined($dayFilename) );
+		}
 	    }
-
-	    # set time zone for date conversions
-	    #Date::Manip::Date_SetConfigVariable('TZ', $lg->{TimeZone});
-	    #Date::Manip::Date_Init();
-	    
-	    $stats->{num_programs}+=writeOutPrograms($lg, $runNDayOfYear+$nday, $Year, $tz, $writer, $station);
-	}
-	
-	if ( !defined($writer_g) || $writer != $writer_g ) {
-	    writeListingsXMLFooter($writer);
-	    $writer->end();
-	    closeOutputFileFD($output);
 	}
     }
 
@@ -1574,6 +1640,15 @@ sub grab
     }
 
     my $endTime=time();
+
+    $stats->{calcProgramsPerSecond}=($endTime!=$startTime &&
+				     $stats->{num_programs} != 0)?
+	$stats->{num_programs}/($endTime-$startTime): 0;
+
+    $stats->{calcSecondsPerlWWWPage}=($endTime!=$startTime &&
+				      $stats->{num_days}*$stats->{num_channels}!=0)?
+	($endTime-$startTime)/($stats->{num_days}*$stats->{num_channels}): 0;
+
     printf(STDERR "Grabbed %d programs on %d channels over %d day(s) in %d seconds\n",
 	   $stats->{num_programs},
 	   $stats->{num_channels},
@@ -1581,9 +1656,16 @@ sub grab
 	   $endTime-$startTime);
 
     printf(STDERR "  not too bad, that's %.2f programs/sec and %.2f seconds/www page\n",
-	   $stats->{num_programs}/($endTime-$startTime),
-	   ($endTime-$startTime)/($stats->{num_days}*$stats->{num_channels}));
+	   $stats->{calcProgramsPerSecond}, $stats->{calcSecondsPerlWWWPage});
 	    
+    if ( $stats->{num_readScheduleFailed} != 0 ) {
+	printf(STDERR "  does not include %d failed channel schedules\n",
+	       $stats->{num_readScheduleFailed});
+    }
+    if ( $stats->{num_alreadyHad} != 0 ) {
+	printf(STDERR "  does not include %d output file(s) that already existed\n",
+	       $stats->{num_alreadyHad});
+    }
     return(0);
 }
 
@@ -1875,6 +1957,24 @@ sub writeOutChannels($$)
 	next if ( !$config->stationIncluded($station));
 
 	$writer->startTag('channel', id=> $station);
+
+	# just for testing - may be enabled (properly supported) in a future release 
+	if ( 0 ) {
+	    if ( defined($config->getStationTransientFlag($station, 'zap2it-id')) ) {
+		$writer->emptyTag('channel-id', system=>"TMSID",
+				  id=>$config->getStationTransientFlag($station, 'zap2it-id'));
+	    }
+	}
+
+	# just for testing - may be enabled (properly supported) in a future release 
+	if ( 0 ) {
+	    if ( $station=~m/^\s*(\d+)\s*(.*)/o ) {
+		my $number=$1;
+		my $callletters=$2;
+		$writer->dataElement('channel-number', $number);
+		$writer->dataElement('channel-callletters', $callletters);
+	    }
+	}
 
 	$writer->dataElement('display-name', "Channel $station");
 	if ( defined($config->stationIcon($station)) ) {
