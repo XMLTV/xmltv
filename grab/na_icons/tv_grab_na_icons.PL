@@ -12,7 +12,7 @@ use IO::File;
 my $out = shift @ARGV; die "no output file given" if not defined $out;
 my $share_dir = shift @ARGV;
 die "no final share/ location given" if not defined $share_dir;
-my $in = 'grab/na_icons/tv_grab_na_icons.IN';
+my $in = 'grab/na_icons/tv_grab_na_icons.in';
 my $out_fh = new IO::File "> $out" or die "cannot write to $out: $!";
 my $in_fh = new IO::File "< $in" or die "cannot read $in: $!";
 my $seen = 0;
