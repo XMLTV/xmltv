@@ -7,24 +7,20 @@ use strict;
 use HTTP::Cookies;
 use HTTP::Request::Common;
 
-use vars qw($cookieJar);
-
-my $cookieJar=undef;
-
 sub doRequest($$$$)
 {
-    my ($ua, $req, $cookie_jar, $debug)=@_;
+    my ($ua, $req, $debug)=@_;
     
     if ( $debug ) {
 	print STDERR "==== req ====\n", $req->as_string();
     }
     
+    my $cookie_jar=$ua->cookie_jar();
     if ( defined($cookie_jar) ) {
 	if ( $debug ) {
 	    print STDERR "==== request cookies ====\n", $cookie_jar->as_string(), "\n";
 	    print STDERR "==== sending request ====\n";
 	}
-	$cookie_jar->add_cookie_header($req);
     }
     
     my $res = $ua->request($req);
@@ -32,8 +28,8 @@ sub doRequest($$$$)
 	print STDERR "==== got response ====\n";
     }
 
+    $cookie_jar=$ua->cookie_jar();
     if ( defined($cookie_jar) ) {
-	$cookie_jar->extract_cookies($res);
 	if ( $debug ) {
 	    print STDERR "==== response cookies ====\n", $cookie_jar->as_string(), "\n";
 	}
@@ -54,6 +50,7 @@ sub doRequest($$$$)
 	    print STDERR "==== bad ====\n";
 	}
 	#print STDERR $res->headers->as_string(), "\n";
+	#dumpPage($res->content());
 	#print STDERR $res->content(), "\n";
     }
     return($res);
@@ -63,9 +60,7 @@ sub getProviders($$$)
 {
     my ($postalcode, $zipcode, $debug)=@_;
 
-    $cookieJar=HTTP::Cookies->new() if ( !defined($cookieJar) );
-
-    my $ua=ZapListings::RedirPostsUA->new();
+    my $ua=ZapListings::RedirPostsUA->new('cookie_jar'=>HTTP::Cookies->new());
     
     my $code;
     $code=$postalcode if ( defined($postalcode) );
@@ -75,14 +70,14 @@ sub getProviders($$$)
     
     # actually attempt twice since first time in, we get a cookie that
     # works for the second request
-    my $res=&doRequest($ua, $req, $cookieJar, $debug);
+    my $res=&doRequest($ua, $req, $debug);
     
     # looks like some requests require two identical calls since
     # the zap2it server gives us a cookie that works with the second
     # attempt after the first fails
     if ( !$res->is_success || $res->content()=~m/your session has timed out/i ) {
 	# again.
-	$res=&doRequest($ua, $req, $cookieJar, $debug);
+	$res=&doRequest($ua, $req, $debug);
     }
 
     if ( !$res->is_success ) {
@@ -142,35 +137,32 @@ sub getChannelList($$$$)
 {
     my ($postalcode, $zipcode, $provider, $debug)=@_;
 
-    $cookieJar=HTTP::Cookies->new() if ( !defined($cookieJar) );
-
     my $code;
     $code=$postalcode if ( defined($postalcode) );
     $code=$zipcode if ( defined($zipcode) );
 
-    my $ua=ZapListings::RedirPostsUA->new();
+    my $ua=ZapListings::RedirPostsUA->new('cookie_jar'=>HTTP::Cookies->new());
     my $req=POST('http://tvlistings2.zap2it.com/edit_provider_list.asp?id=form1&name=form1',
 		 [FormName=>"edit_provider_list.asp",
 		  zipCode => "$code", 
 		  provider => "$provider", 
 		  saveProvider => 'See Listings' ]);
 
-    my $res=&doRequest($ua, $req, $cookieJar, $debug);
-       $res=&doRequest($ua, $req, $cookieJar, $debug);
-
+    my $res=&doRequest($ua, $req, $debug);
     if ( !$res->is_success || $res->content()=~m/your session has timed out/i ) {
 	# again.
+	$res=&doRequest($ua, $req, $debug);
     }
     
     $req=POST('http://tvlistings2.zap2it.com/listings_redirect.asp?spp=0', [ ]);
-    $res=&doRequest($ua, $req, $cookieJar, $debug);
+    $res=&doRequest($ua, $req, $debug);
 
     # looks like some requests require two identical calls since
     # the zap2it server gives us a cookie that works with the second
     # attempt after the first fails
     if ( !$res->is_success || $res->content()=~m/your session has timed out/i ) {
 	# again.
-	$res=&doRequest($ua, $req, $cookieJar, $debug);
+	$res=&doRequest($ua, $req, $debug);
     }
 
     if ( !$res->is_success ) {
@@ -315,6 +307,7 @@ sub dumpPage($)
 {
     my $content = shift;
     $dumpPage_counter = 0 if not defined $dumpPage_counter;
+    $dumpPage_counter++;
     my $filename = "ZapListings.dump.$dumpPage_counter";
     local *OUT;
     if (open (OUT, ">$filename")) {
@@ -429,7 +422,6 @@ sub summarize($)
 	#delete($self->{Cell});
     }
     
-    #my @arr=reverse();
     my $desc="";
     foreach my $thing (@{$self->{Row}}) {
 	if ( $thing->{starttag} ) {
@@ -500,9 +492,9 @@ sub new
 
     die "no ProviderID specified in create" if ( ! defined($self->{ProviderID}) );
     
-    $self->{cookieJar}=HTTP::Cookies->new() if ( !defined($cookieJar) );
+    $self->{cookieJar}=HTTP::Cookies->new();
     
-    my $ua=ZapListings::RedirPostsUA->new();
+    my $ua=ZapListings::RedirPostsUA->new('cookie_jar'=>$self->{cookieJar});
     
     my $req=POST('http://tvlistings2.zap2it.com/edit_provider_list.asp?id=form1&name=form1',
 		 [FormName=>"edit_provider_list.asp",
@@ -510,8 +502,8 @@ sub new
 		  provider => "$self->{ProviderID}",
 		  saveProvider => 'See Listings' ]);
 
-    my $res=&ZapListings::doRequest($ua, $req, $self->{cookieJar}, $self->{Debug});
-    $res=&ZapListings::doRequest($ua, $req, $self->{cookieJar}, $self->{Debug});
+    my $res=&ZapListings::doRequest($ua, $req, $self->{Debug});
+    $res=&ZapListings::doRequest($ua, $req, $self->{Debug});
 
     bless($self, $type);
     return($self);
@@ -899,7 +891,7 @@ sub readSchedule($$$$$)
 	$/=$s;
     }
     else {
-	my $ua=ZapListings::RedirPostsUA->new();
+	my $ua=ZapListings::RedirPostsUA->new('cookie_jar'=>$self->{cookieJar});
     
 	my $req=POST('http://tvlistings2.zap2it.com/listings_redirect.asp',
 		     [ displayType => "Text",
@@ -911,14 +903,14 @@ sub readSchedule($$$$$)
 		       goButton => "GO"
 		       ]);
 
-	my $res=&ZapListings::doRequest($ua, $req, $cookieJar, $self->{Debug});
+	my $res=&ZapListings::doRequest($ua, $req, $self->{Debug});
 
 	# looks like some requests require two identical calls since
 	# the zap2it server gives us a cookie that works with the second
 	# attempt after the first fails
 	if ( !$res->is_success || $res->content()=~m/your session has timed out/i ) {
 	    # again.
-	    $res=&ZapListings::doRequest($ua, $req, $cookieJar, $self->{Debug});
+	    $res=&ZapListings::doRequest($ua, $req, $self->{Debug});
 	}
 	
 	if ( !$res->is_success ) {
