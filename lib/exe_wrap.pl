@@ -15,8 +15,6 @@
 # Robert Eden rmeden@yahoo.com
 #
 
-use File::Basename;
-
 #
 # get/check time zone
 #
@@ -28,56 +26,20 @@ unless (exists $ENV{TZ})
     my $tz     = ($lhour - $ghour);
        $tz    -= 24 if $tz >  12;
        $tz    += 24 if $tz < -12;
-#       if    ($tz == -5 ) { $tz='EST5EDT' }
-#
-# this should not be necessary, but DATE::MANIP doesn't always deal with
-# numeric time zones correctly.  This should hold us until the fix is widely
-# distributed.
-#
-#       elsif ($tz == -6 ) { $tz='CST6CDT' }
-#       elsif ($tz == -7 ) { $tz='MST7MDT' }
-#       elsif ($tz == -8 ) { $tz='PST8PDT' }
-#       else               { $tz= sprintf("%+03d00",$tz) };
-        $tz= sprintf("%+03d00",$tz);
+       $tz= sprintf("%+03d00",$tz);
 
        $ENV{TZ}= $tz;
 
 } #timezone
 print STDERR "Timezone is $ENV{TZ}\n";
 
-#
-# This hash maps a command name to a subroutine to run.  Most of the
-# subroutines will end up being 'do "whatever"' to call another Perl
-# program, but some of them could be other things for components that
-# aren't written in Perl.
-#
-my %cmds;
+
+$cmd = shift || "";
 
 #
-# Add subroutines for do()ing Perl scripts we know about.
+# check for tv_grab_nz
 #
-$files=PerlApp::get_bound_file("exe_files.txt");
-foreach my $exe (split(/ /,$files))
-{
-    next unless length($exe)>3; #ignore trash
-    $_=$exe;
-    s!^.+/!!g;
-
-    $cmds{$_}=sub {
-	my $r = do $exe;
-	if (not defined $r)
-	{
-	    die "could not load $exe: $!" if defined $!;
-	    die "error compiling $exe: $@" if defined $@;
-	}
-	return $r;
-    };
-}
-
-#
-# add tv_grab_nz which is a Python program
-#
-$cmds{tv_grab_nz}=sub {
+if ($cmd eq 'tv_grab_nz') {
     die <<END
 Sorry, tv_grab_nz is not available in this Windows binary release,
 although if you have Python installed you will be able to get it from
@@ -90,22 +52,6 @@ END
 };
 
 #
-# validate command 
-#
-$cmd=shift || "blank";
-if (! exists $cmds{$cmd} )
-{
-    if ($cmd =~ /-/)
-    {
-	die "you must specify the program to run, for example: $0 tv_grab_fi --configure\n";
-    }
-    else
-    {
-	die "$cmd is not a valid command. Valid commands are:\n".join(" ",keys(%cmds))."\n";
-    }
-}
-
-#
 # some programs use a "share" directory
 #
 if ($cmd eq 'tv_grab_uk' or $cmd eq 'tv_grab_uk_rt')
@@ -116,23 +62,43 @@ if ($cmd eq 'tv_grab_uk' or $cmd eq 'tv_grab_uk_rt')
         $dir =~ s!\\!/!g;      # use / not \   
         $dir .= "/share/xmltv";
     	unless (-d $dir )
-    	{
-	    die "directory $dir not found\n If not kept with the executable, specify with --share\n"
-	}
+    	    {
+	        die "directory $dir not found\n If not kept with the executable, specify with --share\n"
+	        }
         push @ARGV,"--share",$dir;
     }
-} # special tv_grab_uk, tv_grab_uk_rt processing
+} 
 
 #
-# call the appropriate routine (note, ARGV was shifted above)
+# scan through attached files and execute program if found
 #
-$cmds{$cmd}->();
+$files=PerlApp::get_bound_file("exe_files.txt");
+foreach my $exe (split(/ /,$files))
+{
+    next unless length($exe)>3; #ignore trash
+    $_=$exe;
+    s!^.+/!!g;
+    push @cmds,$_;  # build command list (just in case)
+
+    next unless $cmd eq $_;
 
 #
-# Ignore the return value - we assume that the %cmds subroutine will
-# have done that and die()d already if something went very wrong.
+# execute our command
 #
-# Similarly, we know that any command run will have taken the trouble
-# to die() or exit() itself if it wanted to.  If it ran all the way
-# through and returned to the caller, we can assume things went okay.
+    $0 = $_;        # set $0 to our script
+    $r = require $exe;
+    exit $r;
+}
+
 #
+# command not found, print error
+#
+if ($cmd eq "" )
+   {
+	die "you must specify the program to run, for example: $0 tv_grab_fi --configure\n";
+    }
+else
+   {
+	die "$cmd is not a valid command. Valid commands are:\n".join(" ",@cmds)."\n";
+   }
+
