@@ -2,7 +2,7 @@
 #
 # $Id$
 #
-# TVCHECK.PL
+# tvcheck
 #
 # This script searches a channel guide for shows in a show list and alerts when
 # a listed show is missing from it's time slot, or shows up at other days or times.
@@ -11,25 +11,29 @@
 # The channel guide needs to be in XMLTV format.
 #
 # syntax
-#       tvcheck <guide.xml <shows.xml <channels.xml>>>
+#       tvcheck <guide.xml <shows.xml>>
 #
 # (C)2001 - Robert Eden, free to use under the GNU License.
 #
-# 11/28/01 - Robert Eden - reden@cpan.org
+#  Robert Eden - reden@cpan.org
+#  	
+#     See cvs logs entries for module history
 #
 #
 
 use XML::Simple;
 use Date::Manip;
+use XMLTV;
+use Lingua::Preferred qw(which_lang);
 
 #
 # Define constants
 #
-$_=1;
+select STDERR; $|=1;
+select STDOUT; $|=1;
 @WEEKDAY  = qw (Su Mo Tu We Th Fr Sa);
 $GUIDE_XML= shift || 'guide.xml';
 $SHOW_XML = shift || 'shows.xml';
-$CHAN_XML = shift || 'channels.xml';
 
 #
 # Global Vars
@@ -38,21 +42,21 @@ my %chan;   # channel list ( channel-id key )
 my @guide;  # tv schedule
 my %guide;  # tv schedule by title (title key), value reference to @guide member
 my @shows;  # list of shows to check
+my @lang ;  # preferred languages
 
 #
 # Load input files
 #
-print "Loading xml channel info\n";
-my $xml = XMLin($CHAN_XML, searchpath => ".");
-%chan = %{$xml -> {channel}};
-
 print "Loading xml guide info\n";
-$xml = XMLin($GUIDE_XML, forcearray => 1, searchpath => "." );
-@guide = @{$xml -> {programme}};
+my $xml = XMLTV::read_data($GUIDE_XML);
+%chan   = %{$xml -> [2] };
+@guide  = @{$xml -> [3] };
 
 print "Loading xml show info\n";
 $xml = XMLin($SHOW_XML, searchpath => "." );
 @shows = @{$xml -> {shows}};
+@lang  = @{$xml -> {lang}};
+die "No Preferred Languages found in $SHOW_XML\n" unless @lang;
 
 #
 # Build an title hash from XMLTV data
@@ -60,9 +64,9 @@ $xml = XMLin($SHOW_XML, searchpath => "." );
 print "Building title hash\n";
 foreach $episode (@guide)
 {
-    foreach $title (@{$episode -> {title}})
+    foreach (@{$episode -> {title}})
     {
-        push @{$guide{lc($title)}}, $episode;
+        push @{$guide{lc($_->[0])}}, $episode;
     }
 }
 
@@ -77,7 +81,6 @@ foreach $show (@shows)
     print "Checking $title\n";
     $title = lc($title);
 
-
 #
 # deal with spelling errors, or show missing
 #
@@ -87,7 +90,7 @@ foreach $show (@shows)
               $WEEKDAY[$show -> {day}]                ,",",
                        $show -> {hhmm}                ,",",
                        $show -> {len}                 ,",",
-                $chan{ $show -> {channel}}{"display-name"},
+                       get_text($chan{ $show -> {channel}}),
                  "\n";
         print " "x40,"Can't find <$title>\n";
         next;
@@ -126,8 +129,15 @@ foreach $show (@shows)
 #
         if ( $episode -> {channel} != $show -> {channel} )
         {
+            if ( exists $show -> {anychan} )
+            {
+               $bad =1;
+            }
+            else
+            {
                 $episode -> {flag} = 1;
-                next;
+	    }
+            next;
         }
 #
 # Validate Day
@@ -189,7 +199,7 @@ foreach $show (@shows)
               $WEEKDAY[$show -> {day}]                ,",",
                        $show -> {hhmm}               ,",",
                        $show -> {len}                 ,",",
-                $chan{ $show -> {channel}}{"display-name"},
+                       get_text($chan{ $show -> {channel}}),
                  "\n";
 
         print "  "x20," Timeslot Missing\n" if $hit == 0;
@@ -203,10 +213,34 @@ foreach $show (@shows)
                $WEEKDAY[$episode -> {day}]                ,",",
                         $episode -> {hhmm}                ,",",
                         $episode -> {len}                 ,",",
-                  $chan{$episode -> {channel}}{"display-name"},
+                        get_text($chan{ $episode -> {channel}}),",",
+			'"',get_text( $episode -> {"sub-title"} ),'"',
+			($episode -> {"previously-shown"} ? "(R)" : "" ),
                      "\n";
         } # episode print
     } # print error report
 
 } # show loop
 
+#
+# get_text
+#
+# Given a pointer to an array of [text,lang] pairs, return the best value for our langauge
+# Note, if more than one value exists for a language, only the first is returned.
+#
+# @lang should point to a list of languages in order of preferences
+#
+sub get_text
+{
+   my $txt_ptr=shift || die "get_text, how about a pointer fella!\n";
+   my %values;
+
+   foreach (@$txt_ptr)
+   {
+      my $key = $_ -> [1] || "unknown";
+      next if exists $values{$key}; # only keep first value for a language
+      $values{$key} = $_ -> [0];
+   }
+   return $values{ which_lang( \@lang, [ keys %values ] ) };
+
+} #get_text
