@@ -1,5 +1,3 @@
-package ZapListings;
-
 #
 # ----------------------------------------------------------------------------
 # "THE BEER-WARE LICENSE" (Revision 42):
@@ -12,6 +10,17 @@ package ZapListings;
 # Feel free to contact me with comments, contributions,
 # and the like. jerry@matilda.com 
 #
+#
+# $Log$
+# Revision 1.3  2001/11/11 16:41:05  epaepa
+# Rearranged (or added) comments at the start of each file, so the
+# description is near the top and the changelog near the bottom.  Added
+# $Log: $ lines to get an automatically updated changelog from now on; I
+# hope it works.
+#
+#
+
+package ZapListings;
 
 use strict;
 

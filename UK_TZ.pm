@@ -7,6 +7,14 @@
 # 
 # -- Ed Avis, epa98@doc.ic.ac.uk, 2001-03-26
 # 
+# $Log$
+# Revision 1.2  2001/11/11 16:41:05  epaepa
+# Rearranged (or added) comments at the start of each file, so the
+# description is near the top and the changelog near the bottom.  Added
+# $Log: $ lines to get an automatically updated changelog from now on; I
+# hope it works.
+#
+# 
 
 package UK_TZ;
 use Date::Manip;
