@@ -9,6 +9,7 @@ use strict;
 use XMLTV;
 use Data::Dumper;
 use Date::Manip;
+use Log::TraceMessages qw(t d); Log::TraceMessages::check_argv();
 
 sub usage();
 sub all_text( $$ );
@@ -24,6 +25,8 @@ sub match_regexp( $ );
 my @conjunctions;
 my @curr_conjunction;
 
+my $oa = new OptionAbbrev(qw(--ignore-case --and --or --eval --on-after));
+
 my ($ignore_case, $regexp, $ended_options, $filename);
 while (@ARGV) {
     my $arg = shift @ARGV;
@@ -33,16 +36,31 @@ while (@ARGV) {
 	    $ended_options = 1;
 	    next;
 	}
-	if ($arg eq '-i' or abbrev('--ignore-case', $arg)) {
+	my @long_opts = $oa->match($arg);
+	my $lo;
+	if (@long_opts >= 2) {
+	    die "option $arg ambiguous: could be any of @long_opts\n";
+	}
+	elsif (@long_opts == 1) {
+	    $lo = $long_opts[0];
+	}
+	elsif (@long_opts == 0) {
+	    die "unknown long option $arg" if $arg =~ /^--/;
+	    # Otherwise okay.
+	}
+	else { die }
+
+	if ($arg eq '-i' or (defined $lo and $lo eq '--ignore-case')) {
 	    $ignore_case = 1; # no warning if given twice
 	    next;
 	}
 
 	# Logical operators --and and --or.
-	if ($arg eq '-and' or $arg eq '--and') { # no abbrevs
+	if ($arg eq '-and' or (defined $lo and $lo eq '--and')) {
 	    next;
 	}
-	elsif ($arg eq '-o' or $arg eq '-or' or $arg eq '--or') {
+	elsif ($arg eq '-o' or $arg eq '-or'
+	       or (defined $lo and $lo eq '--or')) {
 	    # Finished with this conjunction, start a new one.  The
 	    # final test is a disjunction of all conjunctions.
 	    #
@@ -59,7 +77,7 @@ while (@ARGV) {
 
 	# See if it's a predicate.
 	my $pred; # subroutine to test a programme and return boolean
-	if ($arg eq '-e' or abbrev('--eval', $arg)) {
+	if ($arg eq '-e' or (defined $lo and $lo eq '--eval')) {
 	    my $code = shift @ARGV;
 	    die "-e requires an argument, a snippet of Perl code"
 	      if not defined $code;
@@ -72,7 +90,7 @@ while (@ARGV) {
 		die "-e $code failed for some reason";
 	    }
 	}
-	elsif (abbrev('--on-after', $arg)) {
+	elsif (defined $lo and $lo eq '--on-after') {
 	    my $date = shift @ARGV;
 	    die "--on-after requires an argument, a date and time"
 	      if not defined $date;
@@ -177,13 +195,6 @@ sub all_text( $$ ) {
     return map { $_->[0] } @{$p->{$key}};
 }
 
-# Long option abbreviation.
-sub abbrev( $$ ) {
-    my ($abbrev, $arg) = @_;
-    return ($arg =~ /^--\w/ && index($abbrev, $arg) == 0);
-}
-
-
 ####
 # Boolean tests.  These work on the programme $_ and return true or
 # false.  Their behaviour should be affected, if appropriate, by the
@@ -240,3 +251,63 @@ sub match_regexp( $ ) {
     return $ignore_case ? /$regexp/i : /$regexp/;
 }
 
+
+# Class for long option abbreviation.  You tell it all the options
+# you're going to use, and then it will tell you whether a (possibly
+# abbreviated) argument matches an option unambiguously, ambiguously
+# could match several options, or matches none.
+#
+# Having to roll my own Getopt::Long is getting annoying.  I wonder
+# how much of this code could be shared?
+#
+package OptionAbbrev;
+use Log::TraceMessages qw(t d);
+
+# Constructor.  Give a list of long options and/or add() them later.
+sub new {
+    my $proto = shift;
+    my $class = (ref $proto) || $proto;
+
+    # The representation of an object is a list of long options known
+    # about.
+    #
+    my $self = [];
+    bless $self, $class;
+    $self->add(@_);
+    return $self;
+}
+
+sub add {
+    my $self = shift;
+    foreach (@_) {
+	die 'long options start with --' unless /^--/;
+	foreach my $already (@$self) {
+	    die "option $_ already added" if $_ eq $already;
+	}
+	push @$self, $_;
+    }
+    return $self;
+}
+
+# match() returns a list of possible long options matched.  So if the
+# list has no elements, no match; one element is the unambiguous
+# match; two or more elements mean ambiguity.
+#
+sub match {
+    my ($self, $arg) = @_;
+    t "matching arg $arg against list: " . d $self;
+    return 0 unless $arg =~ /^--/;
+    t 'begins with --, continue';
+    foreach (@$self) {
+	t "testing for exact match against $_";
+	return ($_) if $arg eq $self;
+    }
+    t 'no exact match, try initial substring';
+    my @r;
+    foreach (@$self) {
+	t "testing if $arg is initial substring of $_";
+	push @r, $_ if index($_, $arg) == 0;
+    }
+    t 'returning list of matches: ' . d \@r;
+    return @r;
+}
