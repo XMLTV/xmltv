@@ -11,6 +11,17 @@ use File::Find;
 #
 use Getopt::Long; Getopt::Long::Configure('pass_through');
 
+# Suppress 'isn't numeric' warnings from MakeMaker - see
+# <http://sourceforge.net/tracker/?func=detail&atid=424135&aid=870170&group_id=39046>.
+#
+$SIG{__WARN__} = sub {
+    for (my $msg = shift) {
+	$_ = "warning: something's wrong" if not defined;
+	warn $_
+	  unless /Argument .+ isn't numeric in numeric lt .+MakeMaker.pm/;
+    }
+};
+
 use strict;
 
 sub test_module( $$ );
