@@ -46,7 +46,7 @@ use strict;
 
 package XMLTV::IMDB;
 
-our $VERSION = '0.3';
+our $VERSION = '0.4';
 
 sub new
 {
@@ -1166,9 +1166,9 @@ sub new
 	my $filename="$listsDir/$_.list";
 	my $filenameGz="$filename.gz";
 	my $filenameExists = -f $filename;
-	my $filenameSize = -s _;
+	my $filenameSize = -s $filename;
 	my $filenameGzExists = -f $filenameGz;
-	my $filenameGzSize = -s _;
+	my $filenameGzSize = -s $filenameGz;
 
 	if ( $filenameExists and not $filenameSize ) {
 	    warn "removing zero-length $filename\n";
@@ -1204,7 +1204,7 @@ sub new
 	    my $filename = delete $missingListFiles{$_};
 	    my $partial = "$filename.partial";
 	    if (-e $partial) {
-		if (not -s _) {
+		if (not -s $partial) {
 		    print STDERR "removing empty $partial\n";
 		    unlink $partial or die "cannot unlink $partial: $!";
 		}
@@ -1588,8 +1588,11 @@ sub dbinfoAdd($$$)
 
 sub dbinfoGet($$$)
 {
-    my ($self, $key, $value)=@_;
-    return($self->{dbinfo}->{$key});
+    my ($self, $key, $defaultValue)=@_;
+    if ( defined($self->{dbinfo}->{$key}) ) {
+	return($self->{dbinfo}->{$key});
+    }
+    return($defaultValue);
 }
 
 sub dbinfoSave($)
@@ -1622,11 +1625,13 @@ sub invokeStage($$)
 	elsif ( abs($num - $countEstimate) > $countEstimate*.05 ) {
 	    $self->status("ARG estimate of $countEstimate for movies needs updating, found $num");
 	}
+	$self->dbinfoAdd("movie_list_file",         "$self->{imdbListFiles}->{movies}");
+	$self->dbinfoAdd("movie_list_file_size", -s "$self->{imdbListFiles}->{movies}");
 	$self->dbinfoAdd("db_stat_movie_count", "$num");
 
 	$self->status("writing stage1 data ..");
 	{
-	    my $countEstimate=$self->dbinfoGet("db_stat_movie_count");
+	    my $countEstimate=$self->dbinfoGet("db_stat_movie_count", 0);
 	    my $progress=Term::ProgressBar->new({name  => "writing titles",
 						 count => $countEstimate,
 						 ETA   => 'linear'})
@@ -1670,11 +1675,13 @@ sub invokeStage($$)
 	elsif ( abs($num - $countEstimate) > $countEstimate*.05 ) {
 	    $self->status("ARG estimate of $countEstimate for directors needs updating, found $num");
 	}
+	$self->dbinfoAdd("directors_list_file",         "$self->{imdbListFiles}->{directors}");
+	$self->dbinfoAdd("directors_list_file_size", -s "$self->{imdbListFiles}->{directors}");
 	$self->dbinfoAdd("db_stat_director_count", "$num");
 
 	$self->status("writing stage2 data ..");
 	{
-	    my $countEstimate=$self->dbinfoGet("db_stat_movie_count");
+	    my $countEstimate=$self->dbinfoGet("db_stat_movie_count", 0);
 	    my $progress=Term::ProgressBar->new({name  => "writing directors",
 						 count => $countEstimate,
 						 ETA   => 'linear'})
@@ -1734,11 +1741,13 @@ sub invokeStage($$)
 	elsif ( abs($num - $countEstimate) > $countEstimate*.05 ) {
 	    $self->status("ARG estimate of $countEstimate for actors needs updating, found $num");
 	}
+	$self->dbinfoAdd("actors_list_file",         "$self->{imdbListFiles}->{actors}");
+	$self->dbinfoAdd("actors_list_file_size", -s "$self->{imdbListFiles}->{actors}");
 	$self->dbinfoAdd("db_stat_actor_count", "$num");
 
 	$self->status("writing stage3 data ..");
 	{
-	    my $countEstimate=$self->dbinfoGet("db_stat_movie_count");
+	    my $countEstimate=$self->dbinfoGet("db_stat_movie_count", 0);
 	    my $progress=Term::ProgressBar->new({name  => "writing actors",
 						 count => $countEstimate,
 						 ETA   => 'linear'})
@@ -1782,11 +1791,13 @@ sub invokeStage($$)
 	elsif ( abs($num - $countEstimate) > $countEstimate*.05 ) {
 	    $self->status("ARG estimate of $countEstimate for actresses needs updating, found $num");
 	}
+	$self->dbinfoAdd("actresses_list_file",         "$self->{imdbListFiles}->{actresses}");
+	$self->dbinfoAdd("actresses_list_file_size", -s "$self->{imdbListFiles}->{actresses}");
 	$self->dbinfoAdd("db_stat_actress_count", "$num");
 
 	$self->status("writing stage4 data ..");
 	{
-	    my $countEstimate=$self->dbinfoGet("db_stat_movie_count");
+	    my $countEstimate=$self->dbinfoGet("db_stat_movie_count", 0);
 	    my $progress=Term::ProgressBar->new({name  => "writing actresses",
 						 count => $countEstimate,
 						 ETA   => 'linear'})
@@ -1826,7 +1837,7 @@ sub invokeStage($$)
 	my %movies;
 
 	{
-	    my $countEstimate=$self->dbinfoGet("db_stat_movie_count");
+	    my $countEstimate=$self->dbinfoGet("db_stat_movie_count", 0);
 	    my $progress=Term::ProgressBar->new({name  => "reading titles",
 						 count => $countEstimate,
 						 ETA   => 'linear'})
@@ -1857,7 +1868,7 @@ sub invokeStage($$)
 
 	$self->status("merging in stage 2 data (directors)..");
 	{
-	    my $countEstimate=$self->dbinfoGet("db_stat_movie_count");
+	    my $countEstimate=$self->dbinfoGet("db_stat_movie_count", 0);
 	    my $progress=Term::ProgressBar->new({name  => "reading directors",
 						 count => $countEstimate,
 						 ETA   => 'linear'})
@@ -1900,7 +1911,7 @@ sub invokeStage($$)
 
 	$self->status("merging in stage 3 data (actors)..");
 	{
-	    my $countEstimate=$self->dbinfoGet("db_stat_movie_count");
+	    my $countEstimate=$self->dbinfoGet("db_stat_movie_count", 0);
 	    my $progress=Term::ProgressBar->new({name  => "reading actors",
 						 count => $countEstimate,
 						 ETA   => 'linear'})
@@ -1942,7 +1953,7 @@ sub invokeStage($$)
 	    
 	$self->status("merging in stage 4 data (actresses)..");
 	{
-	    my $countEstimate=$self->dbinfoGet("db_stat_movie_count");
+	    my $countEstimate=$self->dbinfoGet("db_stat_movie_count", 0);
 	    my $progress=Term::ProgressBar->new({name  => "reading actresses",
 						 count => $countEstimate,
 						 ETA   => 'linear'})
@@ -1993,7 +2004,7 @@ sub invokeStage($$)
 	$self->status("computing indexes..");
 	my %nmovies;
 	{
-	    my $countEstimate=$self->dbinfoGet("db_stat_movie_count");
+	    my $countEstimate=$self->dbinfoGet("db_stat_movie_count", 0);
 	    my $progress=Term::ProgressBar->new({name  => "indexing by title",
 						 count => $countEstimate,
 						 ETA   => 'linear'})
@@ -2084,7 +2095,7 @@ sub invokeStage($$)
 
 	$self->status("writing out indexes..");
 	{
-	    my $countEstimate=$self->dbinfoGet("db_stat_movie_count");
+	    my $countEstimate=$self->dbinfoGet("db_stat_movie_count", 0);
 	    my $progress=Term::ProgressBar->new({name  => "writing index",
 						 count => $countEstimate,
 						 ETA   => 'linear'})
@@ -2199,7 +2210,7 @@ sub invokeStage($$)
 		print OFF "\t$info";
 	    }
 	    else {
-		for my $key (keys %{$info}) {
+		for my $key (sort keys %{$info}) {
 		    print OFF "\t$key:$info->{$key}\n";
 		}
 	    }
