@@ -316,7 +316,6 @@ if (not $opt_slow) {
 	foreach (process_summary_page($url, $day, $day)) {
 	    t 'got tuple: ' . d $_;
 	    my ($start, $stop, $title, $url) = @$_;
-	    die if defined $stop and not defined $start;
 	    my %h = (channel => $ch_xmltv_id,
 		     title => [ [ $title, $LANG ] ],
 		    );
@@ -344,16 +343,21 @@ if (not $opt_slow) {
 	foreach (@l) {
 	    t 'doing hash: ' . d $_;
 	    if (not defined $_->{start}) {
-		t 'no start time, try to add to clump';
-		die if defined $_->{stop};
 		if (not $clump) {
-		    warn "programme $_->{title} with no start time at beginning of page, dropping\n";
+		    warn "programme $_->{title} at beginning of page has no start time, dropping\n";
 		    next;
 		}
-		$_->{start} = $clump->[0]->{start};
-		$_->{stop} = $clump->[0]->{stop} if defined $clump->[0]->{stop};
-		push @$clump, $_;
-		t 'added to existing clump, now: ' . d $clump;
+		my $last_clump_stop = $clump->[0]->{stop};
+		if (defined $last_clump_stop) {
+		    t 'found programme with no start time, make it start at stop of last clump';
+		    $_->{start} = $last_clump_stop;
+		    push @clumps, $clump;
+		    $clump = [ $_ ];
+		}
+		else {
+		    t 'found programme with no start time, and clump has no stop, add to clump';
+		    push @$clump, $_;
+		}
 	    }
 	    else {
 		push @clumps, $clump if $clump;
@@ -374,16 +378,6 @@ if (not $opt_slow) {
 		foreach my $i (0 .. $#$_) {
 		    for ($_->[$i]) {
 			$_->{clumpidx} = "$i/$l";
-			# The stop time of the first programme can't
-			# be trusted any more, if there are things
-			# following after it.  Hmm perhaps it would be
-			# better to make those things a clump starting
-			# at the good programme's stop time, and not
-			# spoil the information of the good programme.
-			# But this approach is more conservative and
-			# probably good enough.
-			#
-			delete $_->{stop};
 		    }
 		}
 	    }
@@ -1034,18 +1028,25 @@ sub process_summary_page( $$$ ) {
 	# FIXME should check channel name (among other things).
 	#
 	my ($start, $stop);
-	if ($times =~ /^(\d\d):(\d\d)-(\d\d):(\d\d)$/
-		and 0 <= $1 and $1 < 24 and 0 <= $2 and $2 < 60
-		and 0 <= $3 and $3 < 24 and 0 <= $4 and $4 < 60) {
-	    my ($start_hh, $start_mm, $stop_hh, $stop_mm) = ($1, $2, $3, $4);
-	    die if not defined $day;
+	die if not defined $day;
+	my ($start_hh, $start_mm, $stop_hh, $stop_mm);
+	if ($times =~ /^(\d\d):(\d\d)-/
+	    and 0 <= $1 and $1 < 24 and 0 <= $2 and $2 < 60) {
+	    ($start_hh, $start_mm) = ($1, $2);
 	    $start = parse_eur_date("$day $start_hh:$start_mm", $TZ);
 	    die if not defined $start;
+	    t "parsed start time $start";
+	}
+	if ($times =~ /-(\d\d):(\d\d)$/
+	    and 0 <= $1 and $1 < 24 and 0 <= $2 and $2 < 60) {
+	    ($stop_hh, $stop_mm) = ($1, $2);
 	    $stop = parse_eur_date("$day $stop_hh:$stop_mm", $TZ);
 	    die if not defined $stop;
-	    t "parsed times: $start..$stop";
-	    
-	    if (Date_Cmp($start, $stop) > 0) {
+	    t "parsed stop time $stop";
+	}
+
+	if (defined $start and defined $stop
+	    and Date_Cmp($start, $stop) > 0) {
 		if ($next_day++) {
 		    # But we already crossed midnight once, so the times
 		    # must be just plain wrong.
@@ -1055,16 +1056,13 @@ sub process_summary_page( $$$ ) {
 		}
 		else {
 		    $day = UnixDate(DateCalc($day, '+ 1 day'), '%Y-%m-%d');
+		    t "gone to next day ($day)";
 		    $stop = parse_eur_date("$day $stop_hh:$stop_mm", $TZ);
 		    die if not defined $stop;
 		    die unless Date_Cmp($start, $stop) < 0;
-		    t "gone to next day ($day)";
 		    t '$stop now ' . d $stop;
 		}
 	    }
-	}
-	else {
-	    t 'no sane-looking times given in page, leave them undef';
 	}
 
 	my $title_url = URI->new_abs($title_href, $url);
