@@ -158,7 +158,7 @@ sub new
 				  env_proxy => 1,
 				  timeout => 180);
     bless ($self, $class);
-    $self->agent('xmltv/0.5.7');
+    $self->agent('xmltv/0.5.10');
     return $self;
 }
 
@@ -748,6 +748,14 @@ sub initGeoCodeAndGetProvidersList($$)
 
     my $req = GET("http://www.zap2it.com/index");
     my $res=&doRequest($self->{ua}, $req, $self->{Debug});
+
+    if ( !$res->is_success ) {
+        main::errorMessage("request failed with code: ".$res->code().":".HTTP::Status::status_message($res->code())."\n");
+	main::errorMessage("if problem persists, examine browser settings and\n");
+	main::errorMessage("try setting 'http_proxy' environment variable\n");
+	main::errorMessage("otherwise post problem to xmltv-users\@lists.sf.net for assistance\n");
+	return(-1);
+    }
 
     # traverse through forms on the page looking for the magic one.
     # @zap2it - locate form based on name=zipcode input on a form
