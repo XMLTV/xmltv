@@ -19,21 +19,21 @@ use UK_TZ;
 use XMLTV;
 use Tie::RefHash;
 use Term::ProgressBar;
+use Ananova_Channel;
 
 # Prototype declarations
 sub check_ananova_blurb();
 sub get_regions();
 sub get_dir();
-sub get_ch_types();
+sub read_channels_page();
 sub usage();
 sub get_file($$$);
 sub date_programmes($$);
 sub add_clumpidx($);
-sub ch_output($);
-sub get_ch_to_output();
 sub get_channel_pkgs();
-sub get_output_to_number();
-sub channels_output();
+sub init_channels();
+sub write_channels($);
+sub wanted_by_region($);
 
 # PHP page provided by Ananova to access their internal listings data.
 # This is used as an inital substring of all the URLs gotten by this
@@ -132,19 +132,8 @@ $writer->start({ 'source-info-url'     =>
 my $regions = get_regions(); update $bar;
 #t 'regions: ' . d $regions;
 
-# $ch_types maps Ananova channel id to type, $ch_pretty maps it to
-# pretty name.  However, the pretty names in the channel file are not
-# definitive; they're used to print progress messages, but the name in
-# the listings file itself takes precedence.
-#
-my ($ch_types, $ch_pretty) = get_ch_types(); update $bar;
-t '$ch_types=' . d $ch_types;
-t '$ch_pretty=' . d $ch_pretty;
-my %ch_pretty_definitive; # whether the name in $ch_pretty is defin.
-
-# Maps ouput channel id to an additional pretty name for that channel.
-my %output_to_number = get_output_to_number();
-t '\%output_to_number=' . d \%output_to_number;
+init_channels();
+read_channels_page(); update $bar;
 
 # Hardcoded channel packages.  It is planned to move these to separate
 # files, but I didn't have time to reorganize the directory structure
@@ -161,133 +150,159 @@ my %channel_pkgs = get_channel_pkgs();
 # type is one of 'radio', 'satellite', or a region code.
 #
 my @files;
-my %used_ch_types;
 
-# Some entries in show=dir are for non-terrestrial channels which
-# don't appear in show=channels.  This means they are old files which
-# didn't get deleted, although they should have been.
-#
-my %duff_channels;
-END {
-    my @duff = sort keys %duff_channels;
-    if (@duff) {
-	# Don't bother warning, this error almost always happens and
-	# the Ananova people are aware of the inconsistency.
-	#
-
-# 	warn <<END
-# The following channels had listings files, but were not mentioned in
-# the listing of channels:
-
-# @duff
-
-# The listings files are probably old ones, they haven\'t been fetched.
-END
-  ;
-    }
-}
-
+my %seen_ch;
 foreach (get_dir()) {
-    my ($orig, $day, $ch, $region) = @$_;
-    my $has_type = (defined $ch_types->{$ch});
-    my $has_region = (defined $region);
-    ++ $used_ch_types{$ch};
+#    local $Log::TraceMessages::On = 1;
+    my ($orig, $day, $ananova_id, $region) = @$_;
+    t 'got line from dir: orig=' . d($orig) . ', day=' . d($day) . ', ananova_id=' . d($ananova_id) . ', region=' . d($region);
+    my $ch = Channel->find_by_ananova_id($ananova_id);
+    t 'found channel by Ananova id: ' . d $ch;
+    if (not defined $ch) {
+	t 'creating a new channel and adding id';
+	$ch = new Channel();
+	$ch->add_ananova_id($ananova_id);
+    }
+    $seen_ch{$ch}++; # no dup check, since multiple days
 
-    if (not $has_type and not $has_region) {
-	# So the channel is not listed as 'radio' or 'satellite', and
-	# neither does it have a region.  This probably means it's an
-	# old file which is still lying around in dir.
-	#
-	$duff_channels{$ch} = 1;
-    }
-    elsif (not $has_type and $has_region) {
-	$ch_types->{$ch} = $region;
-	push @files, [ $day, $region, $ch, $orig ];
-    }
-    elsif ($has_type and not $has_region) {
-	if ($ch_types->{$ch} eq 'satellite' or $ch_types->{$ch} eq 'radio') {
-	    # Satellite and radio channels do not have a region, okay.
-	    push @files, [ $day, $ch_types->{$ch}, $ch, $orig ];
+    # If channel not seen before, assume terrestrial.
+    my $type = $ch->get_type();
+    $type = 'terrestrial' if not defined $type;
+    my $has_region = (defined $region);
+
+    if ($type eq 'terrestrial') {
+	if ($has_region) {
+	    $ch->add_region($region);
+	    push @files, [ $day, $region, $ananova_id, $orig ];
 	}
 	else {
-	    warn "channel $ch has unknown type $ch_types->{$ch}";
+	    # Probably an old file which is still lying around in dir.
+	    # We don't bother with these.
+	    #
+	    $type = 'duff';
 	}
     }
-    elsif ($has_type and $has_region) {
-	if ($ch_types->{$ch} eq $region) {
-	    # Encountered the same region as before, okay.
-	    push @files, [ $day, $region, $ch, $orig ];
+    elsif ($type eq 'satellite' or $type eq 'radio') {
+	if ($has_region) {
+	    warn 'channel ' . $ch->stringify() . " was seen as $type but also region $region";
 	}
 	else {
-	    warn "channel $ch has changed from $ch_types->{$ch} to $region";
+	    push @files, [ $day, $type, $ananova_id, $orig ];
 	}
     }
-    else { die }
+    elsif ($type eq 'duff') {
+	# Ignore.
+    }
+    else { die "bad type $type" }
+    $ch->set_type($type);
 }
 t 'files: ' . d \@files;
 update $bar;
 
 # Check that there are no redundant entries in the channel data.
-foreach (keys %$ch_types) {
-    unless ($used_ch_types{$_}) {
-	warn "channels data mentions $_ ($ch_pretty->{$_}), but not used\n";
+foreach (Channel->all()) {
+    unless ($seen_ch{$_}) {
+	warn "channels data mentions channel $_, but not used\n";
+	$_->set_type('duff');
     }
 }
 
-# Now work out which of @files we actually want to download.
-# %wanted_ch says which Ananova channel ids we want to download.
+# Now work out which of @files we actually want to download.  We can
+# pick channels in three ways: by type ('radio', 'satellite'), by
+# Ananova region ('15', '2' with display names like 'Carlton', 'Tyne
+# Tees') and individually by XMLTV id.
 #
-my (%type_pretty, %wanted_type, %wanted_ch);
+my (%wanted_type, %wanted_region, %wanted_xmltv_id);
 my $want_all;
+my %type_display;
+$type_display{$_} = $_ foreach qw(radio satellite);
+my %region_display = reverse %$regions;
 if (defined $ARGV[0] and $ARGV[0] eq 'ALL') {
     $want_all = 1;
 }
 else {
-    %type_pretty = reverse %$regions;
-    $type_pretty{$_} = $_ foreach qw(radio satellite);
+#    local $Log::TraceMessages::On = 1;
     foreach my $arg (@ARGV) {
 	my $t;
 
-	# See whether the argument matches a region.
-	foreach (sort keys %type_pretty) {
-	    if ($type_pretty{$_} =~ /\Q$arg\E/i) {
-		print STDERR "getting region $type_pretty{$_}\n";
+	# See whether the argument matches a type.  We look for an
+	# exact match and if not that then a regexp match.
+	#
+	foreach (sort keys %type_display) {
+	    my $dn = $type_display{$_};
+	    if ($dn =~ /^\Q$arg\E$/i) {
 		$t = $_;
 		last;
 	    }
+	    elsif (not defined $t and $dn =~ /\Q$arg\E/i) {
+		$t = $_;
+	    }
 	}
 	if (defined $t) {
+	    print STDERR "getting channel type $type_display{$t}\n";
 	    $wanted_type{$t}++
-	      && warn "channel type $type_pretty{$t} mentioned twice\n";
+	      && warn "channel type $type_display{$t} mentioned twice\n";
+	    next;
+	}
+
+	# Or a terrestrial region.
+	foreach (sort keys %region_display) {
+	    my $dn = $region_display{$_};
+	    if ($dn =~ /^\Q$arg\E$/i) {
+		$t = $_;
+		last;
+	    }
+	    elsif (not defined $t and $dn =~ /^\Q$arg\E$/i) {
+		$t = $_;
+	    }
+	}
+	if (defined $t) {
+	    print STDERR "getting terrestrial region $region_display{$t}\n";
+	    $wanted_region{$t}++
+	      && warn "terrestrial region $region_display{$t} mentioned twice\n";
 	    next;
 	}
 	
-	# Nope, but maybe it matches a channel package.
+	# Nothing so far, but maybe it matches a channel package.
 	foreach (sort keys %channel_pkgs) {
+	    # Exact match only since they're computery names.
 	    if ($_ eq $arg) {
-		print STDERR "getting channel package $_\n";
 		$t = $_;
 		last;
 	    }
 	}
 	if (defined $t) {
+	    print STDERR "getting channel package $t\n";
 	    foreach (@{$channel_pkgs{$t}}) {
-		++ $wanted_ch{$_};
+		t "setting wanted XMLTV id $_";
+		++ $wanted_xmltv_id{$_};
 	    }
 	    next;
 	}
 
 	# Finally, perhaps it matches the name of a channel.
-	foreach (sort keys %$ch_pretty) {
-	    if ($ch_pretty->{$_} =~ /\Q$arg\E/i) {
-		print STDERR "getting channel $ch_pretty->{$_}\n";
-		$t = $_;
+	my $found_dn;
+	foreach (Channel->all()) {
+	    next if $_->get_type() eq 'duff';
+	    my $dn = $_->get_a_display_name();
+	    next if not defined $dn;
+	    my $xmltv_id = $_->get_xmltv_id();
+	    die if not defined $xmltv_id;
+
+	    if ($dn =~ /^\Q$arg\E$/i) {
+		$t = $xmltv_id;
+		$found_dn = $dn;
 		last;
+	    }
+	    elsif (not defined $t and $dn =~ /\Q$arg\E/i) {
+		$t = $xmltv_id;
+		$found_dn = $dn;
 	    }
 	}
 	if (defined $t) {
-	    $wanted_ch{$t}++
-	      && warn "channel $ch_pretty->{$t} already chosen";
+	    print STDERR "getting channel $found_dn\n";
+	    $wanted_xmltv_id{$t}++
+	      && warn "channel with XMLTV id $t already chosen";
 	    next;
 	}
 	
@@ -296,27 +311,35 @@ else {
 	    usage();
 	}
     }
-    if (not keys %wanted_type and not keys %wanted_ch) {
-	my $default;
-	foreach (keys %type_pretty) {
-	    if ($type_pretty{$_} =~ /carlton/i) {
-		$default = $_;
-		++ $wanted_type{$_};
-		last;
+    if (not keys %wanted_type
+	and not keys %wanted_region
+	and not keys %wanted_xmltv_id) {
+	if (not @ARGV) {
+	# Fall back on default region 'carlton'.
+	    my $chosen;
+	    foreach (sort keys %region_display) {
+		if ($region_display{$_} =~ /\Qcarlton\E/i) {
+		    print STDERR "getting terrestrial region $region_display{$_}\n";
+		    $wanted_region{$_}++;
+		    $chosen = $_;
+		    last;
+		}
+	    }
+	    if (defined $chosen) {
+		warn "no channel types, packages or channels given, assuming $region_display{$chosen}\n";
+		usage();
+	    } else {
+		warn "no channel types, packages or channels given and default 'carlton' not found, "
+		  . "giving up\n";
+		usage();
+		exit(1);
 	    }
 	}
-	if (keys %wanted_type) {
-	    warn "no channel types, packages or channels given, assuming $type_pretty{$default}\n";
-	    usage();
-	}
 	else {
-	    warn "no channel types, packages or channels given and default 'carlton' not found, "
-	      . "giving up\n";
-	    usage();
-	    exit(1);
+	    warn "nothing to download\n";
+	    # But we'll let it print an empty file anyway...
 	}
     }
-    die if not keys %wanted_type and not keys %wanted_ch;
 }
 
 # There used to be a warning that if you chose 'satellite' you'd need
@@ -327,12 +350,67 @@ else {
 #
 
 # Filter out the files we want to download - those with the correct
-# channel type.
+# channel type, region or channel id.
 #
-@files = grep {
-    ($want_all or $wanted_type{$_->[1]} or $wanted_ch{$_->[2]})
-      && (not defined $opt_days or $opt_days >= $_->[0])
-  } @files;
+my @new_files;
+t 'deciding which files to download';
+my %used_xmltv_id;
+foreach (@files) {
+#    local $Log::TraceMessages::On = 1;
+    t 'looking at file: ' . d $_;
+    if (defined $opt_days and $opt_days < $_->[0]) {
+	t 'outside the --days range';
+	next;
+    }
+
+    if ($want_all) {
+	t 'want all files, so want this one';
+	push @new_files, $_;
+	next;
+    }
+
+    my $tor = $_->[1];
+    t "type or region: $tor";
+    if ($wanted_type{$tor} or $wanted_region{$tor}) {
+	t 'want this type or region';
+	push @new_files, $_;
+	next;
+    }
+
+    my $ch = Channel->find_by_ananova_id($_->[2]);
+    t 'looked up by Ananova id: ' . d $ch;
+    if (defined $ch) {
+	my $xmltv_id = $ch->get_xmltv_id();
+	t 'channel has XMLTV id: ' . d $xmltv_id;
+	if (defined $xmltv_id) {
+	    if ($wanted_xmltv_id{$xmltv_id}) {
+		t 'this id is wanted';
+
+		# But the same id may be available as two different
+		# files.  We want only the first Ananova set of pages
+		# for this channel.
+		#
+		if ($ch->get_first_ananova_id() eq $_->[2]) {
+		    t 'is first Ananova id, adding';
+		    push @new_files, $_;
+		    $used_xmltv_id{$xmltv_id}++;
+		    next;
+		}
+		else {
+		    t 'a secondary Ananova page for this channel, not adding';
+		}
+	    }
+	}
+    }
+}
+@files = @new_files;
+t 'checking that every wanted XMLTV id was found';
+foreach (sort keys %wanted_xmltv_id) {
+    next if $used_xmltv_id{$_};
+    my $ch = Channel->find_by_xmltv_id($_);
+    die if not defined $ch;
+    warn 'channel ' . $ch->stringify() . ' not found on site';
+}
 
 # We want to get them in day order, so that we can get the first day's
 # listings first.  This is becuase we need to get a complete day to
@@ -344,9 +422,8 @@ my $first_day;
 my $wrote_channels = 0;
 my @progs_todo;
 foreach (sort { $a->[0] <=> $b->[0] } @files) {
-    my ($day, $type, $ch, $filename) = @$_;
-    t "getting file for day $day, type $type, ch $ch, filename $filename";
-    die if not ($want_all or $wanted_type{$type} or $wanted_ch{$ch});
+    my ($day, $type, $ananova_id, $filename) = @$_;
+    t "getting file for day $day, type $type, Ananova id $ananova_id, filename $filename";
     die if defined $opt_days and $day > $opt_days;
     $first_day = $day if not defined $first_day;
 
@@ -361,6 +438,8 @@ foreach (sort { $a->[0] <=> $b->[0] } @files) {
     # Get a list of programmes from this filename, fix the dates and
     # add clumpidxes.
     #
+    my $ch = Channel->find_by_ananova_id($ananova_id);
+    die if not defined $ch;
     my $progs = get_file($day_date, $ch, $filename);
     date_programmes($progs, $day_date);
     add_clumpidx($progs);
@@ -371,7 +450,7 @@ foreach (sort { $a->[0] <=> $b->[0] } @files) {
 	    # Must have done a whole day's listings, channels are ready to
 	    # write.
 	    #
-	    $writer->write_channels(channels_output());
+	    write_channels($writer);
 	    $wrote_channels = 1;
 	}
     }
@@ -390,7 +469,7 @@ foreach (sort { $a->[0] <=> $b->[0] } @files) {
 # is written.
 #
 if (not $wrote_channels) {
-    $writer->write_channels(channels_output());
+    write_channels($writer);
     $writer->write_programme($_) foreach @progs_todo;
     $wrote_channels = 1; @progs_todo = ();
 }
@@ -426,7 +505,7 @@ where request is one of \[regions\|channels\|dir\|<file>\]
 }
 
 
-# Return a reference to an ordered hash mapping region pretty name to
+# Return a reference to an ordered hash mapping region display name to
 # Ananova internal region name.
 #
 sub get_regions() {
@@ -451,7 +530,7 @@ sub get_regions() {
     }
     return \%r;
 }
-    
+
 
 # Get the list of Ananova 'filenames' and parse each filename into a
 # tuple of:
@@ -519,18 +598,17 @@ sub get_dir() {
 }
 
 
-# Get details of the different channel names.  Returns a list of two
-# hashrefs: the first maps channel internal name to type ('radio' or
-# 'satellite'), the second maps it to pretty name.
+# Read Ananova's Channels page.  This tells us about radio and
+# satellite channels.
 #
-sub get_ch_types() {
+sub read_channels_page() {
     local $Log::TraceMessages::On = 0;
     my $url =  "$A?show=channels";
     (my $data = get $url) or die "cannot get $url";
 #    t "got channels page: $data";
 
-    my (%type, %pretty);
-    my %seen_pretty;
+    my (%type, %display);
+    my %seen_display;
     foreach (split /\n/, $data) {
 	t "doing line: $_";
 	s/^\s+//; s/\s+$//;
@@ -539,32 +617,38 @@ sub get_ch_types() {
 	
 	if (/^(radio|satellite)\.([a-z0-9_]+)=(.+)$/) {
 	    t 'matched';
-	    my ($type, $ch, $pretty) = ($1, $2, $3);
-	    t "type=$type, ch=$ch, pretty=$pretty";
-	    if (defined $type{$ch}) {
-		warn "channel $ch seen twice";
-		next;
+	    my ($type, $ananova_id, $display) = ($1, $2, $3);
+	    t "type=$type, ch=$ananova_id, display=$display";
+
+	    my $ch = Channel->find_by_ananova_id($ananova_id);
+	    $ch = new Channel() if not defined $ch;
+	    $ch->set_type($type);
+	    $ch->add_ananova_id($ananova_id);
+
+	    # Only set the display name based on the first (ie,
+	    # best) Ananova id for this channel.  Otherwise we'd
+	    # have a conflict between say 'Border' and 'Border
+	    # (Scottish viewers)'.  Only the first of the two should
+	    # have a chance to set the display name.
+	    #
+	    if ($ch->get_first_ananova_id() eq $ananova_id) {
+		$ch->set_main_display_name($display, 0);
 	    }
-	    if ($seen_pretty{lc $pretty}++) {
-		# FIXME kludge around fact that we _know_ Nickelodeon
+
+	    if ($seen_display{lc $display}++) {
+		# Kludge around fact that we _know_ Nickelodeon
 		# is wrong: I've reported it but they haven't fixed it
 		# yet.
 		#
-		unless ($pretty eq 'Nickelodeon') {
-		    warn "channel pretty name $pretty seen twice";
+		unless ($display eq 'Nickelodeon') {
+		    warn "channel display name $display seen twice";
 		}
 	    }
-
-	    t "setting type of $ch to $type";
-	    $type{$ch} = $type;
-	    t "setting pretty name of $ch to $pretty";
-	    $pretty{$ch} = $pretty;
 	}
 	else {
 	    warn "bad line in channels listing: $_\n";
 	}
     }
-    return (\%type, \%pretty);
 }
 
 
@@ -580,7 +664,7 @@ terrestrial region or channel type from:
 
 END
 ;
-    $msg .= join(', ', sort values %type_pretty) . "\n";
+    $msg .= join(', ', sort values %type_display) . "\n";
     $msg .= <<END
 
 'radio' means all radio stations and 'satellite' all satellite
@@ -589,15 +673,19 @@ or more of the following channel packages:
 
 END
 ;
-    my %channel_pkgs = get_channel_pkgs();
     foreach (sort keys %channel_pkgs) {
-        # FIXME some of the pretty names are not set because the
-        # channel wasn't listed in show=dir.  We need to unify the
-        # pretty names and 'extra pretty names' and make it so that
-        # at least something is ready to display here.
-        #
-        $msg .= "$_: " . join(', ', map { $ch_pretty->{$_} || $_ }
-                                        @{$channel_pkgs{$_}} ) . "\n\n";
+	my @names;
+	foreach (@{$channel_pkgs{$_}}) {
+	    my $ch = Channel->find_by_xmltv_id($_);
+	    if (defined $ch) {
+		push @names, $ch->get_a_display_name();
+	    }
+	    else {
+		warn "channel id $_ mentioned in package, but not known\n";
+		push @names, $_;
+	    }
+	}
+        $msg .= "$_: " . join(', ', @names) . "\n\n";
     }
 
     $msg .= <<END
@@ -617,10 +705,9 @@ END
 #
 # Parameters:
 #   date expected in file (in Date::Manip format)
-#   channel id, used to check pretty name in file
+#   Channel object, used to check and set display name
 #   'filename'
-#
-# Uses global $ch_types and $ch_pretty hashrefs.
+#   whether the channel name in the file should be used
 #
 # Returns: reference to list of programme details, or undef if error.
 # These won't have proper start and stop times; instead they have a
@@ -634,7 +721,7 @@ sub get_file($$$) {
     my ($date_expected, $ch, $file) = @_;
     my $url =  "$A?show=$file";
 
-    (my $data = get $url) or die "cannot get $url";
+    my $data = get $url; die "cannot get $url" if not defined $data;
 
     my @lines = split /\n/, $data;
     foreach (@lines) { s/^\s+//; s/\s+$//; s/\#.*// }
@@ -658,82 +745,28 @@ sub get_file($$$) {
 	}
     }
 
-    # Check the date.  According to Ananova's comment there's some odd
-    # procedure you have to follow to make sure it is correct.
-    #
-    my $page_date = shift @lines;
-    if (not $page_date =~
-/^((?:Sun|Mon|Tues|Wednes|Thurs|Fri|Satur)day)\|(\d\d)\|(\d\d)\|(\d\d\d\d)$/)
-    {
-	warn "bad date '$page_date' in file $url, skipping";
+    # Check the date.
+    if (not check_page_date((shift @lines), $date_expected)) {
+	warn "bad date in $url, skipping";
 	return undef;
-    }
-    my ($weekday, $dd, $mm, $yyyy) = ($1, $2, $3, $4);
-    t "got date: $weekday $yyyy-$mm-$dd";
-    my $dp = ParseDate("$yyyy-$mm-$dd");
-    if (not defined $dp) {
-	warn "bad date '$page_date' in file $url, skipping";
-	return undef;
-    }
-    t "parsed out date $dp, check it matches $weekday";
-    if (UnixDate($dp, '%A') ne $weekday) {
-	# Apparently you have to step backwards by one or two days
-	# until the date matches the weekday given.
-	#
-	my $found = 0;
-	foreach (0, 1) {
-	    $dp = DateCalc($dp, '- 1 day'); die if not defined $dp;
-	    if (UnixDate($dp, '%A') eq $weekday) {
-		$found = 1;
-		last;
-	    }
-	}
-	if (not $found) {
-	    warn "weekday of $page_date is wrong in $url (even tried going back a couple of days)";
-	    return undef;
-        }
     }
 
-    # But does it match what we expect?
-    if (UnixDate($dp, '%Q') ne UnixDate($date_expected, '%Q')) {
-	if ($opt_cache) {
-	    unless ($warned_wrong_date++) {
-		warn "since cache is in use, ignoring wrong date in pages (eg $url)\n";
-	    }
-	}
-	else {
-	    warn "date from page $url (" . UnixDate($dp, '%Q') . ") is wrong (probably an old file)\n";
-	    return undef;
-	}
-    }
+    # Set the definitive channel name, if not already set.  The
+    # channel name can change if the same channel is listed in two
+    # places, for example 'Sky Sports 2' and 'Sky Sports 2 (ITV
+    # Digital)'.  We could end up grabbing both pages and mapping them
+    # to the same channel.  The first name found wins.
+    #
+    # In practice I expect that soon we'll make sure to grab only one
+    # of the two pages: getting both is really just for debugging.
+    #
 
     # Check the channel name is as expected (if we know what the
-    # pretty name should be for this channel).
+    # display name should be for this channel).
     #
-    my $got_ch_pretty = shift @lines;
-    my $expected_pretty_name = $ch_pretty->{$ch};
-    if (defined $expected_pretty_name
-	and $got_ch_pretty ne $expected_pretty_name) {
-	if ($ch_pretty_definitive{$ch}) {
-	    warn
-"channel $ch changed name from '$expected_pretty_name' to '$got_ch_pretty'\n";
-	}
-	else {
-	    # Not definitive, in other words the new name takes
-	    # precedence (and is definitive).
-	    #
-	    $ch_pretty->{$ch} = $got_ch_pretty;
-	    $ch_pretty_definitive{$ch} = 1;
-	}
-    }
-    else {
-	# Currently no pretty name defined.  Probably because it's a
-	# terrestrial channel and wasn't mentioned in the channels
-	# file.  We check elsewhere for channels in show=dir that
-	# aren't in show=channels, so here we needn't bother with
-	# validating, we can just set the name and carry on happily.
-	#
-	$ch_pretty->{$ch} = $got_ch_pretty;
+    my $got_ch_display = shift @lines;
+    if (not $ch->has_definitive_display_name()) {
+	$ch->set_main_display_name($got_ch_display, 1);
     }
 
     my $copyright = pop @lines;
@@ -878,7 +911,9 @@ sub get_file($$$) {
 		# XMLTV - like all good languages - counts from 0.
 		#
 		$episode_num =~ s/^(\d+)/$1 - 1/e;
-		$p{'episode-num'} = [ $episode_num, 'xmltv_ns' ];
+
+		# We don't know the series or season.
+		$p{'episode-num'} = [ ". . $episode_num", 'xmltv_ns' ];
 	    }
 	    else {
 		warn "bad episode number '$episode_num' "
@@ -913,9 +948,9 @@ sub get_file($$$) {
 	# meant for the length _as shown_, just not including adverts
 	# or other junk.  So we just discard duration.
 	#
-	# FIXME there is an occasional bug where the duration has what
-	# looks like a year stuck three times onto the end.  As in
-	# '85 mins1997 1997 1997'.
+	# There is an occasional bug in the site where the duration has
+	# what looks like a year stuck three times onto the end.  As
+	# in '85 mins1997 1997 1997'.
 	#
 	$duration =~ s/(\d{4}) \1 \1$//;
 	if ($duration ne '' and $duration !~ /^(\d+)\s+(?:mins|minutes)$/) {
@@ -955,12 +990,8 @@ sub get_file($$$) {
 	# that means there's definitely no picture; if it's undefined
 	# then we don't know yet.
 	#
-	my $ch_type = $ch_types->{$ch};
-	if (not defined $ch_type) {
-	    die "no channel type for channel $ch";
-	}
-
-	if ($ch_type =~ /\d$/) {
+	my $ch_type = $ch->get_type();
+	if ($ch_type eq 'terrestrial') {
 	    # Terrestrial television.  We can't infer anything from
 	    # that, because occasionally programmes are broadcast with
 	    # no picture or no sound.
@@ -972,6 +1003,9 @@ sub get_file($$$) {
 	elsif ($ch_type eq 'radio') {
 	    $p{video}{present} = 0;
 	    $p{audio}{present} = 1;
+	}
+	elsif ($ch_type eq 'duff') {
+	    die "trying to download listings for duff channel";
 	}
 	else { die "bad type $ch_type for channel $ch" }
 
@@ -1039,6 +1073,8 @@ sub get_file($$$) {
 	# format to support several descriptions of differing length,
 	# but for now we just sanity-check them.
 	#
+	# FIXME it does support this!  Output them!
+	#
 	my @descs = @fields[17..20];
 	foreach my $i (0 .. $#descs) {
 	    next if not defined $descs[$i] or not length $descs[$i];
@@ -1068,12 +1104,10 @@ sub get_file($$$) {
 	      . "in line from url $url: $_";
 	}
 
-	# Channel.  By now we should know the pretty name of the
-	# channel, so we can call ch_output() to map Ananova id to
-	# output channel id.  (The pretty name is occasionally used
-	# to help with this.)
+	# Channel.  By now we know the definitive display name of the
+	# channel, so we can call get_xmltv_id().
 	#
-	$p{channel} = ch_output($ch);
+	$p{channel} = $ch->get_xmltv_id();
 
 	# Source - used for debugging and written out only as a
 	# comment in the output.
@@ -1083,6 +1117,64 @@ sub get_file($$$) {
 	push @r, \%p;
     }
     return \@r;
+}
+
+
+# check_page_date()
+#
+# Check the date in a day's listings matches what we expect.
+# According to Ananova's comment there's some odd procedure you have
+# to follow to make sure it is correct.
+#
+sub check_page_date($$) {
+    my ($got, $expected) = @_;
+
+    if (not $got =~
+/^((?:Sun|Mon|Tues|Wednes|Thurs|Fri|Satur)day)\|(\d\d)\|(\d\d)\|(\d\d\d\d)$/)
+    {
+	warn "bad date '$got'";
+	return 0;
+    }
+    my ($weekday, $dd, $mm, $yyyy) = ($1, $2, $3, $4);
+    t "got date: $weekday $yyyy-$mm-$dd";
+    my $dp = ParseDate("$yyyy-$mm-$dd");
+    if (not defined $dp) {
+	warn "bad date '$got'";
+	return 0;
+    }
+    t "parsed out date $dp, check it matches $weekday";
+    if (UnixDate($dp, '%A') ne $weekday) {
+	# Apparently you have to step backwards by one or two days
+	# until the date matches the weekday given.
+	#
+	my $found = 0;
+	foreach (0, 1) {
+	    $dp = DateCalc($dp, '- 1 day'); die if not defined $dp;
+	    if (UnixDate($dp, '%A') eq $weekday) {
+		$found = 1;
+		last;
+	    }
+	}
+	if (not $found) {
+	    warn "weekday of $got is wrong (even tried going back a couple of days)";
+	    return undef;
+        }
+    }
+
+    # But does it match what we expect?
+    if (UnixDate($dp, '%Q') ne UnixDate($expected, '%Q')) {
+	if ($opt_cache) {
+	    unless ($warned_wrong_date++) {
+		warn "since cache is in use, ignoring wrong date in pages\n";
+	    }
+	}
+	else {
+	    warn "wrong date in page\n";
+	    return 0;
+	}
+    }
+
+    return 1;
 }
 
 
@@ -1282,565 +1374,350 @@ END
     t 'add_clumpidx() EXIT';
 }
 
+# Write channels which are used.  We can't write channels which we
+# didn't use, because we never downloaded any files for them and so
+# never found out what the definitive display name was.  Fortunately,
+# writing out channels that weren't used is pointless anyway :-).
+#
+# Parameter: XMLTV::Writer to use
+#
+sub write_channels( $ ) {
+#    local $Log::TraceMessages::On = 1;
+    my $writer = shift;
+    my @wanted;
+    foreach (Channel->all()) {
+	t 'is this channel wanted? : ' . d $_;
+	my $type = $_->get_type();
+	die "channel $_ has unknown type" if not defined $type;
+	if ($want_all
+	    or $wanted_type{$type}
+	    or $type eq 'terrestrial' and wanted_by_region($_)) {
+	    t 'all, or by type, or by region: yes';
+	    push @wanted, $_;
+	    next;
+	}
+	
+	my $xmltv_id = $_->get_xmltv_id();
+	if (defined $xmltv_id and $wanted_xmltv_id{$xmltv_id}) {
+	    t 'by XMLTV id, yes';
+	    push @wanted, $_;
+	    next;
+	}
+	t 'no';
+    }
+
+    my @new_wanted;
+    foreach (@wanted) {
+	# The XMLTV id and display name should be available by now.
+	# If not, something went wrong downloading that channel and it
+	# shouldn't be output.
+	#
+	my $has_xmltv_id = (defined $_->get_xmltv_id());
+	my $has_dn = (defined $_->get_main_display_name());
+
+	if (not $has_xmltv_id) {
+	    warn 'cannot find or make XMLTV id for channel ' . $_->stringify() . ', not writing';
+	    next;
+	}
+
+	if (not $has_dn) {
+	    warn 'channel ' . $_->stringify() . ' has no display name, not writing';
+	    next;
+	}
+
+	push @new_wanted, $_;
+    }
+    foreach (sort { $a->get_xmltv_id() cmp $b->get_xmltv_id() } @new_wanted) {
+	$_->write($writer, $LANG);
+    }
+}
+sub wanted_by_region($) {
+    my $ch = shift;
+    foreach (keys %wanted_region) {
+	return 1 if $ch->is_region($_);
+    }
+    return 0;
+}
+
+
 ####
 # Channels stuff
 #
 
-# Convert the channels data into a suitable form for output.  Uses the
-# following globals:
+# In principle it should be possible to find all channel data by
+# looking at the Ananova site.  However they don't use the RFC2838
+# style names, and I also want to add some extra display names for
+# channel numbers.  So there's a hardcoded table listing XMLTV channel
+# ids, their equivalent on the Ananova site, and optionally an extra
+# (short) display name for that channel.
 #
-# %$ch_pretty - Ananova id to pretty name
-# %output_to_number - XMLTV channel id to additional pretty name
-# Calls ch_output() to turn Ananova id into XMLTV id.
+# It can be hard to decide whether two related channels should map to
+# the same internal name - eg digital and analogue versions of the
+# same channel.  I have made different internal names if I know that
+# the content will be different (eg BBC1 digital is different to any
+# of the analogue region versions), but otherwise mapped both channels
+# to the same internal name.  Sometimes there are annoying small
+# differences which require differing internal names, else
+# sort_listings complains.  The same applies to regional variants for
+# channels which don't differ between regions (eg Channel 5).
 #
-# Also info on channel types for sanity checking, but that's not
-# really important.
+# Piping the output through sort_listings will check that the two
+# versions of a channel are indeed identical.
 #
-# FIXME these three different lookups really need to be more
-# consistent.
-#
-sub channels_output() {
-    t 'channels_output() ENTRY';
-    my %channels_output;
-
-    # Routine to modify %channels_output adding a new pretty name for
-    # an internal channel id.
-    #
-    my $add_to_output = sub( $ ) {
-	my ($id, $entry) = @_;
-	t "asked to add pretty name '$entry' to channel id $id";
-
-	# Don't want to add it if it's already in the list.
-	my $already = 0;
-	foreach (@{$channels_output{$id}}) {
-	    t 'checking existing entry: ' . d $_;
-	    next if $_->[0] ne $entry->[0];
-	    if (not defined $_->[1] and not defined $entry->[1]) {
-		$already = 1;
-		last;
-	    }
-	    if (defined $_->[1] and defined $entry->[1]
-		and $_->[1] eq $entry->[1]) {
-		$already = 1;
-		last;
-	    }
-	}
-	t "already in there? $already";
-	unless ($already) {
-	    push @{$channels_output{$id}}, $entry;
-	    t 'list now: ' . d $channels_output{$id};
-	}
-    };
-
-    foreach (keys %$ch_pretty) {
-	next unless $want_all or $wanted_type{$ch_types->{$_}} or $wanted_ch{$_};
-	my $o = ch_output($_);
-	my $p = $ch_pretty->{$_}; die if not defined $p;
-
-	# Don't need to warn about more than one channel with the same
-	# output id, because Channel 4 and Channel 5 are considered by
-	# Ananova as split into regions, but each region is in fact
-	# the same.  Likewise some things like the two versions of
-	# Meridian (different for BBC, but not ITV).
-	#
-	$add_to_output->($o, [ $p, $LANG ]);
-    }
-    foreach (keys %channels_output) {
-	my $extra = $output_to_number{$_};
-	if (defined $extra) {
-	    if ($extra =~ tr/0-9//c) {
-		# Not a channel number, should have a 'language'.
-		$add_to_output->($_, [ $extra, $LANG ]);
-	    } else {
-		$add_to_output->($_, [ $extra ]);
-	    }
-	}
-    }
-    t 'channels_output() RETURNING ' . d \%channels_output;
-    return \%channels_output;
-}
-
-
-# Given an Ananova internal channel id, return the output
-# RFC2838-style name.  Where the name is not known, we invent one
-# based on ananova.com (using global $ch_pretty).
-#
-# Parameter: Ananova internal channel identifier
-# Returns: funky domain name type string
-#
-my $ch_to_output; # cache, initialized with some hardcoded names
-sub ch_output($) {
-    local $Log::TraceMessages::On = 0;
-    my $ch = shift;
-
-    $ch_to_output = get_ch_to_output() if not defined $ch_to_output;
-    if (not defined $ch_to_output->{$ch}) {
-	my $pretty = $ch_pretty->{$ch};
-	$pretty = $ch if not defined $pretty;
-	my $munged = $pretty;
-	for ($munged) {
-	    t d $_;
-	    tr/ _/-/s;
-	    t d $_;
-	    tr/a-zA-Z0-9-//cd;
-	    t d $_;
-	    tr/A-Z/a-z/;
-	    t d $_;
-	}
-	my $new = "$munged.tv-listings.ananova.com";
-	warn "don't know RFC2838-style name for $pretty ($ch), using $new\n";
-	$ch_to_output->{$ch} = $new;
-    }
-    return $ch_to_output->{$ch};
-}
-
-# Return the list of what internal Ananova channel names map to what
-# XMLTV internal channel names.  This isn't fetched from the site,
-# it's just hardcoded here.
-#
-# The hash returned by this subroutine is just a starting point for
-# ch_output(), which may make up new names for stations not mentioned.
-#
-# This function is just a place to store the big hash below; it is
-# called only by ch_output() and get_channel_pkgs().
-#
-sub get_ch_to_output() {
-    # It can be hard to decide whether two related channels should map
-    # to the same internal name - eg digital and analogue versions of
-    # the same channel.  I have made different internal names if I
-    # know that the content will be different (eg BBC1 digital is
-    # different to any of the analogue region versions), but otherwise
-    # mapped both channels to the same internal name.  Sometimes there
-    # are annoying small differences which require differing internal
-    # names, else sort_listings complains.  The same applies to
-    # regional variants for channels which don't differ between
-    # regions (eg Channel 5).
-    #
-    # FIXME: There should be some code to make sure that if two sets
-    # of listings for the same channel id are downloaded, they match
-    # exactly.
-    #
-    my %ch_to_output =
-      ('adult' => 'theadultchannel.co.uk', # Adult Channel
-       'adultsonly1' => 'adults-only-1.itv.co.uk', # Adults Only 1
-       'adultsonly2' => 'adults-only-2.itv.co.uk', # Adults Only 2
-       'anglia_0' => 'anglia.tv.co.uk', # Anglia
-       'animalplanetdigital' => 'animalplanet.discoveryeurope.com', # Animal Planet (Digital)
-       'asianet' => 'asianet-tv.com', # Asia.net
-       'atlantic252' => 'atlantic252.com', # Atlantic 252
-       'bbc1_2' => 'south-east.bbc1.bbc.co.uk', # BBC1
-       'bbc1digital' => 'digital.bbc1.bbc.co.uk', # BBC1 (Digital)
-       'bbc1ea_0' => 'east.bbc1.bbc.co.uk', # BBC1 East Anglia
-       'bbc1irish_12' => 'ireland.bbc1.bbc.co.uk', # BBC1 Ireland
-       'bbc1irishdigital' => 'digital.ireland.bbc1.bbc.co.uk', # BBC1 Ireland (Digital)
-       'bbc1london_16' => 'london.bbc1.bbc.co.uk', # BBC1 LONDON
-       'bbc1mid_3' => 'midlands.bbc1.bbc.co.uk', # BBC1 Midlands
-       'bbc1n_14' => 'north.bbc1.bbc.co.uk', # BBC1 North
-       'bbc1ne_1' => 'north-east.bbc1.bbc.co.uk', # BBC1 North East
-       'bbc1ne_11' => 'north-east.bbc1.bbc.co.uk', # BBC1 North East
-       'bbc1nw_6' => 'north-west.bbc1.bbc.co.uk', # BBC1 North West
-       'bbc1s_9' => 'south.bbc1.bbc.co.uk', # BBC1 South
-       'bbc1scot_10' => 'scotland.bbc1.bbc.co.uk', # BBC1 Scotland
-       'bbc1scot_17' => 'scotland.bbc1.bbc.co.uk', # BBC1 Scotland
-       'bbc1scot_5' => 'scotland.bbc1.bbc.co.uk', # BBC1 Scotland
-       'bbc1scotdigital' => 'digital.scotland.bbc1.bbc.co.uk', # BBC1 Scotland (Digital)
-       'bbc1se_15' => 'south-east.bbc1.bbc.co.uk', # BBC1 South East
-       'bbc1sw_13' => 'south-west.bbc1.bbc.co.uk', # BBC1 South West
-       'bbc1sw_4' => 'south-west.bbc1.bbc.co.uk', # BBC1 South West
-       'bbc1w_8' => 'west.bbc1.bbc.co.uk', # BBC1 West
-       'bbc1walesdigital' => 'digital.wales.bbc.co.uk', # BBC1 Wales (Digital)
-       'bbc1wales_7' => 'wales.bbc1.bbc.co.uk', # BBC1 Wales
-       'bbc2_2' => 'south-east.bbc2.bbc.co.uk', # BBC2
-       'bbc2digital' => 'digital.bbc2.bbc.co.uk', # BBC2 (Digital)
-       'bbc2ea_0' => 'east.bbc2.bbc.co.uk', # BBC2 East Anglia
-       'bbc2irish_12' => 'ireland.bbc2.bbc.co.uk', # BBC2 Ireland
-       'bbc2irishdigital' => 'digital.ireland.bbc2.bbc.co.uk', # BBC2 Ireland (Digital)
-       'bbc2mid_3' => 'midlands.bbc2.bbc.co.uk', # BBC2 Midlands
-       'bbc2n_14' => 'north.bbc2.bbc.co.uk', # BBC2 North
-       'bbc2ne_1' => 'north-east.bbc2.bbc.co.uk', # BBC2 North East
-       'bbc2ne_11' => 'north-east.bbc2.bbc.co.uk', # BBC2 North East
-       'bbc2nw_6' => 'north-west.bbc2.bbc.co.uk', # BBC2 North West
-       'bbc2s_9' => 'south.bbc2.bbc.co.uk', # BBC2 South
-       'bbc2scot_10' => 'scotland.bbc2.bbc.co.uk', # BBC2 Scotland
-       'bbc2scot_17' => 'scotland.bbc2.bbc.co.uk', # BBC2 Scotland
-       'bbc2scot_5' => 'scotland.bbc2.bbc.co.uk', # BBC2 Scotland
-       'bbc2scotdigital' => 'digital.scotland.bbc2.bbc.co.uk', # BBC2 Scotland (Digital)
-       'bbc2se_15' => 'south-east.bbc2.bbc.co.uk', # BBC2 South East
-       'bbc2sw_13' => 'south-west.bbc2.bbc.co.uk', # BBC2 South West
-       'bbc2sw_4' => 'south-west.bbc2.bbc.co.uk', # BBC2 South West
-       'bbc2w_8' => 'west.bbc2.bbc.co.uk', # BBC2 West
-       'bbc2wales_7' => 'wales.bbc2.bbc.co.uk', # BBC2 Wales
-       'bbc2walesdigital' => 'digital.wales.bbc2.bbc.co.uk', # BBC2 Wales (Digital)
-       'bbcchoice' => 'choice.bbc.co.uk', # BBC Choice
-       'bbcknowledge' => 'knowledge.bbc.co.uk', # BBC Knowledge
-       'bbcnews24' => 'news-24.bbc.co.uk', # BBC News 24
-       'bbcparliament' => 'parliament.bbc.co.uk', # BBC Parliament
-       # Just for fun we'll use the Boston Business
-       # Consulting domain for the international (rather
-       # than British) BBC channels.
-       #
-       'bbcprime' => 'prime.bbc.com', # BBC Prime
-       'bbcworld' => 'world-tv.bbc.com', # BBC World
-       'bloomberg' => 'bloomberg.com', # Bloomberg TV
-       'border_1' => 'border-tv.com', # Border
-       'bordern_17' => 'border-tv.com', # Border (Scottish viewers).  FIXME
-       # FIXME can't find domain name for 'Box'
-       'box' => 'box.tv-listings.ananova.com',
-       'bravodigital' => 'bravo.co.uk', # Bravo (Digital)
-       'britisheurosport' => 'british.eurosport.com', # British Eurosport
-       'bsb_movie' => 'sky-premier.sky.com', # Sky Premier
-       'bsb_sports' => 'sky-sports-1.sky.com', # yes, really
-       'carlton_16' => 'carlton.com', # Carlton
-       'carlton_2' => 'carlton.com', # Carlton
-       'carltoncinema' => 'cinema.carlton.com', # Carlton Cinema
-       'carltonfood' => 'food.carlton.com', # Taste CFN
-       'cartoon' => 'uk.cartoonnetwork.com', # Cartoon Network
-       'central_3' => 'central.carlton.com', # Central
-       'ch4_0' => 'channel4.com', # Channel 4
-       'ch4_1' => 'channel4.com', # Channel 4
-       'ch4_10' => 'channel4.com', # Channel 4
-       'ch4_11' => 'channel4.com', # Channel 4
-       'ch4_12' => 'channel4.com', # Channel 4
-       'ch4_13' => 'channel4.com', # Channel 4
-       'ch4_14' => 'channel4.com', # Channel 4
-       'ch4_15' => 'channel4.com', # Channel 4
-       'ch4_16' => 'channel4.com', # Channel 4
-       'ch4_17' => 'channel4.com', # Channel 4
-       'ch4_2' => 'channel4.com', # Channel 4
-       'ch4_3' => 'channel4.com', # Channel 4
-       'ch4_4' => 'channel4.com', # Channel 4
-       'ch4_5' => 'channel4.com', # Channel 4
-       'ch4_6' => 'channel4.com', # Channel 4
-       'ch4_7' => 'channel4.com', # Channel 4
-       'ch4_8' => 'channel4.com', # Channel 4
-       'ch4_9' => 'channel4.com', # Channel 4
-       'ch5_0' => 'channel5.co.uk', # Channel 5
-       'ch5_1' => 'channel5.co.uk', # Channel 5
-       'ch5_10' => 'channel5.co.uk', # Channel 5
-       'ch5_11' => 'channel5.co.uk', # Channel 5
-       'ch5_12' => 'channel5.co.uk', # Channel 5
-       'ch5_13' => 'channel5.co.uk', # Channel 5
-       'ch5_14' => 'channel5.co.uk', # Channel 5
-       'ch5_15' => 'channel5.co.uk', # Channel 5
-       'ch5_16' => 'channel5.co.uk', # Channel 5
-       'ch5_17' => 'channel5.co.uk', # Channel 5
-       'ch5_2' => 'channel5.co.uk', # Channel 5
-       'ch5_3' => 'channel5.co.uk', # Channel 5
-       'ch5_4' => 'channel5.co.uk', # Channel 5
-       'ch5_5' => 'channel5.co.uk', # Channel 5
-       'ch5_6' => 'channel5.co.uk', # Channel 5
-       'ch5_7' => 'channel5.co.uk', # Channel 5
-       'ch5_8' => 'channel5.co.uk', # Channel 5
-       'ch5_9' => 'channel5.co.uk', # Channel 5
-       # FIXME: Ananova calls this 'Channel Islands'
-       'channel_4' => 'channel-islands.tv-listings.ananova.com',
-       'christian' => 'christian-channel-europe.god-digital.com', # God Channel
-       'classicfm' => 'classicfm.co.uk', # Classic FM
-       'cnbc' => 'europe.cnbc.com', # CNBC Europe
-       'cnn' => 'europe.cnn.com', # CNN
-       # FIXME cannot find domain for '.tv' - how do you type that into Google?
-       'computer' => 'dot-tv.tv-listings.ananova.com',
-       'cymru' => 'radio-cymru.bbc.co.uk', # Radio Cymru
-       'digitalclassicstv' => 'digitalclassics.tv', # Digital Classics TV
-       'discoverycivilisations' => 'civilisations.discoveryeurope.com', # Discovery Civilisations
-       'discoverydigital' => 'discoveryeurope.com', # Discovery (Digital)
-       'discoverykids' => 'kids.discoveryeurope.com', # Discovery Kids
-       # Maybe 'Plus 1' means timewarped
-       # by one hour.  There needs to be
-       # some convention for that.
-       'discoveryplus1' => 'plus-1.discoveryeurope.com', # Discovery Plus 1
-       'discoveryscitrek' => 'sci-trek.discoveryeurope.com', # Discovery Sci Trek
-       'discoverytravel' => 'travel.discoveryeurope.com', # Discovery Travel & Adventure
-       'discoverywings' => 'wings.discoveryeurope.com', # Discovery Wings
-       'disney' => 'disneychannel.disney.co.uk', # The Disney Channel
-       'e4' => 'e4.channel4.com', # E4
-       'einsteintv' => 'einstein.tv', # Einstein TV
-       'extremesports' => 'extreme.com', # Extreme Sports
-       'family_channeldigital' => 'challengetv.co.uk', # Challenge TV (Digital)
-       'fantasy' => 'fantasy.televisionx.co.uk', # Fantasy Channel
-       'fashiontv' => 'ftv.com', # Fashion TV
-       'filmfour' => 'filmfour.channel4.com', # Film on Four
-       'filmfourextreme' => 'extreme.filmfour.channel4.com', # FilmFour Extreme
-       'filmfourplus1' => 'plus-1.filmfour.channel4.com', # FilmFour+1
-       'filmfourworld' => 'world.filmfour.channel4.com', # FilmFour World
-       'foxdigital' => 'foxkids.co.uk', # Fox Kids Network (Digital)
-       'foxplus1' => 'plus-1.foxkids.co.uk', # Fox Kids Plus 1
-       'grampian_5' => 'grampiantv.co.uk', # Grampian
-       'granada_6' => 'granadatv.co.uk', # Granada (site down ATM)
-       'granada_breezeondigital' => 'breeze.granadatv.co.uk', # Granada Breeze
-       'granada_men' => 'men.granadatv.co.uk', # Granada Men & Motors
-       'granada_menondigital' => 'itv-digital.men.granadatv.co.uk', # Granada Men & Motors - ITV Digital
-       'granada_plus' => 'plus.granadatv.co.uk', # Granada Plus
-       'granada_plusondigital' => 'plus.granadatv.co.uk', # Granada Plus - ITV Digital
-       'historydigital' => 'thehistorychannel.co.uk', # History Channel (Digital)
-       'htvwales_7' => 'wales.htv.co.uk', # HTV Wales
-       'htvwest_8' => 'west.htv.co.uk', # HTV West
-       'itv2' => 'itv2.itv.co.uk', # ITV2
-       'itvsport' => 'sport.itv.co.uk', # ITV Sport
-       'itvsportplus' => 'sport-plus.itv.co.uk', # ITV Sport
-       'itvsportselect' => 'sport-select.itv.co.uk', # ITV Sport Select
-       'landscape' => 'landscapetv.com', # Landscape Channel
-       'london_live' => 'london-live.bbc.co.uk', # BBC London Live
-       'm2' => 'm2europe.com',	# M2
-       'meridian_15' => 'meridian.tv.co.uk', # Meridian
-       'meridian_9' => 'meridian.tv.co.uk', # Meridian
-       'mtv' => 'mtv.co.uk',	# MTV
-       'mtvbase' => 'base.mtv.co.uk', # MTV Base
-       'mtvdance' => 'dance.mtv.co.uk', # MTV Dance
-       'mtvextra' => 'hits.mtv.co.uk', # MTV Hits
-       # musicchoice.co.uk is down
-       'musicchoiceblues' => 'blues.musicchoice.co.uk', # Music Choice Blues
-       'musicchoiceclassical' => 'classical.musicchoice.co.uk', # Music Choice Classical
-       'musicchoicecountry' => 'country.musicchoice.co.uk', # Music Choice Country
-       'musicchoicedance' => 'dance.musicchoice.co.uk', # Music Choice Dance
-       'musicchoiceeasy' => 'easy.musicchoice.co.uk', # Music Choice Easy
-       'musicchoicegold' => 'gold.musicchoice.co.uk', # Music Choice Gold
-       'musicchoicehits' => 'hits.musicchoice.co.uk', # Music Choice Hits
-       'musicchoicejazz' => 'jazz.musicchoice.co.uk', # Music Choice Jazz
-       'musicchoicelove' => 'love.musicchoice.co.uk', # Music Choice Love
-       'musicchoicerock' => 'rock.musicchoice.co.uk', # Music Choice Rock
-       'mutv' => 'mutv.manutd.com', # MUTV
-       'nagaeltachta' => 'rnag.ie', # Radio na Gaeltachta
-       'nationalgeographicdigital' => 'nationalgeographic.co.uk', # National Geographic (Digital)
-       'nickelodeon' => 'nickelodeon.co.uk', # Nickelodeon
-       'nickelodeondigital' => 'nickelodeon.co.uk', # Nickelodeon (Digital)
-       'nickelodeonddigital' => 'nickelodeon.co.uk', # Nickelodeon (Digital)
-       'nickelodeonjr' => 'jr.nickelodeon.co.uk', # Nickelodeon Jr
-       'nickelodeonreplay' => 'replay.nickelodeon.co.uk', # Nickelodeon Replay
-       'paramount' => 'paramountcomedy.com', # Paramount Comedy
-       'performance' => 'performancetv.co.uk', # Performance
-       'performancedigital' => 'digital.performancetv.co.uk', # Performance (Digital)
-       'playboy' => 'playboy.com', # Playboy Channel
-       'qvc' => 'qvcuk.com',	# QVC
-       'racing' => 'racingchannel.com', # The Racing Channel
-       'radio1' => 'radio-1.bbc.co.uk',
-       'radio2' => 'radio-2.bbc.co.uk',
-       'radio3' => 'radio-3.bbc.co.uk',
-       'radio4' => 'radio-4.bbc.co.uk',
-       'radio5mw' => 'radio-5-mw.bbc.co.uk',
-       # Ananova internal name wrong
-       'radioireland' => 'todayfm.com', # Today FM
-       'radioscotland' => 'radio-scotland.bbc.co.uk', # Radio Scotland
-       'radioulster' => 'radio-ulster.bbc.co.uk', # Radio Ulster
-       # Couldn't find a domain name for Red Hot All Girl
-       'redhotallgirl' => 'red-hot-all-girl.tv-listings.ananova.com', # Red Hot All Girl
-       'rte1_12' => 'rte-1.rte.ie', # RTE 1
-       'rte2_12' => 'rte-2.rte.ie', # RTE 2
-       'rteradio1' => 'radio-1.rte.ie', # RTE Radio 1
-       'rteradio2' => '2-fm.rte.ie', # 2 FM
-       'rteradiofm3' => 'lyric-fm.rte.ie', # Lyric FM
-       's4c_7' => 's4c.co.uk',	# S4C (Welsh Channel 4)
-       's4cdigital' => 'digital.s4c.co.uk', # Channel 4 - Wales (Digital)
-       'scificable' => 'cable.uk.scifi.com', # Sci-Fi (Cable)
-       'scifidigital' => 'digital.uk.scifi.com', # Sci-Fi (Digital)
-       'scottish_10' => 'scottishtv.co.uk', # Scottish
-       'shop' => 'shop-tv.co.uk', # Shop!
-       'simplyshopping' => 'simplyshoppingtv.co.uk', # Simply Shopping
-       'sky_boxofficedigital' => 'box-office-digital.sky.com', # Sky Box Office Digital
-       'sky_channel' => 'sky-one.sky.com', # Sky One
-       'sky_eurosport' => 'eurosport.sky.com', # Eurosport
-       'sky_moviemax2' => '2.moviemax.sky.com', # Sky Moviemax 2
-       'sky_moviemax3' => '3.moviemax.sky.com', # Sky Moviemax 3
-       'sky_moviemax4' => '4.moviemax.sky.com', # Sky Moviemax 4
-       'sky_moviemax5' => '5.moviemax.sky.com', # Sky Moviemax 5
-       'sky_moviemaxondigital' => 'itvdigital.moviemax.sky.com', # Sky Moviemax - Ondigital
-       'sky_movies' => 'moviemax.sky.com', # Sky Moviemax
-       'sky_moviesgolddigital' => 'cinema.sky.com', # Sky Cinema (Digital)
-       'sky_news' => 'sky-news.sky.com', # Sky News
-       'sky_oneondigital' => 'ondigital.sky-one.sky.com', # Sky One (Ondigital)
-       'sky_premier2' => '2.premier.sky.com', # Sky Premier 2
-       'sky_premier3' => '3.premier.sky.com', # Sky Premier 3
-       'sky_premier4' => '4.premier.sky.com', # Sky Premier 4
-       'sky_premierondigital' => 'ondigital.premier.sky.com', # Sky Premier - Ondigital
-       'sky_premierwidescreen' => 'widescreen.premier.sky.com', # Sky Premier - Widescreen
-       'sky_sports2' => '2.sports.sky.com', # Sky Sports 2
-       'sky_sports3' => '3.sports.sky.com', # Sky Sports 3
-       'sky_sportsnews' => 'news.sports.sky.com', # Sky Sports.comTV
-       'skycinema2' => '2.cinema.sky.com', # Sky Cinema 2
-       'sonytv' => 'setindia.com', # Sony Entertainment TV Asia
-       # Couldn't find domain name for Shop America
-       'st121' => 'shop-america.tv-listings.ananova.com', # Shop America
-       'st179' => '51.front-row.ntl.com', # Front Row 51
-       'st180' => '52.front-row.ntl.com', # Front Row 52
-       'st181' => '53.front-row.ntl.com', # Front Row 53
-       'st182' => '54.front-row.ntl.com', # Front Row 54
-       # Assuming Health Channel is this and not Discovery's
-       'st200' => 'channelhealth.tv', # Health Channel
-       'st214' => 'front-row.ntl.com', # Front Row Digital
-       'st215' => 'boomerang.cartoonnetwork.com', # Boomerang
-       'st216' => 'qvc1.qvcuk.com', # QVC1
-       'st417' => 'toon.disney.co.uk', # Toon Disney
-       'st418' => 'playhouse.disney.co.uk', # Playhouse Disney
-       'st422' => '2.tvtravelshop.co.uk', # TV Travel Shop 2
-       'st432' => '1.sports.sky.com', # Sky Sports 1 (ITV Digital)
-       'st436' => '3.sports.sky.com', # Sky Sports 3 (ITV Digital)
-       'st437' => 'extra.sports.sky.com', # Sky Sports Extra
-       'st438' => '2.sports.sky.com', # Sky Sports 2 (ITV Digital)
-       'st474' => 'biography-channel.biography.com', # Biography Channel
-       # Something like 'Channel 9' is hard to search for...
-       'st500' => 'channel-9.tv-listings.ananova.com', # Channel 9 Television
-       'st58' => 'beti.tv', # BET International
-       'st602' => 'artsworld.com', # Artsworld
-       'st606' => 'studio.com', # Studio
-       'st612' => 'asia1tv.com', # Asia1 TV
-       'st613' => 'banglatv.com', # Bangla TV
-       'st615' => 'screenshop.co.uk', # Screenshop
-       'st616' => 'itn.co.uk', # ITN News Channel
-       # pakistanichannel.com is currently down
-       'st617' => 'pakistanichannel.com', # Pakistani Channel
-       'st619' => 'b4utv.com', # B4U Movies
-       # Landmark Travel Channel appears not to have a domain
-       'st66' => 'landmark-travel.tv-listings.ananova.com', # Landmark Travel
-       'st678' => 'star-plus.startv.com', # Star Plus
-       'st701' => 'plus-1.home.discoveryeurope.com', # Discovery Home & Leisure Plus 1
-       'st702' => 'plus-1.thehistorychannel.co.uk', # History Channel Plus 1
-       'st705' => 'plus-1.uk.cartoonnetwork.com', # Cartoon Network Plus 1
-       'st707' => 'plus-1.disneychannel.disney.co.uk', # Disney Plus 1
-       'talkradiouk' => 'talk-radio.co.uk', # Talk Sport, apparently
-       'tara' => 'taratv.net',	# TARA
-       'tcm' => 'tcm.turner.com', # TCM (Digital)
-       'tlcdigital' => 'home.discoveryeurope.com', # Discovery Home & Leisure (Digital)
-       'traveldigital' => 'travelchannel.co.uk', # The Travel Channel (Digital)
-       'troubledigital' => 'trouble.co.uk', # Trouble (Digital)
-       'tv452' => 'utv2.utv.co.uk', # UTV2
-       'tv83' => 'tg4.ie', # TG4
-       'tv84' => 'tv3.ie', # TV3
-       'tv_724_16' => 'london.bbc2.bbc.co.uk', # BBC2 London
-       'tvasia' => 'tvasia.com', # ZEE TV (maybe not right)
-       'tvtravelshop' => 'tvtravelshop.co.uk', # TV Travel Shop
-       'tyne_11' => 'tttv.granadatv.co.uk', # North East
-       'ukarena' => 'uk-drama.flextech.telewest.co.uk', # UK Drama
-       'ukgold' => 'uk-gold.flextech.telewest.co.uk', # UK Gold
-       'ukgoldclassics' => 'uk-gold-2.flextech.telewest.co.uk', # UK Gold 2
-       'ukhorizons' => 'uk-horizons.flextech.telewest.co.uk', # UK Horizons
-       'ukliving' => 'living.flextech.telewest.co.uk', # Living
-       'ukplay' => 'play.flextech.telewest.co.uk', # Play UK
-       'ukstyle' => 'uk-style.flextech.telewest.co.uk', # UK Style
-       'ulster_12' => 'utv.co.uk', # Ulster
-       'vh1' => 'vh1online.co.uk', # VH1
-       'vh1classic' => 'classic.vh1online.co.uk', # VH1 Classic
-       'virgin' => 'virginradio.co.uk', # Virgin
-       'wales' => 'radio-wales.bbc.co.uk', # Radio Wales
-       'wellbeing' => 'wellbeing.com', # Wellbeing
-       'westcountry_13' => 'westcountry.carlton.com', # West Country
-       'worldsvc' => 'world-svc.bbc.com', # World Service
-       'ytv_14' => 'yorkshire.granadatv.co.uk', # Yorkshire
+sub init_channels() {
+    my %ch_data =
+      (
+       '1.sports.sky.com'                         => [ [ 'st432' ] ],
+       '2-fm.rte.ie'                              => [ [ 'rteradio2' ] ],
+       '2.cinema.sky.com'                         => [ [ 'skycinema2' ] ],
+       '2.moviemax.sky.com'                       => [ [ 'sky_moviemax2' ] ],
+       '2.premier.sky.com'                        => [ [ 'sky_premier2' ] ],
+       '2.sports.sky.com'                         => [ [ 'sky_sports2', 'st438' ] ],
+       '2.tvtravelshop.co.uk'                     => [ [ 'st422' ] ],
+       '3.moviemax.sky.com'                       => [ [ 'sky_moviemax3' ] ],
+       '3.premier.sky.com'                        => [ [ 'sky_premier3' ] ],
+       '3.sports.sky.com'                         => [ [ 'sky_sports3', 'st436' ] ],
+       '4.moviemax.sky.com'                       => [ [ 'sky_moviemax4' ] ],
+       '4.premier.sky.com'                        => [ [ 'sky_premier4' ] ],
+       '5.moviemax.sky.com'                       => [ [ 'sky_moviemax5' ] ],
+       '51.front-row.ntl.com'                     => [ [ 'st179' ] ],
+       '52.front-row.ntl.com'                     => [ [ 'st180' ] ],
+       '53.front-row.ntl.com'                     => [ [ 'st181' ] ],
+       '54.front-row.ntl.com'                     => [ [ 'st182' ] ],
+       'adults-only-1.itv.co.uk'                  => [ [ 'adultsonly1' ] ],
+       'adults-only-2.itv.co.uk'                  => [ [ 'adultsonly2' ] ],
+       'anglia.tv.co.uk'                          => [ [ 'anglia_0' ], 3 ],
+       'animalplanet.discoveryeurope.com'         => [ [ 'animalplanetdigital' ] ],
+       'artsworld.com'                            => [ [ 'st602' ] ],
+       'ary-digital.ary-group.com'                => [ [ 'st617' ] ],
+       'asia1tv.com'                              => [ [ 'st612' ] ],
+       'asianet-tv.com'                           => [ [ 'asianet' ] ],
+       'b4utv.com'                                => [ [ 'st619' ] ],
+       'banglatv.com'                             => [ [ 'st613' ] ],
+       'base.mtv.co.uk'                           => [ [ 'mtvbase' ] ],
+       'bbc1.bbc.co.uk'                           => [ [ 'bbc1_2' ], 1 ],
+       'bbc2.bbc.co.uk'                           => [ [ 'bbc2_2' ], 2 ],
+       'beti.tv'                                  => [ [ 'st58' ] ],
+       'biography-channel.biography.com'          => [ [ 'st474' ] ],
+       'bloomberg.com'                            => [ [ 'bloomberg' ], 'Bloomberg' ],
+       'blues.musicchoice.co.uk'                  => [ [ 'musicchoiceblues' ] ],
+       'boomerang.cartoonnetwork.com'             => [ [ 'st215' ] ],
+       'border-tv.com'                            => [ [ 'border_1', 'bordern_17' ], 3 ],
+       'box-office-digital.sky.com'               => [ [ 'sky_boxofficedigital' ], 'Sky Box Office' ],
+       'bravo.co.uk'                              => [ [ 'bravodigital' ], 'Bravo' ],
+       'breeze.granadatv.co.uk'                   => [ [ 'granada_breezeondigital' ], 'Breeze' ],
+       'british.eurosport.com'                    => [ [ 'britisheurosport' ], 'Eurosport' ],
+       'cable.uk.scifi.com'                       => [ [ 'scificable' ], 'Sci-Fi' ],
+       'carlton.com'                              => [ [ 'carlton_16', 'carlton_2' ], 3 ],
+       'central.carlton.com'                      => [ [ 'central_3' ], 3 ],
+       'challengetv.co.uk'                        => [ [ 'family_channeldigital' ], 'Challenge' ],
+       'channel-9.tv-listings.ananova.com'        => [ [ 'st500' ] ],
+       'channel-islands.tv-listings.ananova.com'  => [ [ 'channel_4' ] ],
+       'channel4.com'                             => [ [ 'ch4_0', 'ch4_1', 'ch4_10', 'ch4_11', 'ch4_12', 'ch4_13', 'ch4_14', 'ch4_15', 'ch4_16', 'ch4_17', 'ch4_2', 'ch4_3', 'ch4_4', 'ch4_5', 'ch4_6', 'ch4_7', 'ch4_8', 'ch4_9' ], 4 ],
+       'channel5.co.uk'                           => [ [ 'ch5_0', 'ch5_1', 'ch5_10', 'ch5_11', 'ch5_12', 'ch5_13', 'ch5_14', 'ch5_15', 'ch5_16', 'ch5_17', 'ch5_2', 'ch5_3', 'ch5_4', 'ch5_5', 'ch5_6', 'ch5_7', 'ch5_8', 'ch5_9' ], 5 ],
+       'channelhealth.tv'                         => [ [ 'st200' ] ],
+       'choice.bbc.co.uk'                         => [ [ 'bbcchoice' ] ],
+       'christian-channel-europe.god-digital.com' => [ [ 'christian' ], 'Christian' ],
+       'cinema.carlton.com'                       => [ [ 'carltoncinema' ] ],
+       'cinema.sky.com'                           => [ [ 'sky_moviesgolddigital' ], 'Sky Cinema' ],
+       'civilisations.discoveryeurope.com'        => [ [ 'discoverycivilisations' ] ],
+       'classic.vh1online.co.uk'                  => [ [ 'vh1classic' ] ],
+       'classical.musicchoice.co.uk'              => [ [ 'musicchoiceclassical' ] ],
+       'classicfm.co.uk'                          => [ [ 'classicfm' ] ],
+       'country.musicchoice.co.uk'                => [ [ 'musicchoicecountry' ] ],
+       'dance.mtv.co.uk'                          => [ [ 'mtvdance' ] ],
+       'dance.musicchoice.co.uk'                  => [ [ 'musicchoicedance' ] ],
+       'digital.bbc1.bbc.co.uk'                   => [ [ 'bbc1digital' ], 1 ],
+       'digital.bbc2.bbc.co.uk'                   => [ [ 'bbc2digital' ], 2 ],
+       'digital.ireland.bbc1.bbc.co.uk'           => [ [ 'bbc1irishdigital' ] ],
+       'digital.ireland.bbc2.bbc.co.uk'           => [ [ 'bbc2irishdigital' ] ],
+       'digital.performancetv.co.uk'              => [ [ 'performancedigital' ] ],
+       'digital.s4c.co.uk'                        => [ [ 's4cdigital' ], 'S4C' ],
+       'digital.scotland.bbc1.bbc.co.uk'          => [ [ 'bbc1scotdigital' ] ],
+       'digital.scotland.bbc2.bbc.co.uk'          => [ [ 'bbc2scotdigital' ] ],
+       'digital.uk.scifi.com'                     => [ [ 'scifidigital' ], 'Sci-Fi' ],
+       'digital.wales.bbc.co.uk'                  => [ [ 'bbc1walesdigital' ] ],
+       'digital.wales.bbc2.bbc.co.uk'             => [ [ 'bbc2walesdigital' ] ],
+       'digitalclassics.tv'                       => [ [ 'digitalclassicstv' ] ],
+       'discoveryeurope.com'                      => [ [ 'discoverydigital' ], 'Discovery' ],
+       'disneychannel.disney.co.uk'               => [ [ 'disney' ], 'Disney' ],
+       'e4.channel4.com'                          => [ [ 'e4' ] ],
+       'east.bbc1.bbc.co.uk'                      => [ [ 'bbc1ea_0' ], 1 ],
+       'east.bbc2.bbc.co.uk'                      => [ [ 'bbc2ea_0' ], 2 ],
+       'easy.musicchoice.co.uk'                   => [ [ 'musicchoiceeasy' ] ],
+       'einstein.tv'                              => [ [ 'einsteintv' ] ],
+       'europe.cnbc.com'                          => [ [ 'cnbc' ], 'CNBC' ],
+       'europe.cnn.com'                           => [ [ 'cnn' ] ],
+       'eurosport.sky.com'                        => [ [ 'sky_eurosport' ], 'Eurosport' ],
+       'extra.sports.sky.com'                     => [ [ 'st437' ] ],
+       'extreme.com'                              => [ [ 'extremesports' ] ],
+       'extreme.filmfour.channel4.com'            => [ [ 'filmfourextreme' ] ],
+       'fantasy.televisionx.co.uk'                => [ [ 'fantasy' ], 'Fantasy' ],
+       'filmfour.channel4.com'                    => [ [ 'filmfour' ], 'FilmFour' ],
+       'foxkids.co.uk'                            => [ [ 'foxdigital' ], 'Fox Kids' ],
+       'front-row.ntl.com'                        => [ [ 'st214' ] ],
+       'ftv.com'                                  => [ [ 'fashiontv' ] ],
+       'gold.musicchoice.co.uk'                   => [ [ 'musicchoicegold' ] ],
+       'grampiantv.co.uk'                         => [ [ 'grampian_5' ], 3 ],
+       'granadatv.co.uk'                          => [ [ 'granada_6' ], 3 ],
+       'hits.mtv.co.uk'                           => [ [ 'mtvextra' ] ],
+       'hits.musicchoice.co.uk'                   => [ [ 'musicchoicehits' ] ],
+       'home.discoveryeurope.com'                 => [ [ 'tlcdigital' ], 'Discovery Home' ],
+       'ireland.bbc1.bbc.co.uk'                   => [ [ 'bbc1irish_12' ], 1 ],
+       'ireland.bbc2.bbc.co.uk'                   => [ [ 'bbc2irish_12' ], 2 ],
+       'itn.co.uk'                                => [ [ 'st616' ] ],
+       'itv-digital.men.granadatv.co.uk'          => [ [ 'granada_menondigital' ] ],
+       'itv2.itv.co.uk'                           => [ [ 'itv2' ] ],
+       'itvdigital.moviemax.sky.com'              => [ [ 'sky_moviemaxondigital' ], 'Sky Moviemax' ],
+       'jazz.musicchoice.co.uk'                   => [ [ 'musicchoicejazz' ] ],
+       'jr.nickelodeon.co.uk'                     => [ [ 'nickelodeonjr' ] ],
+       'kids.discoveryeurope.com'                 => [ [ 'discoverykids' ] ],
+       'knowledge.bbc.co.uk'                      => [ [ 'bbcknowledge' ], 'BBC Know' ],
+       'landmark-travel.tv-listings.ananova.com'  => [ [ 'st66' ] ],
+       'landscapetv.com'                          => [ [ 'landscape' ], 'Landscape' ],
+       'living.flextech.telewest.co.uk'           => [ [ 'ukliving' ] ],
+       'london-live.bbc.co.uk'                    => [ [ 'london_live' ] ],
+       'london.bbc1.bbc.co.uk'                    => [ [ 'bbc1london_16' ] ],
+       'london.bbc2.bbc.co.uk'                    => [ [ 'tv_724_16' ] ],
+       'love.musicchoice.co.uk'                   => [ [ 'musicchoicelove' ] ],
+       'lyric-fm.rte.ie'                          => [ [ 'rteradiofm3' ] ],
+       'm2europe.com'                             => [ [ 'm2' ] ],
+       'men.granadatv.co.uk'                      => [ [ 'granada_men' ], 'Men & Motors' ],
+       'meridian.tv.co.uk'                        => [ [ 'meridian_15', 'meridian_9' ], 3 ],
+       'midlands.bbc1.bbc.co.uk'                  => [ [ 'bbc1mid_3' ], 1 ],
+       'midlands.bbc2.bbc.co.uk'                  => [ [ 'bbc2mid_3' ], 2 ],
+       'moviemax.sky.com'                         => [ [ 'sky_movies' ] ],
+       'mtv.co.uk'                                => [ [ 'mtv' ] ],
+       'mutv.manutd.com'                          => [ [ 'mutv' ] ],
+       'nationalgeographic.co.uk'                 => [ [ 'nationalgeographicdigital' ], 'National Geographic' ],
+       'news-24.bbc.co.uk'                        => [ [ 'bbcnews24' ] ],
+       'news.sports.sky.com'                      => [ [ 'sky_sportsnews' ] ],
+       'nickelodeon.co.uk'                        => [ [ 'nickelodeon', 'nickelodeonddigital' ] ],
+       'north-east.bbc1.bbc.co.uk'                => [ [ 'bbc1ne_1', 'bbc1ne_11' ], 1 ],
+       'north-east.bbc2.bbc.co.uk'                => [ [ 'bbc2ne_1', 'bbc2ne_11' ], 2 ],
+       'north-west.bbc1.bbc.co.uk'                => [ [ 'bbc1nw_6' ], 1 ],
+       'north-west.bbc2.bbc.co.uk'                => [ [ 'bbc2nw_6' ], 2 ],
+       'north.bbc1.bbc.co.uk'                     => [ [ 'bbc1n_14' ], 1 ],
+       'north.bbc2.bbc.co.uk'                     => [ [ 'bbc2n_14' ], 2 ],
+       'ondigital.premier.sky.com'                => [ [ 'sky_premierondigital' ], 'Sky Premier' ],
+       'ondigital.sky-one.sky.com'                => [ [ 'sky_oneondigital' ], 'S1' ],
+       'paramountcomedy.com'                      => [ [ 'paramount' ] ],
+       'parliament.bbc.co.uk'                     => [ [ 'bbcparliament' ], 'BBC Parl' ],
+       'performancetv.co.uk'                      => [ [ 'performance' ] ],
+       'play.flextech.telewest.co.uk'             => [ [ 'ukplay' ] ],
+       'playboy.com'                              => [ [ 'playboy' ], 'Playboy' ],
+       'playhouse.disney.co.uk'                   => [ [ 'st418' ] ],
+       'plus-1.discoveryeurope.com'               => [ [ 'discoveryplus1' ], 'Discovery+1' ],
+       'plus-1.disneychannel.disney.co.uk'        => [ [ 'st707' ] ],
+       'plus-1.filmfour.channel4.com'             => [ [ 'filmfourplus1' ] ],
+       'plus-1.foxkids.co.uk'                     => [ [ 'foxplus1' ], 'Fox Kids+1' ],
+       'plus-1.home.discoveryeurope.com'          => [ [ 'st701' ] ],
+       'plus-1.thehistorychannel.co.uk'           => [ [ 'st702' ] ],
+       'plus-1.uk.cartoonnetwork.com'             => [ [ 'st705' ] ],
+       'plus.granadatv.co.uk'                     => [ [ 'granada_plus', 'granada_plusondigital' ] ],
+       'prime.bbc.com'                            => [ [ 'bbcprime' ] ],
+       'qvc1.qvcuk.com'                           => [ [ 'st216' ] ],
+       'qvcuk.com'                                => [ [ 'qvc' ] ],
+       'racingchannel.com'                        => [ [ 'racing' ], 'Racing' ],
+       'radio-1.bbc.co.uk'                        => [ [ 'radio1' ], 'R1' ],
+       'radio-1.rte.ie'                           => [ [ 'rteradio1' ] ],
+       'radio-2.bbc.co.uk'                        => [ [ 'radio2' ], 'R2' ],
+       'radio-3.bbc.co.uk'                        => [ [ 'radio3' ], 'R3' ],
+       'radio-4.bbc.co.uk'                        => [ [ 'radio4' ], 'R4' ],
+       'radio-5-mw.bbc.co.uk'                     => [ [ 'radio5mw' ], 'R5' ],
+       'radio-cymru.bbc.co.uk'                    => [ [ 'cymru' ] ],
+       'radio-scotland.bbc.co.uk'                 => [ [ 'radioscotland' ] ],
+       'radio-ulster.bbc.co.uk'                   => [ [ 'radioulster' ] ],
+       'radio-wales.bbc.co.uk'                    => [ [ 'wales' ] ],
+       'red-hot-all-girl.tv-listings.ananova.com' => [ [ 'redhotallgirl' ] ],
+       'replay.nickelodeon.co.uk'                 => [ [ 'nickelodeonreplay' ] ],
+       'rnag.ie'                                  => [ [ 'nagaeltachta' ] ],
+       'rock.musicchoice.co.uk'                   => [ [ 'musicchoicerock' ] ],
+       'rte-1.rte.ie'                             => [ [ 'rte1_12' ] ],
+       'rte-2.rte.ie'                             => [ [ 'rte2_12' ] ],
+       's4c.co.uk'                                => [ [ 's4c_7' ], 'S4C' ],
+       'sci-trek.discoveryeurope.com'             => [ [ 'discoveryscitrek' ], 'Sci-Trek' ],
+       'scotland.bbc1.bbc.co.uk'                  => [ [ 'bbc1scot_10', 'bbc1scot_17', 'bbc1scot_5' ], 1 ],
+       'scotland.bbc2.bbc.co.uk'                  => [ [ 'bbc2scot_10', 'bbc2scot_17', 'bbc2scot_5' ], 2 ],
+       'scottishtv.co.uk'                         => [ [ 'scottish_10' ], 3 ],
+       'screenshop.co.uk'                         => [ [ 'st615' ] ],
+       'setindia.com'                             => [ [ 'sonytv' ], 'SETI' ],
+       'shop-america.tv-listings.ananova.com'     => [ [ 'st121' ] ],
+       'shop-tv.co.uk'                            => [ [ 'shop' ], 'Shop' ],
+       'simplyshoppingtv.co.uk'                   => [ [ 'simplyshopping' ] ],
+       'sky-news.sky.com'                         => [ [ 'sky_news' ] ],
+       'sky-one.sky.com'                          => [ [ 'sky_channel' ], 'S1' ],
+       'sky-premier.sky.com'                      => [ [ 'bsb_movie' ] ],
+       'sky-sports-1.sky.com'                     => [ [ 'bsb_sports' ] ],
+       'south-east.bbc1.bbc.co.uk'                => [ [ 'bbc1se_15' ], 1 ],
+       'south-east.bbc2.bbc.co.uk'                => [ [ 'bbc2se_15' ], 2 ],
+       'south-west.bbc1.bbc.co.uk'                => [ [ 'bbc1sw_13', 'bbc1sw_4' ], 1 ],
+       'south-west.bbc2.bbc.co.uk'                => [ [ 'bbc2sw_13', 'bbc2sw_4' ], 2 ],
+       'south.bbc1.bbc.co.uk'                     => [ [ 'bbc1s_9' ], 1 ],
+       'south.bbc2.bbc.co.uk'                     => [ [ 'bbc2s_9' ], 2 ],
+       'sport-plus.itv.co.uk'                     => [ [ 'itvsportplus' ], 'ITV Sport Plus' ],
+       'sport-select.itv.co.uk'                   => [ [ 'itvsportselect' ] ],
+       'sport.itv.co.uk'                          => [ [ 'itvsport' ] ],
+       'star-plus.startv.com'                     => [ [ 'st678' ] ],
+       'studio.com'                               => [ [ 'st606' ] ],
+       'talk-radio.co.uk'                         => [ [ 'talkradiouk' ] ],
+       'taratv.net'                               => [ [ 'tara' ] ],
+       'tcm.turner.com'                           => [ [ 'tcm' ], 'TCM' ],
+       'tg4.ie'                                   => [ [ 'tv83' ] ],
+       'theadultchannel.co.uk'                    => [ [ 'adult' ], 'Adult' ],
+       'thebox.co.uk'                             => [ [ 'box' ] ],
+       'thehistorychannel.co.uk'                  => [ [ 'historydigital' ], 'History' ],
+       'todayfm.com'                              => [ [ 'radioireland' ] ],
+       'toon.disney.co.uk'                        => [ [ 'st417' ] ],
+       'travel.discoveryeurope.com'               => [ [ 'discoverytravel' ] ],
+       'travelchannel.co.uk'                      => [ [ 'traveldigital' ], 'Travel' ],
+       'trouble.co.uk'                            => [ [ 'troubledigital' ], 'Trouble' ],
+       'tttv.granadatv.co.uk'                     => [ [ 'tyne_11' ], 3 ],
+       'tv3.ie'                                   => [ [ 'tv84' ] ],
+       'tvasia.com'                               => [ [ 'tvasia' ], 'Zee' ],
+       'tvtravelshop.co.uk'                       => [ [ 'tvtravelshop' ], 'Travel Shop' ],
+       'uk-drama.flextech.telewest.co.uk'         => [ [ 'ukarena' ] ],
+       'uk-gold-2.flextech.telewest.co.uk'        => [ [ 'ukgoldclassics' ] ],
+       'uk-gold.flextech.telewest.co.uk'          => [ [ 'ukgold' ] ],
+       'uk-horizons.flextech.telewest.co.uk'      => [ [ 'ukhorizons' ] ],
+       'uk-style.flextech.telewest.co.uk'         => [ [ 'ukstyle' ] ],
+       'uk.cartoonnetwork.com'                    => [ [ 'cartoon' ] ],
+       'utv.co.uk'                                => [ [ 'ulster_12' ], 3 ],
+       'utv2.utv.co.uk'                           => [ [ 'tv452' ] ],
+       'vh1online.co.uk'                          => [ [ 'vh1' ] ],
+       'virginradio.co.uk'                        => [ [ 'virgin' ] ],
+       'wales.bbc1.bbc.co.uk'                     => [ [ 'bbc1wales_7' ], 1 ],
+       'wales.bbc2.bbc.co.uk'                     => [ [ 'bbc2wales_7' ], 2 ],
+       'wales.htv.co.uk'                          => [ [ 'htvwales_7' ], 3 ],
+       'west.bbc1.bbc.co.uk'                      => [ [ 'bbc1w_8' ], 1 ],
+       'west.bbc2.bbc.co.uk'                      => [ [ 'bbc2w_8' ], 2 ],
+       'west.htv.co.uk'                           => [ [ 'htvwest_8' ], 3 ],
+       'westcountry.carlton.com'                  => [ [ 'westcountry_13' ], 3 ],
+       'widescreen.premier.sky.com'               => [ [ 'sky_premierwidescreen' ], 'Sky Premier' ],
+       'wings.discoveryeurope.com'                => [ [ 'discoverywings' ] ],
+       'world-svc.bbc.com'                        => [ [ 'worldsvc' ] ],
+       'world-tv.bbc.com'                         => [ [ 'bbcworld' ] ],
+       'world.filmfour.channel4.com'              => [ [ 'filmfourworld' ] ],
+       'yorkshire.granadatv.co.uk'                => [ [ 'ytv_14' ], 3 ],
       );
-    return \%ch_to_output;
+
+    foreach (keys %ch_data) {
+	t "initializing channel with id $_";
+	my $ch = new Channel();
+	$ch->set_xmltv_id($_);
+	foreach (@{$ch_data{$_}->[0]}) {
+	    t "adding Ananova id $_";
+	    $ch->add_ananova_id($_);
+	}
+	my $extra_display = $ch_data{$_}->[1];
+	t 'maybe adding extra display name: ' . d $extra_display;
+	$ch->add_extra_display_names($extra_display)
+	  if defined $extra_display;
+    }
 }
 
-# Return a hash mapping internal name to channel number (really just
-# an extra pretty name).
-#
-sub get_output_to_number() {
-    my %channel_numbers = ('theadultchannel.co.uk' => 'Adult',
-			   'anglia.tv.co.uk' => 3,
-			   'south-east.bbc1.bbc.co.uk' => 1,
-			   'east.bbc1.bbc.co.uk' => 1,
-			   'ireland.bbc1.bbc.co.uk' => 1,
-			   'midlands.bbc1.bbc.co.uk' => 1,
-			   'north.bbc1.bbc.co.uk' => 1,
-			   'north-east.bbc1.bbc.co.uk' => 1,
-			   'north-east.bbc1.bbc.co.uk' => 1,
-			   'north-west.bbc1.bbc.co.uk' => 1,
-			   'south.bbc1.bbc.co.uk' => 1,
-			   'scotland.bbc1.bbc.co.uk' => 1,
-			   'scotland.bbc1.bbc.co.uk' => 1,
-			   'south-east.bbc1.bbc.co.uk' => 1,
-			   'south-west.bbc1.bbc.co.uk' => 1,
-			   'south-west.bbc1.bbc.co.uk' => 1,
-			   'west.bbc1.bbc.co.uk' => 1,
-			   'wales.bbc1.bbc.co.uk' => 1,
-			   'digital.bbc1.bbc.co.uk' => 1,
-			   'south-east.bbc2.bbc.co.uk' => 2,
-			   'east.bbc2.bbc.co.uk' => 2,
-			   'ireland.bbc2.bbc.co.uk' => 2,
-			   'midlands.bbc2.bbc.co.uk' => 2,
-			   'north.bbc2.bbc.co.uk' => 2,
-			   'north-east.bbc2.bbc.co.uk' => 2,
-			   'north-east.bbc2.bbc.co.uk' => 2,
-			   'north-west.bbc2.bbc.co.uk' => 2,
-			   'south.bbc2.bbc.co.uk' => 2,
-			   'scotland.bbc2.bbc.co.uk' => 2,
-			   'scotland.bbc2.bbc.co.uk' => 2,
-			   'south-east.bbc2.bbc.co.uk' => 2,
-			   'south-west.bbc2.bbc.co.uk' => 2,
-			   'south-west.bbc2.bbc.co.uk' => 2,
-			   'west.bbc2.bbc.co.uk' => 2,
-			   'wales.bbc2.bbc.co.uk' => 2,
-			   'digital.bbc2.bbc.co.uk' => 2,
-			   'bloomberg.com' => 'Bloomberg',
-			   'border-tv.com' => 3,
-			   'bravo.co.uk' => 'Bravo',
-			   'british.eurosport.com' => 'Eurosport',
-			   'carlton.com' => 3,
-			   'central.carlton.com' => 3,
-			   'channel4.com' => 4, 
-			   'channel5.co.uk' => 5,
-			   'christian-channel-europe.god-digital.com'
-		           => 'Christian',
-			   'europe.cnbc.com' => 'CNBC',
-			   'discoveryeurope.com' => 'Discovery',
-			   'plus-1.discoveryeurope.com' => 'Discovery+1',
-			   'sci-trek.discoveryeurope.com' => 'Sci-Trek',
-			   'disneychannel.disney.co.uk' => 'Disney',
-			   'challengetv.co.uk' => 'Challenge',
-			   'fantasy.televisionx.co.uk' => 'Fantasy',
-			   'filmfour.channel4.com' => 'FilmFour',
-			   'foxkids.co.uk' => 'Fox Kids',
-			   'plus-1.foxkids.co.uk' => 'Fox Kids+1',
-			   'grampiantv.co.uk' => 3,
-			   'granadatv.co.uk' => 3, 
-			   'breeze.granadatv.co.uk' => 'Breeze',
-			   'men.granadatv.co.uk' => 'Men & Motors',
-			   'thehistorychannel.co.uk' => 'History',
-			   'wales.htv.co.uk' => 3,
-			   'west.htv.co.uk' => 3,
-			   'sport-plus.itv.co.uk' => 'ITV Sport Plus',
-			   'landscapetv.com' => 'Landscape',
-			   'meridian.tv.co.uk' => 3,
-			   'nationalgeographic.co.uk' => 'National Geographic',
-			   'playboy.com' => 'Playboy',
-			   'racingchannel.com' => 'Racing',
-			   'radio-1.bbc.co.uk' => 'R1',
-			   'radio-2.bbc.co.uk' => 'R2',
-			   'radio-3.bbc.co.uk' => 'R3',
-			   'radio-4.bbc.co.uk' => 'R4',
-			   'radio-5-mw.bbc.co.uk' => 'R5',
-			   's4c.co.uk' => 'S4C',
-			   'digital.s4c.co.uk' => 'S4C',
-			   'cable.uk.scifi.com' => 'Sci-Fi',
-			   'digital.uk.scifi.com' => 'Sci-Fi',
-			   'scottishtv.co.uk' => 3,
-			   'shop-tv.co.uk' => 'Shop',
-			   'box-office-digital.sky.com' => 'Sky Box Office',
-			   'sky-one.sky.com' => 'S1', 
-			   'eurosport.sky.com' => 'Eurosport',
-			   'itvdigital.moviemax.sky.com' => 'Sky Moviemax',
-			   'cinema.sky.com' => 'Sky Cinema',
-			   'ondigital.sky-one.sky.com' => 'S1',
-			   'ondigital.premier.sky.com' => 'Sky Premier',
-			   'widescreen.premier.sky.com' => 'Sky Premier',
-			   'setindia.com' => 'SETI',
-			   'tcm.turner.com' => 'TCM',
-			   'home.discoveryeurope.com' => 'Discovery Home',
-			   'travelchannel.co.uk' => 'Travel',
-			   'trouble.co.uk' => 'Trouble',
-			   'tvasia.com' => 'Zee',
-			   'tvtravelshop.co.uk' => 'Travel Shop',
-			   'tttv.granadatv.co.uk' => 3,
-			   'utv.co.uk' => 3,
-			   'westcountry.carlton.com' => 3,
-			   'yorkshire.granadatv.co.uk' => 3,
-			   'knowledge.bbc.co.uk' => 'BBC Know',
-			   'parliament.bbc.co.uk' => 'BBC Parl',
-			  );
-    return %channel_numbers;
-}
-
-# Return a hash mapping package names to lists of Ananova channel ids.
+# Return a hash mapping package names to lists of XMLTV channel ids.
 sub get_channel_pkgs() {
-    my %xmltvid_to_ananovaid = reverse %{get_ch_to_output()};
     my %pkgs = (
 		# Free digital channels.  The terrestrial analogue
 		# versions are not included here because they come
@@ -1873,8 +1750,8 @@ fantasy.televisionx.co.uk playboy.com
 red-hot-all-girl.tv-listings.ananova.com)],
 
 		factual => [qw(
-animalplanet.discoveryeurope.com knowledge.bbc.co.uk food.carlton.com
-dot-tv.tv-listings.ananova.com civilisations.discoveryeurope.com
+animalplanet.discoveryeurope.com knowledge.bbc.co.uk
+civilisations.discoveryeurope.com
 discoveryeurope.com kids.discoveryeurope.com
 plus-1.discoveryeurope.com sci-trek.discoveryeurope.com
 travel.discoveryeurope.com wings.discoveryeurope.com einstein.tv
@@ -1886,13 +1763,13 @@ plus-1.thehistorychannel.co.uk home.discoveryeurope.com)],
 news-24.bbc.co.uk parliament.bbc.co.uk bloomberg.com europe.cnn.com
 sky-news.sky.com itn.co.uk)],
 
-		# I couldn't decide what to call this ('ethnic'?) 
+		# I couldn't decide what to call this ('ethnic'?)
 		# until I realized that all the channels come from the
 		# same continent :-).
 		#
 		asia => [qw(
 asianet-tv.com setindia.com asia1tv.com banglatv.com
-pakistanichannel.com b4utv.com star-plus.startv.com tvasia.com)],
+ary-digital.ary-group.com b4utv.com star-plus.startv.com tvasia.com)],
 
 		sport => [qw(
 british.eurosport.com sky-sports-1.sky.com extreme.com sport.itv.co.uk
@@ -1903,10 +1780,10 @@ extra.sports.sky.com 2.sports.sky.com)],
 
 		# Of course actual 'entertainment' is subjective.
 		entertainment => [qw(
-box.tv-listings.ananova.com bravo.co.uk e4.channel4.com
+bravo.co.uk e4.channel4.com
 challengetv.co.uk men.granadatv.co.uk itv-digital.men.granadatv.co.uk
-plus.granadatv.co.uk plus.granadatv.co.uk itv2.itv.co.uk
-sky-one.sky.com ondigital.sky-one.sky.com trouble.co.uk
+plus.granadatv.co.uk itv2.itv.co.uk sky-one.sky.com
+ondigital.sky-one.sky.com trouble.co.uk
 uk-gold.flextech.telewest.co.uk uk-gold-2.flextech.telewest.co.uk
 play.flextech.telewest.co.uk)],
 
@@ -1947,7 +1824,7 @@ play.flextech.telewest.co.uk uk-style.flextech.telewest.co.uk)],
 		lifestyle => [qw(
 breeze.granadatv.co.uk plus-1.home.discoveryeurope.com
 home.discoveryeurope.com living.flextech.telewest.co.uk
-uk-style.flextech.telewest.co.uk wellbeing.com)],
+uk-style.flextech.telewest.co.uk)],
 
 		music => [qw(
 m2europe.com mtv.co.uk base.mtv.co.uk dance.mtv.co.uk hits.mtv.co.uk
@@ -1955,7 +1832,7 @@ blues.musicchoice.co.uk classical.musicchoice.co.uk
 country.musicchoice.co.uk dance.musicchoice.co.uk
 easy.musicchoice.co.uk gold.musicchoice.co.uk hits.musicchoice.co.uk
 jazz.musicchoice.co.uk love.musicchoice.co.uk rock.musicchoice.co.uk
-vh1online.co.uk classic.vh1online.co.uk)],
+vh1online.co.uk classic.vh1online.co.uk thebox.co.uk)],
 
 		comedy => [qw(paramountcomedy.com)],
 
@@ -1969,8 +1846,7 @@ performancetv.co.uk digital.performancetv.co.uk artsworld.com)],
 qvcuk.com shop-tv.co.uk simplyshoppingtv.co.uk
 shop-america.tv-listings.ananova.com qvc1.qvcuk.com
 2.tvtravelshop.co.uk screenshop.co.uk
-landmark-travel.tv-listings.ananova.com tvtravelshop.co.uk
-wellbeing.com)],
+landmark-travel.tv-listings.ananova.com tvtravelshop.co.uk)],
 
 		scifi => [qw(
 cable.uk.scifi.com digital.uk.scifi.com)],
@@ -1981,15 +1857,16 @@ landmark-travel.tv-listings.ananova.com travelchannel.co.uk
 tvtravelshop.co.uk)],
 	       );
 
-    my %r;
-    foreach (keys %pkgs) {
-	my $ananova_ids = $r{$_} = [];
-	foreach (@{$pkgs{$_}}) {
-	    die if not defined;
-	    my $aid = $xmltvid_to_ananovaid{$_};
-	    die "cannot find Ananova id for $_" if not defined $aid;
-	    push @$ananova_ids, $aid;
+
+    # Check that every XMLTV id here is actually known.
+    foreach my $pkg_name (keys %pkgs) {
+	foreach my $ch_id (@{$pkgs{$pkg_name}}) {
+	    my $ch = Channel->find_by_xmltv_id($ch_id);
+	    if (not defined $ch) {
+		warn "channel id $ch_id mentioned in package $pkg_name, but not known";
+	    }
 	}
     }
-    return %r;
+
+    return %pkgs;
 }
