@@ -21,11 +21,12 @@ company providing TV listings in Sweden.  The grabber relies on
 parsing HTML so it might stop working at any time.
 
 First run B<tv_grab_sn --configure> to choose whether you want Swedish
-or Norwegian listings.  Then running B<tv_grab_sn> with no arguments
-will output listings in XML format to standard output.
+or Norwegian listings, and which channels you want to download.  Then
+running B<tv_grab_sn> with no arguments will output listings in XML
+format to standard output.
 
-B<--configure> Prompt for Sweden or Norway and write the configuration
-file.
+B<--configure> Prompt for Sweden or Norway, prompt for which channels,
+and write the configuration file.
 
 B<--config-file FILE> Set the name of the configuration file, the
 default is B<~/.xmltv/tv_grab_sn>.  This is the file written by
@@ -47,7 +48,8 @@ L<xmltv(5)>.
 
 =head1 AUTHOR
 
-Stefan Görling, stefan@gorling.se
+Stefan Görling, stefan@gorling.se.  Thanks to Staffen Malmgren for
+channel configuration.
 
 =head1 BUGS
 
@@ -85,6 +87,12 @@ BEGIN {
     eval { require Term::ProgressBar };
     $have_bar = not $@;
 }
+
+sub tidy( $ );
+sub nextday( $ );
+sub process_table( $$$$ );
+sub dc( $$ );
+sub pd( $ );
 
 # Whether zero-length programmes should be included in the output.
 my $WRITE_ZERO_LENGTH = 0;
@@ -181,31 +189,80 @@ if ($opt_configure) {
 			 sort keys %cs);
     my $c = $cs{$cn}; die if not defined $c;
     print CONF "country $c\t# $cn\n";
+    # find list of available channels
+    my $bar = new Term::ProgressBar('getting list of channels', 1)
+      if $have_bar;
+    my $url="http://www.dagenstv.com/$c/frontpage";
+    my $local_data=get($url);
+    die "could not get channel listing $url, aborting\n"
+      if not defined $local_data;
+    update $bar if $have_bar;
+
+    # the front page has two select dropdowns, one for channels and
+    # one for categories. If you look at only the <option> tag,
+    # there's no way to tell them apart. we have to cut out just the
+    # relevant <select> element.
+    ($local_data) = ($local_data =~ m/<select name="cha"(.*?)<\/select>/s);
+		
+    my $answer;
+    my $answer_all;
+    while ($local_data=~m/<option\s*value=\"(\d+)\"\s*>([^>]+)<\/option>/sg) {
+	my $ch_name=tidy($2);
+	my $ch_did=$1;
+
+	if ($answer_all) {
+	    $answer = $answer_all;
+	    print($answer eq 'yes' ? 'adding' : 'ignoring',
+		  " new channel $ch_name\n");
+	}
+	else {
+	    $answer=askQuestion("add channel $ch_name?", 'yes',
+				'yes', 'no', 'all', 'none');
+	    if ( $answer eq 'all' ) {
+		$answer_all='yes';
+	    }
+	    elsif ( $answer eq 'none' ) {
+		$answer_all='no';
+	    }
+	}
+	if ($answer eq 'yes') {
+	    print CONF "channel $ch_did $ch_name\n";
+	}
+	else {
+	    print CONF "# channel $ch_did $ch_name\n";
+	}
+    }
+
     close CONF or warn "cannot close $CONFIG_FILE: $!";
     print "All done, run with no arguments to grab listings.\n";
+
     exit();
 }
 
-my $country;
+my ($country, %channels, $ch_did, $ch_name);
 open(CONF, $CONFIG_FILE) or die "cannot read $CONFIG_FILE: $!\n";
 while (<CONF>) {
     s/\#.*//; s/^\s+//; s/\s+$//;
     next if not length;
-    if (/^country\s+(\w\w)$/) {
+    if (/^country:?\s+(\w\w)$/) {
 	warn "$CONFIG_FILE:$.: already seen country\n"
 	  if defined $country;
 	$country = $1;
+    }
+    elsif (/^channel:?\s+(\d+)\s+([^\#]+)/) {
+	$ch_did = $1;
+	$ch_name = $2; 
+	$ch_name =~ s/\s*$//;
+	$channels{$ch_did} = $ch_name;
+    }
+    elsif (/^\#/) {
+	# just ignore comments
     }
     else {
 	warn "$CONFIG_FILE:$.: bad line\n";
     }
 }
 
-sub tidy( $ );
-sub nextday( $ );
-sub process_table( $$$$ );
-sub dc( $$ );
-sub pd( $ );
 
 # Assume the listings source uses CET (see BUGS above).
 Date_Init('TZ=CET');
@@ -221,16 +278,8 @@ unless ($@) {
     }
 }
 
-#Find Channels.
-my $bar = new Term::ProgressBar('getting list of channels', 1)
-  if $have_bar;
-my $url="http://www.dagenstv.com/$country/frontpage";
-my $local_data=get($url);
-die "could not get channel listing $url, aborting\n"
-  if not defined $local_data;
-update $bar if $have_bar;
-if ($local_data=~m/<select\s*name=\"cha\"(.*?)<\/select>/s) {
-    $local_data=$1;
+
+if (scalar keys %channels > 0) {
     my %w_args;
     if (defined $opt_output) {
 	my $fh = new IO::File(">$opt_output");
@@ -245,14 +294,13 @@ if ($local_data=~m/<select\s*name=\"cha\"(.*?)<\/select>/s) {
 		'source-data-url'     => "http://www.dagenstv.com/$country/frontpage",
 		'generator-info-name' => 'XMLTV',
 		'generator-info-url'  => 'http://membled.com/work/apps/xmltv/',
-	      });
-    # TODO write <channel> elements.
+	    });
 
-    # for each channel
     my @to_get;
-    while ($local_data=~m/<option\s*value=\"(\d+)\"\s*>([^>]+)<\/option>/sg) {
-	my $ch_name=tidy($2);
-	my $ch_did=$1;
+
+    # the order in which we fetch the channels do not matter
+    foreach $ch_did (keys %channels) {
+	$ch_name=$channels{$ch_did};
 	my $ch_xid="$ch_did.dagenstv.com";
 	$w->write_channel({ id => $ch_xid,
 			    'display-name' => [ [ $ch_name ] ] });
@@ -270,14 +318,15 @@ if ($local_data=~m/<select\s*name=\"cha\"(.*?)<\/select>/s) {
     # they could be separate, as with tv_grab_uk.
     #
     my $bar = new Term::ProgressBar('getting listings', scalar @to_get)
-      if $have_bar;
+       if $have_bar;
     foreach (@to_get) {
 	process_table($w, $_->[0], $_->[1], $_->[2]);
 	update $bar if $have_bar;
     }
     $w->end();
-}else{
-    die "Could not find channel listing.";
+}
+else {
+    print "No channels specified, run me with --configure\n";
 }
 
 # Use Log::TraceMessages if installed.
