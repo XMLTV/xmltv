@@ -10,6 +10,19 @@ use Date::Manip; # no Date_Init(), that can be done by the app
 use base 'Exporter'; our @EXPORT_OK;
 @EXPORT_OK = qw(gettz ParseDate_PreservingTZ tz_to_num parse_local_date);
 
+# Use Log::TraceMessages if installed.
+BEGIN {
+    eval { require Log::TraceMessages };
+    if ($@) {
+	*t = sub {};
+	*d = sub { '' };
+    }
+    else {
+	*t = \&Log::TraceMessages::t;
+	*d = \&Log::TraceMessages::d;
+    }
+}
+
 
 # gettz()
 #
@@ -97,7 +110,7 @@ sub tz_to_num( $ ) {
 # # The two dates should differ by one hour.
 # print Date_Cmp($a, $b), "\n";
 #
-# The script should print 0 but it prints -1.
+# The script should print -1 but it prints 0.
 #
 # NB, use this function _before_ changing the default timezone to UTC,
 # if you want to parse some dates in the user's local timezone!
@@ -106,9 +119,14 @@ sub tz_to_num( $ ) {
 #
 sub parse_local_date( $ ) {
     my $d = shift;
+#    local $Log::TraceMessages::On = 1;
+    t 'parse_local_date() parsing: ' . d $d;
     my $pd = ParseDate($d);
+    t 'ParseDate() returned: ' . d $pd;
     return undef if not defined $pd;
-    return Date_ConvTZ($pd, Date_TimeZone(), 'UTC');
+    my $r = Date_ConvTZ($pd, Date_TimeZone(), 'UTC');
+    t 'converted into UTC: ' . d $r;
+    return $r;
 }
 
 1;
