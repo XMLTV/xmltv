@@ -25,6 +25,17 @@ use Getopt::Long;
 
 my $debug;
 
+# Temporary directory used for checking out a copy and building
+# tarballs.  This is not meant to be race-condition-proof, so don't
+# run mkdist as root :-).
+#
+my $TMP_CHECKOUT_DIR = "/tmp/mkdist$$";
+if ( -d $TMP_CHECKOUT_DIR ) {
+   print STDERR "$TMP_CHECKOUT_DIR already exists, aborting\n";
+   exit 1;
+}
+mkdir($TMP_CHECKOUT_DIR, 0755) || die "cannot mkdir $TMP_CHECKOUT_DIR: $!";
+
 sub Usage()
 {
     print "mkdist --version <id> [options]\n";
@@ -122,16 +133,11 @@ if ( defined($opt_login) ) {
     do_system("cvs login");
 }
 
-print "\nChecking out current head revision in ./xmltv ..\n";
+print "\nChecking out current head revision in $TMP_CHECKOUT_DIR/xmltv ..\n";
 
-if ( -d "xmltv" ) {
-   print STDERR "./xmltv exists, remove and re-run $0\n";
-   exit 1;
-}
+do_system("cd $TMP_CHECKOUT_DIR && CVS_RSH=ssh CVSROOT=\":ext:$opt_sfuser\@cvs.xmltv.sourceforge.net:/cvsroot/xmltv\" cvs -q co xmltv");
 
-do_system("CVS_RSH=ssh CVSROOT=\":ext:$opt_sfuser\@cvs.xmltv.sourceforge.net:/cvsroot/xmltv\" cvs -q co xmltv");
-
-open(FD, "< xmltv/README") || die "README: $!";
+open(FD, "< $TMP_CHECKOUT_DIR/xmltv/README") || die "README: $!";
 $_=<FD>;
 chop();
 close(FD);
@@ -141,29 +147,29 @@ if ( m/^XMLTV\s+$opt_version$/ ) {
 }
 else {
     print "\nupdating README version line\n";
-    open(FD, "< xmltv/README") || die "README: $!";
-    open(OD, "> .README-tmp");
+    open(FD, "< $TMP_CHECKOUT_DIR/xmltv/README") || die "README: $!";
+    open(OD, "> $TMP_CHECKOUT_DIR/.README-tmp");
     print OD "XMLTV $opt_version\n";
     while(<FD>) {
 	print OD "$_";
     }
     close(OD);
     close(FD);
-    unlink("xmltv/README") || die "unlink xmltv/README:$!";
-    rename(".README-tmp", "xmltv/README") || die "rename README-tmp to xmltv/README:$!";
+    unlink("$TMP_CHECKOUT_DIR/xmltv/README")
+      || die "unlink $TMP_CHECKOUT_DIR/xmltv/README:$!";
+    rename("$TMP_CHECKOUT_DIR/.README-tmp",
+	   "$TMP_CHECKOUT_DIR/xmltv/README")
+      || die "rename README-tmp to xmltv/README:$!";
 
     print "checking in new README with updated version line to \"XMLTV $opt_version\"\n";
-    chdir("xmltv");
-    do_system("cvs ci -m \'updated version to XMLTV $opt_version\' README");
-    chdir("..");
+    do_system("cd $TMP_CHECKOUT_DIR/xmltv && cvs ci -m \'updated version to XMLTV $opt_version\' README");
 }
 
-chdir("xmltv");
 print "\nremoving old tag $cvs_tag just in case\n";
-do_system("cvs tag -d \"$cvs_tag\"");
-chdir("..");
+do_system("cd $TMP_CHECKOUT_DIR/xmltv && cvs tag -d \"$cvs_tag\"");
 
-my @toremove=grep { -e || (warn("$_ missing, but no matter\n"), 0) }
+my @toremove=grep { -e "$TMP_CHECKOUT_DIR/$_"
+		      || (warn("$_ missing, but no matter\n"), 0) }
   map { "xmltv/$_" }
   qw(attic
      leon
@@ -171,10 +177,9 @@ my @toremove=grep { -e || (warn("$_ missing, but no matter\n"), 0) }
      todo
      MANIFEST.SKIP
      mkdist
-     ChangeLog.old
-     t/data/do_not_dist);
+     ChangeLog.old);
 
-my $cmd="tar cf save.tar ";
+my $cmd="cd $TMP_CHECKOUT_DIR && tar cf save.tar ";
 for my $f (@toremove) { $cmd.="$f "; }
 
 $cmd.="`find xmltv -name CVS -type d`";
@@ -183,19 +188,18 @@ print "\ntemporarily removing files/dirs not for release..\n";
 do_system($cmd);
 
 # take easy route :)
-do_system('rm', '-rf', @toremove);
+do_system('rm', '-rf', map { "$TMP_CHECKOUT_DIR/$_" } @toremove);
 
-chdir("xmltv");
 print "\ngenerating ChangeLog..\n";
-do_system("cvs2cl.pl --utc");
+do_system("cd $TMP_CHECKOUT_DIR/xmltv && cvs2cl.pl --utc");
 
 print "\ntagging release with $cvs_tag..\n";
-do_system("cvs tag \"$cvs_tag\"");
-chdir("..");
+do_system("cd $TMP_CHECKOUT_DIR/xmltv && cvs tag \"$cvs_tag\"");
 
 print "\nremoving CVS dirs..\n";
-do_system("find xmltv -name CVS -type d -prune -exec rm -rf {} \\;");
+do_system("cd $TMP_CHECKOUT_DIR && find xmltv -name CVS -type d -prune -exec rm -rf {} \\;");
 
+chdir($TMP_CHECKOUT_DIR) || die "cannot chdir to $TMP_CHECKOUT_DIR: $!";
 print "\nrenaming xmltv directory to xmltv-$opt_version..\n";
 rename("xmltv", "xmltv-$opt_version");
 
@@ -211,6 +215,7 @@ do_system("tar xpf save.tar");
 unlink("save.tar");
 
 print "\n------------------------------------------------------------------------------------\n";
+print "Files left in $TMP_CHECKOUT_DIR\n\n";
 print "Things left to do:\n";
 print " 1. post files on sf\n";
 print "    hints:\n";
