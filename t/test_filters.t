@@ -277,6 +277,7 @@ foreach my $pair (@cmds) {
 
 	my $out_content; # contents of $out, to be filled in later
 
+        # TODO File::Spec
 	$cmd[0] = "$cmds_dir/$cmd[0]";
 	$cmd[0] =~ s!/!\\!g if $^O eq 'MSWin32';
 	if ($verbose) {
