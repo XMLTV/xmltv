@@ -106,6 +106,16 @@ my %rt_to_xmltv =
   );
 my %xmltv_to_rt = reverse %rt_to_xmltv;
 
+# We try to strip away Javascript to just get URLs.  This is a list of
+# known Javascript functions foo such that foo('url') can be changed
+# to just url.  Other functions may be removed also, but you get a
+# warning :-).
+#
+my %known_js = (exitpopup      => 1,
+		refreshOpener  => 1,
+		refreshOpener2 => 1,
+	       );
+
 # Check options.  First do the undocumented --cache option (to cache
 # get(), which retrieves web pages), then the normal ones.
 #
@@ -228,7 +238,8 @@ sub grab( @ ) {
     t 'available dates: ' . d \@available_dates;
     die 'apparently, there are no days of listings on the site'
       if not @available_dates;
-    my $today = ParseDate('today midnight');
+    warn "FIXME yesterday!\n";
+    my $today = ParseDate('yesterday midnight');
 
     my $is_available = sub( $ ) {
 	my $d = shift;
@@ -469,7 +480,16 @@ sub get_programme_details( $$$$ ) {
     $prog_details_string  =~ m{</script>\s*(<table .*?)<!-- end main table -->}s
       or die "cannot main table in HTML $_";
     my $prog_details = $1;
-#    local $Log::TraceMessages::On = 1;
+#    local $Log$
+#    local Revision 1.9  2002/10/03 16:55:08  epaepa
+#    local Dealt with the remaining bits of data that were thrown away; now
+#    local almost everything on the site is included in the XMLTV output.  There
+#    local are three things which cannot be written out because the DTD doesn't
+#    local have provision for them: the names of parts played by each actor, the
+#    local link text and description for each URL, and a signed-for-the-deaf
+#    local flag.  These are now warned about just once per run, I hope to add
+#    local them to the DTD when we overhaul it.
+#    localprog_details =~ /emmerdale/i;
 
     for ($prog_details) {
 	my $C = '<!-- -->'; # used to stop strings running together
@@ -482,7 +502,8 @@ sub get_programme_details( $$$$ ) {
 
  	# Remove hyperlinks within the RT site (keep only external
  	# ones).  Hmm, sometimes Related Features might be relative
- 	# links, and we might want to keep those.  Should check.
+ 	# links, and we might want to keep those.  Hasn't happened so
+ 	# far though.
  	#
  	s{<a href="\W.+?"[^>]*>([^<]*)</a>}{$C$1$C}g;
 
@@ -512,10 +533,6 @@ sub get_programme_details( $$$$ ) {
 #	local $Log::TraceMessages::On = 1;
 	t 'after barification: ' . d $_;
     }
-
-#    # chop of related features or related websites.  FIXME do better.
-#    $prog_details =~ s/Related Features\|.*//;
-#    $prog_details =~ s/Related Websites\|.*//;
 
     my @bits = split /\|/, $prog_details;
     (warn('no programme details found in HTML'), return undef)
@@ -599,10 +616,14 @@ sub get_programme_details( $$$$ ) {
     $p{stop} = $stop;
 
     if (defined $cert) {
+	warn "already seen certificate" if defined $p{rating};
 	for ($cert) {
-	    s/^\[//;
-	    s/\]$//;
-	    warn "ignoring certificate $_\n";
+	    if (not s/^\[(.+)\]$/$1/) {
+		warn "bad certificate text: $_";
+	    }
+	    else {
+		push @{$p{rating}}, [ $_, 'BBFC' ];
+	    }
 	}
     }
 
@@ -629,7 +650,13 @@ sub get_programme_details( $$$$ ) {
 	push @{$p{credits}{director}}, $director;
     }
     if (defined $filmed_in) {
-	warn "discarding filmed in $filmed_in\n";
+	warn "already seen filmed-in date" if defined $p{date};
+	if ($filmed_in !~ /^\d+$/) {
+	    warn "bad filmed-in value '$filmed_in'\n";
+	}
+	else {
+	    $p{date} = $filmed_in;
+	}
     }
 
     if (defined $cast) {
@@ -651,51 +678,26 @@ sub get_programme_details( $$$$ ) {
 	my $bit = shift @bits;
 	if ($bit eq 'Cast List') {
 	    # Some of the following bits are a cast list.
+	    t 'calling do_cast()';
 	    do_cast(\%p, \@bits);
+	    t 'after do_cast(), remaining bits: ' . d \@bits;
 	}
-	elsif ($bit eq 'Related Websites') {
-	    my ($url, $link_text, $desc, @bits) = @bits;
+	elsif ($bit eq 'Related Websites' or $bit eq 'Related Features') {
+	    t 'calling do_link()';
+	    do_link(\%p, \@bits);
+	    t 'after do_link(), remaining bits: ' . d \@bits;
+	}
+	elsif ($bit eq 'Add to my diary') {
+	    my $url = shift @bits;
 	    if (not defined $url) {
-		warn "strange, no URL after 'Related Websites'";
-		next;
+		warn "strange, no URL in 'Add to my diary'";
 	    }
-	    # Remove moronic use of Javascript.
-	    for ($url) {
-		if (s/^javascript://) {
-		    if (s/^(\w+)\('(.+?)'\);$/$2/) {
-			warn "unknown Javascript function $1"
-			  if ($1 ne 'exitpopup' and $1 ne 'refreshOpener');
-		    }
-		    else {
-			warn "unknown Javascript statement $url";
-		    }
-		}
-		else {
-		    # I don't think this code will ever execute, alas.
-		    warn "Hooray!  A non-Javascript link!\n";
-		}
-		# Not sure how spaces get in there, but they do.
-		s/^\s+//; s/\s+$//;
-		# (Could warn about all non-URL characters.)
+	    elsif ($url !~ /^javascript:/) {
+		warn "strange, add to diary URL not javascript";
 	    }
-	    push @{$p{url}}, $url;
-	    if (not defined $link_text) {
-		warn "strange, no link text after 'Related Websites'";
-	    }
-	    else {
-		# Damned if you do, and damned if you don't :-).
-		warn "discarding link text $link_text\n";
-	    }
-	    if (not defined $desc) {
-		warn "strange, no description after 'Related Websites'";
-	    }
-	    else {
-		# Damned if you do, and damned if you don't :-).
-		warn "discarding link description $desc\n";
-	    }
-	    # And what if there was more than one related site?
 	}
 	else {
+	    t "unknown bit $bit, try do_misc()";
 	    push @followons, do_misc(\%p, $bit);
 	}
     }
@@ -723,6 +725,7 @@ sub get_programme_details( $$$$ ) {
 #
 # Also returns any follow-on programmes which are found.
 #
+my $warned_discarding_deaf_signed;
 sub do_misc( $$ ) {
     use vars '%p'; local *p = shift;
     local $_ = shift;
@@ -731,28 +734,38 @@ sub do_misc( $$ ) {
 	if (s/^Subtitled,?\s*//) {
 	    warn 'seen subtitling twice' if defined $p{subtitles};
 	    $p{subtitles} = [ { type => 'teletext' } ];
-	} elsif (s/^Widescreen,?\s*//) {
+	}
+	elsif (s/^Widescreen,?\s*//) {
 	    warn 'seen widescreen twice' if defined $p{_widescreen};
 	    # FIXME I think this can be handled under <video>.
 	    $p{_widescreen} = 'yes';
-	} elsif (s/^Repeat,?\s*//) {
+	}
+	elsif (s/^Repeat,?\s*//) {
 	    warn 'seen repeat twice' if defined $p{'previously-shown'};
 	    $p{'previously-shown'} = {};
-	} elsif (s/^(Black (?:and|&) White),?\s*//) {
+	}
+	elsif (s/^(Black (?:and|&) White),?\s*//) {
 	    warn 'seen black-and-white twice' if defined $p{video}{colour};
 	    warn "assuming $1 is 'Black and White'\n";
 	    $p{video}{present} = 1;
 	    $p{video}{colour} = 0;
-	} elsif (s/^(?:Followed by|Including) ([^,]+),?\s*//) {
+	}
+	elsif (s/^(?:Followed by|Including) ([^,]+),?\s*//) {
 	    push @r, { channel => $p{channel},
 		       title   => [ [ $1, $LANG ] ],
 		       start   => $p{start},
 		       stop    => $p{stop},
 		     };
 	    # The caller must add the clumpidx later.
-	} elsif (s/^Deaf Signed,?\s*//) {
-	    warn "discarding deaf-signed\n";
-	} else {
+	}
+	elsif (s/^Deaf Signed,?\s*//) {
+	    warn "discarding deaf-signed information\n"
+	      unless $warned_discarding_deaf_signed++;
+	}
+	elsif (s/^TV Movie,?\s*//) {
+	    push @{$p{category}}, [ 'TV movie', 'en' ];
+	}
+	else {
 	    warn "unknown remnant bit $_";
 	    last;
 	}
@@ -769,6 +782,7 @@ sub do_misc( $$ ) {
 # This routine removes elements from the front of the list, as much as
 # looks like a cast list.
 #
+my $warned_discarding_parts;
 sub do_cast( $$ ) {
     my $prog = shift;
     use vars '@bits'; local *bits = shift;
@@ -810,7 +824,8 @@ sub do_cast( $$ ) {
 	    for (shift @bits) {
 		if ($_ eq $DOTS) {
 		    ++ $n;
-		} else {
+		}
+		else {
 		    unshift @bits, $_;
 		    last DOTS;
 		}
@@ -825,11 +840,13 @@ sub do_cast( $$ ) {
 		if (not defined) {
 		    warn "not enough actors for all parts in cast list";
 		    last ACTOR;
-		} elsif (not /\w/) {
+		}
+		elsif (not /\w/) {
 		    warn "bad actor name $_";
 		    unshift @bits, $_;
 		    last ACTOR;
-		} else {
+		}
+		else {
 		    push @actors, $_;
 		}
 	    }
@@ -838,7 +855,8 @@ sub do_cast( $$ ) {
 	while (@parts) {
 	    my $p = shift @parts;
 	    my $a = shift @actors;
-	    warn "discarding information that $p is played by $a\n";
+	    warn "discarding information about the parts played by each actor\n"
+	      unless $warned_discarding_parts++;
 	    push @{$prog->{credits}->{actor}}, $a;
 	}
     }
@@ -863,7 +881,67 @@ sub do_cast( $$ ) {
 	}
     }
 }
+# Process a hyperlink from the bits of text.  This means remove the
+# first three bits.
+#
+# Parameters:
+#   (ref to) programme hash to modify,
+#   (ref to) list of 'bits' of text, also modified
+#
+my ($warned_discarding_link_text, $warned_discarding_link_description);
+sub do_link( $$ ) {
+    my $prog = shift;
+    use vars '@bits'; local *bits = shift;
+    t 'got link bits: ' . d \@bits;
 
+    # Modify the list in-place.
+    my $url       = shift @bits;
+    my $link_text = shift @bits;
+    my $desc      = shift @bits;
+    t "link data: \$url=$url, \$link_text=$link_text, \$desc=$desc";
+
+    if (not defined $url) {
+	warn "strange, no URL after 'Related Websites'";
+	return;
+    }
+    # Remove moronic use of Javascript.
+    for ($url) {
+	if (s/^javascript://) {
+	    if (s/^(\w+)\('(.+?)'\);$/$2/) {
+		warn "unknown Javascript function $1"
+		  if not $known_js{$1}++;
+	    }
+	    else {
+		warn "unknown Javascript statement $url";
+	    }
+	}
+	else {
+	    # I don't think this code will ever execute, alas.
+	    warn "Hooray!  A non-Javascript link!\n";
+	}
+	# Not sure how spaces get in there, but they do.
+	s/^\s+//; s/\s+$//;
+	# (Could warn about all non-URL characters.)
+    }
+    push @{$prog->{url}}, $url;
+    if (not defined $link_text) {
+	warn "strange, no link text after 'Related Websites'";
+    }
+    else {
+	# Damned if you do, and damned if you don't :-).
+	warn "discarding link text, just storing URL\n"
+	  unless $warned_discarding_link_text++;
+    }
+    if (not defined $desc) {
+	warn "strange, no description after 'Related Websites'";
+    }
+    else {
+	warn "discarding link description, just storing URL\n"
+	  unless $warned_discarding_link_description++;
+    }
+    t 'finished doing link, remaining bits: ' . d \@bits;
+    # And what if there was more than one related site?
+}
 
 # Function which will locate all the available channels and return a hash
 # with channelId as the key and a chanel description
