@@ -86,6 +86,7 @@ sub get_regions( $$ );
 sub get_dir( $$ );
 sub read_channels_page( $ );
 sub read_file( $$$$$ );
+sub page_date_diff( $$ );
 sub date_programmes( $$ );
 sub add_clumpidx( $ );
 sub get_channel_pkgs();
@@ -790,8 +791,13 @@ sub read_file( $$$$$ ) {
     }
 
     # Check the date.
-    if (not check_page_date(\$date_expected, shift @lines)) {
-	warn "bad date in $file (expected $date_expected), skipping";
+    my $date_diff = page_date_diff(\$date_expected, shift @lines);
+    if (not defined $date_diff) {
+	warn "cannot find any date in $file, skipping\n";
+	return undef;
+    }
+    elsif ($date_diff != 0) {
+	warn "bad date in $file, skipping\n";
 	return undef;
     }
 
@@ -1156,7 +1162,7 @@ sub read_file( $$$$$ ) {
 }
 
 
-# check_page_date()
+# page_date_diff()
 #
 # Check the date in a day's listings matches what we expect.
 # According to Ananova's comment there's some odd procedure you have
@@ -1169,7 +1175,14 @@ sub read_file( $$$$$ ) {
 # As with read_file(), the expected date is passed by reference and
 # modified sometimes.
 #
-sub check_page_date($$) {
+# The return value is the difference between the found date and the
+# expected date, after performing any devious machinations needed to
+# alter the expected date a little.  Obviously if difference == 0 then
+# the dates match.  If the date of the page could not be determined
+# then undef is returned (so unfortunately you can't treat the return
+# value as a Boolean).
+#
+sub page_date_diff( $$ ) {
     use vars '$expected'; local *expected = shift;
     my $got = shift;
 
@@ -1177,14 +1190,14 @@ sub check_page_date($$) {
 /^((?:Sun|Mon|Tues|Wednes|Thurs|Fri|Satur)day)\|(\d\d)\|(\d\d)\|(\d\d\d\d)$/)
     {
 	warn "bad date '$got'";
-	return 0;
+	return undef;
     }
     my ($weekday, $dd, $mm, $yyyy) = ($1, $2, $3, $4);
     t "got date: $weekday $yyyy-$mm-$dd";
     my $dp = ParseDate("$yyyy-$mm-$dd");
     if (not defined $dp) {
 	warn "bad date '$got'";
-	return 0;
+	return undef;
     }
     t "parsed out date $dp, check it matches $weekday";
     if (UnixDate($dp, '%A') ne $weekday) {
@@ -1210,11 +1223,12 @@ sub check_page_date($$) {
     my $day_expected = UnixDate($expected, '%Q');
     if ($day_got ne $day_expected) {
 	if ($using_cache) {
-	    unless ($warned_wrong_date++) {
-		warn "since cache is in use, ignoring wrong date in pages\n";
-	    }
+	    warn "since cache is in use, ignoring wrong date in pages\n"
+	      unless $warned_wrong_date++;
+	    return 0;
 	}
-	elsif (not defined $fudge_day) {
+	
+	if (not defined $fudge_day) {
 	    # There's still a chance to set the fudge-flag for
 	    # days and work around Ananova being one day out.
 	    #
@@ -1226,18 +1240,17 @@ sub check_page_date($$) {
 		$expected = $yesterday; # passed by ref, remember
 	    }
 	    else {
-		warn "wrong date in page: expected $day_expected, got $day_got\n";
 		$fudge_day = 0; # don't try this trick again
-		return 0;
 	    }
 	}
-	else {
-	    warn "wrong date in page: expected $day_expected, got $day_got\n";
-	    return 0;
-	}
     }
-    
-    return 1;
+
+    $day_expected = UnixDate($expected, '%Q'); # recalculate
+    my $delta = DateCalc($day_expected, $day_got);
+    my $day_diff = Delta_Format($delta, 0, '%dh') + 0; # force numberify
+    warn "wrong date in page: expected $day_expected, got $day_got (diff $day_diff day(s))\n"
+      if $day_diff;
+    return $day_diff;
 }
 
 
