@@ -672,6 +672,7 @@ sub scrapehtml($$$)
 			  Hungarian
 			  Innu
 			  Inuktitut
+			  Inukutitut
 			  Inuvialuktun
 			  Italian
 			  Italianate
@@ -679,6 +680,7 @@ sub scrapehtml($$$)
 			  Japanese
 			  Korean
 			  Mandarin
+			  Mi'kmaq
 			  Mohawk
 			  Musgamaw
 			  Oji-Cree
@@ -1058,9 +1060,9 @@ sub scrapehtml($$$)
 		    # example "French with English subtitles"
 		    # example "French and English subtitles"
 		    # example "Japanese; English subtitles"
-		    elsif ( $i=~/^\(([a-zA-Z]+)\s+with\s+([a-zA-Z]+) subtitles\)$/io ||
-			    $i=~/^\(([a-zA-Z]+)\s+and\s+([a-zA-Z]+) subtitles\)$/io ||
-			    $i=~/^\(([a-zA-Z]+)\s*[;,\/]*\s*([a-zA-Z]+) subtitles\)$/io) {
+		    elsif ( $i=~/^\(([^\s]+)\s+with\s+([^\s]+) subtitles\)$/io ||
+			    $i=~/^\(([^\s]+)\s+and\s+([^\s]+) subtitles\)$/io ||
+			    $i=~/^\(([^\s|;|,|\/]+)[\s;,\/]*\s*([^\s]+) subtitles\)$/io) {
 			my $lang=$1;
 			my $sub=$2;
 
@@ -1090,9 +1092,9 @@ sub scrapehtml($$$)
 			# 'Hindi-English'
 			# 'Hindi and English'
 			# 'Hindi with English'
-			if ( $i=~/^\(([a-zA-Z]+)\s*[,\-]+\s*([a-zA-Z]+)\)$/io ||
-			     $i=~/^\(([a-zA-Z]+)\s+and\s+([a-zA-Z]+)\)$/io ||
-			     $i=~/^\(([a-zA-Z]+)\s+with\s+([a-zA-Z]+)\)$/io ) {
+			if ( $i=~/^\(([^\s|,|-]+)[\s,\-]+\s*([^\s]+)\)$/io ||
+			     $i=~/^\(([^\s]+)\s+and\s+([^\s]+)\)$/io ||
+			     $i=~/^\(([^\s]+)\s+with\s+([^\s]+)\)$/io ) {
 			    my $lang=$1;
 			    my $sub=$2;
 
