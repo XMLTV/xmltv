@@ -42,7 +42,7 @@ use strict;
 package XMLTV::IMDB;
 
 use vars qw($VERSION);
-$VERSION = '0.1';
+$VERSION = '0.2';
 
 sub new
 {
@@ -123,15 +123,22 @@ sub checkIndexesOkay($)
     return($info) if ( ref $info eq 'SCALAR' );
 
     if ( !defined($info->{db_version}) ) {
-	return("imdbDir index db missing version information, rerun --prepStages all\n");
+	return("imdbDir index db missing version information, rerun --prepStage all\n");
     }
     if ( $info->{db_version}=~m/^(\d+)\.(\d+)$/o ) {
 	if ( $1 != $major || $minor < $2 ) {
-	    return("imdbDir index db requires updating, rerun --prepStages all\n");
+	    return("imdbDir index db requires updating, rerun --prepStage all\n");
 	}
+	if ( $1 == 0 && $2 == 1 ) {
+	    return("imdbDir index db requires update, rerun --prepStage 5 (bug:actresses never appear)\n");
+	}
+	# okay
+	return(undef);
     }
-    # okay
-    return(undef);
+    else {
+	return("imdbDir index version of '$info->{db_version}' is invalid, rerun --prepStage 5\n".
+	       "if problem persists, submit bug report to xmltv-devel\@lists.sf.net\n");
+    }
 }
 
 sub basicVerificationOfIndexes($)
@@ -1012,7 +1019,7 @@ sub readMovies($$$)
 		if ( $percentDone%5 == 0 ) {
 		    my $sec=((((time()-$startTime)*100)/$percentDone)*(100-$percentDone))/100;
 		    $sec=1 if ($sec < 1);
-		    $self->status(sprintf("%d%% done, finished in approx %d seconds ($count movies so far)..",
+		    $self->status(sprintf("%d%% done, finished in approx %d seconds ($count titles so far)..",
 					  $p, $sec));
 		}
 	    }
@@ -1022,7 +1029,7 @@ sub readMovies($$$)
 	}
     }
     close(FD);
-    $self->status(sprintf("Parsed $count movies in %d seconds",time()-$startTime));
+    $self->status(sprintf("Parsed $count titles in %d seconds",time()-$startTime));
     return($count);
 }
 
@@ -1106,7 +1113,7 @@ sub readCastOrDirectors($$$)
 		if ( $percentDone%5 == 0 ) {
 		    my $sec=((((time()-$startTime)*100)/$percentDone)*(100-$percentDone))/100;
 		    $sec=1 if ($sec < 1);
-		    $self->status(sprintf("%d%% done, finished in approx %d seconds ($castNames $whichCastOrDirector in $entryCount movies)..",
+		    $self->status(sprintf("%d%% done, finished in approx %d seconds ($castNames $whichCastOrDirector in $entryCount titles)..",
 					  $p, $sec));
 		}
 	    }
@@ -1166,7 +1173,7 @@ sub readCastOrDirectors($$$)
 	$entryCount++;
     }
     close(FD);
-    $self->status(sprintf("Parsed $castNames $whichCastOrDirector in $entryCount movies in %d seconds",time()-$startTime));
+    $self->status(sprintf("Parsed $castNames $whichCastOrDirector in $entryCount titles in %d seconds",time()-$startTime));
     return($castNames);
 }
 
@@ -1262,7 +1269,7 @@ sub crunchStage($)
 	my $num=$self->readCastOrDirectors("directors", $countEstimate, "$self->{imdbListFiles}->{directors}");
 	if ( $num < 0 ) {
 	    if ( $num == -2 ) {
-		$self->error("you need to download $self->{imdbListFiles}->{directors} from ftp.imdb.com");
+		$self->error("you need to download $self->{imdbListFiles}->{directors} from ftp.imdb.com (see http://www.imdb.com/interfaces)");
 	    }
 	    $self->status("prep stage $stage failed");
 	    return(1);
@@ -1274,7 +1281,21 @@ sub crunchStage($)
 
 	open(OUT, "> $self->{imdbDir}/stage$stage.data") || die "$self->{imdbDir}/stage$stage.data:$!";
 	for my $key (keys %{$self->{movies}}) {
-	    print OUT "$key\t$self->{movies}{$key}\n";
+	    my %dir;
+	    for (split('\|', $self->{movies}{$key})) {
+		$dir{$_}++;
+	    }
+	    my @list;
+	    for (keys %dir) {
+		push(@list, sprintf("%03d:%s", $dir{$_}, $_));
+	    }
+	    my $value="";
+	    for my $c (reverse sort {$a cmp $b} @list) {
+		my ($num, $name)=split(':', $c);
+		$value.=$name."|";
+	    }
+	    $value=~s/\|$//o;
+	    print OUT "$key\t$value\n";
 	}
 	close(OUT);
 	#unlink("$self->{imdbDir}/stage2.data");
@@ -1306,21 +1327,11 @@ sub crunchStage($)
     elsif ( $stage == 4 ) {
 	$self->status("starting prep stage $stage (parsing actresses.list)..");
 
-	$self->status("restoring stage 3 data (actors data)..");
-	open(IN, "< $self->{imdbDir}/stage3.data") || die "$self->{imdbDir}/stage3.data:$!";
-	while(<IN>) {
-	    chop();
-	    s/^([^\t]+)\t//o;
-	    $self->{movies}{$1}=$_;
-	}
-	close(IN);
-
-	$self->status("merging in actresses data..");
 	my $countEstimate=260000;
 	my $num=$self->readCastOrDirectors("actresses", $countEstimate, "$self->{imdbListFiles}->{actresses}");
 	if ( $num < 0 ) {
 	    if ( $num == -2 ) {
-		$self->error("you need to download $self->{imdbListFiles}->{actresses} from ftp.imdb.com");
+		$self->error("you need to download $self->{imdbListFiles}->{actresses} from ftp.imdb.com (see http://www.imdb.com/interfaces)");
 	    }
 	    $self->status("prep stage $stage failed");
 	    return(1);
@@ -1357,7 +1368,7 @@ sub crunchStage($)
 	    chop();
 	    s/^([^\t]+)\t//o;
 	    if ( !defined($movies{$1}) ) {
-	        $self->error("directors list references unidentified movie '$1'");
+	        $self->error("directors list references unidentified title '$1'");
 	        next;
 	    }
 	    $movies{$1}=$_;
@@ -1371,16 +1382,43 @@ sub crunchStage($)
 	    }
 	}
 
-	$self->status("merging in stage 4 data (actors and actresses)..");
+	$self->status("merging in stage 3 data (actors)..");
 	open(IN, "< $self->{imdbDir}/stage3.data") || die "$self->{imdbDir}/stage3.data:$!";
 	while(<IN>) {
 	    chop();
 	    s/^([^\t]+)\t//o;
-	    if ( !defined($movies{$1}) ) {
-	        $self->error("actors or actresses list references unidentified movie '$1'");
+	    my $title=$1;
+	    my $val=$movies{$title};
+	    if ( !defined($val) ) {
+	        $self->error("actors list references unidentified title '$title'");
 	        next;
 	    }
-	    $movies{$1}.=$tab.$_;
+	    if ( $val=~m/$tab/o ) {
+		$movies{$title}=$val."|".$_;
+	    }
+	    else {
+		$movies{$title}=$val.$tab.$_;
+	    }
+	}
+	close(IN);
+
+	$self->status("merging in stage 4 data (actresses)..");
+	open(IN, "< $self->{imdbDir}/stage4.data") || die "$self->{imdbDir}/stage4.data:$!";
+	while(<IN>) {
+	    chop();
+	    s/^([^\t]+)\t//o;
+	    my $title=$1;
+	    my $val=$movies{$title};
+	    if ( !defined($val) ) {
+	        $self->error("actresses list references unidentified title '$title'");
+	        next;
+	    }
+	    if ( $val=~m/$tab/o ) {
+		$movies{$title}=$val."|".$_;
+	    }
+	    else {
+		$movies{$title}=$val.$tab.$_;
+	    }
 	}
 	close(IN);
 
@@ -1497,9 +1535,15 @@ sub crunchStage($)
 		$details.="<unknown>";
 	    }
 	    else {
+		my %order;
 		# sort actors by billing
 		for my $c (sort {$a cmp $b} split('\|', $actors)) {
 		    my ($billing, $name)=split(':', $c);
+		    if ( $billing != 9999 && defined($order{$billing}) ) {
+			# this occurs, most of the time so we don't check it  :<
+			#$self->error("title \"$title\" has two actors at billing level $billing ($order{$billing} and $name)");
+		    }
+		    $order{$billing}=$name;
 		    #if ( !defined($billing) || ! defined($name) ) {
 			#warn "no billing or name in $c from movie $title";
 			#warn "y=$year";
