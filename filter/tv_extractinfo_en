@@ -152,6 +152,7 @@ sub time12to24( $ );
 sub add( $$$ );
 sub scrub_empty( @ );
 sub set_stop_time( $$ );
+sub dump_pseudo_programme( $ );
 
 # --no-create-sub-titles is an undocumented switch, affecting the
 # splitting of multipart programmes only, to not break a title
@@ -633,7 +634,12 @@ sub special_multipart( $ ) {
 	}
     }
 
-    t "best result found: count $best_count, first word? $best_first_word_is_time";
+    if (defined $best_interp) {
+	t "best result found: count $best_count, first word? $best_first_word_is_time";
+    }
+    else {
+	t "couldn't find any interpretation that worked at all";
+    }
 
     # Heuristic.  We require at least three valid times to split - or
     # when the programme description begins with a time, that's also
@@ -646,8 +652,8 @@ sub special_multipart( $ ) {
     t 'at least three valid times, proceed';
 
     my $split = multipart_split_desc(\@words, $best_interp);
-    use vars '@progs'; local *progs = $split->[0];
-    t 'got list of pseudo-programmes: ' . d \@progs;
+    use vars '@pps'; local *pps = $split->[0];
+    t 'got list of pseudo-programmes: ' . d \@pps;
     my $common = $split->[1];
     use vars '@errors'; local *errors = $split->[2];
 
@@ -663,14 +669,19 @@ sub special_multipart( $ ) {
     # main_desc instead of real [text, lang] descriptions, and hh:mm
     # 'time' instead of real start time+date.
     #
-    foreach (@progs) {
+    foreach (@pps) {
 	my $time = delete $_->{time};
 	my $start = Date_SetTime($day, $time);
 	die if not defined $start;
 	$start = Date_ConvTZ($start, $tz, 'UTC') if defined $tz;
-	die "subprogramme starts before main one" if Date_Cmp($start, $p->{start}) < 0;
-	if (defined $p->{stop}) {
-	    die "subprogramme starts after main one stops" if Date_Cmp($p->{stop}, $start) < 0;
+	if (Date_Cmp($start, $p->{start}) < 0) {
+	    my $dump = dump_pseudo_programme($_);
+	    die "subprogramme ($dump) "
+	      . "starts before main programme ($p->{start}, $p->{title}->[0]->[0])";
+	}
+	if (defined $p->{stop} and Date_Cmp($p->{stop}, $start) < 0) {
+	    my $dump = dump_pseudo_programme($_);
+	    die "subprogramme ($dump) starts after main one stops";
 	}
 
 	# Now we store the time in the official 'start' key.  But
@@ -707,7 +718,7 @@ sub special_multipart( $ ) {
     #
     if (defined $p->{stop}) {
 	t "setting stop time of last subprog to stop time of main prog ($p->{stop})";
-	set_stop_time($progs[-1], $p->{stop});
+	set_stop_time($pps[-1], $p->{stop});
     }
     else { t 'main prog had no stop time, not adding to last subprog' }
 
@@ -715,7 +726,7 @@ sub special_multipart( $ ) {
     # multipart programme.  Add a dummy prog to fill the gap if
     # necessary.
     #
-    my $first_sub_start = $progs[0]->{start};
+    my $first_sub_start = $pps[0]->{start};
     my $cmp = Date_Cmp(pd($first_sub_start), $p_start);
     if ($cmp < 0) {
 	# Should have caught this already.
@@ -731,14 +742,14 @@ sub special_multipart( $ ) {
 		      stop    => $first_sub_start };
 	t 'inserting dummy subprogramme: ' . d $dummy;
 	cst $dummy if $SLOW;
-	unshift @progs, $dummy;
+	unshift @pps, $dummy;
     }
     else { die }
 
-    if ($SLOW) { cst $_ foreach @progs }
-    scrub_empty($_->{title}, $_->{"sub-title"}, $_->{desc}) foreach @progs;
-    t 'returning new list of programmes: ' . d \@progs;
-    return \@progs;
+    if ($SLOW) { cst $_ foreach @pps }
+    scrub_empty($_->{title}, $_->{"sub-title"}, $_->{desc}) foreach @pps;
+    t 'returning new list of programmes: ' . d \@pps;
+    return \@pps;
 }
 # Given a programme description split into a list of words, and a
 # subroutine to interpret times, return a list of the subprogrammes
@@ -863,7 +874,10 @@ sub multipart_split_desc( $$ ) {
 	    }
 	}
     }
-    foreach (@r) { die if not defined $_->{main_title} }
+    foreach (@r) {
+	die if not keys %$_;
+	die if not defined $_->{main_title};
+    }
     t 'returning list of pseudo-programmes: ' . d \@r;
     t '...and common text: ' . d $common;
     t '...and errors: ' . d \@errors;
@@ -891,6 +905,21 @@ sub clocks_poss( $ ) {
     #
     return [0, 0];
 }
+# Debugging stringification.
+sub dump_pseudo_programme( $ ) {
+    my @r;
+    my $pp = shift;
+    foreach (qw(time main_title main_desc)) {
+	push @r, $pp->{$_} if defined $pp->{$_};
+    }
+    if (not @r) {
+	local $Log::TraceMessages::On =  1;
+	t 'strange pseudo-programme: ' . d $pp;
+	die 'pseudo-programme without recognized keys';
+    }
+    return join(' ', @r);
+}
+
 
 # time12to24()
 #
