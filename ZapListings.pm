@@ -811,9 +811,9 @@ sub scrapehtml($$$)
     return(@programs);
 }
 
-sub readSchedule($$$$$$$)
+sub readSchedule($$$$$)
 {
-    my ($self, $station, $station_desc, $startHour, $endHour, $day, $month, $year)=@_;
+    my ($self, $station, $station_desc, $day, $month, $year)=@_;
 
     my $content;
 
