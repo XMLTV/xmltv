@@ -645,28 +645,19 @@ windows_dist ::
 	perl -MExtUtils::Command -e mv $(INSTALLPLAINDOC) $location/doc/
 	perl -MExtUtils::Command -e rm_r $location/share/doc
 	perl -MExtUtils::Command -e mkpath $location/doc/man
-	# Convert the manual pages to plain text.  A bit roundabout,
-	# this, we could just use pod2text to start with.  But since
-	# 'make' generates troff documentation anyway this code is
-	# easier.
-	#
-	set -e; for i in $(INST_MAN1DIR)/*; do \
-	        b=`basename $$i .1`; \
-	        if test "$$b" = '*'; then \
-	                echo cannot find manpages in $(INST_MAN1DIR) >&2; \
-	                exit 1; \
-	        fi; \
-	        echo Converting $$i to plain text; \
-	        troff -mandoc -Tascii $$i | grotty -buo \
-	            | perl -pe 's/Date::Manip[(]3[)]/date_formats.txt/g' \
-	            >$location/doc/man/`basename $$i .1`.txt; \
+	# Generate plain text documentation from pod.
+	set -e; \
+	cd blib/script; \
+	for i in *; do \
+	    out=$location/doc/man/$$i.txt; \
+	    echo Writing documentation for $$i into $$out; \
+	    pod2text $$i >$$out; \
 	done
 	# Remove 'real' manual pages, not needed on Windows.
 	rm -rfv $location/man $location/share/man
 	# My MakeMaker creates this dud directory.
 	rm -rfv $location/5.8.0
 	rmdir $location/share/doc
-
 	# Generate Date::Manip docs by filtering perldoc output.  The
 	# use of temp files instead of pipes is so set -e works properly.
 	#
