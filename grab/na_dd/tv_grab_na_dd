@@ -1,0 +1,665 @@
+#!/usr/bin/perl -w
+
+=pod
+
+=head1 NAME
+
+tv_grab_na_dd - Grab TV listings for North America using Zap2IT's Data Direct service.
+
+=head1 SYNOPSIS
+
+tv_grab_na_dd --help
+
+tv_grab_na_dd [--config-file FILE] --configure
+
+tv_grab_na_dd [--config-file FILE] [--output FILE] [--days N]
+              [--offset N] [--quiet] [--lineup "LINEUP"] [--old_chan_id] [--low_mem]
+
+=head1 DESCRIPTION
+
+This scripts downloads listings from Zap2IT's DataDirect service,
+converts it to XMLTV format, and outputs the results.
+
+You must first register with Data Direct at:
+.             http://labs.zap2it.com
+
+You'll need to provide the XMLTV certificate code "ZYZM-TE50-SBUT"
+
+The service is currently free.
+
+Once you've registered, run B<tv_grab_na_dd --configure> to provide
+your username and password.  You control what channels you get at
+the DataDirect website.
+
+Once configured, running B<tv_grab_na_dd> with no arguments will output
+listings in XML format to standard output.
+
+B<--configure> Prompt for username/password and write the configuration file.
+
+B<--config-file FILE> Set the name of the configuration file, the
+default is B<~/.xmltv/tv_grab_na_dd.conf>.  This is the file written by
+B<--configure> and read when grabbing.
+
+B<--output FILE> write to FILE rather than standard output.
+
+B<--days N> grab N days.  The default is 7. 0 will only list channels/lineups.
+
+B<--offset N> start N days in the future.  The default is to start
+from today.
+
+B<--quiet> suppress the progress messages normally written to standard
+error.
+
+B<--lineup> limits results to one lineup. "--lineup list" does what you expect
+
+B<--old_chan_id> attempt to use the same channel id as tv_grab_na
+
+B<--low_mem> uses less memory. Omit all but the most basic program information.
+
+=head1 SEE ALSO
+
+L<xmltv(5)>.
+
+=head1 AUTHOR
+
+Robert Eden, rmeden@yahoo.com
+
+=head1 BUGS
+
+We'll see!
+
+=cut
+
+#################################################################
+# initializations
+
+use strict;
+use Date::Manip;
+use Time::Local;
+use SOAP::Lite;
+use File::Temp qw(tempfile);
+use Getopt::Long;
+use XML::Twig 3.10;
+use Data::Dumper;
+use constant Have_bar => eval { require Term::ProgressBar; 1 };
+
+use XMLTV;
+use XMLTV::Ask;
+use XMLTV::Config_file;
+#use XMLTV::Date;
+use XMLTV::Usage <<END
+$0: get lists from Zap2IT's DataDirect service in XMLTV format
+To configure: $0 --configure [--config-file FILE]
+To grab listings: $0 [--config-file FILE] [--output FILE] [--days N]
+        [--offset N] [--quiet] [--lineup "LINEUP"] [--old_chan_id] [--low_mem]
+END
+;
+
+#
+# Global Vars
+# 
+my @messages;           # DD warnings.
+my %chan_names;         # Active/inactive channels.
+my %chan_id;            # quick channel id lookup
+my %station;            # DD station data
+my %lineups;            # DD channel mapping data
+my %program;            # DD program data
+my %crew;               # DD crew data
+my %programGenre;       # DD Genre data
+
+my $bar;                # handle for status bar
+my $count;              # record count (for status bar)
+my $DEBUG          =0;  # debug mode
+my $config_file;        # config file name
+my $tz;                 # TZ values to avoid date::manip when speed counts
+my $tz_offset;
+my $start_time=time();
+my $prog_count=0;        # record count;
+
+my $dd_user="";         # dd username
+my $dd_pass="";         # dd password
+my $dd_lineup="";       # dd lineup (empty all lineups)
+my $dd_data;            # temp file handle to store DD data
+my $dd_data_name;       # filename for above
+my $dd_data_size;       # amount of data returned 
+my $dd_start;           # dd start time
+my $dd_stop;            # dd stop time
+
+my $opt_help;           # ask for help
+my $opt_configure;      # configure mode
+my $opt_config_file ;   # config_file_name
+my $opt_output;         # output name
+my $opt_days       =10; # days to fetch
+my $opt_offset     =0;  # day to start
+my $opt_quiet      =0;  # supress messages
+my $opt_lineup     =''; # limit results to one lineup
+my $opt_old_chan_id=0;  # use tv_grab_na style chan ids
+my $opt_low_mem    =0;  # use as little memory as you can
+
+#
+# Process command line
+#
+GetOptions(
+	       'help'          => \$opt_help,
+    	   'configure'     => \$opt_configure,
+    	   'config-file=s' => \$opt_config_file,
+    	   'output=s'      => \$opt_output,
+           'days=i'        => \$opt_days,
+    	   'offset=i'      => \$opt_offset,
+    	   'quiet'         => \$opt_quiet,
+    	   'lineup=s'      => \$opt_lineup,
+           'old_chan_id'   => \$opt_old_chan_id,
+           'low_mem'       => \$opt_low_mem,
+           'debug'         => \$DEBUG,
+	  )
+  or usage(0);
+
+usage(1) if $opt_help;
+
+die 'number of days must not be negative' if ($opt_days < 0);
+
+$config_file = XMLTV::Config_file::filename($opt_config_file, 'tv_grab_na_dd', $opt_quiet);
+
+########################################################################
+#
+# configure mode
+#
+if ( $opt_configure )
+{
+    XMLTV::Config_file::check_no_overwrite($config_file);
+    open(CONF,">$config_file") or die "can't open config file: $config_file\n";
+    say("
+Free Data Direct registration required in advance.
+You can get an ID at http://labs.zap2it.com
+Specify certificate code: ZYZM-TE50-SBUT
+
+");
+    $dd_user=ask("Username:") || die "DataDirect Username Required\n";
+    $dd_pass=ask("Password:") || die "DataDirect Password Required\n";
+    print CONF "username: $dd_user\n";
+    print CONF "password: $dd_pass\n";
+    close CONF;
+    exit 0;
+} # config mode
+
+########################################################################
+#
+# normal mode
+#
+
+
+#
+# read settings from config file
+#
+foreach (XMLTV::Config_file::read_lines($config_file))
+{
+    chomp;
+    s/\#.+//;
+    next unless length($_);
+    $dd_user=$1 if /^username\: (.+)/;
+    $dd_pass=$1 if /^password\: (.+)/;
+}
+
+
+die "You must specify a username/password.\n" unless $dd_user && $dd_pass;
+
+#
+# hack to display lineups
+#
+$opt_days=0 if $opt_lineup eq 'list';
+
+#
+# compute start/stop time
+#
+{
+    my $start = DateCalc(" Midnight","+ $opt_offset days") || die "Can't compute <$opt_offset> days\n";
+    my $stop  = DateCalc($start,"+ $opt_days   days") || die "Can't compute <$opt_days> days\n";
+
+#
+# if days==0, back start time up by a minute to try and get only channels
+#
+    $start = DateCalc($start,"- 1 minute") if $opt_days==0;
+
+    die "*ERROR* start($start) before stop($stop)\n" unless $stop gt $start;
+    
+    $dd_start=UnixDate(Date_ConvTZ($start,"","UTC"),"%Y-%m-%dT%H:%M:%SZ");
+    $dd_stop =UnixDate(Date_ConvTZ($stop ,"","UTC"),"%Y-%m-%dT%H:%M:%SZ");
+
+    print STDERR "dd_start: $dd_start\n" if $DEBUG;
+    print STDERR "dd_stop : $dd_stop\n" if $DEBUG;
+
+#
+# generate these values to avoid date::manip later
+#     this code is twice as fast!
+#
+    $tz = UnixDate("now","%z");
+    $tz_offset = substr($tz,0,3)*3600+substr($tz,3,2)*60;
+    print "Using TZ=<$tz> offset=<$tz_offset>\n" if $DEBUG;
+} # compute date
+
+
+#
+# open temporary file to store DD XML
+#
+($dd_data,$dd_data_name) = tempfile('tv_grab_na_dd_XXXX',
+                                     DIR    => File::Spec->tmpdir(),
+                                     SUFFIX => '.tmp',
+                                     UNLINK=>($DEBUG ? 0 : 1));
+print STDERR "dd_data is in $dd_data_name\n" if $DEBUG;
+   
+#
+# get DD data
+#
+{
+    print STDERR "Fetching from DataDirect\n";
+    print STDERR "('$opt_lineup' lineup.)\n" if $opt_lineup;
+
+    sub SOAP::Transport::HTTP::Client::get_basic_credentials
+    {
+        return "$dd_user" => "$dd_pass";
+    }
+
+    my $time=time();
+    $dd_data->print( SOAP::Lite
+            -> service('http://docs.tms.tribune.com/tech/tmsdatadirect/zap2it/xtvd.wsdl')
+            -> outputxml('true')
+            -> on_fault( sub {
+                             	my($soap,$res)=@_;
+                              	die "SOAP call failed: "
+                             	    .(ref $res ? $res->faultstring
+                              	               : $soap->transport->status)
+                              	    ."\n";
+                              })
+            -> proxy('http://foobar/', options => {compress_threshold => 10000},
+                                                   timeout            => 420)
+            -> download("<startTime>$dd_start</startTime><endTime>$dd_stop</endTime>"));
+    $dd_data->flush;
+    $dd_data_size= -s $dd_data;
+    $time = int(time() - $time);
+    printf STDERR "Fetched %d k/bytes in %d seconds\n",$dd_data_size/1024,$time;
+} # get data
+
+#
+# load supporting details
+#
+my $twig=XML::Twig->new(   
+         twig_roots    => { message => 1, xtvd => 1 },
+         ignore_elts   => { schedules => 1 },
+		 twig_handlers => 
+		      {                 
+                 message  => sub {
+                                  push @messages, $_->first_child_text;
+                                  $_->twig->purge;
+                                  return 1;
+                                 },
+		         stations => sub { $_->twig->purge;  return 1;},
+		         station  => sub {
+                                  my $hash=$_->simplify;
+                                  $station{$hash->{id}}=$hash;
+                                  $_->twig->purge;  
+                                  return 1;
+                		         },
+		         lineups => sub { $_->twig->purge;  return 1;},
+                 lineup  => sub {
+                                  my $hash = $_->simplify;
+                                  $lineups{$hash->{name}}=$hash;
+                                  $_->twig->purge;
+                                  return 1;
+                                 },
+		         programs=> sub { $_->twig->purge;  return 1;},
+		         program => sub {
+                                  my $hash=$_->simplify;
+                                  if ($opt_low_mem)  # only store title/subtitle
+                                  {
+                                    $program{$hash->{id}}{title}=$hash->{title};
+                                    $program{$hash->{id}}{'subtitle'}=$hash->{subtitle} if exists $hash->{subtitle};
+                                  }
+                                  else
+                                  {
+                                    $program{$hash->{id}}=$hash;
+                                  }
+                                  $_->twig->purge;  
+                                  return 1;
+                		         },  
+                 productionCrew => sub { $_->twig->purge;  return 1;},
+		         crew    => sub {
+                                  unless ($opt_low_mem)
+                                  {
+                                    my $hash=$_->simplify;
+                                    $crew{$hash->{program}}=$hash;
+                                  }
+                                  $_->twig->purge;  
+                                  return 1;
+                  		          },
+                 genres       => sub { $_->twig->purge;  return 1;},
+		         programGenre => sub {
+                                  unless ($opt_low_mem)
+                                  {
+                                    my $hash=$_->simplify;
+                                    $programGenre{$hash->{program}}=$hash;
+                                  }
+                                  $_->twig->purge;  
+                                  return 1;
+                  		          },
+		         _default_ => sub {  # for some reason this is not being processed last, can't do the purge
+                                  unless ( $opt_quiet || $count++ % 1000 )
+                                  {
+                                     if ($bar) { $bar->update(tell($dd_data)) }
+                                     else      { print STDERR "."            };
+                                  }
+                                  return 1;
+                  		          },
+	         });
+
+unless ($opt_quiet)
+{
+    if (Have_bar) { $bar = new Term::ProgressBar('loading data',$dd_data_size+1) }
+    else          { print STDERR "loading data "; }
+}
+seek($dd_data,0,0);  #rewind
+$twig->parse( $dd_data );
+$bar->update($dd_data_size+1) if $bar;
+print STDERR "\n" unless ($opt_quiet || $bar );
+
+$twig=undef;  # destroy twig (just in case)
+
+#
+# Hack to display lineups
+#
+if ($opt_lineup eq 'list')  # kludge to display lineups.. select --days 0 --lineup none
+{
+    print STDERR "available lineups:",join(",",sort keys (%lineups)),"\n";
+    exit 0;
+}
+
+#
+# store lineup information with stations
+#
+{
+    my $id;
+    my $count=0;
+    while ( ($id,$_)=each %lineups )
+    {
+        next if $opt_lineup && $opt_lineup ne $id;
+        $count++;
+        foreach (@{$_->{map}})
+        {
+            $station{$_->{station}}{lineups}{$id}=$_->{channel};
+        }
+    }
+    die "Can't have multiple lineups with --old_chan_id\n" if $opt_old_chan_id && $count>1;
+}
+
+#
+# open output file
+# 
+my %w_args;
+my $writer;
+if (defined $opt_output) {
+                            my $fh = new IO::File(">$opt_output");
+                            die "cannot write to $opt_output: $!" if not defined $fh;
+                            $w_args{OUTPUT} = $fh;
+                         }
+$w_args{encoding} = 'ISO-8859-1';
+
+$writer = new XMLTV::Writer(%w_args);
+$writer->start( { 'date'             => scalar localtime(),
+              'source-info-name'     => 'TMS Data Direct Service',
+              'source-info-url'      => 'http://labs.zap2it.com/',
+              'generator-info-name'  => 'tv_grab_na_dd $Id$',
+      	      'generator-info-url'   => 'http://www.xmltv.org/',
+            });
+
+#
+# write stations
+#
+my $id;
+while ( ($id,$_)=each %station)
+{
+    my @names;
+    my $myid=$id;
+    next unless $_->{lineups};  # there should be at least one lineup
+    
+#
+# note: DD fccChannelNumber not typically used. (channel comes from lineup)
+# 
+
+#
+# generate tv_grab_na channel number
+# (if we have more than one lineup, pick one (doesn't make sense, but need to do something)
+#
+    if ($opt_old_chan_id)
+    {
+       $myid = sprintf("C%d%s.zap2it.com",((values %{$_->{lineups}})[0]), # channel from whatever is first in hash!
+                                          lc($_->{callSign}));
+    }
+
+#
+# display names are a mess, especially with multiple lineups!
+# not much we can do about it, but make choices available
+# this should be fixed in the new XMLTV DTD
+#
+# For each lineup (hopefully 1)
+#           channel + callsign
+#           channel + callsign + lineup
+#           channel (only)
+
+    my ($name,$chan);
+    while (($name,$chan)=each %{$_->{lineups}})
+    {
+        push @names, [ sprintf("%d %s"   ,$chan,$_->{callSign})];
+        push @names, [ sprintf("%d %s %s",$chan,$_->{callSign},$name)];
+        push @names, [ $chan ];
+    }
+
+# 
+# Now add display names for the fcc
+#
+    push @names,[sprintf("%d %s %s",$_->{fccChannelNumber},
+                                    $_->{callSign},
+                                    'fcc')] if exists $_->{fccChannelNumber};
+
+#
+# round up the rest we have
+#
+    for my $key (qw(callSign name affiliate))
+    {
+            push @names,[ $_->{$key} ] if exists $_->{$key};
+    }
+    
+    unless (@names)
+    {
+        warn "No display names defined for channel $id\n";
+        next;
+    }
+
+    $writer->write_channel({ 'id'           => $myid,
+                              'display-name' => \@names});
+    $chan_id{$_->{id}}=$myid;
+} # output  channels
+
+
+#
+# prepare to output schedule
+#
+$twig=XML::Twig->new( twig_roots => { schedule => 1 }, twig_handlers => {                 
+    schedule => sub {
+                     $prog_count++;
+                     unless ( $opt_quiet || $count++ % 10 )
+                     {
+                       if ($bar) { $bar->update(tell($dd_data)) }
+                      else      { print STDERR "."            };
+                     }
+
+                     my %prog=();
+                     my $ptr;
+                     my $twig=$_;
+                     $_=$_->simplify;
+
+                     ## Skip programs not in our lineup.
+                     next unless exists $chan_id{$_->{station}};
+
+#
+# start with elements from schedule tag
+#
+
+#
+# we generated a TZ offset a while back... this is twice as fast as Date::Manip!
+#
+                    my $start = timegm(
+                                        int( substr($_->{time},17,2) ),
+                                        int( substr($_->{time},14,2) ),
+                                        int( substr($_->{time},11,2) ),
+                                        int( substr($_->{time},8,2) ),
+                                        int( substr($_->{time},5,2) - 1 ),
+                                        int( substr($_->{time},0,4) - 1900 ) );
+                     my @gStart = gmtime( $start+$tz_offset );
+                     $prog{start} = sprintf("%d%02d%02d%02d%02d%02d %s",
+		                             $gStart[5] + 1900,
+					     $gStart[4] + 1,
+					     @gStart[3,2,1,0],
+					     $tz);
+
+                     my $h = substr($_->{duration},2,2);
+                     my $m = substr($_->{duration},5,2);
+                     my $stop = $start + ( ( $h * 60 ) + $m ) * 60;
+                     my @gStop = gmtime( $stop+$tz_offset );
+                     $prog{stop} = sprintf("%d%02d%02d%02d%02d%02d %s",
+		                            $gStop[5] + 1900,
+					    $gStop[4] + 1,
+					    @gStop[3,2,1,0],
+					    $tz);
+
+                     $prog{channel} = $chan_id{$_->{station}};
+                     $prog{'previously-shown'}={}           if exists $_->{repeat};
+                     $prog{audio}{stereo}='stereo'          if exists $_->{stereo};
+                     $prog{subtitles}=[{type=>'onscreen' }] if exists $_->{subtitled};
+
+                     if (exists $_->{part} )
+                     {
+                          $prog{clumpidx} = sprintf("%d/%d",$_->{part}{number},
+                                                            $_->{part}{total})
+                     }
+
+#todo.. parse program ID to get episode num
+#                     if ( $_->{program} =~ /^EP/ )
+#                     {
+#                            #episode-num?
+#                     }
+                   
+#
+# add elements from program tag
+#
+                     if ($ptr = $program{$_->{program}})
+                     {
+                        $prog{title}        =[[$ptr->{title},      'en']] if exists $ptr->{title};
+                        $prog{'sub-title'}  =[[$ptr->{subtitle}   ,'en']] if exists $ptr->{subtitle};
+                        $prog{desc}         =[[$ptr->{description},'en']] if exists $ptr->{description};
+                        $prog{date}         =$ptr->{year}                 if exists $ptr->{year};
+                        $prog{video}{colour}=$ptr->{colorCode}            if exists $ptr->{colorCode};
+
+                        $prog{length}       =substr($ptr->{duration},2,2)*3600+
+                                             substr($ptr->{duration},5,2)*60 if exists $ptr->{runtime};
+
+                        push @{ $prog{rating} }, [$ptr->{mpaaRating},'MPAA'] if exists $ptr->{mpaaRating};
+                        push @{ $prog{rating} }, [$ptr->{tvRating},'TV']     if exists $ptr->{tvRating};
+
+                        if (exists $ptr->{starRating})
+                        {
+                             my $star=length($ptr->{starRating});
+                             if ($ptr->{starRating} =~ /\+$/)
+                             {
+                                  $star -= .5;
+                                  $prog{'star-rating'}=[sprintf("%1.1f/%d",$star,4)];
+                             }
+                             else
+                             {                              
+                                  $prog{'star-rating'}=[sprintf("%d/%d",$star,4)];
+                             }
+                        }
+                     } # %program items
+
+#
+# add elements from program Genre tag
+#
+                     if ($ptr = $programGenre{$_->{program}})
+                     {
+                        $prog{category}=[];
+                        if (ref $ptr->{genre} eq 'HASH')
+                        {
+                            push @{$prog{category}},[$ptr->{genre}{class},'en'];
+                        }
+                        else
+                        {
+                            foreach (@{$ptr->{genre}})
+                            {
+                                push @{$prog{category}},[$_->{class},'en'];
+                            }
+                        }
+                     } # Genra items
+
+#
+# add elements from crew tag
+#
+                     if ($ptr = $crew{$_->{program}})
+                     {
+                        my ( @director, @actor, @writer, @adapter, @producer,
+                             @presenter, @commentator, @guest );
+                        $ptr->{member}=[$ptr->{member}] if (ref $ptr->{member} eq 'HASH');
+                        foreach (@{$ptr->{member}})
+                        {
+                            my $name="";
+                            $name.=$_->{givenname}." " unless ref $_->{givenname};
+                            $name.=$_->{surname}       unless ref $_->{surname};
+                            push @actor     ,$name if $_->{role} eq 'Actor';
+                            push @guest     ,$name if $_->{role} eq 'Guest Star';
+                            push @presenter ,$name if $_->{role} eq 'Host';
+                            push @director  ,$name if $_->{role} eq 'Director';
+                            push @producer  ,$name if $_->{role} eq 'Executive Producter';
+                            push @producer  ,$name if $_->{role} eq 'Producter';
+                            push @writer    ,$name if $_->{role} eq 'Writer';
+                        }
+
+                        $prog{credits}{actor    }=\@actor     if @actor   ;
+                        $prog{credits}{director }=\@director  if @director;
+                        $prog{credits}{guest    }=\@guest     if @guest;
+                        $prog{credits}{presenter}=\@presenter if @presenter;
+                        $prog{credits}{producer }=\@producer  if @producer;
+                        $prog{credits}{writer   }=\@writer    if @writer;
+                     } #crew items
+
+#
+# write record
+#
+                     $writer->write_programme(\%prog);
+                     $twig->twig->purge;
+                     return 1;
+       		         } # schedule subroutine
+	         }); #twig setup
+
+#
+# rescan data, looking for schedule items
+#
+seek($dd_data,0,0);  #rewind
+unless ($opt_quiet)
+{
+    if (Have_bar) { $bar = new Term::ProgressBar('Writing schedule',$dd_data_size+1) }
+    else          { print STDERR "Writing schedule"; }
+}
+my $time=time();
+$twig->parse( $dd_data );
+print STDERR "\n" unless ($opt_quiet || $bar );
+$bar->update($dd_data_size+1) if $bar;
+
+$writer->end();
+if (@messages)
+{
+    warn join( "\n", @messages ), "\n";
+}
+
+printf STDERR "Downloaded %d programs in %d seconds\n",$prog_count,time()-$start_time
+    unless $opt_quiet;
+
+exit();
+
+
