@@ -373,8 +373,10 @@ sub read_data( $ ) {
 # Parameters:
 #   listref of four elements as returned by read_data()
 #   arguments to be passed on to XMLTV::Writer's constructor
-# 
-# For example write_data($data, OUTPUT => 'out.xml');
+#
+# For example:
+#   my $f = new IO::File '>out.xml'; die if not $f;
+#   write_data($data, OUTPUT => $f);
 #
 sub write_data( $;@ ) {
     my $data = shift;
