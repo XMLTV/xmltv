@@ -76,7 +76,7 @@ sub MY::constants {
     package MY;
     my $inherited = shift->SUPER::constants(@_);
     $inherited .= "INST_PLAINDOC = blib/doc\n";
-    $inherited .= "INSTALLPLAINDOC = \$(PREFIX)/share/doc/xmltv-$VERSION\n";
+    $inherited .= "INSTALLPLAINDOC = \$(PREFIX)/share/doc/xmltv-$::VERSION\n";
     return $inherited;
 }
 sub MY::install {
