@@ -189,21 +189,6 @@ sub read_data( $ ) { # FIXME remove altogether
     &parsefile;
 }
 
-# Private.  Return a new, empty, Perl data structure and an XML::Twig
-# ready to go.
-#
-sub new_doc() {
-    my @data = (undef, undef, {}, []);
-    my $t = new XML::Twig(StartTagHandlers =>
-			  { '/tv' => sub { tv_handler(\@data, @_) } },
-			  TwigHandlers =>
-			  { '/tv/channel'   => sub { do_channel(\@data, @_) },
-			    '/tv/programme' => sub { do_programme(\@data, @_) },
-			  },
-			  KeepEncoding => $KEEP_ENCODING);
-    return (\@data, $t);
-}
-
 # Private.
 sub sanity( $ ) {
     for (shift) {
@@ -235,26 +220,58 @@ is not currently handled by the XMLTV format, or by this module.
 sub parse( $ ) {
     my $str = shift;
     sanity($str);
-    my ($data, $t) = new_doc();
-    $t->parse($str);
-    return $data;
+    # FIXME commonize with parsefiles()
+    my ($encoding, $credits);
+    my %channels;
+    my @programmes;
+    parse_callback($str,
+		   sub { $encoding = shift },
+		   sub { $credits = shift },
+		   sub { for (shift) { $channels{$_->{id}} = $_ } },
+		   sub { push @programmes, shift });
+    return [ $encoding, $credits, \%channels, \@programmes ];
 }
 
 =pod
 
-=item parsefile(filename)
+=item parsefiles(filename...)
 
-Like C<parse()> but takes a filename instead of a whole document.
-(Note that compared to earlier releases, the ability to read from a
-URL has been lost, unless XML::Parser decides to support it.)
+Like C<parse()> but takes one or more filenames instead of a string
+document.  The data returned is the merging of those file contents:
+the programmes will be concatenated in their original order, the
+channels just put together in arbitrary order (ordering of channels
+should not matter).
+
+It is necessary that each file have the same character encoding, if
+not, an exception is thrown.  Ideally the credits information would
+also be the same between all the files, since there is no obvious way to
+merge it - but if the credits information differs from one file to the
+next, one file is picked arbitrarily to provide credits and a warning
+is printed.  If two files give differing channel definitions for the
+same XMLTV channel id, then one is picked arbitrarily and a warning
+is printed.
+
+In the simple case, with just one file, you neednE<39>t worry
+about mismatching of encodings, credits or channels.
+
+The deprecated function C<parsefile()> is a wrapper allowing just one
+filename.
 
 =cut
-sub parsefile( $ ) {
-    my $filename = shift;
-    my ($data, $t) = new_doc();
-    $t->parsefile($filename);
-    return $data;
+sub parsefiles( @ ) {
+    die 'one or more filenames required' if not @_;
+    my ($encoding, $credits);
+    my %channels;
+    my @programmes;
+    parsefiles_callback(sub { $encoding = shift },
+			sub { $credits = shift },
+			sub { for (shift) { $channels{$_->{id}} = $_ } },
+			sub { push @programmes, shift },
+			@_);
+    return [ $encoding, $credits, \%channels, \@programmes ];
 }
+
+sub parsefile( $ ) { parsefiles(@_) }
 
 =pod
 
@@ -382,7 +399,11 @@ sub new_doc_callback( $$$$ ) {
 			my $p = node_to_programme($node);
 			$t->purge();
 			$p_cb->($p);
-		    } });
+		    },
+		  },
+
+		  KeepEncoding => $KEEP_ENCODING,
+		 );
 }
 
 sub parse_callback( $$$$ ) {
@@ -397,17 +418,10 @@ sub parse_callback( $$$$ ) {
                           channel_callback, programme_callback,
                           filenames...)
 
-As C<parse_callback()> but takes one or more filenames to open.  The
-data returned is the merging of those file contents: the programmes
-will be concatenated in their original order, the channels just put
-together in arbitrary order (ordering of channels should not matter).
-
-It is necessary that each file have the same character encoding, if
-not, an exception is thrown.  Ideally the credits information would
-also be the same between all the files, since there is no obvious way to
-merge it - but if the credits information differs from one file to the
-next, one file is picked arbitrarily to provide credits and a warning
-is printed.
+As C<parse_callback()> but takes one or more filenames to open,
+merging their contents in the same manner as C<parsefiles()>.  Note
+that the reading is still gradual - you get the channels and
+programmes one at a time, as they are read.
 
 For compatibility, there is an alias C<parsefile_callback()> which is
 the same but takes only a single filename, B<before> the callback
@@ -481,41 +495,6 @@ sub parsefiles_callback( $$$$@ ) {
 
     # Let's go.
     $do_next_file->();
-}
-
-
-# Private.  Three handlers indirectly called by XML::Twig.  First arg
-# is the XMLTV data structure, remaining args those passed by
-# XML::Twig to its handlers.
-#
-sub tv_handler( $$$ ) {
-    my ($d, $t, $node) = @_; die if not defined $node;
-    t 'tv_handler() ENTRY';
-    if ($KEEP_ENCODING) {
-	$d->[0] = $t->encoding();
-	t 'got encoding: ' . d $d->[0];
-    }
-    else {
-	$d->[0] = 'UTF-8';
-	t 'assuming UTF-8 encoding';
-    }
-    $d->[1] = get_attrs($node);
-    t 'got attrs: ' . d $d->[1];
-}
-sub do_channel( $$$ ) {
-    my ($d, $t, $node) = @_;
-    use vars '%channels'; local *channels = $d->[2];
-    my $channel = node_to_channel($node);
-    my $id = $channel->{id};
-    warn "channel with id $id seen twice"
-      if defined $channels{$id};
-    $channels{$id} = $channel;
-    $t->purge();
-}
-sub do_programme( $$$ ) {
-    my ($d, $t, $node) = @_; die if not defined $node;
-    push @{$d->[3]}, node_to_programme($node);
-    $t->purge();
 }
 
 =pod
@@ -594,8 +573,7 @@ sub get_text( $ ) {
 
  	if ($XML::Twig::VERSION < 3.01 || $KEEP_ENCODING) {
 	    # Old versions of XML::Twig had stupid behaviour with
-	    # entities - and so do the latest ones if you have
-	    # KeepEncoding turned on.
+	    # entities - and so do the new ones if KeepEncoding is on.
 	    #
  	    for ($v) {
  		s/&gt;/>/g;
