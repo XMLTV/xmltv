@@ -119,7 +119,6 @@ sub get_copyright( $$ );
 sub get_regions( $$ );
 sub read_channels_page( $$ );
 sub fix_times( $ );
-#sub fix_dates( $ );
 sub fix_zero_length( $ );
 sub extract_variant( $$ );
 sub get_channel_pkgs();
@@ -278,7 +277,7 @@ my %region_display = reverse %$regions;
 t 'regions: ' . d $regions;
 foreach my $r (keys %$regions) {
     t "region $r:";
-    foreach (grep { $_->is_region($r) } XMLTV::Ananova_Channel->all()) {
+    foreach (grep { $_->is_region($r) } @XMLTV::Ananova_Channel::all) {
 	t "...contains channel " . $_->stringify();
     }
 }
@@ -379,7 +378,7 @@ END
     }
 
     my @radio_chs = grep { my $t = $_->get_type(); defined $t and $t eq 'radio' }
-      XMLTV::Ananova_Channel->all();
+      @XMLTV::Ananova_Channel::all;
 
     if (@radio_chs == 0) {
 	print "Hmm, there don't seem to be any radio channels available.\n";
@@ -408,7 +407,7 @@ END
 	$in =~ s/^\s+//; $in =~ s/\s+$//;
 	last if $in eq '.';
 	my @poss;
-	foreach (XMLTV::Ananova_Channel->all()) {
+	foreach (@XMLTV::Ananova_Channel::all) {
 	    push @poss, $_ if $_->get_a_display_name() =~ /\Q$in\E/i;
 	}
 	if (@poss == 0) {
@@ -487,7 +486,7 @@ sub grab( @ ) {
     my %wanted; tie %wanted, 'Tie::RefHash';
     open(CONF, $CONFIG_FILE)
       or die "cannot read $CONFIG_FILE: $!\n";
-    my @all_chs = XMLTV::Ananova_Channel->all();
+    my @all_chs = @XMLTV::Ananova_Channel::all;
     while (<CONF>) {
 	s/\#.*//; s/^\s+//; s/\s+$//;
 	next if not length;
@@ -625,7 +624,9 @@ sub grab( @ ) {
     $bar = new Term::ProgressBar('parsing', scalar @to_parse)
       if $have_bar;
 
-    my @listingses;
+    my ($encoding, $credits, @prog_lists);
+    my $w;
+    my %written_xid;
     foreach (@to_parse) {
 	my ($xml, $url) = @$_;
 	t "parsing content of $url";
@@ -643,61 +644,71 @@ sub grab( @ ) {
 	    };
 	    die "$url: $@" if $@;
 	}
-	push @listingses, $r;
-	update $bar if $have_bar;
-    }
 
-    # Join together all the listings files: but for scalability we
-    # don't join the programmes.  (Putting them all into a big list in
-    # channel order gave very poor locality of memory use, so
-    # thrashing.)
-    #
-    my $catted = XMLTV::cat_noprogrammes(@listingses);
-    my $w = new XMLTV::Writer(@_, encoding => $catted->[0]);
-    $w->start($catted->[1]);
-    $w->comment($copyright);
-    use vars '%ch'; local *ch = $catted->[2];
-
-    # Convert Ananova channel ids to XMLTV ids.  Ananova serves the pages
-    # with its own internal numeric ids.
-    #
-    foreach (keys %ch) {
-	die if not defined;
-	my $xid = XMLTV::Ananova_Channel->ananova_id_to_xmltv_id($_);
-	if (not defined $xid) {
-	    # Shouldn't happen as we read the allchannels page before.
- 	    warn "in channels, cannot convert Ananova id $_->{channel} to XMLTV id";
+	if (not defined $w) {
+	    ($encoding, $credits) = ($r->[0], $r->[1]);
+	    $w = new XMLTV::Writer(@_, encoding => $encoding);
+	    $w->start($credits);
+	    $w->comment($copyright);
 	}
 	else {
-	    warn "channel with XMLTV id $xid seen twice"
-	      if defined $ch{$xid};
-	    ($ch{$xid} = delete $ch{$_})->{id} = $xid;
+	    if ($encoding ne $r->[0]) {
+		warn "different pages have different encodings";
+	    }
+	    # Don't check credits since we have no reliable and simple
+	    # way to do it.
+	    #
 	}
-    }
-    add_display_names(\%ch);
-    $w->write_channels(\%ch);
+	die if not defined $w;
 
-    $bar = new Term::ProgressBar('writing', scalar @listingses)
-      if $have_bar;
-    foreach (@listingses) {
-	my $progs = $_->[3];
-	# Get rid of Ananova's bizarre system for follow-on
-	# programmes.  The XMLTV way of dealing with them is not ideal
-	# either, but it's the standard right now.
-	#
-	# This *might* fail to fix bizarre follow-ons between two
-	# different 'days', but it's much more scalable to do it this
-	# way than to concatenate the programmes into a big list.
-	#
-	fix_times($progs);
+	# Convert Ananova channel id to XMLTV id and write <channel>.
+	my $ch = $r->[2];
+	foreach (sort keys %$ch) {
+	    die if not defined;
+	    my $xid = XMLTV::Ananova_Channel->ananova_id_to_xmltv_id($_);
+	    if (not defined $xid) {
+		# Shouldn't happen as we read the allchannels page before.
+		warn "in channels, cannot convert Ananova id $_->{channel} to XMLTV id";
+		next;
+	    }
+	    next if $written_xid{$xid}++;
 
-	# Remove the occasional zero-length programmes which pop up.  NB
-	# we rely here on the ordering which Ananova generates within each
-	# channel.
-	#
-	fix_zero_length($progs);
+	    my $towrite = $ch->{$_};
+	    $towrite->{id} = $xid;
 
-	foreach (@$progs) {
+	    # Add extra display names.
+	    my $ch_obj = XMLTV::Ananova_Channel->find_by_xmltv_id($xid);
+	    if (not defined $ch_obj) {
+		# Shouldn't happen.
+		warn "no object for XMLTV id $_";
+	    }
+	    else {
+		# Discard the existing display name data and replace it
+		# with the list from the object.  Urgh, this is horrible.
+		#
+		my @new = ();
+		foreach ($ch_obj->get_display_names()) {
+		    if (not defined) {
+			warn "got undef display name from get_display_names()";
+		    }
+		    elsif (not tr/0-9//c) {
+			# Only numbers, this name is language independent.
+			push @new, [ $_ ];
+		    }
+		    else {
+			# Assume the channel_ids file is in English.
+			push @new, [ $_, 'en' ];
+		    }
+		}
+		$towrite->{'display-name'} = \@new;
+	    }
+
+	    $w->write_channel($towrite);
+	}
+
+	# Convert channel ids in programmes.
+	my $prog_list = $r->[3];
+	foreach (@$prog_list) {
 	    my $xid = XMLTV::Ananova_Channel->ananova_id_to_xmltv_id($_->{channel});
 	    if (not defined $xid) {
 		warn "in programme, cannot convert Ananova id $_->{channel} to XMLTV id";
@@ -705,9 +716,35 @@ sub grab( @ ) {
 	    else {
 		$_->{channel} = $xid;
 	    }
-	    $w->write_programme($_);
 	}
 
+	# Get rid of Ananova's bizarre system for follow-on
+	# programmes.  The XMLTV way of dealing with them is not ideal
+	# either, but it's the standard right now.
+	#
+	# We need to group the programmes by channel and call
+	# fix_times() on those groups.
+	#
+	my %ch_todo;
+	push @{$ch_todo{$_->{channel}}}, $_ foreach @$prog_list;
+	foreach (keys %ch_todo) {
+	    fix_times($ch_todo{$_});
+	}
+
+	push @prog_lists, $prog_list;
+	update $bar if $have_bar;
+    }
+
+    $bar = new Term::ProgressBar('writing', scalar @prog_lists)
+      if $have_bar;
+    foreach (@prog_lists) {
+	# Remove the occasional zero-length programmes which pop up.  NB
+	# we rely here on the ordering which Ananova generates within each
+	# channel.
+	#
+#	fix_zero_length($_);
+
+	$w->write_programme($_) foreach @$_;
 	update $bar if $have_bar;
     }
 
@@ -1273,10 +1310,11 @@ sub get_pages( $$ ) {
 sub fix_times($) {
 #    local $Log::TraceMessages::On = 1;
     die 'usage: fix_times(ref to list of programmes)' if @_ != 1;
-    t('fix_times() ENTRY');
+    t 'fix_times() ENTRY';
     my @progs = @{shift()}; # take a copy
 
     for (my $prev = shift @progs; my $p = $progs[0]; $prev = shift @progs) {
+	die if $prev->{channel} ne $p->{channel};
 	my $start = $p->{start};
 	my $stop = $p->{stop};
 	my $prev_stop = $prev->{stop};
@@ -1289,46 +1327,24 @@ sub fix_times($) {
 	    if (not Date_Cmp($start_plus_15, $prev_stop_p)
 		and not Date_Cmp($stop_p, $prev_stop_p)) {
 		# Found the magic 15 second difference.  Fix it.
+		t 'found 15 second difference';
+		t '$p=' . d $p;
+		t '$prev=' . d $prev;
 		if (defined $prev->{clumpidx} or defined $p->{clumpidx}) {
 		    # I really don't expect this to happen.
-		    warn 'cannot add clumpidx to programmes, already there';
+		    warn "cannot add clumpidx to programmes at $start_p-|$stop_p on $p->{channel}, already there";
 		    next;
 		}
 		$prev->{clumpidx} = '0/2';
 		$p->{clumpidx} = '1/2';
 		$p->{start} = $prev->{start};
+		t '$p now: ' . d $p;
+		t '$prev now: ' . d $prev;
 	    }
 	}
     }
     t 'fix_times() EXIT';
 }
-
-
-# # fix_dates()
-# #
-# # Turn dates like 'TVM 1996' into date and category.  Takes a
-# # reference to a list of programmes and modifies them.
-# #
-# sub fix_dates( $ ) {
-#     die 'usage: fix_dates(ref to list of programmes)' if @_ != 1;
-#     use vars '@progs'; local *progs = shift;
-#
-#     # This code is similar to special_tv_movie() in tv_extractinfo_en,
-#     # but acts on the <date> field and not the programme description.
-#     #
-#     PROG: foreach (@progs) {
-# 	if (defined $_->{date} and $_->{date} =~ s/^TVM\s*//) {
-# 	    # Add the category (unless it's already there).
-# 	    my $cat = 'TV movie';
-# 	    if (defined $_->{category}) {
-# 		foreach (@{$_->{category}}) {
-# 		    next PROG if $_->[0] eq $cat;
-# 		}
-# 	    }
-# 	    push @{$_->{category}}, [ $cat, 'en' ];
-# 	}
-#     }
-# }
 
 
 # fix_zero_length()

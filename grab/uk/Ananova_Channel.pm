@@ -43,7 +43,7 @@ BEGIN {
 }
 
 
-my @all;
+use vars '@all';
 my %idx_a; # index by Ananova id, to 'set' of objects
 tie %idx_a, 'Tie::RefHash::Nestable';
 my %idx_x; # index by XMLTV id
