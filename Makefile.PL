@@ -112,6 +112,11 @@ my %pm
 my %prereqs
   = (
      'LWP'         => 5.65,
+     # XML::Parser is required by XML::Twig, but older versions have a
+     # bug when $SIG{__DIE__} is set (well, could be a perl bug, but
+     # anyway it doesn't appear with 2.34).
+     #
+     'XML::Parser' => 2.34,
      'XML::Twig'   => 3.09,
      'Date::Manip' => 5.42,
      'XML::Writer' => 0,
