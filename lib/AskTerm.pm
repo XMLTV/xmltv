@@ -140,9 +140,8 @@ sub askQuestion( $$@ )
 	    # numbers or the option names.
 	    #
 	    print STDERR "$_: $options[$_]\n" foreach 0 .. $#options;
-	    my $res = ask('choose one: ');
-	    return undef if not defined $res;
-	    # No default.
+	    my $res = ask("choose one (default=$choice_to_num{$default},$default): ");
+	    return $default if not defined $res;
 
 	    foreach (0 .. $#options) {
 		return $num_to_choice{$_} if $res eq $_;
