@@ -61,14 +61,30 @@ my $verbose = 0;
 GetOptions('tests-dir=s' => \$tests_dir, 'cmds-dir=s' => \$cmds_dir,
 	   'verbose' => \$verbose)
   or usage(0);
-my @tests = <$tests_dir/*.xml>;
-my @tests_gz = <$tests_dir/*.xml.gz>; s/\.gz$// foreach @tests_gz;
-@tests = (@tests, @tests_gz);
+my @inputs = <$tests_dir/*.xml>;
+my @inputs_gz = <$tests_dir/*.xml.gz>; s/\.gz$// foreach @inputs_gz;
+@inputs = sort (@inputs, @inputs_gz);
 die "no test cases (*.xml, *.xml.gz) found in $tests_dir"
-  if not @tests;
-foreach (@tests) {
+  if not @inputs;
+foreach (@inputs) {
     s!^\Q$tests_dir\E/!!o or die;
 }
+
+# We want to test multiple input files.  But it would be way OTT to
+# test all permutations of all input files up to some length.  Instead
+# we pick all single files and a handful of pairs.
+#
+my @tests;
+push @tests, [ $_ ] foreach @inputs;
+
+# This code will be enabled soon!
+#
+# my $pair_limit = 3; $pair_limit = @inputs if $pair_limit > @inputs;
+# foreach my $i (0 .. $pair_limit - 1) {
+#     foreach my $j (0 .. $pair_limit - 1) {
+# 	unshift @tests, [ $inputs[$i], $inputs[$j] ];
+#     }
+# }
 
 # Any other environment needed (relative to $tests_dir)
 $ENV{PERL5LIB} .= ":..";
@@ -87,12 +103,12 @@ foreach my $pair (@cmds) {
     my ($cmd, $idem) = @$pair;
     foreach my $test (@tests) {
 	++ $test_num;
-	my $test_name = join('_', @$cmd, $test);
+	my $test_name = join('_', @$cmd, @$test);
 	$test_name =~ tr/A-Za-z0-9/_/sc;
 	die "two tests munge to $test_name"
 	  if $seen{$test_name}++;
 
-	my $in       = "$tests_dir/$test";
+	my @cmd = @$cmd;
 	my $base     = "$tests_dir/$test_name";
 	my $expected = "$base.expected";
 	my $out      = "$base.out";
@@ -102,7 +118,7 @@ foreach my $pair (@cmds) {
 	# afterwards.  Keys matter, values do not.
 	#
 	my (%to_gzip, %to_gunzip);
-	foreach ($in, $expected) {
+	foreach (@$test, $expected) {
 	    my $gz = "$_.gz";
 	    if (not -e and -e $gz) {
 		$to_gunzip{$gz}++ && die "$gz seen twice";
@@ -119,13 +135,14 @@ foreach my $pair (@cmds) {
 
 	my $out_content; # contents of $out, to be filled in later
 
-	my @cmd = @$cmd;
 	$cmd[0] = "$cmds_dir/$cmd[0]";
 	$cmd[0] =~ s!/!\\!g if $^O eq 'MSWin32';
 	if ($verbose) {
 	    print STDERR "test $test_num: @cmd\n";
 	}
-	my $okay = run(\@cmd, $in, $out, $err);
+
+	my @in = map { "$tests_dir/$_" } @$test;
+	my $okay = run(\@cmd, \@in, $out, $err);
 	# assume: if $okay then -e $out.
 
 	my $have_expected = -e $expected;
@@ -167,7 +184,7 @@ foreach my $pair (@cmds) {
 		my $twice_err = "$base.twice_err";
 		$to_unlink{$twice_out} = $to_unlink{$twice_err} = undef;
 		
-		my $twice_okay = run(\@cmd, $out, $twice_out, $twice_err);
+		my $twice_okay = run(\@cmd, [ $out ], $twice_out, $twice_err);
 		# assume: if $twice_okay then -e $twice_out.
 
 		if (not $twice_okay) {
@@ -201,7 +218,7 @@ foreach my $pair (@cmds) {
 		}
 	    }
 	    else {
-		warn "skipping idempotence test for @cmd on $in\n";
+		warn "skipping idempotence test for @cmd on @$test\n";
 		# Do not print 'ok' or 'not ok'.
 	    }
 	}
@@ -218,15 +235,18 @@ die "ran $test_num tests, expected to run $num_tests"
 
 # run()
 #
-# Run a command redirecting input and output.  This is not fully
+# Run a Perl command redirecting input and output.  This is not fully
 # general - it relies on the --output option working for redirecting
 # output.  (Don't know why I decided this, but it does.)
 #
 # Parameters:
 #   (ref to) list of command and arguments
-#   input filename
+#   (ref to) list of input filenames
 #   output filename
 #   error output filename
+#
+# This routine is specialized to Perl stuff running during the test
+# suite; it has the necessary -Iwhatever arguments.
 #
 # Dies if error opening or closing files, or if the command is killed
 # by a signal.  Otherwise creates the output files, and returns
@@ -234,7 +254,9 @@ die "ran $test_num tests, expected to run $num_tests"
 #
 sub run( $$$$ ) {
     my ($cmd, $in, $out, $err) = @_; die if not defined $cmd;
-    my @cmd = (@$cmd, $in, '--output', $out);
+    my @cmd = (qw(perl -Iblib/arch -Iblib/lib), @$cmd,
+	       @$in,
+	       '--output', $out);
 
     # Redirect stderr to file $err.
     open(OLDERR, '>&STDERR') or die "cannot dup stderr: $!\n";
