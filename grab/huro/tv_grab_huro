@@ -1,0 +1,585 @@
+#!/usr/bin/perl -w
+
+=pod
+
+=head1 NAME
+
+tv_grab_hu - Grab TV listings for Hungary or Romania.
+
+=head1 SYNOPSIS
+
+tv_grab_hu --help
+
+tv_grab_hu [--config-file FILE] --configure
+
+tv_grab_hu [--config-file FILE] [--output FILE] [--days N]
+           [--offset N] [--quiet]
+
+tv_grab_hu --list-channels --loc [hu | ro]
+
+=head1 DESCRIPTION
+
+Output TV listings for several channels available in Hungary or
+Romania.  The grabber relies on parsing HTML so it might stop working
+at any time.
+
+First run B<tv_grab_hu --configure> to choose, which channels you want
+to download. Then running B<tv_grab_hu> with no arguments will output
+listings in XML format to standard output.
+
+B<--configure> Prompt for which channels,
+and write the configuration file.
+
+B<--config-file FILE> Set the name of the configuration file, the
+default is B<~/.xmltv/tv_grab_hu.conf>.  This is the file written by
+B<--configure> and read when grabbing.
+
+B<--output FILE> write to FILE rather than standard output.
+
+B<--days N> grab N days.  The default is eight.
+
+B<--offset N> start N days in the future.  The default is to start
+from today.
+
+B<--quiet> suppress the progress messages normally written to standard
+error.
+
+B<--list-channels> write output giving <channel> elements for every
+channel available (ignoring the config file), but no programmes.
+
+=head1 SEE ALSO
+
+L<xmltv(5)>.
+
+=head1 AUTHOR
+
+Attila Szekeres and Zsolt Varga.  Based on tv_grab_fi by Matti Airas.
+Maintained by Ed Avis ed@membled.com.
+
+=head1 BUGS
+
+The data source does not include full channels information and the
+channels are identified by short names rather than the RFC2838 form
+recommended by the XMLTV DTD.
+
+=cut
+
+######################################################################
+# initializations
+
+use strict;
+use XMLTV::Version '$Id$ ';
+use Getopt::Long;
+use Date::Manip;
+use HTML::TreeBuilder;
+use HTML::Entities; # parse entities
+use IO::File;
+
+use XMLTV;
+use XMLTV::Memoize;
+use XMLTV::Ask;
+use XMLTV::DST;
+use XMLTV::Get_nice;
+use XMLTV::Mode;
+use XMLTV::Config_file;
+use XMLTV::Date;
+# Todo: perhaps we should internationalize messages and docs?
+use XMLTV::Usage <<END
+$0: get Hungarian or Romanian television listings in XMLTV format
+To configure: $0 --configure [--config-file FILE]
+To grab listings: $0 [--config-file FILE] [--output FILE] [--days N]
+        [--offset N] [--quiet]
+To list channels: $0 --list-channels --loc [hu | ro]
+END
+  ;
+
+sub domain( $ );
+sub xhead( $ );
+sub xid( $$ );
+sub process_table( $$$$$ );
+sub make_programme_hash( $$$$$$ );
+sub bump_start_day( $$ );
+sub get_program_data( @ );
+sub get_time( @ );
+sub get_title( @ );
+sub get_desc( @ );
+sub get_channels( $ );
+sub nextday( $ );
+
+# Use Term::ProgressBar if installed.
+use constant Have_bar => eval { require Term::ProgressBar; 1 };
+
+# Attributes of the root element in output.
+sub domain( $ ) { "port.$_[0]" };
+sub xhead( $ ) {
+    my $d = &domain;
+    return { 'source-info-url'     => "http://www.$d/",
+	     'source-data-url'     => "http://www.$d/tv/",
+	     'generator-info-name' => 'XMLTV',
+	     'generator-info-url'  => 'http://membled.com/work/apps/xmltv/',
+	   };
+}
+
+my %COUNTRIES = (Hungary => [ 'hu', '+0100' ],
+		 Romania => [ 'ro', '+0200' ],
+		);
+
+# Whether zero-length programmes should be included in the output.
+my $WRITE_ZERO_LENGTH = 0;
+
+# Global channel data.
+our @ch_all;
+
+######################################################################
+# get options
+
+# Get options, including undocumented --cache option.
+XMLTV::Memoize::check_argv('XMLTV::Get_nice::get_nice_aux');
+my ($opt_days, $opt_offset, $opt_help, $opt_output,
+    $opt_configure, $opt_config_file, $opt_quiet,
+    $opt_list_channels, $opt_loc);
+$opt_days = 8; # default
+$opt_offset = 0; # default
+$opt_quiet = 0; # default
+GetOptions('days=i'        => \$opt_days,
+	   'offset=i'      => \$opt_offset,
+	   'help'          => \$opt_help,
+	   'configure'     => \$opt_configure,
+	   'config-file=s' => \$opt_config_file,
+	   'output=s'      => \$opt_output,
+	   'quiet'         => \$opt_quiet,
+	   'list-channels' => \$opt_list_channels,
+	   'loc=s'         => \$opt_loc,
+	  )
+  or usage(0);
+die 'number of days must not be negative'
+  if (defined $opt_days && $opt_days < 0);
+usage(1) if $opt_help;
+my $mode = XMLTV::Mode::mode('grab', # default
+			     $opt_configure => 'configure',
+			     $opt_list_channels => 'list-channels',
+			    );
+
+# File that stores which channels to download.
+my $config_file
+  = XMLTV::Config_file::filename($opt_config_file, 'tv_grab_hu', $opt_quiet);
+
+my @config_lines; # used only in grab mode
+if ($mode eq 'configure') {
+    XMLTV::Config_file::check_no_overwrite($config_file);
+}
+elsif ($mode eq 'grab') {
+    @config_lines = XMLTV::Config_file::read_lines($config_file);
+}
+elsif ($mode eq 'list-channels') {
+    # Config file not used.
+}
+else { die }
+
+######################################################################
+# write configuration
+
+if ($mode eq 'configure') {
+    open(CONF, ">$config_file") or die "cannot write to $config_file: $!";
+
+    my $default_cn = 'Hungary';
+    my $cn = askQuestion('Grab listings for which country?',
+			 $default_cn,
+			 sort keys %COUNTRIES);
+    my $c = $COUNTRIES{$cn}[0];
+    print CONF "country $c\t# $cn\n";
+
+    # Ask about each channel.
+    my %channels = get_channels($c);
+    my @chs = sort keys %channels;
+    my @names = map { $channels{$_} } @chs;
+    my @qs = map { "add channel $_?" } @names;
+    my @want = askManyBooleanQuestions(1, @qs);
+    foreach (@chs) {
+	my $w = shift @want;
+	warn("cannot read input, stopping channel questions"), last
+	  if not defined $w;
+	# No need to print to user - XMLTV::Ask is verbose enough.
+
+	# Print a config line, but comment it out if channel not wanted.
+	print CONF '#' if not $w;
+	my $name = shift @names;
+	print CONF "channel $_ $name\n";
+	# TODO don't store display-name in config file.
+    }
+
+    close CONF or warn "cannot close $config_file: $!";
+    say("Finished configuration.");
+
+    exit();
+}
+
+# Not configuration, we must be writing something, either full
+# listings or just channels.
+#
+die if $mode ne 'grab' and $mode ne 'list-channels';
+
+# Options to be used for XMLTV::Writer.
+my %w_args;
+if (defined $opt_output) {
+    my $fh = new IO::File(">$opt_output");
+    die "cannot write to $opt_output: $!" if not defined $fh;
+    $w_args{OUTPUT} = $fh;
+}
+$w_args{encoding} = 'ISO-8859-2';
+
+if ($mode eq 'list-channels') {
+    # Write channels mode.
+    if (not defined $opt_loc) {
+	my $msg = "--loc option required with --list-channels:\n";
+	foreach (sort keys %COUNTRIES) {
+	    $msg .= "    --loc $COUNTRIES{$_}[0] for $_\n";
+	}
+	die $msg;
+    }
+    my $writer = new XMLTV::Writer(%w_args);
+    $writer->start(xhead($opt_loc));
+    get_channels($opt_loc); # sets @ch_all
+    $writer->write_channel($_) foreach @ch_all;
+    $writer->end();
+    exit();
+}
+
+######################################################################
+# We are producing full listings.
+die if $mode ne 'grab';
+
+# Read configuration
+my $line_num = 0;
+my ($country, $tz);
+my @channels;
+foreach (@config_lines) {
+    ++ $line_num;
+    next if not defined;
+    my $where = "$config_file:$line_num";
+    if (/^country:?\s+(\w\w)$/) {
+	warn "$where: already seen country\n"
+	  if defined $country;
+	$country = $1;
+
+	# Lame reverse lookup on %COUNTRIES.
+	foreach (values %COUNTRIES) {
+	    if ($_->[0] eq $country) {
+		$tz = $_->[1];
+		last;
+	    }
+	}
+	die "$where: unknown country $country\n" if not defined $tz;
+    }
+    elsif (/^channel:?\s+(\S+)\s+([^\#]+)/) {
+	my $ch_did = $1;
+	my $ch_name = $2;
+	$ch_name =~ s/\s*$//;
+	push @channels, $ch_did;
+	# FIXME do not store display-name in the config file - it is
+	# ignored here.
+	#
+    }
+    else {
+	warn "$config_file:$.: bad line\n";
+    }
+}
+for ($country) {
+    if (not defined) {
+	$_ = 'hu';
+	warn "country not seen in $config_file, assuming '$_'\n";
+    }
+}
+
+######################################################################
+# begin main program
+
+my $now = DateCalc(parse_date('now'), "$opt_offset days");
+my %channels = get_channels($country); # sets @ch_all
+my @to_get;
+my $writer = new XMLTV::Writer(%w_args);
+$writer->start(xhead($country));
+
+# Turn a site channel id into an XMLTV id.
+# Parameters: country, site id
+sub xid( $$ ) {
+    my ($country, $id) = @_;
+    return "$id." . domain($country);
+}
+
+# Write channel elements
+foreach my $ch_did (@channels) {
+    my $ch_name=$channels{$ch_did};
+    $writer->write_channel({ id => xid($country, $ch_did),
+			     'display-name' => [ [ $ch_name ] ] });
+}
+
+# Make list of pages to fetch for each day.
+my @days;
+my $day=UnixDate($now,'%Q');
+for (my $i=1+$opt_offset;$i<$opt_days+$opt_offset+1;$i++) {
+    push @days, [ $day, $i ];
+    $day=nextday($day); die if not defined $day;
+}
+
+# This progress bar is for both downloading and parsing.  Maybe
+# they could be separate stages.
+#
+my $bar = new Term::ProgressBar('getting listings', @days * @channels)
+  if Have_bar && not $opt_quiet;
+foreach my $d (@days) {
+    my ($day, $i) = @$d;
+    my $some_success = 0;
+    foreach my $ch_did (@channels) {
+	my @ps = process_table($country, $day, xid($country, $ch_did), $ch_did, $i);
+	$some_success = 1 if @ps;
+	$writer->write_programme($_) foreach @ps;
+	update $bar if Have_bar && not $opt_quiet;
+    }
+    if (@channels and not $some_success) {
+	warn "failed to get any listings for day $i, stopping\n";
+	last;
+    }
+}
+$writer->end();
+
+######################################################################
+# subroutine definitions
+
+# Use Log::TraceMessages if installed.
+BEGIN {
+    eval { require Log::TraceMessages };
+    if ($@) {
+	*t = sub {};
+	*d = sub { '' };
+    }
+    else {
+	*t = \&Log::TraceMessages::t;
+	*d = \&Log::TraceMessages::d;
+	Log::TraceMessages::check_argv();
+    }
+}
+
+####
+# process_table: fetch a URL and process it
+#
+# arguments:
+#    country id (hu, ro)
+#    Date::Manip object giving the day to grab
+#    xmltv id of channel
+#    site id of channel
+#
+# returns: list of the programme hashes to write
+#
+sub process_table( $$$$$ ) {
+    my ($country, $date, $ch_xmltv_id, $ch_port_id, $interval) = @_;
+
+    my $d = domain($country);
+    my $url = "http://www.$d/pls/tv/tv.channel?i_ch=$ch_port_id&i_days=$interval&i_where=1";
+    my $data=get_nice($url);
+    if (not defined $data) {
+	die "could not fetch $url, aborting\n";
+    }
+    local $SIG{__WARN__} = sub {
+	warn "$url: $_[0]";
+    };
+
+    # parse the page to a document object
+    my $tree = HTML::TreeBuilder->new();
+    $tree->parse($data);
+    my @program_data = get_program_data($tree);
+
+    if (not @program_data) {
+	warn "no programs found, skipping\n";
+	return ();
+    }
+
+    my $bump_start_day=0;
+
+    my @r;
+    my $prev;
+    while (@program_data) {
+	my $cur = shift @program_data;
+	if (defined $prev and bump_start_day($prev, $cur)) {
+	    $bump_start_day = 1;
+	    $date = UnixDate(DateCalc($date, '+ 1 day'), '%Q');
+	}
+	# Assume country and lang. code the same.
+	push @r, make_programme_hash($country, $tz, $date,
+				     $ch_xmltv_id, $ch_port_id, $cur);
+	$prev = $cur;
+    }
+    return @r;
+}
+
+sub make_programme_hash( $$$$$$ ) {
+    my ($lang, $tz, $date, $ch_xmltv_id, $ch_port_id, $cur) = @_;
+
+    my %prog;
+
+    $prog{channel}=$ch_xmltv_id;
+    $prog{title}=[ [ $cur->{title}, $lang ] ];
+
+    my $start=parse_local_date("$date $cur->{time}", $tz);
+    my ($start_base, $start_tz) = @{date_to_local($start, $tz)};
+    $prog{start}=UnixDate($start_base, '%q') . " $start_tz";
+
+    # FIXME: parse description field further
+    $prog{desc}=[ [ $cur->{desc}, $lang ] ] if defined $cur->{desc};
+
+    return \%prog;
+}
+sub bump_start_day( $$ ) {
+    my ($cur,$next) = @_;
+    if (!defined($next)) {
+	return undef;
+    }
+    my $start = UnixDate($cur->{time},'%H:%M');
+    my $stop = UnixDate($next->{time},'%H:%M');
+    if (Date_Cmp($start,$stop)>0) {
+	return 1;
+    } else {
+	return 0;
+    }
+}
+
+
+#
+# program data is split as follows:
+# - data is contained within many tag nodes, in a complicated hierarchy that
+#   includes several tables...,
+#   however each tv program listing has also a fixed head (HORA, TIPO,
+#   CANAL...) and the data follows this header in a fixed order, so...
+sub get_program_data( @ ) {
+    my ($tree) = @_;
+    my @data;
+
+    my @html_time = get_time($tree);
+    my @html_title = get_title($tree);
+    my @html_desc = get_desc($tree);
+
+    my $index = 0;
+    while (defined $html_time[$index]) {
+	my %h = (time =>$html_time[$index],
+		 title=>$html_title[$index],
+		);
+	for ($html_desc[$index]) {
+	    $h{desc} = $_ if defined;
+	}
+	push @data, \%h;
+	$index++;
+    }
+    return @data;
+}
+
+sub get_time( @ ) {
+
+    my ($tree) = @_;
+
+    my @txt_elem;
+    my @txt_cont = $tree->look_down("_tag"=>"td", "align"=>"right", "valign"=>"top");
+	foreach my $txt (@txt_cont) {
+		$_ = $txt->as_text;
+		s/^\s+//;s/\s+$//;
+		s/^Kb[.]//; # means 'approx' in Magyar
+		push @txt_elem, $_;
+	}
+    return @txt_elem;
+}
+
+sub get_title( @ ) {
+
+    my ($tree) = @_;
+
+	my @txt_elem;
+    my @txt_cont = $tree->look_down("_tag"=>"td", "align"=>"left", "valign"=>"top");
+	foreach my $txt (@txt_cont) {
+		my @fonts = $txt->find_by_tag_name("_tag"=>"font", "size"=>"2");
+		my $text = $fonts[0]->as_text;
+		for ($text) { s/^\s+//; s/\s+$// }
+		push @txt_elem, $text unless $text eq '';
+	}
+	
+    return @txt_elem;
+}
+
+sub get_desc( @ ) {
+
+    my ($tree) = @_;
+    
+    my @txt_elem;
+    my @txt_cont = $tree->look_down("_tag"=>"td", "align"=>"left", "valign"=>"top");
+    foreach my $txt (@txt_cont) {
+	my @alltext;
+	my @fonts = $txt->content_list;
+	foreach (grep { ref } @fonts) {
+	    for ($_->as_text) {
+		s/^\s+//;s/\s+$//;
+		push @alltext, $_ if length;
+	    }
+	}
+	my $joined;
+	if (@alltext) {
+	    $joined = join(".  ", @alltext);
+	}
+	push @txt_elem, $joined; # maybe undef
+    }
+    return @txt_elem;
+}
+
+
+# get channel listing for a country
+sub get_channels( $ ) {
+    my $country = shift;
+    my $d = domain($country);
+    my $bar = new Term::ProgressBar('getting list of channels', 1)
+	if Have_bar && not $opt_quiet;
+    my %channels;
+    my $url="http://www.$d/pls/tv/tv.prog";
+    my $local_data=get_nice($url);
+    die "could not get channel listing $url, aborting\n"
+      if not defined $local_data;
+
+    my $tree = HTML::TreeBuilder->new();
+    $tree->parse($local_data);
+
+    my @menus = $tree->find_by_tag_name("_tag"=>"select");
+
+    foreach my $elem (@menus) {
+	my $cname = $elem->attr('name');
+	if ($cname eq "i_ch") {
+	    my @ocanals = $elem->find_by_tag_name("_tag"=>"option");
+	    @ocanals = sort @ocanals;
+	    foreach my $opt (@ocanals) {
+		if (not $opt->attr('value') eq "") {
+		    my $channel_id = $opt->attr('value');
+		    my $channel_name = $opt->as_text;
+		    if (length $channel_id eq 1) {
+			$channel_id = "00" . $channel_id
+		    }
+		    if (length $channel_id eq 2) {
+			$channel_id = "0" . $channel_id
+		    }
+		    $channels{$channel_id}=$channel_name;
+		    # Assume country code and lang. code the same.
+		    push @ch_all, { 'display-name' => [ [ $channel_name,
+							  $country ] ],
+				    'id'=> "$channel_id.$d" };
+		}
+	    }
+	}
+    }
+    die "no channels could be found" if not keys %channels;
+    update $bar if Have_bar && not $opt_quiet;
+    return %channels;
+}
+
+
+# Bump a YYYYMMDD date by one.
+sub nextday( $ ) {
+    my $d = shift;
+    my $p = parse_date($d);
+    my $n = DateCalc($p, '+ 1 day');
+    return UnixDate($n, '%Q');
+}
+
