@@ -1322,11 +1322,13 @@ sub scrapehtml($$$)
 			  Aboriginal
 			  Arabic
 			  Armenian
+			  Bengali
 			  Cambodian
 			  Cantonese
 			  Chinese
 			  Colonial
 			  Cree
+			  Dari
 			  Dene
 			  Diwlai
 			  English
@@ -1334,7 +1336,8 @@ sub scrapehtml($$$)
 			  French
 			  German
 			  Greek
-			  Gujarati
+			  Gujarati # spelling ?
+			  Gujrati
 			  Hindi
 			  Hmong
 			  Hungarian
@@ -1351,23 +1354,29 @@ sub scrapehtml($$$)
 			  Khmer
 			  Korean
 			  Mandarin
+			  Macedonian
 			  Mi'kmaq
 			  Mohawk
 			  Musgamaw
 			  Oji
 			  Ojibwa
 			  Panjabi
+			  Persian
 			  Polish
 			  Portuguese
 			  Punjabi
+			  Pushto
 			  Quechuan
 			  Romanian
 			  Russian
+			  Sinhalese
+			  Somali
 			  Spanish
 			  Swedish
 			  Tagalog
 			  Tamil
 			  Tlingit
+			  Turkish
 			  Ukrainian
 			  Urdu
 			  Vietnamese
