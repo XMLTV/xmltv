@@ -168,6 +168,7 @@ sub clump_relation( $ ) {
 sub fix_clumps( $$$ ) {
     die 'usage: fix_clumps(old programme, listref of replacements, clump relation)' if @_ != 3;
     my ($orig, $new, $rel) = @_;
+    return if not defined $orig->{clumpidx}; # optimize common case
     die if ref($rel) ne 'HASH';
     die if ref($new) ne 'ARRAY';
     use vars '@new'; local *new = $new;
@@ -205,12 +206,29 @@ sub fix_clumps( $$$ ) {
     t 'how many programmes has $prog been split into?';
     if (@new == 0) {
 	t 'deleted programme entirely!';
-	if (@relatives) {
-	    warn "programme sharing a clump ($orig->{title}->[0]->[0]) was deleted, "
-	      . "this isn't handled";
-	
-	    nuke_from_rel($rel, $orig);
+	nuke_from_rel($rel, $orig);
+
+	if (@relatives == 0) {
+	    # Strange... why is this running at all?
+	    warn;
 	}
+	elsif (@relatives == 1) {
+	    delete $relatives[0]->{clumpidx};
+	}
+	elsif (@relatives >= 2) {
+	    # Just decrement the index of all following programmes.
+	    my $orig_clumpidx = $orig->{clumpidx};
+	    $orig_clumpidx =~ /^(\d+)/ or die;
+	    $orig_clumpidx = $1;
+	    foreach (@relatives) {
+		my $rel_clumpidx = $_->{clumpidx};
+		$rel_clumpidx =~ /^(\d+)/ or die;
+		$rel_clumpidx = $1;
+		-- $rel_clumpidx if $rel_clumpidx > $orig_clumpidx;
+		$_->{clumpidx} = "$rel_clumpidx/" . scalar @relatives;
+	    }
+	}
+	else { die }
     }
     elsif (@new >= 1) {
 #	local $Log::TraceMessages::On = 1;
