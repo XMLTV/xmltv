@@ -24,18 +24,19 @@ use XMLTV;
 use XMLTV::Ananova_Channel;
 
 # Prototype declarations
-sub check_ananova_blurb();
-sub get_regions();
-sub get_dir();
-sub read_channels_page();
+sub get_copyright( $ );
+sub get_regions( $$ );
+sub get_dir( $$ );
+sub read_channels_page( $ );
 sub usage();
-sub get_file($$$);
-sub date_programmes($$);
-sub add_clumpidx($);
+sub read_file( $$$$$ );
+sub date_programmes( $$ );
+sub add_clumpidx( $ );
 sub get_channel_pkgs();
 sub init_channels();
-sub write_channels($);
-sub wanted_by_region($);
+sub write_channels( $ );
+sub wanted_by_region( $ );
+sub get_pages( $$ );
 
 # PHP page provided by Ananova to access their internal listings data.
 # This is used as an inital substring of all the URLs gotten by this
@@ -130,8 +131,9 @@ else {
      }
 }
 
-my $bar = new Term::ProgressBar('getting list of channels', 4);
-my $copyright = check_ananova_blurb(); update $bar;
+# Download the three index pages now.
+my $index_pages = get_pages('getting list of channels', [ qw(regions channels dir) ]);
+my $copyright = get_copyright($index_pages->{regions}->{content});
 
 # Set up an XMLTV::Writer; print copyright and start of
 # document.  Ananova's data is in Latin-1.
@@ -153,11 +155,12 @@ $writer->start({ 'source-info-url'     =>
 	  'http://www.doc.ic.ac.uk/~epa98/work/apps/xmltv/',
 	       });
 
-my $regions = get_regions(); update $bar;
+my $regions = get_regions($index_pages->{regions}->{content},
+			  $index_pages->{regions}->{url});
 #t 'regions: ' . d $regions;
 
 init_channels();
-read_channels_page(); update $bar;
+read_channels_page($index_pages->{channels}->{content});
 
 # Hardcoded channel packages.  It is planned to move these to separate
 # files, but I didn't have time to reorganize the directory structure
@@ -176,7 +179,8 @@ my %channel_pkgs = get_channel_pkgs();
 my @files;
 
 my %seen_ch;
-foreach (get_dir()) {
+foreach (get_dir($index_pages->{dir}->{content},
+		 $index_pages->{dir}->{url})) {
 #    local $Log::TraceMessages::On = 1;
     my ($orig, $day, $ananova_id, $region) = @$_;
     t 'got line from dir: orig=' . d($orig) . ', day=' . d($day) . ', ananova_id=' . d($ananova_id) . ', region=' . d($region);
@@ -221,7 +225,6 @@ foreach (get_dir()) {
     $ch->set_type($type);
 }
 t 'files: ' . d \@files;
-update $bar;
 
 # Check that there are no redundant entries in the channel data.
 foreach (XMLTV::Ananova_Channel->all()) {
@@ -463,7 +466,10 @@ foreach (sort keys %wanted_xmltv_id) {
 # get the complete channel information, which must be written out
 # before any programmes.
 #
-$bar = new Term::ProgressBar('downloading listings', scalar @files);
+# We download all the files at once, then process them one by one.
+#
+my $got = get_pages('downloading listings', [ map { $_->[3] } @files ]);
+my $bar = new Term::ProgressBar('parsing', scalar @files);
 my $first_day;
 my $wrote_channels = 0;
 my @progs_todo;
@@ -486,7 +492,8 @@ foreach (sort { $a->[0] <=> $b->[0] } @files) {
     #
     my $ch = XMLTV::Ananova_Channel->find_by_ananova_id($ananova_id);
     die if not defined $ch;
-    my $progs = get_file($day_date, $ch, $filename);
+    my $g = $got->{$filename};
+    my $progs = read_file($day_date, $ch, $g->{content}, $filename, $g->{url});
     date_programmes($progs, $day_date);
     add_clumpidx($progs);
 
@@ -525,39 +532,30 @@ $writer->end();
 exit();
 
 
-# Check that the usage message has not changed (if it has, this
-# program probably needs changing).  Returns the copyright message.
+# Extract the copyright message from the comment at the start of every
+# page served.  Takes page content, returns the copyright message.
 #
-sub check_ananova_blurb() {
-    for (get $A) {
-	die "cannot get $A" if not defined;
-
-	# Remove cruft and check it looks as expected.
-	s/^\s*\#\s*//gm; s/(\s)\s+/$1/g;
-	s/
-useage: \?show=<request>
-where request is one of \[regions\|channels\|dir\|<file>\]
-\?show=regions outputs a list of regions and region codes
-\?show=channels outputs a list of channel codes and names
-\?show=dir outputs the list of currently valid file names.*//s
-  or warn "usage message has changed to: $_\n";
-
-	# There should be no need to fix non-ASCII characters since we
-	# have set the XMLTV::Writer for Latin-1.
-	#
-
-	return $_;
+sub get_copyright( $ ) {
+    my $r;
+    foreach (split /\n/, $_[0]) {
+	s/^\s*\#// or die "unexpected non-comment line in page";
+	s/^\s+//;
+	last if not length;
+	$r .= "$_\n";
     }
+    return $r;
 }
 
 
 # Return a reference to an ordered hash mapping region display name to
 # Ananova internal region name.
 #
-sub get_regions() {
-    my $url =  "$A?show=regions";
-    (my $data = get $url) or die "cannot get $url";
-#    t "got regions page: $data";
+# Parameters:
+#   contents of Ananova 'regions' page
+#   URL of that page (for error reporting)
+#
+sub get_regions( $$ ) {
+    my ($data, $url) = @_;
     my %r; tie %r, 'Tie::IxHash';
     foreach (split /\n/, $data) {
 	t "doing line: $_";
@@ -588,11 +586,13 @@ sub get_regions() {
 #
 # Returns a list of these tuples (er, listrefs).
 #
-sub get_dir() {
+# Parameters:
+#   contents of Ananova 'dir' page
+#   URL of 'dir' page
+#
+sub get_dir( $$ ) {
+    my ($data, $url) = @_;
     local $Log::TraceMessages::On = 0;
-    my $url =  "$A?show=dir";
-    (my $data = get $url) or die "cannot get $url";
-#    t "got dir page: $data";
 
     my @r;
     my %warned_unknown_region;
@@ -647,11 +647,11 @@ sub get_dir() {
 # Read Ananova's Channels page.  This tells us about radio and
 # satellite channels.
 #
-sub read_channels_page() {
+# Parameter: content of channels page
+#
+sub read_channels_page( $ ) {
+    my $data = shift;
     local $Log::TraceMessages::On = 0;
-    my $url =  "$A?show=channels";
-    (my $data = get $url) or die "cannot get $url";
-#    t "got channels page: $data";
 
     my (%type, %display);
     my %seen_display;
@@ -748,13 +748,15 @@ END
 }
 
 
-# Get data for a particular day.
+# Read data for a particular day.
 #
 # Parameters:
 #   date expected in file (in Date::Manip format)
 #   XMLTV::Ananova_Channel object, used to check and set display name
-#   'filename'
-#   whether the channel name in the file should be used
+#   content of page from Ananova
+# Plus two used for error reporting and checking:
+#   Ananova 'filename'
+#   Ananova URL
 #
 # Returns: reference to list of programme details, or undef if error.
 # These won't have proper start and stop times; instead they have a
@@ -764,12 +766,8 @@ END
 # style) afterwards.
 #
 my (%warned_shorter, $warned_wrong_date); # cut down on duplicate warnings
-sub get_file($$$) {
-    my ($date_expected, $ch, $file) = @_;
-    my $url =  "$A?show=$file";
-
-    my $data = get $url; die "cannot get $url" if not defined $data;
-
+sub read_file( $$$$$ ) {
+    my ($date_expected, $ch, $data, $file, $url) = @_;
     my @lines = split /\n/, $data;
     foreach (@lines) { s/^\s+//; s/\s+$//; s/\#.*// }
     @lines = grep { length } @lines;
@@ -782,7 +780,7 @@ sub get_file($$$) {
 	# file itself is handled by a different box where the file is
 	# in fact deleted.
 	#
-	if ($data =~ /\n\# $file does not exist$/) {
+	if ($data =~ /\n\# \Q$file\E does not exist$/) {
 	    warn "file $file does not exist on server, probably should be removed from dir\n";
 	    return undef;
 	}
@@ -1918,4 +1916,94 @@ tvtravelshop.co.uk)],
     }
 
     return %pkgs;
+}
+
+
+# get_pages()
+#
+# Fetch the given 'pages' from Ananova.  Attempt to combine multiple
+# page fetches.
+#
+# Parameters:
+#   text to use for progress bar
+#   listref of page names to download, eg for show=dir name is 'dir'
+#
+# Returns: reference to hash mapping page name to a hash with 'url'
+# and 'content'.  Although 'url' may be shared with other pages.
+#
+# Dies if a page cannot be downloaded.
+#
+sub get_pages( $$ ) {
+    my ($text, $pages) = @_;
+    my @pages = @$pages;
+    my %r;
+    my $num_pages = scalar @pages;
+    t "initializing progress bar with $num_pages items";
+    my $bar = new Term::ProgressBar($text, $num_pages);
+
+    # Arbitrary limit on number of pages fetched at once, requested by
+    # Ananova to keep down memory usage on the server.
+    #
+    my $max_at_once = 10;
+    while (@pages) {
+	my @this_fetch = ();
+	while (@pages and (@this_fetch < $max_at_once)) {
+	    push @this_fetch, shift @pages;
+	}
+	t 'this fetch: ' . d \@this_fetch;
+	t 'remaining to fetch: ' . d \@pages;
+	my $url = "$A?" . join('&', map { "show[]=$_" } @this_fetch);
+	t "fetching url: $url";
+	foreach (@this_fetch) { $r{$_}->{url} = $url }
+	my $got = get $url;
+	die "cannot fetch $url" if not defined $got;
+	
+	# Each new page begins with some comment (#) lines.
+	my @lines = split /\n/, $got;
+	my @got;
+	my $curr = '';
+	my $in_comment = 1;
+	foreach (@lines) {
+	    my $is_comment = /^\#/;
+
+	    # Horrible kludge: there is one page which does have a
+	    # comment in the middle of it, ignore that line.
+	    #
+	    $is_comment = 0 if /^\#\s+OK,/;
+
+	    if (not $is_comment and not $in_comment) {
+		# Another ordinary line on the current page.
+		$curr .= "$_\n";
+	    }
+	    elsif (not $is_comment and $in_comment) {
+		# Reached the end of the comments on the current page.
+		$curr .= "$_\n";
+		$in_comment = 0;
+	    }
+	    elsif ($is_comment and not $in_comment) {
+		# Reached some comments, must be start of next page.
+		t 'reached end of page: ' . d $curr;
+		push @got, $curr; update $bar;
+		$curr = "$_\n";
+		$in_comment = 1;
+	    }
+	    elsif ($is_comment and $in_comment) {
+		# Another comment at the top of the current page.
+		$curr .= "$_\n";
+	    }
+	    else { die }
+	}
+	t 'last page: ' . d $curr;
+	push @got, $curr; update $bar;
+	if (@got != @this_fetch) {
+	    die 'expected ' . (scalar @this_fetch) .
+	      " pages from URL $url, got " . (scalar @got);
+	}
+	foreach (@this_fetch) {
+	    die "page $_ requested twice" if defined $r{$_}->{content};
+	    $r{$_}->{content} = shift @got;
+	}
+    }
+    die if (keys %r) != $num_pages;
+    return \%r;
 }
