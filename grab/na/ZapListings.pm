@@ -576,7 +576,7 @@ sub massageText
     $text=~s/&nbsp;/ /og;
     $text=~s/&nbsp$/ /og;
     $text=decode_entities($text);
-    $text=~s/\240$/ /og;
+    $text=~s/\240/ /og;
     $text=~s/^\s+//o;
     $text=~s/\s+$//o;
     $text=~s/\s+/ /o;
@@ -888,11 +888,7 @@ sub scrapehtml($$$)
 	    }
 	    my @extras;
 	    while ($desc=~s;<text>\s*(.*?)\s*</text>;;io ) {
-		my $val=massageText($1);
-		if ( $self->{Debug} && $val ne $1 ) {
-		    print STDERR "massage changed '$1' to '$val'\n";
-		}
-		push(@extras, $val); #if ( length($1) );
+		push(@extras, massageText($1); #if ( length($1) );
 	    }
 	    if ( $self->{Debug} ) {
 		print STDERR "POSTEXTRA: $desc\n";
