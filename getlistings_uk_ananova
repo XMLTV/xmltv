@@ -20,12 +20,6 @@ use XMLTV;
 use Tie::RefHash;
 use Term::ProgressBar;
 
-# FIXME temporary speedup
-use POSIX;
-use Memoize;
-memoize('get', SCALAR_CACHE => [ 'TIE', 'DB_File', '/tmp/epa98/get.cache', O_RDWR() | O_CREAT(), 0666 ]);
-warn "FIXME temporary speedup";
-
 # Prototype declarations
 sub check_ananova_blurb();
 sub get_regions();
@@ -52,21 +46,6 @@ sub channels_output();
 #
 my $A = 'http://www.ananova.com/tv_listings/_tv_raw.php';
 
-# Memoize some subroutines if possible
-eval { require Memoize };
-if ($@) {
-    warn "could not load Memoize module, things will run slowly\n";
-}
-else {
-    # FIXME
-#     foreach (qw/parse_uk_date date_to_uk
-# 	        ParseDate UnixDate DateCalc Date_Cmp
-#                 ParseDateDelta/)
-#     {
-# 	Memoize::memoize($_) or die "cannot memoize $_: $!";
-#     }
-}
-
 # Things will go horribly wrong if Ananova change pages from one day
 # to the next while the script is running.  Assume they do it at
 # midnight.
@@ -82,8 +61,8 @@ END {
 my $LANG = 'en';
 
 # Check options.
-my ($opt_days, $opt_help);
-GetOptions('days=i' => \$opt_days, 'help' => \$opt_help);
+my ($opt_days, $opt_help, $opt_cache);
+GetOptions('days=i' => \$opt_days, 'help' => \$opt_help, 'cache' => \$opt_cache);
 if ($opt_help) {
     print <<END
 $0: get UK television listings in XMLTV format
@@ -95,6 +74,24 @@ redirect it to a file.
 END
   ;
     exit(1);
+}
+
+if ($opt_cache) {
+    # Undocumented option to speed up debugging (and reduce server
+    # load).  Previous versions of getlistings_uk_ananova used Memoize
+    # all over the place, but this program doesn't have as many
+    # side-effect-free routines.  Many of the subs are self-memoizing
+    # in that they update a global hash; others are run once and
+    # return a hash.
+    #
+    my $cache = "$0.cache";
+    print STDERR "using cache $cache\n";
+    require POSIX;
+    require Memoize;
+    Memoize::memoize('get',
+		     SCALAR_CACHE => [ 'TIE', 'DB_File', $cache,
+				       POSIX::O_RDWR() | POSIX::O_CREAT(),
+				       0666 ]);
 }
 
 my $bar = new Term::ProgressBar('getting list of channels', 4);
@@ -801,11 +798,15 @@ sub get_file($$$) {
 	    }
 	}
 	elsif ($when eq 'LATENIGHT') {
-	    if ($hours < 7
+	    # Latenight is until 07:00 (or sometimes a programme just
+	    # beginning at that time is still latenight).  Annoyingly,
+	    # 23:59 is also counted as latenight, so we'll say it runs
+	    # from 23:00 to 07:00.
+	    #
+	    if (23 <= $hours
+		or $hours < 7
 		or ($hours == 7 and $minutes == 0)) {
-		# Latenight is until 07:00 (or sometimes a programme
-		# just beginning at that time is still latenight).
-		#
+		# Okay.
 	    }
 	    else {
 		warn "time $time is wrongly considered 'LATENIGHT' "
