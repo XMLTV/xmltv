@@ -1,24 +1,19 @@
 use ExtUtils::MakeMaker;
 use Config;
 use File::Basename ();
+use strict;
 
-$VERSION = '0.5';
+use vars '$VERSION'; $VERSION = '0.5';
 
 my $PREFIX = "/usr/local/";
 
-# An explicit check for required modules should not be necessary,
-# we mention them with PREREQ_PM below.
-#
-# Could maybe warn about Unicode::String but not worth bothering.
-#
-# Also no need to go through the files in $pmdir copying the .in
-# versions to the final filenames.  Substituting @PREFIX@ and
-# @VERSION@ in binary files is a nice idea, but should not be done
-# in the Makefile.PL.  (Only when you run 'make', and even then
-# only on a copy of the file, keeping the original.)
-#
-# Consequently, no special BEGIN section needed.
-#
+use vars '%extra_constants';
+%extra_constants
+  = (INST_PLAINDOC   => 'blib/doc',
+     INSTALLPLAINDOC => "\$(PREFIX)/share/doc/xmltv-$::VERSION",
+     INST_SHARE      => 'blib/share',
+     INSTALLSHARE    => '$(PREFIX)/share/xmltv',
+    );
 
 WriteMakefile
   (
@@ -33,7 +28,9 @@ WriteMakefile
 			'filter/tv_to_latex',
 			'filter/tv_cat',
 		      ],
-   'PL_FILES' => { 'filter/tv_grep.PL' => 'filter/tv_grep' },
+   'PL_FILES' => { 'filter/tv_grep.PL' => 'filter/tv_grep',
+		   'grab/uk/tv_grab_uk.PL' => 'grab/uk/tv_grab_uk',
+		 },
    'PM'            => { 'XMLTV.pm'                   => '$(INST_LIBDIR)/XMLTV.pm',
 			'grab/Memoize.pm'            => '$(INST_LIBDIR)/XMLTV/Memoize.pm',
 			'grab/na/ZapListings.pm'     => '$(INST_LIBDIR)/XMLTV/ZapListings.pm',
@@ -58,52 +55,54 @@ WriteMakefile
 );
 
 
-# Try to hack in support for 'ordinary' documentation going in
-# /usr/share/doc/.
-#
 sub MY::constants {
     package MY;
     my $inherited = shift->SUPER::constants(@_);
-    $inherited .= "INST_PLAINDOC = blib/doc\n";
-    $inherited .= "INSTALLPLAINDOC = \$(PREFIX)/share/doc/xmltv-$::VERSION\n";
+    die if not keys %::extra_constants;
+    foreach (sort keys %::extra_constants) {
+	$inherited .= "$_ = $::extra_constants{$_}\n";
+    }
     return $inherited;
 }
 sub MY::install {
     package MY;
     my $inherited = shift->SUPER::install(@_);
 
-    # Add an extra dependency to 'doc_install'.
-    $inherited =~ s/^(\s*doc_install\s+::\s.+)/$1 plaindoc_install/m or die;
+    my %extra_deps = (doc_install => 'plaindoc_install',
+		      install_perl => 'share_install',
+		      install_site => 'share_install');
+    foreach (keys %extra_deps) {
+	$inherited =~ s/^(\s*$_\s+::\s.+)/$1 $extra_deps{$_}/m or die;
+    }
 
-    # Create the target 'plaindoc_install'.
-    my $extra = <<'END'
-plaindoc_install ::
-        @echo Installing contents of $(INST_PLAINDOC) into $(INSTALLPLAINDOC)
-        @$(MOD_INSTALL) \
-                $(INST_PLAINDOC) $(INSTALLPLAINDOC)
+    foreach (qw(plaindoc share)) {
+	my $target = $_ . '_install';
+	my $uc = uc;
+
+	my $inst_var = "INST_$uc";
+	my $extra = <<END
+# Add code to create the directory under blib/.
+\$($inst_var)/.exists :: \$(PERL_INC)/perl.h
+	\@\$(MKPATH) \$($inst_var)
+	\@\$(EQUALIZE_TIMESTAMP) \$(PERL_INC)/perl.h \$($inst_var)/.exists
+	-\@\$(CHMOD) \$(PERM_RWX) \$($inst_var)
+
+# Create a target to install to the final location.
+$target ::
+        \@echo Installing contents of \$(INST_$uc) into \$(INSTALL$uc)
+        \@\$(MOD_INSTALL) \\
+                \$(INST_$uc) \$(INSTALL$uc)
+
 END
   ;
-    $extra =~ s/ {8}/\t/g;
-    $inherited .= $extra;
-
-    # Create stuff for managing blib/doc/, analogous to blib/bin/.  It
-    # really isn't clear how to define these things, hope this works.
-    #
-    $extra = <<'END'
-$(INST_PLAINDOC)/.exists :: $(PERL_INC)/perl.h
-	@$(MKPATH) $(INST_PLAINDOC)
-	@$(EQUALIZE_TIMESTAMP) $(PERL_INC)/perl.h $(INST_PLAINDOC)/.exists
-	-@$(CHMOD) $(PERM_RWX) $(INST_PLAINDOC)
-END
-  ;
-    $extra =~ s/ {8}/\t/g;
-    $inherited .= $extra;
+	$extra =~ s/ {8}/\t/g;
+	$inherited .= $extra;
+    }
 
     return $inherited;
 }
-# Well documentation doesn't really belong under 'installbin', but
-# I've stopped caring by this point.
-#
+
+# Extend installbin() to put doc and share under blib/.
 sub MY::installbin {
     package MY;
     my $inherited = shift->SUPER::installbin(@_);
@@ -115,38 +114,74 @@ sub MY::installbin {
 		  choose/tv_check/README.tv_check
 		  choose/tv_check/tv_check_doc.html
 		  choose/tv_check/tv_check_doc.jpg);
-     foreach (@docs) {
- 	my $basename = File::Basename::basename($_);
-	$extra = <<END
-\$(INST_PLAINDOC)/$basename: $_ Makefile \$(INST_PLAINDOC)/.exists
-	\@rm -f \$(INST_PLAINDOC)/$basename
-	cp $_ \$(INST_PLAINDOC)/$basename
-	\$(FIXIN) \$(INST_PLAINDOC)/$basename
-	-\@\$(CHMOD) \$(PERM_RW) \$(INST_PLAINDOC)/$basename
+    my %doc_files;
+    foreach (@docs) {
+	$doc_files{$_} = File::Basename::basename($_);
+    }
+    my %share_files = ('grab/uk/channel_ids' => 'tv_grab_uk/channel_ids');
+
+    my %new_filetypes = (plaindoc => \%doc_files, share => \%share_files);
+    my %seen_dir;
+    foreach my $filetype (sort keys %new_filetypes) {
+	my $uc = uc $filetype;
+	use vars '%files'; local *files = $new_filetypes{$filetype};
+	foreach my $src (sort keys %files) {
+	    my $inst_pos = $files{$src};
+	    my $extra = '';
+
+	    # The directory containing this file in blib/ needs to be created.
+	    my @dirs = split m!/!, $inst_pos; pop @dirs;
+	    foreach (0 .. $#dirs) {
+		my $dir = join('/', @dirs[0 .. $_]);
+		my $parent = join('/', @dirs[0 .. $_-1]);
+		next if $seen_dir{$dir}++;
+		die if (length $parent and not $seen_dir{$parent});
+		my $parent_exists = "\$(INST_$uc)/$parent/.exists";
+		$parent_exists =~ tr!/!/!s;
+		$extra .= <<END
+\$(INST_$uc)/$dir/.exists :: \$(PERL_INC)/perl.h $parent_exists
+	\@\$(MKPATH) \$(INST_$uc)/$dir
+	\@\$(EQUALIZE_TIMESTAMP) \$(PERL_INC)/perl.h \$(INST_$uc)/$dir/.exists
+	-\@\$(CHMOD) \$(PERM_RWX) \$(INST_$uc)/$dir
 END
-	  ;
-	$extra =~ s/ {8}/\t/g;
-	$inherited .= $extra;
-     }
+  ;
+	    }
+	    my $dir_exists = "\$(INST_$uc)/" . join('/', @dirs) . '/.exists';
+	    $dir_exists =~ tr!/!/!s;
 
-    # These targets need to be added to pure_all.
-    $inherited =~ s/^(\s*pure_all\s+::\s.+)/$1 pure_plaindoc/m
-      or die "no pure_all in: $inherited";
-    $inherited .= 'pure_plaindoc :: ';
-    foreach (@docs) {
-	my $basename = File::Basename::basename($_);
-	$inherited .= "\$(INST_PLAINDOC)/$basename ";
-    }
-    $inherited .= "\n\t\@\$(NOOP)\n";
+	    $extra .= <<END
+\$(INST_$uc)/$inst_pos: $src Makefile $dir_exists
+	\@rm -f \$(INST_$uc)/$inst_pos
+	cp $src \$(INST_$uc)/$inst_pos
+	\$(FIXIN) \$(INST_$uc)/$inst_pos
+	-\@\$(CHMOD) \$(PERM_RW) \$(INST_$uc)/$inst_pos
+END
+	      ;
+	    $extra =~ s/ {8}/\t/g;
+	    $inherited .= $extra;
+	}
 
-    # And realclean should remove them.
-    $inherited =~ s/^(\s*realclean\s+::\s.+)/$1 realclean_plaindoc/m or die;
-    $inherited .= "realclean_plaindoc ::\n\trm -f ";
-    foreach (@docs) {
-	my $basename = File::Basename::basename($_);
-	$inherited .= "\$(INST_PLAINDOC)/$basename ";
+	# These targets need to be added to pure_all, using a new target
+	# pure_$filetype.
+	#
+	$inherited =~ s/^(\s*pure_all\s+::\s.+)/$1 pure_$filetype/m
+	  or die "no pure_all in: $inherited";
+	$inherited .= "pure_$filetype :: ";
+	foreach (sort keys %files) {
+	    my $inst_pos = $files{$_};
+	    $inherited .= "\$(INST_$uc)/$inst_pos ";
+	}
+	$inherited .= "\n\t\@\$(NOOP)\n";
+	
+	# And realclean should remove them, by calling realclean_$filetype.
+	$inherited =~ s/^(\s*realclean\s+::\s.+)/$1 realclean_$filetype/m or die;
+	$inherited .= "realclean_$filetype ::\n\trm -f ";
+	foreach (sort keys %files) {
+	    my $inst_pos = $files{$_};
+	    $inherited .= "\$(INST_$uc)/$inst_pos ";
+	}
+	$inherited .= "\n";
     }
-    $inherited .= "\n";
 
     return $inherited;
 }
@@ -162,14 +197,22 @@ sub MY::clean {
     return $inherited;
 }
 
-# Creating tv_grep depends on tv_grep.in and XMLTV.pm (as well as
-# tv_grep.PL).
-#
 sub MY::processPL {
     package MY;
     my $inherited = shift->SUPER::processPL(@_);
-    # Add pm_to_blib as a dependency.
+
+    # Creating tv_grep depends on tv_grep.in and XMLTV.pm (as well as
+    # tv_grep.PL).  Creating tv_grab_uk depends on tv_grab_uk.in.
+    #
     $inherited =~ s!^(\s*filter/tv_grep\s+::\s.+)!$1 filter/tv_grep.in pm_to_blib!m
       or die "no filter/tv_grep in: $inherited";
+    $inherited =~ s!^(\s*grab/uk/tv_grab_uk\s+::\s.+)!$1 grab/uk/tv_grab_uk.in!m
+      or die "no grab/uk/tv_grab_uk in: $inherited";
+
+    # And tv_grab_uk.in needs the share/ directory passed as an extra argument.
+    $inherited =~ s{(grab/uk/tv_grab_uk.PL grab/uk/tv_grab_uk)\s*$}
+      {$1 $::extra_constants{INSTALLSHARE}}m
+	or die "no call to tv_grab_uk.PL in: $inherited";
+
     return $inherited;
 }
