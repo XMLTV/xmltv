@@ -1048,6 +1048,7 @@ END
 	    # For downloading we use LWP::Simple::getprint() which
 	    # writes to stdout.
 	    #
+	    local *OLDOUT;
 	    open(OLDOUT, '>&STDOUT') or die "cannot dup stdout: $!";
 	    open(STDOUT, ">$filename") or die "cannot write to $filename: $!";
 	    my $success = getprint($url);
