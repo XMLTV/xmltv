@@ -8,6 +8,7 @@
 package XMLTV::Ask;
 use strict;
 use XMLTV::GUI;
+use XMLTV::ProgressBar;
 
 use vars qw(@ISA @EXPORT);
 use Exporter;
