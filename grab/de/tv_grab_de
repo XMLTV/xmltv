@@ -7,7 +7,7 @@ tv_grab_de - Grab TV listings for Germany and Austria.
 
 =head1 SYNOPSIS
 
-tv_grab_de [--help] [--output FILE] [--days N]
+tv_grab_de [--help] [--output FILE] [--days N] [--offset N]
 
 =head1 DESCRIPTION
 
@@ -20,6 +20,9 @@ B<--output FILE> write to FILE rather than standard output.
 
 B<--days N> grab N days starting from today, rather than as many as
 possible.
+
+B<--offset N> start grabbing N days from today, rather than starting
+today.  N may be negative.
 
 =head1 SEE ALSO
 
@@ -52,7 +55,7 @@ use XMLTV::Memoize;
 # Todo: perhaps we should internationalize messages and docs?
 use XMLTV::Usage <<END
 $0: get Germany/Austria television listings in XMLTV format
-usage: $0 [--help] [--output FILE] [--days N]
+usage: $0 [--help] [--output FILE] [--days N] [--offset N]
 END
   ;
 
@@ -101,9 +104,10 @@ sub nextday( $ );
 
 # Get options.
 XMLTV::Memoize::check_argv('get');
-my ($opt_days, $opt_help, $opt_output);
+my ($opt_days, $opt_help, $opt_output, $opt_offset);
+$opt_offset = 0;
 GetOptions('days=i' => \$opt_days, 'help' => \$opt_help,
-	   'output=s' => \$opt_output)
+	   'output=s' => \$opt_output, 'offset=i' => \$opt_offset)
   or usage(0);
 die 'number of days must not be negative'
   if (defined $opt_days && $opt_days < 0);
@@ -111,7 +115,8 @@ usage(1) if $opt_help;
 
 # Assume the listings source uses CET (see BUGS above).
 Date_Init('TZ=CET');
-my $now = ParseDate('now'); die if not defined $now;
+my $now = DateCalc(ParseDate('now'), "$opt_offset days");
+die if not defined $now;
 my $today = UnixDate($now, '%Q');
 
 my $URL_BASE = 'http://www.szing.at/xmltv/';
@@ -150,18 +155,29 @@ elsif (not @to_get) {
 my $bar = new Term::ProgressBar('downloading listings', scalar @to_get)
   if $have_bar;
 my @listingses;
-foreach (@to_get) {
+foreach my $url (@to_get) {
     my $xml;
-    {
-#	local $Log::TraceMessages::On = 1;
-	t "downloading page: $_";
-	$xml = gunzip(get($_));
-	t 'got XML: ' . d $xml;
-	
-	# Fix empty 'length' elements that wrongly appear in the XML.
-	$xml =~ s!<length[^>]*></length>!!g;
-	t 'after removing empty <length>: ' . d $xml;
+    local $SIG{__WARN__} = sub {
+	my $msg = shift;
+	$msg = "warning: something's wrong" if not defined $msg;
+	print STDERR "$url: $msg\n";
+    };
+    
+    my $got = get($url);
+    if (not defined $got) {
+	warn 'failed to download, skipping';
+	next;
     }
+    
+    $xml = gunzip($got);
+    t 'got XML: ' . d $xml;
+    if (not defined $xml) {
+	warn 'failed to gunzip, skipping';
+	next;
+    }
+    
+    # Fix empty 'length' elements that wrongly appear in the XML.
+    $xml =~ s!<length[^>]*></length>!!g;
 
     push @listingses, XMLTV::parse($xml);
     update $bar if $have_bar;
