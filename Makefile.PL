@@ -46,7 +46,11 @@ END
 #
 my $opt_nodeps = 0;
 my $opt_yes = 0;
-GetOptions('nodeps' => \$opt_nodeps, 'yes' => \$opt_yes);
+my $opt_components;
+GetOptions(nodeps         => \$opt_nodeps,
+	   yes            => \$opt_yes,
+	   'components=s' => \$opt_components,
+	  );
 
 our $VERSION;
 $VERSION = '0.5.32';
@@ -428,8 +432,9 @@ foreach my $info (@opt_components) {
     }
 }
 
-# Generate a default configuration that installs as much as possible.
-print STDERR <<END
+if (not defined $opt_components) {
+    # Generate a default configuration that installs as much as possible.
+    print STDERR <<END
 
 Choose which optional components of xmltv you want to install.  The
 XMLTV.pm library and the filter programs such as tv_grep and tv_sort
@@ -437,60 +442,74 @@ are installed by default; here you choose grabbers for different
 countries and front-ends for managing listings.
 
 END
-  ;
+      ;
 
-my $width = 0;
-foreach my $info (@opt_components) {
-    my $w = length("$info->{blurb} ($info->{name})");
-    $width = $w if $w > $width;
-}
-foreach my $info (@opt_components) {
-    my $missing = $info->{missing};
-    my $s = "$info->{blurb} ($info->{name})";
-
-    # Guess a default value for {install} based on whether
-    # prerequisites were found.
-    #
-    $info->{install} = $opt_yes || not $info->{missing};
-
-    print STDERR ($s, ' ' x (1 + $width - length $s),
-		  $info->{install} ? '[yes]' : '[no]',
-		  "\n");
-}
-print STDERR "\n";
-if (not ask('Do you want to proceed with this configuration?', 1)) {
-    # Need to set {install} for each component by prompting.
+    my $width = 0;
+    foreach my $info (@opt_components) {
+	my $w = length("$info->{blurb} ($info->{name})");
+	$width = $w if $w > $width;
+    }
     foreach my $info (@opt_components) {
 	my $missing = $info->{missing};
-	my $name = $info->{name};
-	print STDERR "\n* $info->{blurb} ($name)\n\n";
-	if ($missing) {
-	    print STDERR "These dependencies are missing for $name:\n\n";
-	    foreach (sort keys %$missing) {
-		print STDERR "$_";
-		my $min_ver = $missing->{$_};
-		if ($min_ver) {
-		    print STDERR " (version $min_ver or higher)";
+	my $s = "$info->{blurb} ($info->{name})";
+
+	# Guess a default value for {install} based on whether
+	# prerequisites were found.
+	#
+	$info->{install} = $opt_yes || not $info->{missing};
+
+	print STDERR ($s, ' ' x (1 + $width - length $s),
+		      $info->{install} ? '[yes]' : '[no]',
+		      "\n");
+    }
+    print STDERR "\n";
+    if (not ask('Do you want to proceed with this configuration?', 1)) {
+	# Need to set {install} for each component by prompting.
+	foreach my $info (@opt_components) {
+	    my $missing = $info->{missing};
+	    my $name = $info->{name};
+	    print STDERR "\n* $info->{blurb} ($name)\n\n";
+	    if ($missing) {
+		print STDERR "These dependencies are missing for $name:\n\n";
+		foreach (sort keys %$missing) {
+		    print STDERR "$_";
+		    my $min_ver = $missing->{$_};
+		    if ($min_ver) {
+			print STDERR " (version $min_ver or higher)";
+		    }
+		    print STDERR "\n";
 		}
 		print STDERR "\n";
 	    }
-	    print STDERR "\n";
-	}
 
-	my $msg;
-	my $type = $info->{type};
-	if (not defined $type or $type eq 'install') {
-	    $msg = "Do you wish to install $name?";
-	}
-	elsif ($type eq 'run') {
-	    $msg = "Do you plan to run $name?";
-	}
-	else { die }
+	    my $msg;
+	    my $type = $info->{type};
+	    if (not defined $type or $type eq 'install') {
+		$msg = "Do you wish to install $name?";
+	    } elsif ($type eq 'run') {
+		$msg = "Do you plan to run $name?";
+	    } else {
+		die;
+	    }
 	
-	$info->{install} =
-	  ask($msg, not $missing);
+	    $info->{install} =
+	      ask($msg, not $missing);
+	}
     }
 }
+else {
+    my @to_install = split /\s+/, $opt_components;
+    my %by_name;
+    foreach (@opt_components) {
+	$by_name{$_->{name}} = $_;
+	$_->{install} = 0; # default if not mentioned
+    }
+    foreach (@to_install) {
+	my $i = $by_name{$_};
+	die "unknown component $_\n" if not $i;
+	$i->{install} = 1;
+    }
+}	
 
 foreach my $info (@opt_components) {
     next if not $info->{install};
