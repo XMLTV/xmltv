@@ -164,6 +164,9 @@ if ($opt_configure) {
 # Ask the user which channels to download, and write $CONFIG_FILE.
 sub configure() {
     warn "FIXME overwriting existing $CONFIG_FILE\n";
+    # FIXME need to make directory
+    open(CONF, ">$CONFIG_FILE") or die "cannot write to $CONFIG_FILE: $!";
+    my %chose_ch;
 
     # Need to ask:
     #
@@ -175,17 +178,116 @@ sub configure() {
     my $terr = askBooleanQuestion
       ('Do you get terrestrial analogue television?', 1);
     if ($terr) {
+	my @region_dns = sort keys %$regions;
+	die if not @region_dns;
+	my $default_region = 'Carlton';
+	if (not defined $regions->{$default_region}) {
+	    warn "default region '$default_region' seems to have disappeared\n";
+	    $default_region = $region_dns[0];
+	}
 	my $region_dn = askQuestion
-	  ('Which terrestrial region?', sort keys %$regions);
+	  ('Which terrestrial region?', $default_region, @region_dns);
 	my $aid;
-	foreach (keys %$regions) {
+	foreach (@region_dns) {
 	    if ($_ eq $region_dn) {
 		$aid = $regions->{$_};
+		last;
 	    }
 	}
 	die if not defined $aid;
-	print "chose region $region_dn, $aid\n";
+	print CONF "region $aid\t# $region_dn\n";
     }
+
+    my $dig = askBooleanQuestion
+      ('Do you get digital or satellite television?', 0);
+    if ($dig) {
+	print <<END
+You now need to select which digital channels to download.
+First choose some predefined packages of channels.
+END
+  ;
+	my $finished_option = 'Finished choosing packages';
+	die "can't have package named '$finished_option'!"
+	  if defined $channel_pkgs{$finished_option};
+	my %to_choose = %channel_pkgs;
+	while (%to_choose) {
+	    my @k = sort keys %to_choose;
+	    my $default = $k[0];
+	    my $chosen = askQuestion('Package to add: ',
+				     $default, @k, $finished_option);
+	    last if $chosen eq $finished_option;
+
+	    # Now prompt about individual channels in this package.
+ 	    use vars '@ch_in_pkg';
+	    local *ch_in_pkg = delete $to_choose{$chosen};
+	    my @r = askManyBooleanQuestions
+	      (1, map { "Add channel $_?" } @ch_in_pkg);
+	    die if @r != @ch_in_pkg;
+	    foreach (@ch_in_pkg) {
+		if (shift @r) {
+		    unless ($chose_ch{$_}++) {
+			print CONF "channel $_\t# from package $chosen\n";
+		    }
+		}
+	    }
+	}
+    }
+
+    if (askBooleanQuestion('Download radio listings?', 1)) {
+	print CONF "radio\n";
+    }
+
+    print "Any other channels which may have been missed?\n";
+    for (;;) {
+	print "Enter the name of a channel, or '.' to finish: ";
+	my $in = <STDIN>;
+	$in =~ s/^\s+//; $in =~ s/\s+$//;
+	last if $in eq '.';
+	my @poss;
+	foreach (XMLTV::Ananova_Channel->all()) {
+	    push @poss, $_ if $_->get_a_display_name() =~ /$in/i;
+	}
+	if (@poss == 0) {
+	    print "No channel matching that.\n";
+	}
+	elsif (@poss == 1) {
+	    my $ch = $poss[0];
+	    if (askBooleanQuestion('Add channel ' .
+				   $ch->get_a_display_name() . '?', 1)) {
+		my $xmltv_id = $ch->get_xmltv_id();
+		unless ($chose_ch{$xmltv_id}++) {
+		    print CONF "channel $xmltv_id\n";
+		}
+	    }
+	}
+	elsif (1 <= @poss and @poss < 25) {
+	    my %dn_to_ch;
+	    foreach (@poss) {
+		my $dn = $_->get_a_display_name();
+		warn "more than one channel called $dn"
+		  if exists $dn_to_ch{$dn};
+		$dn_to_ch{$dn} = $_;
+	    }
+	    my $none_option = 'None of the above are what I wanted';
+	    die 'silly channel name' if exists $dn_to_ch{$none_option};
+	    my $r = askQuestion('Which channel to add?',
+				$poss[0]->get_a_display_name(),
+				(sort keys %dn_to_ch), $none_option);
+	    next if $r eq $none_option;
+	    my $ch = $dn_to_ch{$r}; die if not defined $ch;
+	    my $xmltv_id = $ch->get_xmltv_id();
+	    unless ($chose_ch{$xmltv_id}++) {
+		print CONF "channel $xmltv_id\n";
+	    }
+	}
+	elsif (25 <= @poss) {
+	    print "'$in' matches lots of channels, be more specific.\n";
+	}
+	else { die }
+    }
+
+    close CONF or warn "cannot close $CONFIG_FILE: $!";
+    print "All done, run with no arguments to grab a week's listings.\n";
     exit();
 }
 
@@ -511,7 +613,11 @@ sub grab( @ ) {
 	#
 	my $day_offset = $day-1;
 	t 'day offset: ' . d $day_offset;
+
+	# FIXME I noticed that at 00:49 the pages had not changed
+	# over. 
 	my $day_date = DateCalc($today, "+ $day_offset days");
+#	$day_date = DateCalc($day_date, '- 1 day'); # Aargh! FIXME!
 	die if not defined $day_date;
 
 	# Get a list of programmes from this filename, fix the dates and
@@ -521,8 +627,15 @@ sub grab( @ ) {
 	die if not defined $ch;
 	my $g = $got->{$filename};
 	my $progs = read_file($day_date, $ch, $g->{content}, $filename, $g->{url});
-	date_programmes($progs, $day_date);
-	add_clumpidx($progs);
+	if (defined $progs) {
+	    date_programmes($progs, $day_date);
+	    add_clumpidx($progs);
+	    push @progs_todo, @$progs;
+	}
+	else {
+	    my $chd = $ch->get_a_display_name();
+	    warn "not writing any programmes for channel $chd, day $day_date\n";
+	}
 
 	# Check to see if we have to write channels data first.
 	if (not $wrote_channels) {
@@ -535,7 +648,6 @@ sub grab( @ ) {
 	    }
 	}
 
-	push @progs_todo, @$progs;
 	if ($wrote_channels) {
 	    t 'channels have been written before, write programmes';
 	    $writer->write_programme($_) foreach @progs_todo;
@@ -1236,14 +1348,16 @@ sub check_page_date($$) {
     }
 
     # But does it match what we expect?
-    if (UnixDate($dp, '%Q') ne UnixDate($expected, '%Q')) {
+    my $day_got = UnixDate($dp, '%Q');
+    my $day_expected = UnixDate($expected, '%Q');
+    if ($day_got ne $day_expected) {
 	if ($using_cache) {
 	    unless ($warned_wrong_date++) {
 		warn "since cache is in use, ignoring wrong date in pages\n";
 	    }
 	}
 	else {
-	    warn "wrong date in page\n";
+	    warn "wrong date in page: expected $day_expected, got $day_got\n";
 	    return 0;
 	}
     }

@@ -6,7 +6,7 @@ use base 'Exporter';
 use vars '@EXPORT';
 use Log::TraceMessages qw(t d);
 use Carp qw(croak);
-@EXPORT = qw(ask askQuestion askBooleanQuestion);
+@EXPORT = qw(ask askQuestion askBooleanQuestion askManyBooleanQuestions);
 
 sub ask( $ );
 sub askQuestion( $$@ );
@@ -48,13 +48,21 @@ sub askQuestion( $$@ )
 	    if ( !defined($res) || $res eq "" ) {
 		return($default);
 	    }
-	    for my $val (@options) {
-		if ( $val=~m/$res/i ) {
-		    return($val);
-		}
+
+	    # Check for exact match, then for substring matching.
+	    foreach (@options) {
+		return $_ if $_ eq $res;
 	    }
-	    print STDERR "invalid response, please choose one of ".join(',', @options)."\n";
-	    print STDERR "\n";
+	    my @poss;
+	    foreach (@options) {
+		push @poss, $_ if /$res/i;
+	    }
+	    if ( @poss == 1 ) {
+		# Unambiguous substring match.
+		return $poss[0];
+	    }
+
+	    print "invalid response, please choose one of ".join(',', @options)."\n\n";
 	}
     }
     else {
@@ -78,9 +86,8 @@ sub askQuestion( $$@ )
 	    if ( defined($r) && defined($num_to_choice{$r}) ) {
 		return $num_to_choice{$r};
 	    }
-	    print STDERR "invalid response, please choose one of "
-	      .0 .. $optnum."\n";
-	    print STDERR "\n";
+	    print "invalid response, please choose one of "
+	      .0 .. $optnum."\n\n";
 	    $r=undef;
 	}
     }
@@ -104,6 +111,38 @@ sub askBooleanQuestion( $$ )
 	return 0;
     }
     else { die }
+}
+
+# Ask yes/no questions with option 'default to all'.
+#
+# Parameters: default (true or false),
+#             question texts (one per question).
+#
+# Returns: lots of booleans, one for each question.
+#
+sub askManyBooleanQuestions( $@ )
+{
+    my $default = shift;
+    my @r;
+    while (@_) {
+	my $q = shift @_;
+	my $r = askQuestion($q, ($default ? 'yes' : 'no'),
+			    'yes', 'no', ($default ? 'all' : 'none'));
+	if ($r eq 'yes') {
+	    push @r, 1;
+	} elsif ($r eq 'no') {
+	    push @r, 0;
+	} elsif ($r eq 'all' or $r eq 'none') {
+	    my $bool = ($r eq 'all');
+	    push @r, $bool;
+	    foreach (@_) {
+		print "$_ ", ($bool ? 'yes' : 'no'), "\n";
+		push @r, $bool;
+	    }
+	    last;
+	} else { die }
+    }
+    return @r;
 }
 
 1;
