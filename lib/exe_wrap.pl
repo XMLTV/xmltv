@@ -48,8 +48,26 @@ foreach my $exe (split(/ /,$files))
     next unless length($exe)>3; #ignore trash
     $_=$exe;
     s!^.+/!!g;
-#   print "Storing $_=$exe\n";
-    $cmds{$_}=sub { do $exe };
+
+    my $sub;
+    if ($exe eq 'tv_grab_uk' or $exe eq 'tv_grab_uk_rt') {
+	# These require a share/ directory.  It's included in the
+	# distribution.
+	#
+	my $dir = "share/xmltv/$exe";
+	if (not -d 'share') {
+	    die "directory $dir not found, please run me from the directory where you unpacked\n";
+	}
+	$sub=sub {
+	    push @ARGV, '--share', $dir;
+	    do $exe;
+	};
+    }
+    else {
+	$sub=sub { do $exe };
+    }
+
+    $cmds{$_}=$sub;
 }
 
 #
@@ -80,7 +98,7 @@ if (! exists $cmds{$cmd} )
 #
 # call the appropriate routine (note, ARGV was shifted above)
 #
-$return = $cmds{$cmd}->();
+$return=$cmds{$cmd}->();
 
 die "$cmd:$! $@" unless (defined $return);
 
