@@ -13,24 +13,14 @@ tv_grab_uk_rt --help
 
 tv_grab_uk_rt [--config-file FILE] --configure
 
-tv_grab_uk_rt [--config-file FILE] [--output FILE] [--days N]
-              [--offset N] [--quiet]
+tv_grab_uk_rt [--config-file FILE] [--output FILE] [--quiet]
+              [--days N] [--offset N]
+              [--slow]
 
 =head1 DESCRIPTION
 
 Output TV and radio listings in XMLTV format for many stations
 available in Britain.  The data comes from the Radio Times website.
-
-=head1 WARNING
-
-Running this grabber requires very many web page fetches (potentially
-one per programme).  It is better where possible to run the ordinary
-UK grabber B<tv_grab_uk>, which has its own specially-created data
-source rather than scraping from a human-readable website.
-
-Normally youE<39>d run this grabber instead of B<tv_grab_uk> only when
-you want more than seven days of listings, or to get the more detailed
-cast lists in the Radio Times data.
 
 =head1 USAGE
 
@@ -54,6 +44,9 @@ possible.
 
 B<--offset N> Start grabbing at today + N.  N may be negative.
 
+B<--slow> Fetch additional details for each programme.  This requires
+one extra web page fetch per programme, so use with care.
+
 B<--quiet> suppress the progress messages normally written to standard
 error.
 
@@ -73,10 +66,9 @@ details provided by the site have to be thrown away because they
 cannot be accommodated in the XMLTV format; again, warning messages
 are printed.
 
-There are too many web page fetches, because a separate page gives
-'details' for each programme.  It would be better to fetch the details
-only for those programmes that are interesting, in some kind of
-two-pass grabbing.
+Rather than the all-or-nothing --slow mode, it would be better to
+fetch the details only for those programmes that are interesting, in
+some kind of two-pass grabbing.
 
 There is code to find out the 'categories' given for each programme,
 but that involves even more page fetches so it is disabled at present.
@@ -135,6 +127,13 @@ my $TIME_INTERVAL = 120;
 my $LANG = 'en';
 my $DOMAIN = 'radiotimes.beeb.com';
 my $BASE_URL = "http://www.$DOMAIN";
+my $CHANNELS_URL = ( $BASE_URL
+		     ."/PersonalisationServlet?"
+		     ."event=3&channelType=1&includeUnchosenChannels=true"
+		     ."&jspLocation=/jsp/select_channels.jsp"
+		     ."&rtError=/jsp/error.jsp"
+		     ."&jspError=/jsp/register.jsp"
+		     ."&next_page=tv_select" );
 
 # Whether to fetch categories (makes everything slower)
 my $GET_CATEGORIES = 0;
@@ -162,10 +161,12 @@ my ($opt_days,
     $opt_config_file,
     $opt_offset,
     $opt_quiet,
+    $opt_slow,
    );
 # No default for $opt_days, we determine it from the site.
 $opt_offset = 0; # default today
 $opt_quiet  = 0; # default
+$opt_slow   = 0; # default
 GetOptions('days=i'        => \$opt_days,
 	   'help'          => \$opt_help,
 	   'configure'     => \$opt_configure,
@@ -174,6 +175,7 @@ GetOptions('days=i'        => \$opt_days,
 	   'share=s'       => \$opt_share, # also undocumented
            'offset=i'      => \$opt_offset,
 	   'quiet'         => \$opt_quiet,
+	   'slow'          => \$opt_slow,
 	  )
   or usage(0);
 die 'number of days must not be negative'
@@ -261,7 +263,7 @@ sub grab( $$ ) {
     # FIXME turn into progress bar.
     print STDERR "finding channels:\t" unless $opt_quiet;
     my %channels = get_channels();
-    print STDERR "done.\n" unless $opt_quiet;
+    print STDERR "got ". (scalar keys %channels) . " done.\n" unless $opt_quiet;
 
     # Read the configuration file.  At present the lines must be one
     # of two forms:
@@ -473,6 +475,7 @@ sub get_programmes( $$$$$ ) {
     my $prog_to_cat = shift;
     my $categories = shift;
     my $channels = shift;
+    my $day = UnixDate($time, '%Q'); die if not $day;
 
     my @p;
 
@@ -491,7 +494,7 @@ sub get_programmes( $$$$$ ) {
     local $SIG{__DIE__} = sub {
 	die "$url: $_[0]";
     };
-    
+
     my $data;
     eval {
 	$data = get_url($url);
@@ -502,8 +505,8 @@ sub get_programmes( $$$$$ ) {
     };
     if ($@) {
 	warn "could not get $url\n";
-	my $from_time = UnixDate($time, '%Q');
-	my $to_time = UnixDate(DateCalc($time, "+ $TIME_INTERVAL seconds"), '%Q');
+	my $from_time = UnixDate($time, '%q');
+	my $to_time = UnixDate(DateCalc($time, "+ $TIME_INTERVAL seconds"), '%q');
 	warn "not fetching any programmes for channel $channel_xid "
 	  . "between $from_time and $to_time\n";
 	return ();
@@ -527,19 +530,43 @@ sub get_programmes( $$$$$ ) {
     foreach (@results) {
 	m/programmeId=([0-9]+)/ or die "$url: cannot find programmeId= in $_";
 	my $programmeId = $1;
-
-	unless ($seen_prog{$channel_xid}->{$programmeId}++) {
-	    my $progs = get_programme_details($channel_xid, $programmeId,
-					      $prog_to_cat, $categories,
-					      $channels);
-	    if (not $progs) {
-		warn "$url: could not get programme $programmeId on channel $channel_xid\n";
+	/title="(.+?)"/ or die "$url: cannot find title= in $_";
+	my $link_title = $1;
+	my ($start, $stop);
+	for ($link_title) {
+	    s/\s+\((.+)-(.+)\)\s*$//
+	      or die "expected to see '(start-stop)' times in title: $_";
+	    ($start, $stop) = ($1, $2);
+	    foreach ($start, $stop) {
+		$_ = utc_offset("$day $_", '+0000');
 	    }
-	    elsif (not @$progs) {
-		warn "$url: strange, $programmeId on channel $channel_xid seems to be empty";
-	    }
-	    else {
-		push @p, @$progs;
+	}
+	if (not $opt_slow) {
+	    # Assume no categories in fast mode.
+	    push @p, { channel => $channel_xid,
+		       start => $start,
+		       stop => $stop,
+		       title => $link_title };
+	}
+	else {
+	    unless ($seen_prog{$channel_xid}->{$programmeId}++) {
+		my $progs = get_programme_details($channel_xid, $programmeId,
+						  $prog_to_cat, $categories,
+						  $channels);
+		# We could check that the result is consistent with
+		# what we got above.  But I don't know how to do that
+		# when more than one programme is found (or under what
+		# circumstances that could happen).
+		#
+		if (not $progs) {
+		    warn "$url: could not get programme $programmeId on channel $channel_xid\n";
+		}
+		elsif (not @$progs) {
+		    warn "$url: strange, $programmeId on channel $channel_xid seems to be empty";
+		}
+		else {
+		    push @p, @$progs;
+		}
 	    }
 	}
 	print STDERR '#' unless $opt_quiet;
@@ -1204,34 +1231,58 @@ sub rt_date( $$$ ) {
 # with channelId as the key and a channel description.
 #
 sub get_channels() {
+    # RT website has additional sets of channels available to 
+    # registered users. 
+    #
+    # There is no authentication made on user-id, so we just pass 2 dummy 
+    # values in the cookies to get this channel listing for registered users
+
+    use LWP::Simple qw($ua);
+    use HTTP::Cookies;
+    # Debug cookies by uncommenting this line
+    # use LWP::Debug qw(+);
+    my $cookie_jar = HTTP::Cookies->new;
+    $cookie_jar->set_cookie
+        (0, "LOG_ID", "999999999", "/", "radiotimes.beeb.com", 
+         80, 1, 0, 9999999, 0);
+    $cookie_jar->set_cookie
+        (0, "RADIOTIMES_USER_ID", "999999999", "/", "radiotimes.beeb.com", 
+         80, 1, 0, 9999999, 0);
+    $ua->cookie_jar($cookie_jar);
+    
     my $data;
     eval {
-	$data = get_url("$BASE_URL/");
+	$data =  get_nice($CHANNELS_URL);    
 	die 'strange, get_url() not supposed to return undef'
 	  if not defined $data;
     };
     if ($@) {
-	die "could not get channels page $BASE_URL/, aborting\n";
+	die "could not get channels page $CHANNELS_URL - aborting\n";
     }
+    # clear cookie jar
+    $cookie_jar->clear();
+    
+    
     $data =~ tr/\n\r/\n/ds;
     t 'got channels page: ' . d $data;
     $data =~ s/\n//g;
-    $data =~ /<select name="channels"[^>]*?>(.*?)<\/select>/
-      or die "cannot find channel string in HTML $data";
+    $data =~ /<form +name=\"all_channels\"[^>]*?>(.*?)<\/form>/i
+	or die "cannot find channel string in HTML $data";
     my $channel_string = $1;
     t 'got string of channels: ' . d $channel_string;
     $channel_string =~ s/\s+/ /g;
-    my @channels = ($channel_string =~ /<option value="[0-9]+"[^>]*>[^<]*/ig);
+    my @channels = ($channel_string =~ 
+		    /<a href=\"javascript:spawn_window\(\'http:\/\/www.radiotimes.beeb.com\/[^>]*\/jsp\/channel_details.jsp[^>]*>[^<]*<\/a>/ig);
     t 'channels in string: ' . d @channels;
     warn "no channels found in $channel_string" if not @channels;
     my %c;
 
     foreach (@channels) {
 	t 'doing channel string: ' . d $_;
-	m/"([0-9]*)"/ or die "cannot find numeric channel id in $_";
+	m/&channelId=([0-9]+)&/ or die "cannot find numeric channel id in $_";
 	my $channelId = $1;
 	t 'got numeric id: ' . d $channelId;
-	m/>(.*)/ or die "cannot find channel description in $_";
+	m/>(.*)<\/a>/ or die "cannot find channel description in $_";
 	my $channelDesc = $1;
 	for ($channelDesc) {
 	    s/^\s+//; s/\s+$//;
@@ -1241,6 +1292,12 @@ sub get_channels() {
 	t 'XMLTV id to use: ' . d $chanID_to_output;
 	die if not defined $chanID_to_output;
 	die if not defined $channelId;
+
+	# warn about new channel ID's
+	if ($chanID_to_output eq "$channelId.$DOMAIN" )
+	{
+	    warn "$DOMAIN Channel $channelDesc ID $channelId not found in channel_ids file";
+	}
 
 	my @dns = ([ $channelDesc, $LANG ]);
 	my $extra_dn = $extra_dn{$chanID_to_output};
@@ -1472,7 +1529,7 @@ END
     # FIXME turn into progress bar.
     print STDERR "finding channels:\t";
     my %channels = get_channels();
-    print STDERR "done.\n";
+    print STDERR "got ". (scalar keys %channels) . " done.\n" unless $opt_quiet;
 
     # FIXME need to make directory
     open(CONF, ">$config_file") or die "cannot write to $config_file: $!";
@@ -1485,6 +1542,8 @@ END
 Enter the name of a channel, or '.' to finish selecting channels:
 END
 	);
+	die "cannot read input, aborting configuration\n"
+	  if not defined $in;
 	$in =~ s/^\s+//; $in =~ s/\s+$//;
 	last if $in eq '.';
 
@@ -1534,6 +1593,8 @@ END
 	    my $r = askQuestion('Which channel to add?',
 				$poss[0]->{'display-name'}->[0]->[0],
 				(sort keys %dn_to_ch), $none_option);
+	    die "cannot read input, aborting configuration\n"
+	      if not defined $r;
 	    next if $r eq $none_option;
 	    my $ch = $dn_to_ch{$r}; die if not defined $ch;
 	    my $xmltv_id = $ch->{id};
