@@ -1304,6 +1304,14 @@ END
 		warn "You might try continuing the download of <$url> manually.\n";
 		exit(1);
 	    }
+	    if (not -e $filename) {
+		die <<END
+strange, getstore() claimed to have created $filename, but it did not.
+Please report this to the xmltv-devel list; in the meantime download
+the file manually.
+END
+  ;
+	    }
 	    print STDERR "<$url>\n\t-> $filename, success\n\n";
 	}
 	$self->{downloadMissingFiles} = 0;
