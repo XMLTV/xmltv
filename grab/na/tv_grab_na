@@ -1,21 +1,104 @@
 #!/usr/bin/perl -w
-#
-# This script scrapes www.zap2it.com tv listings, producing
-# xmltv.dtd and channels.dtd compliant output. Zap2it supports
-# both Canadian and US listings.
-#
-# Feel free to contact me with comments, contributions,
-# and the like. jerry@matilda.com 
-#
-# Known Bugs
-#  - no longer supports --startHour and --endHour parameters
-#    defaults to scraping an entire day's schedules. 
-#  - not all program qualifiers have been defined, so sometimes
-#    program descriptions include qualifiers that are unidentified
-#    These should be reported to the author
-#
 # $Id$
-#
+
+=head1 NAME
+
+tv_grab_na - Grab Canadian and US TV listings.
+
+=head1 SYNOPSIS
+
+tv_grab_na [--help] [--debug] [--config-file FILE] --configure CONFIG_OPTIONS
+
+tv_grab_na [--help] [--debug] [--config-file FILE] GRAB_OPTIONS
+
+=head1 DESCRIPTION
+
+Output TV listings for Canada and the USA in XMLTV format.  The data
+currently comes from the zap2it.com site.
+
+First you must run B<tv_grab_na --configure> to set your local area,
+service provider and which channels you wish to download.  Then
+running B<tv_grab_na> with no arguments will get a weekE<39>s listings
+for the channels you chose.  If the upstream data changes (for
+example, new channels appear) you will be prompted to rerun
+B<--configure> to update your choices.
+
+Some options are available in both configure and grab mode:
+
+B<--help> Print help to standard output and exit successfully.
+
+B<--debug> Turn on debugging checks.
+
+B<--config-file FILE> The location of the config file, which is
+written in configure mode and read in grab mode.  The default location
+is B<~/.xmltv/tv_grab_na>.
+
+Configuration is normally interactive, but it can be run
+noninteractively, usually to update an existing set of choices.  The
+following options are used to invoke --configure in a non-interactive
+mode:
+
+B<--postalcode X>, B<--zipcode X> Specify your postal code or zip code.
+
+B<--provider ID> Specify the id of your service provider.  This is a
+number assigned by the zap2it site.  During interactive configuration
+you are presented with a list of provider names, but if you already
+know the id you can specify it here.
+
+B<--auto-fail-on-provider-changes BOOLEAN> If true, exit with failure
+if the provider id has changed on the zap2it site.
+
+B<--auto-new-channels [ignore|add]> Ignore or automatically add new
+channels in schedule listing.
+
+B<--auto-missing-channels [ignore|remove]> Ignore or remove channels
+no longer in schedule listing.
+
+Interactive mode is entered if some necessary information is not given
+(for example no postal or zip code in the existing configuration file,
+and not given on the command line).
+
+After successful configuration you can start grabbing.  The options
+here are:
+
+B<--debuglistings> Add debugging information to the output as XML
+comments.
+
+B<--listings FILE>, B<--output FILE> Write output to FILE rather than
+standard output.  FILE may contain L<date(1)> style substitutions, for
+example use B<--listings "listings-%d%m%Y.xml"> to separate output by
+day.   Similarily, B<%postalcode> and B<%zipcode> are also substituted from
+settings current configuration.  The filename is only re-evaluated
+when a new dayE<39>s listings is started.
+
+B<--days N> When grabbing, grab N days of listings.  The default is 7.
+
+B<--offset N> Number of days in the future to offset the start of the
+listings.  The default is 0, meaning today.
+
+=head1 SEE ALSO
+
+L<xmltv(5)>, L<http://www.zap2it.com/>
+
+=head1 AUTHOR
+
+Jerry Veldhuis, jerry@matilda.com
+
+=head1 BUGS
+
+There is no way to get listings for only part of each day; the old
+B<--startHour> and B<--endHour> options no longer exist.  This makes
+grabbing slower than it needs to be if you only want listings for
+certain hours.
+
+The zap2it site has a long list of program qualifiers such as Live,
+Animated, HDTV and so on.  Most of these are understood by tv_grab_na
+and included in the XMLTV output.  But some new ones pop up
+occasionally and generate a warning message (which should be reported
+to the author).  Some qualifiers such as Live donE<39>t yet have a
+good translation into XMLTV format.
+
+=cut
 
 my $VersionMajor=2;
 my $VersionMinor;
@@ -378,7 +461,7 @@ sub ConfigureUsage($)
     print $fp "   --provider ZZZZZZZ\n";
     print $fp "     specify provider id\n";
     print $fp "\n";
-    print $fp "   --config <file>\n";
+    print $fp "   --config-file <file>\n";
     print $fp "     write results of configure to <file> instead of \$HOME/$ConfigFileName_g\n";
     print $fp "\n";
     print $fp "  The following options are used to invoke --configure in a non-interactive mode\n";
@@ -433,7 +516,7 @@ sub Usage($)
     print $fp "   --debuglistings\n";
     print $fp "     add debugging material in output xml as comments\n";
     print $fp "\n";
-    print $fp "   --config <file>\n";
+    print $fp "   --config-file <file>\n";
     print $fp "     specify file that contains config information, default in \$HOME/$ConfigFileName_g\n";
     print $fp "     (created by using --configure)\n";
     print $fp "\n";
@@ -467,23 +550,20 @@ if ( @ARGV ) {
     }
 }
 
+# Accept older --config as synonym for --config-file.
+foreach ( @ARGV ) {
+    last if $_ eq '--';
+    next if /^--config-/;
+    s/^--config\b/--config-file/;
+}
+
 if ( $configure ) {
-    use vars qw/$opt_configure $opt_help $opt_postalcode $opt_zipcode $opt_provider $opt_config $opt_debug $opt_auto_fail_on_provider_changes $opt_auto_new_channels $opt_auto_missing_channels/;
+    use vars qw/$opt_configure $opt_help $opt_postalcode $opt_zipcode $opt_provider $opt_config_file $opt_debug $opt_auto_fail_on_provider_changes $opt_auto_new_channels $opt_auto_missing_channels/;
 
     $opt_debug=0;
     $opt_auto_fail_on_provider_changes="false";
 
-    # For backwards compatibility, accept underscores in long
-    # arguments as well as hyphens.
-    #
-    foreach (@ARGV) {
-	last if $_ eq '--';
-	if (s/^--//) {
-	    tr/_/-/;
-	    $_ = "--$_";
-	}
-    }
-    if ( ! GetOptions('configure', 'help', 'postalcode=s', 'zipcode=s', 'provider=s', 'config=s', 'debug', 'auto-fail-on-provider-changes=s', 'auto-new-channels=s', 'auto-missing-channels=s') ) {
+    if ( ! GetOptions('configure', 'help', 'postalcode=s', 'zipcode=s', 'provider=s', 'config-file=s', 'debug', 'auto-fail-on-provider-changes=s', 'auto-new-channels=s', 'auto-missing-channels=s') ) {
 	ConfigureUsage(0);
 	exit(1);
     }
@@ -533,8 +613,8 @@ if ( $configure ) {
     my $config=new myConfig();
     
     my $configfile=$ConfigPathName_g;
-    if ( defined($opt_config) ) {
-	$configfile=$opt_config;
+    if ( defined($opt_config_file) ) {
+	$configfile=$opt_config_file;
     }
 
     if ( -f $configfile && $config->load($configfile, $opt_debug) != 0 ) {
@@ -852,12 +932,12 @@ if ( $configure ) {
 
 # in grabber mode - yeah !
 
-use vars qw/$opt_help $opt_config $opt_debug $opt_programs $opt_channels $opt_listings $opt_output $opt_days $opt_debuglistings $opt_offset/;
+use vars qw/$opt_help $opt_config_file $opt_debug $opt_programs $opt_channels $opt_listings $opt_output $opt_days $opt_debuglistings $opt_offset/;
 
 $opt_debug=0;
 $opt_debuglistings=0;
 
-if ( ! GetOptions('help', 'config=s', 'debug', 'programs=s', 'channels=s', 'listings=s', 'output=s', 'days=i', 'debuglistings', 'offset=i') ) {
+if ( ! GetOptions('help', 'config-file=s', 'debug', 'programs=s', 'channels=s', 'listings=s', 'output=s', 'days=i', 'debuglistings', 'offset=i') ) {
     Usage(0);
     exit(1);
 }
@@ -955,12 +1035,12 @@ sub grab
     my $config=new myConfig();
     
     my $configfile=$ConfigPathName_g;
-    if ( defined($opt_config) ) {
-	if ( ! -f $opt_config ) {
-	    print STDERR "$0: specified config file '$opt_config' does not exist, run --configure\n";
+    if ( defined($opt_config_file) ) {
+	if ( ! -f $opt_config_file ) {
+	    print STDERR "$0: specified config file '$opt_config_file' does not exist, run --configure\n";
 	    return(1);
 	}
-	$configfile=$opt_config;
+	$configfile=$opt_config_file;
     }
     else {
 	# versions starting with 0.5 have configuration information in $HOME/.xmltv by default.
