@@ -588,7 +588,7 @@ foreach my $p ((sort keys %prereqs), (sort keys %recommended)) {
     else { die }
 }
 if ($err and not $opt_nodeps) {
-    die "Required modules missing, not writing Makefile\n";
+    warn "Required modules missing, 'make' is unlikely to work\n";
 }
 
 WriteMakefile
