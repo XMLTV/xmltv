@@ -11,6 +11,7 @@
 
 use strict;
 use Getopt::Long;
+sub usage( ;$ );
 
 my @cmds
   = (
@@ -37,7 +38,8 @@ my $cmds_dir = 'blib/script'; # directory filter programs live in
 die "no directory $cmds_dir" if not -d $cmds_dir;
 my $verbose = 0;
 GetOptions('tests-dir=s' => \$tests_dir, 'cmds-dir=s' => \$cmds_dir,
-	   'verbose' => \$verbose);
+	   'verbose' => \$verbose)
+  or usage(0);
 my @tests = <$tests_dir/*.xml>;
 die "no test cases (*.xml) found in $tests_dir"
   if not @tests;
@@ -126,3 +128,22 @@ foreach my $cmd (@cmds) {
     }
 }
 die if $test_num != $num_tests;
+
+
+# If optional parameter true, is 'help message'.
+sub usage( ;$ ) {
+    my $is_help = shift;
+    my $msg = <<END
+$0: test suite for filter programs
+usage: $0 [--tests-dir DIR] [--cmds-dir DIR] [--verbose]
+END
+;
+    if ($is_help) {
+	print $msg;
+	exit(0);
+    }
+    else {
+	print STDERR $msg;
+	exit(1);
+    }
+}
