@@ -70,10 +70,14 @@ sub MY::install {
     package MY;
     my $inherited = shift->SUPER::install(@_);
 
-    my %extra_deps = (doc_install => 'plaindoc_install',
-		      install     => 'share_install');
-    foreach (keys %extra_deps) {
-	$inherited =~ s/^(\s*$_\s+::\s.+)/$1 $extra_deps{$_}/m or die;
+    # Decided that 'plaindoc_install' should be directly under
+    # 'install', not under the misleadingly named 'doc_install'.
+    #
+    my %extra_deps = (install => [ 'plaindoc_install', 'share_install' ]);
+    foreach my $t (keys %extra_deps) {
+	foreach my $d (@{$extra_deps{$t}}) {
+	    $inherited =~ s/^(\s*$t\s+::\s.+)/$1 $d/m or die;
+	}
     }
 
     foreach (qw(plaindoc share)) {
@@ -99,6 +103,26 @@ END
 	$extra =~ s/ {8}/\t/g;
 	$inherited .= $extra;
     }
+
+    # Remove existing non-working 'uninstall' target.
+    $inherited =~ s!^uninstall\s:.*$!!m
+      or die "no uninstall target in: $inherited";
+
+    # For each *_install create a corresponding _uninstall.
+    my $targets = ::targets($inherited);
+    foreach (qw(pure_perl_install pure_site_install plaindoc_install share_install)) {
+	die "no $_ in: $inherited" if not defined $targets->{$_};
+	my @t = @{$targets->{$_}}; # make a copy
+	shift @t if $t[0] =~ /^\s*\@echo\b/;
+	$t[0] =~ s/\@\$\(MOD_INSTALL\)/\$(PERL) -I. -MUninstall -e 'uninstall(\@ARGV)'/
+	  or die "first command of target $_ isn't \@\$\(MOD_INSTALL\)";
+	(my $new_target = $_) =~ s/install$/uninstall/ or die;
+	foreach ("\n\n$new_target ::\n", @t) {
+	    $inherited .= $_;
+	}
+    }
+    $inherited .= 'pure_uninstall :: pure_$(INSTALLDIRS)_uninstall' . "\n";
+    $inherited .= 'uninstall :: all pure_uninstall plaindoc_uninstall share_uninstall';
 
     return $inherited;
 }
@@ -222,4 +246,31 @@ sub MY::processPL {
 	or die "no call to tv_grab_uk.PL in: $inherited";
 
     return $inherited;
+}
+
+# Split a section of makefile into targets.
+sub targets {
+    my @lines = split /\n/, shift;
+    $_ .= "\n" foreach @lines;
+    my %r;
+    my $curr_target;
+    foreach (@lines) {
+	if (/^(\S+)\s+:/) {
+	    # Beginning of a new target.
+	    my $name = $1;
+	    die "target $name seen twice" if defined $r{$name};
+	    $r{$name} = $curr_target = [];
+	}
+	elsif (/^\t/ and defined $curr_target) {
+	    # Commands for the target.
+	    push @$curr_target, $_;
+	}
+	elsif (/^\s*(?:\#.*)?$/) {
+	    undef $curr_target;
+	}
+	else {
+	    die "bad makefile line: $_";
+	}
+    }
+    return \%r;
 }
