@@ -161,11 +161,6 @@ my @deps = ('filter/tv_grep' => [ qw(filter/tv_grep.in pm_to_blib) ],
 #
 my @grab_need_share;
 
-# Flag to trigger special installation for tv_grab_uk (currently no
-# other grabber needs the same variable-number-of-files installation).
-#
-my $do_uk_channel_pkgs = 0;
-
 # 'Recommended but not required'.  It isn't currently handled to have
 # the same module in both sets.
 #
@@ -216,17 +211,6 @@ my @opt_components
 #        blurb => 'Grabber for Germany and Austria',
 #        exes => [ 'grab/de/tv_grab_de' ],
 #      },
-
-     { name => 'tv_grab_uk',
-       blurb => 'Grabber for Britain',
-       exes => [ 'grab/uk/tv_grab_uk' ],
-       pl_files => { 'grab/uk/tv_grab_uk.PL' => 'grab/uk/tv_grab_uk' },
-       share_files => { 'grab/uk/channel_ids' => 'tv_grab_uk/channel_ids' },
-       to_clean => [ 'grab/uk/tv_grab_uk' ],
-       deps => [ 'grab/uk/tv_grab_uk' => [ 'grab/uk/tv_grab_uk.in' ] ],
-       grab_need_share => [ 'uk' ],
-       do_uk_channel_pkgs => 1,
-     },
 
      { name => 'tv_grab_uk_rt',
        blurb => 'Alternative grabber for Britain',
@@ -449,12 +433,6 @@ foreach my $info (@opt_components) {
     push @deps, @{$info->{deps}}                  if $info->{deps};
     push @grab_need_share, @{$info->{grab_need_share}}
       if $info->{grab_need_share};
-    for ($info->{do_uk_channel_pkgs}) {
-	if (defined) {
-	    die 'turn on, but not off' if not $_;
-	    $do_uk_channel_pkgs = 1;
-	}
-    }
 }
 
 my $warned_uninstall_broken = 1;
@@ -730,24 +708,6 @@ sub MY::installbin {
 	$doc_files{$_} = File::Basename::basename($_);
     }
 
-    # Special case for tv_grab_uk.
-    if ($do_uk_channel_pkgs) {
-	my $ch_pkgs_dir= 'grab/uk/channel_pkgs';
-	my $wanted = sub {
-	    return if -d;
-
-	    # Ignore files that may be lying around in a CVS working
-	    # copy but cannot be part of the xmltv package.
-	    #
-	    return if /^\#/ || /~$/ || $File::Find::name =~ m!/CVS/!;
-
-	    die if defined $share_files{$File::Find::name};
-	    (my $inst = $File::Find::name) =~ s!^grab/uk/!tv_grab_uk/! or die;
-	    $share_files{$File::Find::name} = $inst;
-	};
-	File::Find::find($wanted, $ch_pkgs_dir);
-    }
-
     my %new_filetypes = (plaindoc => \%doc_files, share => \%share_files);
     my %seen_dir;
     foreach my $filetype (sort keys %new_filetypes) {
@@ -853,14 +813,6 @@ sub MY::processPL {
 sub MY::makefile {
     package MY;
     my $inherited = shift->SUPER::makefile(@_);
-    if ($do_uk_channel_pkgs) {
-	# Add an extra dependency: the contents of tv_grab_uk's
-	# packages directory.
-	#
-	$inherited =~ s{^((?:Makefile|\$\(FIRST_MAKEFILE\))\s+:)}
-	  {$1 grab/uk/channel_pkgs}m
-	    or die "no Makefile dependencies line in: $inherited";
-    }
     return $inherited;
 }
 

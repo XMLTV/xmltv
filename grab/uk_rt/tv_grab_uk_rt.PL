@@ -4,8 +4,6 @@
 # The second argument is the share directory for the final
 # installation.
 #
-# FIXME commonize this with tv_grab_uk.PL.
-#
 # $Id$
 #
 
