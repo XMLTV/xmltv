@@ -226,10 +226,10 @@ my @opt_components
   = (
 
 # tv_grab_de not currently working
-#      { name => 'tv_grab_de',
-#        blurb => 'Grabber for Germany and Austria',
-#        exes => [ 'grab/de/tv_grab_de' ],
-#      },
+#     { name => 'tv_grab_de',
+#       blurb => 'Grabber for Germany and Austria',
+#       exes => [ 'grab/de/tv_grab_de' ],
+#     },
 
      { name => 'tv_grab_uk_rt',
        blurb => 'Alternative grabber for Britain',
@@ -252,19 +252,19 @@ my @opt_components
        grab_need_share => [ 'uk_bleb' ],
        prereqs => { 'IO::Scalar' => 0, 'Archive::Zip' => 0 },
      },
-     
-     { name => 'tv_grab_it',
-       blurb => 'Grabber for Italy',
-       exes => [ 'grab/it/tv_grab_it' ],
-       pl_files => { 'grab/it/tv_grab_it.PL' => 'grab/it/tv_grab_it' },
-       share_files => { 'grab/it/channel_ids' => 'tv_grab_it/channel_ids' },
-       to_clean => [ 'grab/it/tv_grab_it' ],
-       deps => [ 'grab/it/tv_grab_it' => [ 'grab/it/tv_grab_it.in' ] ],
-       grab_need_share => [ 'it' ],
-     },
+
+#     { name => 'tv_grab_it',
+#       blurb => 'Grabber for Italy',
+#       exes => [ 'grab/it/tv_grab_it' ],
+#       pl_files => { 'grab/it/tv_grab_it.PL' => 'grab/it/tv_grab_it' },
+#       share_files => { 'grab/it/channel_ids' => 'tv_grab_it/channel_ids' },
+#       to_clean => [ 'grab/it/tv_grab_it' ],
+#       deps => [ 'grab/it/tv_grab_it' => [ 'grab/it/tv_grab_it.in' ] ],
+#       grab_need_share => [ 'it' ],
+#     },
 
      { name => 'tv_grab_it_lt',
-       blurb => 'Alternative grabber for Italy',
+       blurb => 'Grabber for Italy',
        exes => [ 'grab/it_lt/tv_grab_it_lt' ],
        pl_files => { 'grab/it_lt/tv_grab_it_lt.PL' => 'grab/it_lt/tv_grab_it_lt' },
        share_files => { 'grab/it_lt/channel_ids' => 'tv_grab_it_lt/channel_ids' },
