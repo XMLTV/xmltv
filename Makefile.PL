@@ -786,6 +786,7 @@ windows_dist ::
         #
 	perl -MExtUtils::Command -e rm_rf $location/bin/ $location/lib/ $(INSTMANDIR) $(INSTALLMAN3DIR)
 	perl -MExtUtils::Command -e cp xmltv.dtd $location
+	perl -MExtUtils::Command -e cp ChangeLog $location
 	# The following command will not be necessary when the source
 	# tree was checked out on a DOSish system.  It may not even
 	# work properly when run on a DOSish system - should check.
