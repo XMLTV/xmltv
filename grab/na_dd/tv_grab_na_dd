@@ -178,6 +178,27 @@ Channel lists can be configured both at the DataDirect website and through the g
 allow multiple config files with different channel lists.  DataDirect only supports a single channel map
 per lineup.
 
+=head1 Notes on episode numbers
+
+Three episode-num formats are supplied (when available)
+
+=over
+
+=item xmltv_ns
+
+always C<..a/b> for part C<a> of C<b>. First two xmltv_ns fields always blank.
+
+=item dd_progid
+
+TMS generated C<a.b.c/d> where C<a> is a unique program id, C<b> is a unique episode id,
+C<c/d> is part C<c> of C<d> similar to xmltv_ns.
+
+=item onscreen
+
+Distributor-designated number corresponding to an episode of a specific show. Varies by distributor.
+
+=back
+
 =head1 Notes on passwords
 
 If a password is stored in the config file, the config file should be properly protected.
@@ -216,6 +237,7 @@ and of course everyone else I forgot to mention. :)
 # initializations
 
 use strict;
+use Data::Dumper;
 use Date::Manip;
 use Time::Local;
 use SOAP::Lite;
@@ -246,6 +268,11 @@ END
 ;
 
 #
+# module version checking doesn't work with XMLTV version numbers
+#
+die "*ERROR* XMLTV.PM 0.5.32 required\n" if $XMLTV::VERSION lt '0.5.32';
+
+#
 # Global Vars
 # 
 my @messages;           # DD warnings.
@@ -264,6 +291,7 @@ my $config_file;        # config file name
 my $tz_offset=0;
 my $start_time=time();
 my $prog_count=0;        # record count;
+my %old_lineups=();      # used for DD schema 1.2 -> 1.3 migration
 
 my $dd_user="";         # dd username
 my $dd_pass="";         # dd password
@@ -288,9 +316,10 @@ my $opt_low_mem    =0;  # use as little memory as you can
 my $opt_dd_data    =''; # save dd data
 my $opt_reprocess  =''; # reprocess dd data
 my $opt_auto_config  =''; # auto add/ignore channels
-my $opt_list_channels=''; # 
-my $opt_list_lineups='' ; #
-my $opt_down_only=0     ; #
+my $opt_list_channels='';  
+my $opt_list_lineups='' ; 
+my $opt_down_only=0     ; 
+my $opt_beta_data=0     ; # undocumented flag to grab beta DD schema
 my $opt_tz_offset="+0000";
 
 #
@@ -322,6 +351,7 @@ GetOptions(
            'list-lineups'  => \$opt_list_lineups,
            'tz-offset=s'   => \$opt_tz_offset,
            'download-only' => \$opt_down_only,
+           'beta-data'   => \$opt_beta_data,
            'debug'         => \$DEBUG,
 	  )
   or usage(0);
@@ -367,6 +397,14 @@ if (-e $config_file)
         elsif ( $setting eq 'lineup' )
         {
             $dd_lineup = $val;
+#
+# special processing for dd_schema 1.2 -> 1.3
+#
+            if (exists $old_lineups{$dd_lineup})
+            {
+                print STDERR "Lineup IDs have changed. Please run --configure\n";
+                $dd_lineup = $old_lineups{$dd_lineup};
+            }
         }
         else
         {
@@ -485,9 +523,12 @@ else
        return "$dd_user" => "$dd_pass";
     }
 
+    my $dd_service='http://docs.tms.tribune.com/tech/tmsdatadirect/zap2it/xtvd.wsdl';
+    $dd_service='http://docs.tms.tribune.com/tech/tmsdatadirect/zap2it/beta/xtvd.wsdl' if $opt_beta_data;
+
     my $time=time();
     my $soap= SOAP::Lite
-            -> service("http://docs.tms.tribune.com/tech/tmsdatadirect/zap2it/xtvd.wsdl")
+            -> service($dd_service)
             -> outputxml('true')
 #           -> on_debug(1)
             -> on_fault( sub {
@@ -524,40 +565,50 @@ my $twig=XML::Twig->new(
                 		         },
                  xtvd  => sub {
                                   $dd_schema=$_->att('schemaVersion');
-
-                                  warn "\nDD Schema # is $dd_schema, check for upgrade\n"
-                                       if $dd_schema > 1.2;
-
                                   $_->twig->purge;
-                                  return 1;
+                                  return 0;
                                  },
                  message  => sub {
                                   push @messages, $_->first_child_text;
                                   $_->twig->purge;
-                                  return 1;
+                                  return 0;
                                  },
 
-		         stations => sub { $_->twig->purge;  return 1;},
+		         stations => sub { $_->twig->purge;  return 0;},
 		         station  => sub {
                                   my $hash=$_->simplify;
                                   $station{$_->att('id')}=$hash;
                                   $_->twig->purge;
-                                  return 1;
+                                  return 0;
                 		         },
-		         lineups => sub { $_->twig->purge;  return 1;},
+		         lineups => sub { $_->twig->purge;  return 0;},
                  lineup  => sub {
                                   my $hash = $_->simplify;
                                   my $name = $_->att('name');
+                                  my $id   = $_->att('id');
                                   $hash->{orig_id}=$name;
-                                  while (exists $lineups{$name})
+                                  $hash->{name}   =$name;
+                                  if (exists $lineups{$name})
                                   {
                                     $name.='-2'; # deal with dupe names
                                   }
-                                  $lineups{$name}=$hash;
+#
+# note. special processing for dd_schema 1.2 -> 1.3 conversion
+#
+                                  if ($id)
+                                  {
+                                    $old_lineups{$name}=$id;
+                                    $lineups{$id}=$hash;
+                                  }
+                                  else
+                                  {
+                                    $lineups{$name}=$hash;
+                                  }
+                                  
                                   $_->twig->purge;
-                                  return 1;
+                                  return 0;
                                  },
-		         programs=> sub { $_->twig->purge;  return 1;},
+		         programs=> sub { $_->twig->purge;  return 0;},
 		         program => sub {
                                   my $hash=$_->simplify;
 
@@ -571,9 +622,9 @@ my $twig=XML::Twig->new(
                                     $program{$_->att('id')}=$hash;
                                   }
                                   $_->twig->purge;  
-                                  return 1;
+                                  return 0;
                 		         },  
-                 productionCrew => sub { $_->twig->purge;  return 1;},
+                 productionCrew => sub { $_->twig->purge;  return 0;},
 		         crew    => sub {
                                   unless ($opt_low_mem)
                                   {
@@ -581,9 +632,9 @@ my $twig=XML::Twig->new(
                                     $crew{$_->att('program')}=$hash;
                                   }
                                   $_->twig->purge;  
-                                  return 1;
+                                  return 0;
                   		          },
-                 genres       => sub { $_->twig->purge;  return 1;},
+                 genres       => sub { $_->twig->purge;  return 0;},
 		         programGenre => sub {
                                   unless ($opt_low_mem)
                                   {
@@ -591,15 +642,15 @@ my $twig=XML::Twig->new(
                                     $programGenre{$_->att('program')}=$hash;
                                   }
                                   $_->twig->purge;  
-                                  return 1;
+                                  return 0;
                   		          },
-		         _default_ => sub {  # for some reason this is not being processed last, can't do the purge
+		         _all_ => sub {  # for some reason this is not being processed last, can't do the purge
                                   unless ( $opt_quiet || $count++ % 1000 )
                                   {
                                      if ($bar) { $bar->update(tell($dd_data)) }
                                      else      { print STDERR "."            };
                                   }
-                                  return 1;
+                                  return 0;
                   		          },
 	         });
 
@@ -630,6 +681,8 @@ print STDERR "\n" unless ($opt_quiet || $bar );
 $twig=undef;  # destroy twig (just in case)
 
 
+warn "DD Schema # is $dd_schema, check for upgrade\n" if $dd_schema > 1.2;
+
 #
 # --list-lineup mode
 #
@@ -638,6 +691,7 @@ if ($opt_list_lineups)
     my $id_len=2;
     my $type_len=4;
     my $orig_len=6;
+    my $dev_len=6;
     for my $id (sort keys %lineups)
     {
         my $len=length($id);
@@ -648,17 +702,28 @@ if ($opt_list_lineups)
 
         $len=length($lineups{$id}{orig_id}||'');
         $orig_len=$len if $len>$orig_len;
+
+        $len=length($lineups{$id}{device}||'');
+        $dev_len=$len if $len>$dev_len;
+
     }
 
 
-    printf STDOUT "%-${id_len}s|%-6s|%-${type_len}s|%-${orig_len}s|%s\n","Lineup ID","Postal","Type","OrigID","Device";
+    printf STDOUT "%-${id_len}s|%-6s|%-${type_len}s|%-${orig_len}s|%-${dev_len}s|%s\n",
+                                                    "Lineup ID",
+                                                    "Postal",
+                                                    "Type",
+                                                    "OrigID",
+                                                    "Device",
+                                                    "Location";
     for my $id (sort keys %lineups)
     {
-          printf STDOUT "%-${id_len}s|%-6s|%-${type_len}s|%-${orig_len}s|%s\n",$id,
+          printf STDOUT "%-${id_len}s|%-6s|%-${type_len}s|%-${orig_len}s|%-${dev_len}s|%s\n",$id,
                                                   ,$lineups{$id}{postalCode}||'',
                                                   ,$lineups{$id}{type}||'',
                                                   ,$lineups{$id}{orig_id}||'',
-                                                  ,$lineups{$id}{device}||'';
+                                                  ,$lineups{$id}{device}||'',
+                                                  ,$lineups{$id}{location}||'',
     }
     exit 0;    
 }
@@ -670,10 +735,20 @@ if ($opt_configure)
 {
     my %chan_found=();
     my $key;
-    $dd_lineup = (keys %lineups)[0] unless $dd_lineup;
+    $dd_lineup=$old_lineups{$dd_lineup} if exists $old_lineups{$dd_lineup};
+    $dd_lineup=(sort keys %lineups)[0]  unless exists $lineups{$dd_lineup};
     if (! $opt_auto_config)
     {
-        $dd_lineup = askQuestion("\nWhich Lineup? ($dd_lineup)",$dd_lineup,sort keys %lineups);
+        my @choices=map sprintf("%s|%s,%s",$_,
+                                           $lineups{$_}{name},
+                                           $lineups{$_}{type}),
+                        sort keys %lineups;
+        my $val=sprintf("%s|%s,%s",$dd_lineup,
+                                   $lineups{$dd_lineup}{name},
+                                   $lineups{$dd_lineup}{type});
+                                           
+        $val = askQuestion("\nWhich Lineup? ($dd_lineup)",$val,@choices);
+        $dd_lineup = (split(/\|/,$val))[0];
     }
     print CONF "lineup: $dd_lineup\n";
 
@@ -720,6 +795,16 @@ if ($opt_configure)
     exit 0;
 } # --configure channel list
 
+#
+# Make sure we have a valid lineup
+#
+if ( exists $old_lineups{$dd_lineup} )
+{
+    print STDERR "**Warning** lineup ID has changed, please re-run configure\n";
+    $dd_lineup=$old_lineups{$dd_lineup};
+}
+
+die "Lineup ($dd_lineup} not found in data\n" unless exists $lineups{$dd_lineup};
 
 
 #
@@ -741,6 +826,7 @@ $writer->start( {
               'generator-info-name'  => 'XMLTV',
       	      'generator-info-url'   => 'http://www.xmltv.org/',
             });
+
 
 #
 # write stations, removing those we don't care about
@@ -907,6 +993,7 @@ $twig=XML::Twig->new( twig_roots => { schedule => 1 },
                        push @{$prog{'episode-num'}}, [$value,'dd-progid'];
                      }
 
+
 #
 # add elements from program Genre tag
 # Note: before program so Genra comes before ShowType in <category>
@@ -939,8 +1026,6 @@ $twig=XML::Twig->new( twig_roots => { schedule => 1 },
                         $prog{length}       = substr($ptr->{runTime},2,2)*3600+
                                               substr($ptr->{runTime},5,2)*60 if exists $ptr->{runTime};
 
-#use Data::Dumper;
-#die Dumper($ptr->{advisories}{advisory});
                         if (exists $ptr->{advisories})
                         {
                            if (ref $ptr->{advisories}{advisory})
@@ -978,7 +1063,8 @@ $twig=XML::Twig->new( twig_roots => { schedule => 1 },
                              }
                         }
 
-                        push @{ $prog{category}}, [$ptr->{showType}   ,'en' ] if exists $ptr->{showType};
+                        push @{$prog{category}}, [$ptr->{showType}   ,'en' ] if exists $ptr->{showType};
+                        push @{$prog{'episode-num'}}, [$ptr->{syndicatedEpisodeNumber},'onscreen']  if exists $ptr->{syndicatedEpisodeNumber};
 
                      } # %program items
 
@@ -1018,7 +1104,7 @@ $twig=XML::Twig->new( twig_roots => { schedule => 1 },
 #
                      $writer->write_programme(\%prog);
                      $twig->twig->purge;
-                     return 1;
+                     return 0;
        		     }
        		 }, # schedule subroutine
 	         }); #twig setup
