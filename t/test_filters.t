@@ -24,6 +24,7 @@ my @cmds
      [ 'tv_grep', 'a' ],
      [ 'tv_grep', '--category', 'b' ],
      [ 'tv_grep', '-i', '--last-chance', 'c' ],
+     [ 'tv_grep', '--premiere', '' ],
      [ 'tv_grep', '--new' ],
      [ 'tv_grep', '--channel-name', 'd' ],
      [ 'tv_grep', '--channel-id', 'channel4.com' ],
