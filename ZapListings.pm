@@ -71,7 +71,7 @@ sub getProviders($$$)
     $code=$postalcode if ( defined($postalcode) );
     $code=$zipcode if ( defined($zipcode) );
 
-    my $req=POST("http://tvlistings2.zap2it.com/register.asp?id=form1&name=form1&zipcode=$code", [ ]);
+    my $req=GET("http://tvlistings2.zap2it.com/register.asp?id=form1&name=form1&zipcode=$code");
 
     # actually attempt twice since first time in, we get a cookie that
     # works for the second request
@@ -169,7 +169,7 @@ sub getChannelList($$$$)
 	$res=&doRequest($ua, $req, $debug);
     }
 
-    $req=POST('http://tvlistings2.zap2it.com/listings_redirect.asp?spp=0', [ ]);
+    $req=GET('http://tvlistings2.zap2it.com/listings_redirect.asp?spp=0');
     $res=&doRequest($ua, $req, $debug);
 
     # looks like some requests require two identical calls since
@@ -352,6 +352,7 @@ use LWP::UserAgent;
 
 use vars qw(@ISA);
 @ISA = qw(LWP::UserAgent);
+
 
 #
 # manually check requirements on LWP (libwww-perl) installation
@@ -647,6 +648,7 @@ sub scrapehtml($$$)
 			  Cambodian
 			  Cantonese
 			  Chinese
+			  Colonial
 			  Cree
 			  English
 			  Farsi
@@ -660,10 +662,12 @@ sub scrapehtml($$$)
 			  Inuktitut
 			  Inuvialuktun
 			  Italian
+			  Italianate
 			  Iranian
 			  Japanese
 			  Korean
 			  Mandarin
+			  Mohawk
 			  Oji-Cree
 			  Panjabi
 			  Polish
@@ -1152,8 +1156,15 @@ sub scrapehtml($$$)
 			    }
 
 			    if ( $i=~/^\(/o && $i=~/\)$/o ) {
-				print STDERR "possible candidate for program detail we didn't identify $i\n"
-				  unless $warnedCandidateDetail{$i}++;
+				if ( $i=~/^\(``/o && $i=~/''\)$/o ) {
+				   if ( $self->{Debug} ) {
+				      print STDERR "ignoring what's probably a show reference $i\n";
+				   }
+				}
+				else {
+				   print STDERR "possible candidate for program detail we didn't identify $i\n"
+				       unless $warnedCandidateDetail{$i}++;
+				}
 			    }
 
 			    $success=0;
