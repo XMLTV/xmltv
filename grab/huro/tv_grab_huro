@@ -61,6 +61,8 @@ L<xmltv(5)>.
 =head1 AUTHOR
 
 Attila Szekeres and Zsolt Varga.  Based on tv_grab_fi by Matti Airas.
+Patched by Stefan Siegl <ssiegl@gmx.de>.
+
 Maintained by Ed Avis ed@membled.com.
 
 =head1 BUGS
@@ -395,7 +397,83 @@ sub process_table( $$$$$ ) {
     # parse the page to a document object
     my $tree = HTML::TreeBuilder->new();
     $tree->parse($data);
-    my @program_data = get_program_data($tree);
+
+    my @datatables; 
+    # page consists of two main tables, split by an advertisement
+    # we need to reorder those tables, to grab continued column by column
+    # 
+    # actually we assign to @datatables like this:
+
+    # UPPER MAJOR TABLE:
+    #  0      10    20
+    #  1      11    21
+    #         12
+    #
+    #  <<< the ad >>>
+    # LOWER MAJOR TABLE:
+    #  5      15    25
+    #         16
+    #
+    
+    my $i = 0;
+    my $lasttime = 0;
+    # assign to @datatables in order: 0, 2, 4, 1, 3, 5, etc.
+    foreach my $tab($tree->look_down
+		    ("_tag"=>"table", "cellspacing"=>2)) {
+	# we must ignore the table surrounding all the data, which holds one
+	# sub-table for each day shown, ...
+	next if((($tab->content_list())[0])->look_down("_tag"=>"table"));
+
+	# time is printed in <strong /> tags, require those to skip the
+	# headings - which we don't really care for ...
+	next unless($tab->look_down("_tag"=>"strong"));
+
+	# especially on port.ro there aren't only two tables per day column,
+	# there are even more, split by images, etc.
+	#
+	# why the hell don't they continue the table and put the image
+	# right into a <tr><td> <img> </td></tr>  thingy??
+	#
+	# tsts...
+	#
+
+	# extract the first time specified in this table-piece ...
+	$tab->as_text() =~ m/([012][0-9]):([0-5][0-9])/
+	    or die "unable to parse returned html page";
+	my $time = $1 * 60 + $2;
+	$time += 24 * 60 if($time < 6 * 60 && ($i % 10 > 4));
+
+	#print "this: $time, last: $lasttime ...\n";
+
+	if($time < $lasttime) {
+	    # this table is in the same major table, but in the next column
+	    # since it's first time is before the last time of the prev. tab.
+	    $i = $i - ($i % 5) + 10;
+	}
+
+	if($time >= 20 * 60 && ($i % 10 < 5)) {
+	    # first time time's at least 20 o'clock => lower table
+	    $i = 5;
+	}
+
+
+	# lookup last time in this minor table ... (as base for comparing)
+	$tab->as_text() =~ m/.*([012][0-9]):([0-5][0-9])/
+	    or die "unable to parse returned html page";
+	$lasttime = $1 * 60 + $2;
+	$lasttime += 24 * 60 if($lasttime < 6 * 60 && ($i % 10 > 4));
+
+	
+	#print "assigning datatables entry ", $i, ".\n"; 
+	#$tab->dump();
+	$datatables[$i++] = $tab;
+    }
+
+    my @program_data;
+    foreach(@datatables) {
+	push @program_data, get_program_data($_)
+	    if defined;
+    }
 
     if (not @program_data) {
 	warn "no programs found, skipping\n";
