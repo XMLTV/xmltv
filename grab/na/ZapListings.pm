@@ -345,10 +345,13 @@ sub getChannelList($$$)
     my $debug=$self->{Debug};
 
     my $req = POST("http://$self->{httpHost}/system.asp?partner_id=national&zipcode=$self->{GeoCode}",
-		   [btnPreviewYes=>'YES',
+		   [saveProvider=>"See Listings",
+		    zipcode=>"$self->{GeoCode}",
 		    provider=>"$provider",
-		    FormName=>'system.asp']);
-
+		    FormName=>'system.asp',
+		    btnPreviewYes=>'Confirm Channel Lineup',
+		    page_from=>''
+		    ]);
 
     my $res=&doRequest($self->{ua}, $req, $debug);
     if ( !$res->is_success || $res->content()=~m/your session has timed out/i ) {
@@ -639,9 +642,13 @@ sub new
     $self->{httphost}=XMLTV::ZapListings::getHttpHost();
 
     my $req = POST("http://$self->{httphost}/system.asp?partner_id=national&zipcode=$self->{ZipCode}",
-		   [btnPreviewYes=>'YES',
+		   [saveProvider=>"See Listings",
+		    zipcode=>"$self->{ZipCode}",
 		    provider=>"$self->{ProviderID}",
-		    FormName=>'system.asp']);
+		    FormName=>'system.asp',
+		    btnPreviewYes=>'Confirm Channel Lineup',
+		    page_from=>''
+		    ]);
 
     # initialize listings cookies
     my $res=&XMLTV::ZapListings::doRequest($self->{zl}->getUserAgent(), $req, $self->{Debug});
