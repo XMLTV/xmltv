@@ -193,14 +193,14 @@ are present.",
        blurb => 'Tv_grab_nz is the listings grabber for New Zealand.',
        exes => [ 'grab/nz/tv_grab_nz' ],
        prereqs => {},
-       special_prereqs
-       => [ [ sub {
-		  my $p = `python -V 2>&1`;
-		  return undef if not defined $p;
-		  $p =~ /Python (\S+)/ or return undef;
-		  return $1;
-	      },
-	      'Python', '1.5.2' ] ] },
+       special_prereqs =>
+       [ [ sub {
+	       my $p = `python -V 2>&1`;
+	       return undef if not defined $p;
+	       $p =~ /Python (\S+)/ or return undef;
+	       return $1;
+	   },
+	   'Python', '1.5.2' ] ] },
     );
 
 foreach my $info (@opt_components) {
