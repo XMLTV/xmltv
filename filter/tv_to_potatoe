@@ -1,0 +1,180 @@
+#!/usr/bin/perl -w
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2, or (at your option)
+# any later version.
+
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, you can either send email to this
+# program's maintainer or write to: The Free Software Foundation,
+# Inc.; 675 Massachusetts Avenue; Cambridge, MA 02139, USA.
+
+=pod
+
+=head1 NAME
+
+tv_to_potatoe - Convert XMLTV listings to potatoe format.
+
+=head1 SYNOPSIS
+
+tv_to_potatoe [--help] [--outdir PATH] [--lang LANGUAGE] [FILE...]
+
+=head1 DESCRIPTION
+
+Read XMLTV data and output potatoe files to either the current working
+directory or the specified one.
+
+B<--outdir PATH> write to PATH rather than current working directory
+
+B<--lang LANGUAGE> the LANGUAGE you prefer.  This argument may be specified
+multiple times.  If no B<--lang> arguments are provided, German is used
+as the language of choice, followed by English.
+
+=head1 SEE ALSO
+
+L<xmltv(5)>.
+
+=head1 AUTHOR
+
+Stefan Siegl, ssiegl@gmx.de
+
+=cut
+
+use strict;
+use XMLTV::Version '$Id$ ';
+use IO::File;
+use Date::Manip; Date_Init('TZ=UTC');
+use Getopt::Long;
+
+sub lisp_quote( $ );
+sub get_best_name( $$ );
+
+# Use Log::TraceMessages if installed.
+BEGIN {
+    eval { require Log::TraceMessages };
+    if ($@) {
+	*t = sub {};
+	*d = sub { '' };
+    }
+    else {
+	*t = \&Log::TraceMessages::t;
+	*d = \&Log::TraceMessages::d;
+	Log::TraceMessages::check_argv();
+    }
+}
+
+use XMLTV qw(best_name);
+use XMLTV::Summarize qw(summarize);
+use XMLTV::Usage <<END
+$0: Convert XMLTV listings to potatoe format
+usage: $0 [--help] [--outdir PATH] [--lang LANGUAGE] [FILE...]
+END
+;
+
+my @default_langs = ("de", "en");
+my $langs = [];
+my $opt_help = 0;
+my $opt_outdir = ".";
+
+GetOptions('help' => \$opt_help,
+	   'outdir=s' => \$opt_outdir,
+	   'lang=s' => \@$langs
+	  ) or usage(0);
+
+usage(1) if $opt_help;
+
+# use default languages unless at least one was specified by the user
+push @$langs, @default_langs unless(@$langs);
+
+@ARGV = ('-') if not @ARGV;
+my ($encoding, $credits, $ch, $progs) = @{XMLTV::parsefiles(@ARGV)};
+
+my %channels;
+$channels{$_->{q(id)}} = get_best_name($_, "display-name")
+    foreach(values %$ch);
+
+my %split_by_date;
+foreach(@$progs) {
+    push @{$split_by_date{substr($_->{q(start)}, 0, 8)}}, $_;
+}
+
+foreach my $date (keys(%split_by_date)) {
+    my ($year, $month, $day) = $date =~ m/([12]...)(..)(..)/;
+    my $filename = $opt_outdir . "/tv-$year-$month-$day";
+
+    open HANDLE, ">$filename" or
+	die "cannot open file '$filename' for writing";
+
+    # write out the header
+    print HANDLE ";;; -*- lisp -*-\n\n(\n";
+
+    foreach(@{$split_by_date{$date}}) {
+	print HANDLE "[";
+	print HANDLE "$year $month $day ";
+
+	# category
+	my $category = get_best_name($_, "category");
+	if(defined($category)) {
+	    print HANDLE lisp_quote($category), " ";
+	}
+	else { print HANDLE "\"\" "; } # write empty "" to keep potatoe.el
+	                               # from writing out 'nil' as category.
+	                               # sorry for the hack ;-)
+
+	print HANDLE substr($_->{q(start)},  8, 2), " ";  # hour
+	print HANDLE substr($_->{q(start)}, 10, 2), " ";  # minute
+
+	print HANDLE lisp_quote(get_best_name($_, "title")), " ";
+	print HANDLE lisp_quote(undef), " "; # url
+	print HANDLE lisp_quote($channels{$_->{q(channel)}}), " ";
+	print HANDLE lisp_quote($_->{q(showview)}), " ";
+
+	# vps start time in 'hh:mm' format (I suppose)
+	if(defined $_->{q(vps-start)}) {
+	    print HANDLE substr($_->{q(vps-start)},  8, 2), ":";  # hour
+	    print HANDLE substr($_->{q(vps-start)}, 10, 2), " ";  # minute
+	} 
+	else {
+	    print HANDLE "() ";
+	}
+
+	# what shall we write out as 'aux'?
+	# please vote what you'd like to have here ;)
+	print HANDLE lisp_quote(get_best_name($_, "desc"));
+
+	# finish line
+	print HANDLE "]\n";
+    }
+
+    # finishing file ...
+    print HANDLE ")\n";
+    close HANDLE or die "unable to close file '$filename'";
+}
+
+
+# quote string to be written out into lisp source
+sub lisp_quote( $ ) {
+    my ($str) = @_;
+
+    # return nil if either not defined or zero length ...
+    return "()" unless(defined($str) && length($str));
+
+    $str =~ s/\"/\\\"/g;  # quote!
+    return "\"$str\"";
+}
+
+
+# get the bestname from programme hash in given field
+sub get_best_name( $$ ) {
+    my ($prog, $field) = @_;
+    
+    my $bestname = XMLTV::best_name($langs, $prog->{$field});
+    return undef unless(defined($bestname));
+
+    return $bestname->[0]; # return the value from bestname pair
+}

@@ -107,6 +107,7 @@ my @exes
        filter/tv_sort
        filter/tv_to_latex
        filter/tv_to_text
+       filter/tv_to_potatoe
        filter/tv_cat
        filter/tv_split
        filter/tv_imdb
