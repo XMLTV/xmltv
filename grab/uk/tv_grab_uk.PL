@@ -6,5 +6,5 @@
 #
 # $Id$
 #
-my $in = 'grab/uk/tv_grab_uk.in';
+use vars '$in'; $in = 'grab/uk/tv_grab_uk.in';
 require 'lib/set_share_dir.pl';
