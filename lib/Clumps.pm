@@ -217,7 +217,7 @@ sub fix_clumps( $$$ ) {
 
     my @relatives = @{relatives($rel, $orig)};
     if (not @relatives) {
-	local $Log::TraceMessages::On = 1;
+#	local $Log::TraceMessages::On = 1;
 	t 'programme without relatives: ' . d $orig;
 	warn "programme has clumpidx of $orig->{clumpidx}, but cannot find others in same clump\n";
 	return;
