@@ -19,11 +19,12 @@ use strict;
 # This script scrapes www.clicktv.com, while trying to remain
 # compatible with www.tvguide.ca which shares the same user
 # Profiles, but produces the schedule listings in a slightly
-# different format.
+# different format. Update: tvguide.ca have changed their
+# format and is problem no longer supported.
 # 
 # Clicktv supports both Canadian and US listings.
 #
-my $VersionID="getlistings_na V0.1";
+my $VersionID="getlistings_na V0.2";
 
 # Note: I decided not to cache any program listings html pages like
 #       other xmltv scripts since I'm reading multiple listings and
@@ -51,13 +52,17 @@ my $VersionID="getlistings_na V0.1";
 #     a) verify the text above the date/time selections near the top
 #        of the page reads your location, date/time and timezone
 #        is correct.
-#     b) copy/paste everything in the url following "profileID=" into
-#        the $ServiceID variable below. Note: be sure not to
-#        include 'gDate=' or 'Hour=' settings that may appear at
-#        the end of the url. For instance my test ServiceID is:
-#        'profileID=%247A%247A%248F%2471%248D%248A&WSN=WSERVER20&UserID=%2479%2474%248C%2474%2490%2487'
-
-my $ServiceID="profileID=%247A%247A%248F%2471%248D%248A&WSN=WSERVER20&UserID=%2479%2474%248C%2474%2490%2487";
+#     b) copy/paste the URL into $URL below.  (The example URL
+#        supplied is mine, but you really should change it.)
+#
+my $URL = 'http://www.clicktv.com/listings.asp?CID=TVD&profileID=%247A%247A%248F%2471%248D%248A&WSN=WSERVER24&UserID=%2479%2474%248C%2474%2490%2487';
+my $ServiceID;
+if ($URL =~ /[?&](profileID=.+&UserID=[^&]+)/) {
+    $ServiceID = $1;
+}
+else {
+    die "cannot find profileID and stuff in URL $URL\n";
+}
 
 #
 #     c) If your not interested in the entire days schedule, you
@@ -73,7 +78,7 @@ my $ServiceID="profileID=%247A%247A%248F%2471%248D%248A&WSN=WSERVER20&UserID=%24
 #
 # The number of days included may be set at run-time via the command line.
 #
-my $Days=1;
+my $Days=14;
 
 #
 # Output Hours
@@ -104,10 +109,12 @@ my $Days=1;
 # result in programs appearing more than once if running for more than one
 # day.
 #
+# Warning: endhour > 24 is only useful when you grabbing one day
+#
 # 'start' and 'end' hours may be set at run-time via the command line.
 #
-my $StartHour=15;
-my $EndHour=26;
+my $StartHour=0;
+my $EndHour=24;
 
 #
 # Partial Programs
@@ -157,11 +164,11 @@ my $ExpandedDetailsCacheName="progDetails.db";
 # Currently the only support output format XMLTV.
 # Future version may include html, or csv files...
 #
-# Specify --channels=channels.xml which saves an XMLTV
-# xml description of the channels found.
-
+# By default, a file channels.xml is written which contains data about
+# the channels found, in XMLTV's channels.dtd format.
+#
 my $Format="xmltv";
-my $programsFile="programs-%d%m%Y.xml";
+my $programsFile="";
 my $channelsFile="channels.xml";
 
 #
@@ -186,11 +193,13 @@ sub Usage
     print STDERR "   --programs <file>    specify programs.xml file in xml format\n";
     print STDERR "       <file> may contain Date::Manip::Unix substitutions\n";
     print STDERR "       for instance, use --programs \"prog-%d%m%Y.xml\" to separate output by day.\n";
+    print STDERR "       if no --programs is specified stdout is used\n";
     print STDERR "   --channels <file>    specify channels.xml <file>\n";
-    print STDERR "       <file> follows the same rules as -programs (not sure why)\n";
-    print STDERR "   --startHour x        specify starting hour (see script comments)\n";
-    print STDERR "   --endHour y          specify ending hour (see script comments)\n";
-    print STDERR "   --days n             specify number of days to include in output\n";
+    print STDERR "       <file> follows the similar rules to -programs (not sure why)\n";
+    print STDERR "       default is 'channels.xml', empty string means don't write channels file  \n";
+    print STDERR "   --startHour x        specify starting hour (24 hour clock, default $StartHour)\n";
+    print STDERR "   --endHour y          specify ending hour (can be >24 for next day, default $EndHour)\n";
+    print STDERR "   --days n             specify number of days to include in output (default $Days)\n";
     print STDERR "   --trackQualifiers <path2db> specify the DB_File database to\n";
     print STDERR "                        store unidentified program qualifiers in\n";
     print STDERR "\n";
@@ -204,6 +213,7 @@ if ( ! GetOptions('programs=s', 'channels=s', 'startHour=i', 'endHour=i', 'days=
     Usage();
     exit(1);
 }
+
 $opt_programs=$programsFile if ( !defined($opt_programs) );
 $opt_channels=$channelsFile if ( !defined($opt_channels) );
 $opt_startHour=$StartHour if ( !defined($opt_startHour) );
@@ -217,9 +227,9 @@ if ( defined($opt_dumpQualifiers) ) {
     my %hash;
     tie (%hash, "DB_File", $opt_trackQualifiers, O_RDWR, 0444) || die "$opt_trackQualifiers: $!";
     
-    print "List of identified qualifiers that are not understood:\n";
+    print STDERR "List of identified qualifiers that are not understood:\n";
     foreach my $key (keys %hash) {
-	print "\t$key\n";
+	print STDERR "\t$key\n";
     }
     untie %hash;
     exit(0);
@@ -276,6 +286,23 @@ if ( defined($opt_trackQualifiers) && length($opt_trackQualifiers) ) {
     tie (%undefQualifiers, "DB_File", $opt_trackQualifiers, O_RDWR|O_CREAT) || die "$opt_trackQualifiers: $!";
 }
 
+# initalize global XML::Writer if we're writting to stdout
+my $writer_g;
+
+if ( !length($opt_programs) ) {
+    print STDERR "writing Programs to stdout\n";
+    $writer_g = new XML::Writer(DATA_MODE => 1, DATA_INDENT => 2 );
+
+    $writer_g->xmlDecl("ISO-8859-1", "1.0");
+    $writer_g->doctype('tv', undef, 'xmltv.dtd');
+    $writer_g->startTag('tv',
+		      date=>&Date::Manip::UnixDate("now","%T on %b %e, %Y"),
+		      source=>"$SourceHost",
+		      author=>"$VersionID");
+
+
+}
+
 # special case if you want all the listings for multiple days
 # if so, we grab and resolve "spanning" programs in the listings by
 # requesting multiple days in one call
@@ -297,6 +324,7 @@ if ( $opt_startHour == 0 && $opt_endHour == 24 ) {
   Date::Manip::Date_SetConfigVariable('TZ', $lg->{TimeZone});
   Date::Manip::Date_Init();
 
+    updateChannelIds($lg);
     writeOutChannels($lg);
     writeOutPrograms($lg);
 }
@@ -318,6 +346,7 @@ else {
       Date::Manip::Date_SetConfigVariable('TZ', $lg->{TimeZone});
       Date::Manip::Date_Init();
 	
+	updateChannelIds($lg);
 	writeOutChannels($lg);
 	writeOutPrograms($lg);
     }
@@ -325,10 +354,32 @@ else {
 if ( defined($opt_trackQualifiers) && length($opt_trackQualifiers) ) { 
     untie(%undefQualifiers);
 }
+
+if ( defined($writer_g) ) {
+    $writer_g->endTag('tv');
+    $writer_g->end();
+}
+
 exit(0);
 
 use XML::Writer;
 use IO;
+
+sub updateChannelIds
+{
+    my ($lg)=@_;
+
+    my @Channels=$lg->getChannelList();
+    for (my $chindex=0 ; $chindex< scalar(@Channels) ; $chindex++) {
+	my $channel=$Channels[$chindex];
+	if ( defined($channel->{localStation}) ) {
+	    $channel->{xml_id}="$channel->{number} $channel->{localStation}";
+	}
+	else {
+	    $channel->{xml_id}=$channel->{number};
+	}
+    }
+}
 
 # write the channels in xml format
 sub writeOutChannels
@@ -337,7 +388,11 @@ sub writeOutChannels
 
     my $filename=&Date::Manip::UnixDate($lg->getProgramStartTime(),"$opt_channels");
 
-    print "writing Channels to $filename\n";
+    if ( $filename eq "" ) {
+	return;
+    }
+
+    print STDERR "writing Channels to $filename\n";
     my $output = new IO::File("> $filename") || die "$filename: $!";
 
     my $writer = new XML::Writer(OUTPUT=>$output, DATA_MODE => 1, DATA_INDENT => 2 );
@@ -358,20 +413,13 @@ sub writeOutChannels
     my @Channels=$lg->getChannelList();
     for (my $chindex=0 ; $chindex< scalar(@Channels) ; $chindex++) {
 	my $channel=$Channels[$chindex];
-	my $chId;
-	if ( defined($channel->{localStation}) ) {
-	    $chId="$channel->{number} $channel->{localStation}";
-	}
-	else {
-	    $chId="$channel->{number}"; 
-	}
-	$writer->startTag('channel', id=> $chId);
-	$channel->{xml_id}=$chId;
+	$writer->startTag('channel', id=> $channel->{xml_id});
+
 	if ( defined($channel->{affiliate}) ) {
-	    $writer->dataElement('display-name', "Channel $chId ($channel->{affiliate})");
+	    $writer->dataElement('display-name', "Channel $channel->{xml_id} ($channel->{affiliate})");
 	}
 	else {
-	    $writer->dataElement('display-name', "Channel $chId");
+	    $writer->dataElement('display-name', "Channel $channel->{xml_id}");
 	}
 	# not supported as of yet
 	#$writer->dataElement('url', $channel->{url}) if ( defined($channel->{url}) );
@@ -386,19 +434,35 @@ sub writeOutPrograms
 {
     my ($lg)=@_;
 
-    my $filename=&Date::Manip::UnixDate($lg->getProgramStartTime(),"$opt_programs");
+    my $output;
+    my $writer;
 
-    print "writing Programs to $filename\n";
-    my $output = new IO::File("> $filename") || die "$filename: $!";
+    if ( defined($writer_g) ) {
+	$writer=$writer_g;
+    }
+    else {
+	my $filename=&Date::Manip::UnixDate($lg->getProgramStartTime(),"$opt_programs");
+	if ( $opt_programs eq $filename ) {
+	    die <<END
+Trying to get multiple days as seperate files, but you didn\'t give a
+filename containing any magic date(1) style specifiers.  I need to
+generate a new filename for each day based on the date.  Try giving
+an argument to --programs which contains '%Q'.
+END
+  ;
+	}
 
-    my $writer = new XML::Writer(OUTPUT=>$output, DATA_MODE => 1, DATA_INDENT => 2 );
+	print STDERR "writing Programs to $filename\n";
+	$output = new IO::File("> $filename") || die "$filename: $!";
+	$writer = new XML::Writer(OUTPUT=>$output, DATA_MODE => 1, DATA_INDENT => 2 );
 
-    $writer->xmlDecl("ISO-8859-1", "1.0");
-    $writer->doctype('tv', undef, 'xmltv.dtd');
-    $writer->startTag('tv',
-		      date=>&Date::Manip::UnixDate("now","%T on %b %e, %Y"),
-		      source=>"$SourceHost",
-		      author=>"$VersionID");
+	$writer->xmlDecl("ISO-8859-1", "1.0");
+	$writer->doctype('tv', undef, 'xmltv.dtd');
+	$writer->startTag('tv',
+			  date=>&Date::Manip::UnixDate("now","%T on %b %e, %Y"),
+			  source=>"$SourceHost",
+			  author=>"$VersionID");
+    }
 
     my @Channels=$lg->getChannelList();
     for (my $chindex=0 ; $chindex< scalar(@Channels) ; $chindex++) {
@@ -450,6 +514,10 @@ sub writeOutPrograms
 	    # hunt for things in the "qualifiers bucket" where alot of things fall.
 	    if ( defined($prog->{qualifiers}) ) {
 		if ( defined($prog->{qualifiers}->{PaidProgram}) ) {
+		    # FIXME I don't that payment counts as a
+		    # 'category'.  Though there should probably be
+		    # some way to include it.  -- epa98@doc.ic.ac.uk
+		    # 
 		    $writer->dataElement('category', "PaidProgram");
 		}
 		if ( defined($prog->{qualifiers}->{Language}) ) {
@@ -459,20 +527,6 @@ sub writeOutPrograms
 		    else {
 			$writer->dataElement('language', $prog->{qualifiers}->{Language});
 		    }
-		}
-		
-		if ( defined($prog->{qualifiers}->{PremiereShowing}) ) {
-		    $writer->dataElement('premiere',$prog->{qualifiers}->{PremiereShowing});
-		}
-		if ( defined($prog->{qualifiers}->{LastShowing}) ) {
-		    $writer->dataElement('last-chance',$prog->{qualifiers}->{LastShowing});
-		}
-
-		if ( defined($prog->{qualifiers}->{Subtitles}) ) {
-		    $writer->dataElement('subtitles', '', 'type' => "onscreen");
-		}
-		elsif ( defined($prog->{qualifiers}->{ClosedCaptioned}) ) {
-		    $writer->dataElement('subtitles', '', 'type' => "teletext");
 		}
 		
 		if ( defined($prog->{qualifiers}->{Taped}) ) {
@@ -494,15 +548,28 @@ sub writeOutPrograms
 		if ( defined($prog->{qualifiers}->{HDTV}) ) {
 		    # nowhere to put this 
 		}
+		if ( defined($prog->{qualifiers}->{BlackAndWhite}) ) {
+		    $writer->startTag('video');
+		    $writer->dataElement('colour', 'no');
+		    $writer->endTag('video');
+		}
 		if ( defined($prog->{qualifiers}->{InStereo}) ) {
 		    $writer->startTag('audio');
 		    $writer->dataElement('stereo', '');
 		    $writer->endTag('audio');
 		}
-		if ( defined($prog->{qualifiers}->{BlackAndWhite}) ) {
-		    $writer->startTag('video');
-		    $writer->dataElement('colour', 'no');
-		    $writer->endTag('video');
+		if ( defined($prog->{qualifiers}->{PremiereShowing}) ) {
+		    $writer->dataElement('premiere',$prog->{qualifiers}->{PremiereShowing});
+		}
+		if ( defined($prog->{qualifiers}->{LastShowing}) ) {
+		    $writer->dataElement('last-chance',$prog->{qualifiers}->{LastShowing});
+		}
+
+		if ( defined($prog->{qualifiers}->{Subtitles}) ) {
+		    $writer->dataElement('subtitles', '', 'type' => "onscreen");
+		}
+		elsif ( defined($prog->{qualifiers}->{ClosedCaptioned}) ) {
+		    $writer->dataElement('subtitles', '', 'type' => "teletext");
 		}
 	    }
 	    if ( defined($prog->{ratings_VCHIP}) ) {
@@ -531,9 +598,12 @@ sub writeOutPrograms
 	    $writer->endTag('programme');
 	}
     }
-    $writer->endTag('tv');
-    $writer->end();
-    $output->close();
+    if ( $writer != $writer_g ) {
+	$writer->endTag('tv');
+	$writer->end();
+    }
+
+    $output->close() if ( defined($output) );
 }
 
 

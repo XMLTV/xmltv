@@ -1,0 +1,143 @@
+#!/usr/bin/perl -w
+use strict;
+my $opt_noprefs = 0;
+if (@ARGV) {
+    if ($ARGV[0] eq '--noprefs') {
+	$opt_noprefs = 1;
+	shift @ARGV;
+    }
+    else {
+	die "usage: $0 [--noprefs]";
+    }
+}
+
+my %type_scores = (never  => -2,
+		   no     => -1,
+		   yes    =>  1,
+		   always =>  2);
+my (%pos_points, %neg_points);
+my ($total_pos, $total_neg);
+while (<>) {
+    s/^\s+//; s/\s+$//;
+    s/\#.*//;
+    next unless /\S/;
+    s/^(\w+):\s*//;
+
+    unless ($opt_noprefs) {
+	my $type = $1; die if not defined $type;
+	my $score = $type_scores{$type};
+	if (not defined $score) {
+	    die "$ARGV:$.: unknown type $type";
+	}
+	while (s/(\w+)//) {
+	    my $word = lc $1;
+	    if ($score > 0) {
+		$pos_points{$word} += $score;
+		# Add zero just to make sure the entry gets there.  So
+		# no undefined value warnings later on.
+		# 
+		$neg_points{$word} += 0;
+		$total_pos += $score;
+	    }
+	    elsif ($score < 0) {
+		$neg_points{$word} += -$score;
+		$pos_points{$word} += 0;
+		$total_neg += -$score;
+	    }
+	}
+    }
+    else {
+	while (s/(\w+)//) {
+	    my $word = lc $1;
+	    ++ $pos_points{$word};
+	    $neg_points{$word} = 0;
+	    ++ $total_pos;
+	    $total_neg = 0;
+	}
+    }
+
+}
+
+# Normalize - first, if we are doing preferences, by rebalancing
+# positive and negative scores.  (Normally, there will be many more
+# 'never' programmes than any other kind, so without normalizing
+# there'd be huge negative scores and a few small positive ones.)
+# 
+unless ($opt_noprefs) {
+    if ($total_pos == 0) {
+	die "no programmes at all had a positive score\n";
+    }
+    elsif ($total_neg == 0) {
+	die "no programmes at all had a negative score\n";
+    }
+    my $norm_factor = $total_neg / $total_pos;
+    foreach (keys %pos_points) {
+	$pos_points{$_} *= $norm_factor;
+    }
+}
+
+# Now we've got +ve and -ve on the same sort of scale, we can add them
+# to get an overall score for each word.
+# 
+my %score;
+foreach (keys %pos_points) {
+    $score{$_} = $pos_points{$_} - $neg_points{$_};
+}
+
+# Now divide by the total number of points allocated, so we get
+# reasonably similar-sized numbers no matter how large or small the
+# prefs file.
+# 
+# Finally, divide each word's score by its frequency in English: so we
+# don't end up with a big negative score for 'the', outweighing
+# everything else, for example.
+# 
+my $total = $total_pos + $total_neg;
+foreach (keys %score) {
+    $score{$_} /= $total;
+    $score{$_} /= word_freq($_);
+}
+
+foreach (sort { $score{$a} <=> $score{$b} || $a cmp $b } keys %score) {
+    printf "%s:\t%.3g\n", $_, $score{$_};
+}
+
+# Given a word, return its frequency in English.  We have a file of
+# the top 3000; we assume that these are the only words in English,
+# but that lower-ranking words all have the same frequency as the
+# 3000th.  (Nobody is checking whether the frequencies add up to 1.)
+# 
+# The file is distilled from the 1996 version of the British National
+# Corpus; I got it from
+# <http://www.invisiblelighthouse.com/langlab/bncfreq.html>.
+# 
+my %bnc_freq;
+my $default_freq;
+sub word_freq {
+    my $w = shift;
+    if (not defined $default_freq) {
+	open(BNC_FREQ, 'bnc_freq.txt') or die "cannot open bnc_freq.txt: $!";
+	my $total = 0;
+	while (<BNC_FREQ>) {
+	    chomp; s/\r$//; next unless /\S/;
+	    my @F = split; die "bnc_freq.txt:$.: bad line" if @F != 3;
+	    # Add to existing entry, if it exists, since we aren't
+	    # interested in parts of speech distinctions.
+	    # 
+	    $bnc_freq{$F[0]} += $F[1];
+	    $total += $F[1];
+	}
+	die "no frequencies found in bnc_freq.txt" if $total == 0;
+	my $least;
+	foreach (keys %bnc_freq) {
+	    $bnc_freq{$_} /= $total;
+	    if (not defined $least or $least > $bnc_freq{$_}) {
+		$least = $bnc_freq{$_};
+	    }
+	}
+	$default_freq = $least;
+    }
+
+    defined $bnc_freq{$w} && return $bnc_freq{$w};
+    return $default_freq;
+}

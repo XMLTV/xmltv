@@ -14,7 +14,35 @@ foreach (qw/parse_uk_date date_to_uk
   }
 
 use base 'Exporter'; use vars '@EXPORT';
-@EXPORT = qw(read_programmes write_programmes write_programme);
+@EXPORT = qw(read_programmes write_programmes write_programme
+	     read_credits
+	     read_channels write_channels);
+
+
+# Private.
+sub node_to_programme($) {
+    my $node = shift;
+    my %programme;
+    
+    foreach (qw<start stop channel>) {
+	my $v = $node->getAttribute($_);
+	$programme{$_} = $v unless $v eq '';
+    }
+    
+    my @titles = ();
+    foreach ($node->getElementsByTagName('title', 0)) {
+	push @titles, $_->getFirstChild()->getData();
+    }
+    $programme{title} = \@titles;
+    
+    my @sub_titles = ();
+    foreach ($node->getElementsByTagName('sub-title', 0)) {
+	push @sub_titles, $_->getFirstChild()->getData();
+    }
+    $programme{sub_title} = \@sub_titles;
+    
+    return \%programme;
+}
 
 
 # read_programmes()
@@ -25,6 +53,8 @@ use base 'Exporter'; use vars '@EXPORT';
 # Parameter: filename to read from
 # Returns: ref to list of hashes with start, titles, etc.
 # 
+# NOTE: this isn't finished yet, it doesn't read all the information.
+# 
 sub read_programmes($) {
     my $p = new XML::DOM::Parser;
     my $doc = $p->parsefile(shift);
@@ -34,28 +64,28 @@ sub read_programmes($) {
     my @programmes = ();
     for (my $i = 0; $i < $n; $i++) {
 	my $node = $nodes->item($i);
-	my %programme;
-	
-	foreach (qw<start stop channel>) {
-	    my $v = $node->getAttribute($_);
-	    $programme{$_} = $v unless $v eq '';
-	}
-	
-	my @titles = ();
-	foreach ($node->getElementsByTagName('title', 0)) {
-	    push @titles, $_->getFirstChild()->getData();
-	}
-	$programme{title} = \@titles;
-	
-	my @sub_titles = ();
-	foreach ($node->getElementsByTagName('sub-title', 0)) {
-	    push @sub_titles, $_->getFirstChild()->getData();
-	}
-	$programme{sub_title} = \@sub_titles;
-	
-	push @programmes, \%programme;
+	push @programmes, node_to_programme($node);
     }
     return \@programmes;
+}
+
+
+# read_credits()
+# 
+# Get the source and other info from an XMLTV file.
+# 
+# Parameter: filename to read from
+# Returns: attributes of <tv> element (key => value)
+# 
+sub read_credits($) {
+    my @attrs;
+    my $p = new XML::Parser(Handlers => { Start => sub {
+				     if ($_[1] eq 'tv') {
+					 push @attrs, @_[2 .. $#_];
+				     }
+				 } });
+    $p->parsefile(shift);
+    return @attrs;
 }
 
 
@@ -143,10 +173,6 @@ sub write_programme($$) {
 	{
 	    next unless defined $val->{$_};
 	    my @people = @{delete $val->{$_}};
-	    if ($_ eq 'director' and @people > 1) {
-		die "more than one director"; # not allowed by DTD
-	    }
-
 	    foreach my $person (@people) {
 		die if not defined $person;
 		$w->dataElement($_, $person);
@@ -205,8 +231,12 @@ sub write_programme($$) {
 	$w->endTag('video');
     }
 
+    # Old-style {stereo} hash element.  Now we use $p{audio}{present}
+    # and $p{audio}{stereo}, which better reflect the DTD.
+    # 
     if (delete $p{stereo}) {
-	t "'audio' element (stereo)";
+	warn "deprecated {stereo} hash element";
+	t "'audio' element (stereo) - deprecated";
 	$w->startTag('audio');
 	# I should use the emptyTag() method, but my nsgmls doesn't
 	# like that, even when I give it the -wxml option.  So we
@@ -220,6 +250,39 @@ sub write_programme($$) {
 	# Well, we could explicitly say that it's mono, but why
 	# bother?  (Or maybe there is no sound at all...)
 	# 
+    }
+
+    if (defined(my $audio = delete $p{audio})) {
+	t "'audio' element: " . d $audio;
+	$w->startTag('audio');
+	if (defined(my $val = delete $audio->{present})) {
+	    if ($val) {
+		$w->emptyTag('present');
+		if (defined(my $val = delete $audio->{stereo})) {
+		    if ($val eq 'mono') {
+			$w->dataElement('stereo', 'mono');
+		    }
+		    elsif ($val eq 'stereo') {
+			$w->dataElement('stereo', 'stereo');
+		    }
+		    elsif ($val eq 'surround') {
+			$w->dataElement('stereo', 'surround');
+		    }
+		    else {
+			warn "bad value for 'stereo': $val";
+		    }
+		}
+	    }
+	    else {
+		# Not present makes it meaningless to have anything
+		# else like stereo.
+		# 
+	    }
+	}
+	foreach (keys %$audio) {
+	    warn "unused key in 'audio' hash: $_";
+	}
+	$w->endTag('audio');
     }
 
     if (delete $p{previously_shown}) {
@@ -263,4 +326,83 @@ sub write_programme($$) {
     }
 }
 
+
+# read_channels()
+# 
+# Read the channels.xml file and return a list of channel
+# information.
+# 
+# Returns: hashref looking like:
+#   { 'radio-4.bbc.co.uk' => [ [ 'en',  'BBC Radio 4' ],
+#                              [ 'en',  'Radio 4'     ],
+#                              [ undef, '4'           ] ] }
+# 
+# in other words mapping channel ID to a list of [ language, pretty
+# name ] pairs.
+# 
+sub read_channels() {
+    print STDERR "reading channels.xml\n";
+    my $p = new XML::DOM::Parser;
+    my $doc = $p->parsefile('channels.xml');
+    if (not defined $doc) {
+	die "couldn't read channels.xml: $!";
+    }
+    my $nodes = $doc->getElementsByTagName('channel');
+    my $n = $nodes->getLength();
+
+    my %channels;
+    for (my $i = 0; $i < $n; $i++) {
+	my $node = $nodes->item($i);
+	my $id = $node->getAttribute('id');
+	my @display_names = ();
+	foreach ($node->getElementsByTagName('display-name', 0)) {
+	    my $lang = $_->getAttribute('lang');
+	    undef $lang if $lang eq '';
+	    my $name = $_->getFirstChild()->getData();
+	    push @display_names, [ $lang, $name ];
+	}
+	warn "channel with id $id seen twice"
+	  if defined $channels{$id};
+	$channels{$id} = \@display_names;
+    }
+    return \%channels;
+}
+
+
+# write_channels()
+# 
+# Write channels data as channels.dtd XML to file 'channels.xml'.
+# 
+# Parameter: channels data hashref
+# 
+sub write_channels($) {
+    my $channels = shift;
+
+    my $fh = new IO::File '>channels.xml'
+      or die "cannot write to channels.xml: $!";
+    my $w = new XML::Writer(OUTPUT      => $fh,
+			    DATA_MODE   => 1,
+			    DATA_INDENT => 2 );
+    $w->xmlDecl();
+    { local $^W = 0; $w->doctype('channels', undef, 'channels.dtd') }
+    $w->startTag('channels');
+    foreach (sort keys %$channels) {
+	my $id = $_;
+	my $names = $channels->{$_};
+	if (not @$names) {
+	    warn "channel $id has no display names, not writing";
+	    next;
+	}
+	$w->startTag('channel', id => $id);
+	foreach (@$names) {
+	    my ($lang, $text) = @$_;
+	    my %attrs;
+	    $attrs{lang} = $lang if defined $lang;
+	    $w->dataElement('display-name', $text, %attrs);
+	}
+	$w->endTag('channel');
+    }
+    $w->endTag('channels');
+    print STDERR "wrote channels.xml\n";
+}
 1;

@@ -57,11 +57,19 @@ use vars qw(@ISA $infield $inrecord $intable $nextTableIsIt);
 require HTML::Parser;
 use Dumpvalue;
 
-my $dumper = new Dumpvalue;
-$dumper->veryCompact(1);
-
 my $debug=0;
 my $verify=0;
+
+sub dumpMe($)
+{
+    require Data::Dumper;
+    my $s = $_[0];
+    my $d = Data::Dumper::Dumper($s);
+    $d =~ s/^\$VAR1 =\s*//;
+    $d =~ s/;$//;
+    chomp $d;
+    return $d;
+}
 
 sub start()
 {
@@ -107,9 +115,9 @@ sub start()
 
     }
     if ( $debug>1 && $intable ) {
-	print "start: ($tag, ";
-	$dumper->dumpValue($attr);
-	print ")\n";
+	print STDERR "start: ($tag, ";
+	dumpMe($attr);
+	print STDERR ")\n";
     }
 
 }
@@ -132,14 +140,14 @@ sub massageText
 {
     my ($text) = @_;
 
-    #print "MASSAGE:\"$text\"\n";
+    #print STDERR "MASSAGE:\"$text\"\n";
     $text=~s/&nbsp;/ /og;
     #$text=~s/&#0//og;
     $text=HTML::Entities::decode($text);
     $text=~s/^\s+//o;
     $text=~s/\s+$//o;
     $text=~s/\s+/ /o;
-    #print "MASSAGE:'$text'\n";
+    #print STDERR "MASSAGE:'$text'\n";
     return($text);
 }
 
@@ -154,7 +162,7 @@ sub evaluateDetails
     my ($undefQualifiers, $result, @parenlist)=@_;
 
     for my $info (@parenlist) {
-	print "Working on details: $info\n" if ( $debug );
+	print STDERR "Working on details: $info\n" if ( $debug );
 
 	# special cases, if Info starts with Director, its a list.
 	if ( $info=~s/^Director: //oi ) {
@@ -186,7 +194,7 @@ sub evaluateDetails
 
 	    $i=~s/^\s+//og;
 	    $i=~s/\s+$//og;
-	    print "\t checking detail: $i\n" if ( $debug > 2 );
+	    print STDERR "\t checking detail: $i\n" if ( $debug > 2 );
 	
 	    #
 	    # www.tvguidelines.org and http://www.fcc.gov/vchip/
@@ -395,7 +403,7 @@ sub evaluateDetails
 	    }
 
 	    if ( defined($i) && length($i) ) {
-		print "Failed to decode info: \"$i\"\n" if ( $debug );
+		print STDERR "Failed to decode info: \"$i\"\n" if ( $debug );
 		push(@unmatched, $i);
 	    }
 	}
@@ -405,7 +413,7 @@ sub evaluateDetails
 	    if ( $matches == 0 ) {
 		# assume anything else is a list of actors or something to complain about
 		if ( !defined($result->{prog_actors}) || scalar(@{$result->{prog_actors}}) == 0 ) {
-		    #print "Actors ?: ". join(",", @unmatched)."\n";
+		    #print STDERR "Actors ?: ". join(",", @unmatched)."\n";
 		    push(@{$result->{prog_actors}}, @unmatched);
 		}
 		else {
@@ -420,14 +428,14 @@ sub evaluateDetails
 		    }
 		    else {
 			if ( $found != 0 ) {
-			    print "undefined qualifier(s) (or actor list may be corrupt) $info\n";
+			    print STDERR "undefined qualifier(s) (or actor list may be corrupt) $info\n";
 			}
 			else {
 			    # add unfound keywords to the list of known undefined keywords.
 			    for my $k (@unmatched) {
 				if ( !defined($undefQualifiers->{$k}) ) {
 				    $undefQualifiers->{$k}=1;
- 				    print "adding unidentified qualifier \"$k\" to filter list\n";
+ 				    print STDERR "adding unidentified qualifier \"$k\" to filter list\n";
 				}
 				else {
 				    $undefQualifiers->{$k}++;
@@ -443,7 +451,7 @@ sub evaluateDetails
 		for my $k (@unmatched) {
 		    if ( ! defined($undefQualifiers->{$k}) ) {
 			$undefQualifiers->{$k}=1;
-			print "adding unidentified qualifier \"$k\" to filter list\n";
+			print STDERR "adding unidentified qualifier \"$k\" to filter list\n";
 		    }
 		    else {
 			$undefQualifiers->{$k}++;
@@ -461,7 +469,7 @@ sub endField
     my ($self) = @_;
     my $result;
     
-    #print "push field: \n";
+    #print STDERR "push field: \n";
 
     my $column=0;
 
@@ -479,8 +487,8 @@ sub endField
     if ( $debug ) {
 	my $count=0;
 	foreach my $entry (@thgs) {
-	    print "\tPRE $count"; $count++;
-	    $dumper->dumpValue($entry);
+	    print STDERR "\tPRE $count"; $count++;
+	    dumpMe($entry);
 	}
     }
 
@@ -527,11 +535,11 @@ sub endField
 		}
 	    }
 	    if ( keys (%{$e}) != $understood ) {
-		print "understood $understood, out of ".keys (%{$e}) ." keys of:";
-		$dumper->dumpValue($e);
+		print STDERR "understood $understood, out of ".keys (%{$e}) ." keys of:";
+		dumpMe($e);
 	    }
 	}
-	print "PROG SYNTAX: $str\n";
+	print STDERR "PROG SYNTAX: $str\n";
     }
 
     # cells always start with 'td' and end in 'td'
@@ -561,7 +569,7 @@ sub endField
 		    else {
 			die "found prev line without <a></a> around";
 		    }
-		    #print "entry was cont from prior listing\n";
+		    #print STDERR "entry was cont from prior listing\n";
 		    $result->{contFromPreviousListing}=1;
 		    
 		    # start again
@@ -577,7 +585,7 @@ sub endField
 		    else {
 			die "failed to find time <text> tag for previous start time";
 		    }
-		    #print "entry was cont to next listing\n";
+		    #print STDERR "entry was cont to next listing\n";
 		    $result->{contToNextListing}=1;
 		    
 		    # start again
@@ -604,7 +612,7 @@ sub endField
 		next;
 	    }
 	    print STDERR "img link defined without src definition $e ".$thg."\n";
-	    $dumper->dumpValue($thg);
+	    dumpMe($thg);
 	    exit(1);
 	}
 	
@@ -709,11 +717,11 @@ sub endField
 		}
 	    }
 	    if ( keys (%{$e}) != $understood ) {
-		print "understood $understood, out of ".keys (%{$e}) ." keys of:";
-		$dumper->dumpValue($e);
+		print STDERR "understood $understood, out of ".keys (%{$e}) ." keys of:";
+		dumpMe($e);
 	    }
 	}
-	print "PROG2 SYNTAX: $str\n";
+	print STDERR "PROG2 SYNTAX: $str\n";
     }
 
     my $count=0;
@@ -721,16 +729,16 @@ sub endField
     my @textSections;
     for ($count=0 ; $count<scalar(@thgs) ; $count++ ) {
 	my $entry=$thgs[$count];
-	if ( $debug > 1) { print "\tNUM $count"; $dumper->dumpValue($entry); }
+	if ( $debug > 1) { print STDERR "\tNUM $count"; dumpMe($entry); }
 
-	#print "entry is a ". $entry ."\n";
-	#print "entry start is a ". $entry->{starttag} ."\n" if ( defined($entry->{starttag}) );
+	#print STDERR "entry is a ". $entry ."\n";
+	#print STDERR "entry start is a ". $entry->{starttag} ."\n" if ( defined($entry->{starttag}) );
 
 	if ( defined($entry->{starttag}) ) {
 	    my $tag=$entry->{starttag};
 	    my $attr=$entry->{attr};
 
-	    #print "tag is a ". $tag ."\n";
+	    #print STDERR "tag is a ". $tag ."\n";
 
 	    if ( $tag eq "td" || $tag eq "th" ) {
 		if ( !defined($result->{fieldtag}) ) {
@@ -768,7 +776,7 @@ sub endField
 		# ignore comments
 	    }
 	    else {
-		print "ignoring start tag: $tag\n";
+		print STDERR "ignoring start tag: $tag\n";
 	    }
 	}
 	elsif ( defined($entry->{endtag}) ) {
@@ -796,14 +804,14 @@ sub endField
 		# ignore comments
 	    }
 	    else {
-		print "ignoring end tag: $tag\n";
+		print STDERR "ignoring end tag: $tag\n";
 	    }
 	}
 	elsif ( defined($entry->{text}) ) {
 		$textSections[$startEndTagCount].=$entry->{text};
 	}
 	else {
-	    print "undefined thing:$count:"; $dumper->dumpValue($entry);
+	    print STDERR "undefined thing:$count:"; dumpMe($entry);
 	    die "undefined thing";
 	}
     }
@@ -825,7 +833,7 @@ sub endField
 	    $result->{prog_details}=massageText($text);
 	}
 	else {
-	    print "don't have a place for extra text section '$text'\n";
+	    print STDERR "don't have a place for extra text section '$text'\n";
 	}
     }
 
@@ -849,10 +857,10 @@ sub endField
     push(@{$self->{Row}}, $result);
 
     if ( $debug ) {
-	print "READ FIELD (col $column):"; $dumper->dumpValue($result);
+	print STDERR "READ FIELD (col $column):"; dumpMe($result);
     }
 
-    #print "push field: $self->{Field}->{text} ($self->{Field}->{tag}, $self->{Field}->{colspan})\n";
+    #print STDERR "push field: $self->{Field}->{text} ($self->{Field}->{tag}, $self->{Field}->{colspan})\n";
     undef($self->{Field});
 }
 
@@ -902,8 +910,18 @@ package ClickListings;
 #
 
 use strict;
-use Data::Dumper;
 use LWP::Simple;
+
+sub dumpMe($)
+{
+    require Data::Dumper;
+    my $s = $_[0];
+    my $d = Data::Dumper::Dumper($s);
+    $d =~ s/^\$VAR1 =\s*//;
+    $d =~ s/;$//;
+    chomp $d;
+    return $d;
+}
 
 sub new {
     my($type) = shift;
@@ -1070,7 +1088,7 @@ sub readSchedule
 	    my ($year,$month,$day,$hr,$min,$sec)=Date::Manip::Date_NthDayOfYear($nyear, $nday);
 
 	    my $url=$self->getListingURL($hour, $day, $month, $year);
-	    print "retrieving hour $hour of $month/$day/$year..\n";
+	    printf STDERR "retrieving hour $hour of %4d-%02d-%02d...\n", $year, $month, $day;
 	    
 	    my $tbl = new ClickListings::ParseTable();
 	    $tbl->{undefQualifiers}=$self->{undefQualifiers};
@@ -1082,8 +1100,8 @@ sub readSchedule
 		return(0);
 	    }
 	    else {
-		print "\tread ".length($urldata). " bytes of html\n" if ( $debug );
-		print "urldata:\n'$urldata'\n" if ( $debug>1 );
+		print STDERR "\tread ".length($urldata). " bytes of html\n" if ( $debug );
+		print STDERR "urldata:\n'$urldata'\n" if ( $debug>1 );
 	    }
 
 	    # first listing, scrape for number of hours per page
@@ -1124,7 +1142,7 @@ sub readSchedule
 		print STDERR "user selected $self->{TimeZone} as his time zone\n" if ( $debug );
 	    }
 
-	    print "parsing ..\n" if ($debug);
+	    print STDERR "parsing ..\n" if ($debug);
 	    $tbl->parse($urldata);
 
 	    my $tablearr=$tbl->{Table};
@@ -1136,9 +1154,9 @@ sub readSchedule
 	    
 	    #my @tablearr=$tablearr[0];
 	    
-	    #print "RESULT:\n";
-	    #$dumper->dumpValue($tablearr);
-	    #print "/RESULT:\n";
+	    #print STDERR "RESULT:\n";
+	    #dumpMe($tablearr);
+	    #print STDERR "/RESULT:\n";
 
 	    my @noSubHeadersTable;
 	    my @arr=@{$tablearr};
@@ -1151,7 +1169,7 @@ sub readSchedule
 		    my @row=@{$arr[$i]};
 		    
 		    if ( isTimeRow(\@row) ) {
-			print "row $i is time\n" if ($debug);
+			print STDERR "row $i is time\n" if ($debug);
 		    }
 		    else {
 			push(@noSubHeadersTable, \@row);
@@ -1159,13 +1177,13 @@ sub readSchedule
 		}
 	    }
 	
-	    #print "Ended up with ". scalar(@noSubHeadersTable). " rows\n";
+	    #print STDERR "Ended up with ". scalar(@noSubHeadersTable). " rows\n";
 
 	    # traverse table, removing first un-usable columns
 	    for (my $nrow=0 ; $nrow< scalar(@noSubHeadersTable) ; $nrow++) {
 		my @row=@{$noSubHeadersTable[$nrow]};
 
-		#print "examing row:";$dumper->dumpValue(\@row);
+		#print STDERR "examing row:";dumpMe(\@row);
 
 		# remove unneeded last column
 		if ( $nrow == 0 ) {
@@ -1173,8 +1191,8 @@ sub readSchedule
 		    my $field=$row[0];
 		    
 		    if ( $field->{colspan} != 2 || $field->{fieldtag} ne 'td' || defined($field->{prog_title})) {
-			print "ROW: "; $dumper->dumpValue(\@{$noSubHeadersTable[$nrow]});
-			print "FIELD: "; $dumper->dumpValue($field);
+			print STDERR "ROW: "; dumpMe(\@{$noSubHeadersTable[$nrow]});
+			print STDERR "FIELD: "; dumpMe($field);
 			die "column 0 failed on row $nrow";
 		    }
 		    # change colspan to remove virtual first column
@@ -1185,11 +1203,11 @@ sub readSchedule
 		    my $field=$row[0];
 		    
 		    if ( $field->{colspan} != 1 || $field->{fieldtag} ne 'td' || defined($field->{prog_title}) ) {
-			print "ROW: "; $dumper->dumpValue(\@{$noSubHeadersTable[$nrow]});
-			print "FIELD: "; $dumper->dumpValue($field);
+			print STDERR "ROW: "; dumpMe(\@{$noSubHeadersTable[$nrow]});
+			print STDERR "FIELD: "; dumpMe($field);
 			die "column 0 failed on row $nrow";
 		    }
-		    #print "row $nrow: deleting first column entry\n";
+		    #print STDERR "row $nrow: deleting first column entry\n";
 		    # remove the first column
 		    splice(@{$noSubHeadersTable[$nrow]}, 0, 1);
 		}
@@ -1202,8 +1220,8 @@ sub readSchedule
 		    if ( $nrow == 0 ) {
 			# check constraints on last column of time row
 			if ( $field->{colspan} != 2 || $field->{fieldtag} ne 'td' ) {
-			    print "ROW: "; $dumper->dumpValue(\@{$noSubHeadersTable[$nrow]});
-			    print "FIELD: "; $dumper->dumpValue($field);
+			    print STDERR "ROW: "; dumpMe(\@{$noSubHeadersTable[$nrow]});
+			    print STDERR "FIELD: "; dumpMe($field);
 			    die "column ".(scalar(@{$noSubHeadersTable[$nrow]})-1)." failed on row $nrow";
 			}
 			# change colspan to remove virtual last column
@@ -1212,11 +1230,11 @@ sub readSchedule
 		    else {
 			# check constraints on last column of non-time rows
 			if ( $field->{colspan} != 1 || $field->{fieldtag} ne 'td' ) {
-			    print "ROW: "; $dumper->dumpValue(\@{$noSubHeadersTable[$nrow]});
-			    print "FIELD: "; $dumper->dumpValue($field);
+			    print STDERR "ROW: "; dumpMe(\@{$noSubHeadersTable[$nrow]});
+			    print STDERR "FIELD: "; dumpMe($field);
 			    die "column ".(scalar(@{$noSubHeadersTable[$nrow]})-1)." failed on row $nrow";
 			}
-			#print "row $nrow: deleting last column entry ".(scalar(@{$noSubHeadersTable[$nrow]})-1)."\n";
+			#print STDERR "row $nrow: deleting last column entry ".(scalar(@{$noSubHeadersTable[$nrow]})-1)."\n";
 			# remove the last column in the row
 			splice(@{$noSubHeadersTable[$nrow]}, scalar(@{$noSubHeadersTable[$nrow]})-1, 1);
 		    }
@@ -1231,12 +1249,12 @@ sub readSchedule
 		    if ( $col1->{colspan}!=1 || $col1->{fieldtag} ne 'td' || 
 			 (defined($col1->{prog_title}) != defined($col2->{prog_title}) || 
 			  (defined($col1->{prog_title}) && $col1->{prog_title} ne $col2->{prog_title})) ) {
-			print "ROW: "; $dumper->dumpValue(\@{$noSubHeadersTable[$nrow]});
-			print "FIELD1: "; $dumper->dumpValue($col1);
-			print "FIELD2: "; $dumper->dumpValue($col2);
+			print STDERR "ROW: "; dumpMe(\@{$noSubHeadersTable[$nrow]});
+			print STDERR "FIELD1: "; dumpMe($col1);
+			print STDERR "FIELD2: "; dumpMe($col2);
 			die "first/last column failed to be duplicates - row $nrow";
 		    }
-		    #print "row $nrow: deleting last column entry ".(scalar(@{$noSubHeadersTable[$nrow]})-1)."\n";
+		    #print STDERR "row $nrow: deleting last column entry ".(scalar(@{$noSubHeadersTable[$nrow]})-1)."\n";
 		    splice(@{$noSubHeadersTable[$nrow]}, scalar(@{$noSubHeadersTable[$nrow]})-1, 1);
 		}
 	    }
@@ -1257,7 +1275,7 @@ sub readSchedule
 		my $field=$timerow[0];
 
 		if ( !defined($field->{prog_title}) ) {
-		    print "analizing time cell:"; $dumper->dumpValue($field);
+		    print STDERR "analizing time cell:"; dumpMe($field);
 		    die "time cell failed to give value in 'prog_title'";
 		}
 		
@@ -1307,8 +1325,8 @@ sub readSchedule
 			$want2=sprintf("%d:30 p.m.", $hourOfDay-12);
 		    }
 		
-		    #print "column $col in time row says $timerow[$col]->{prog_title}, expect $want1\n";
-		    #print "  and says $timerow[$col+1]->{prog_title}, expect $want2\n";
+		    #print STDERR "column $col in time row says $timerow[$col]->{prog_title}, expect $want1\n";
+		    #print STDERR "  and says $timerow[$col+1]->{prog_title}, expect $want2\n";
 		
 		    my $field1=$timerow[$col];
 		    my $field2=$timerow[$col+1];
@@ -1332,9 +1350,9 @@ sub readSchedule
 		}
 	    }
 	
-	    #print "RESULT:\n";
-	    #$dumper->dumpValue(\@noSubHeadersTable);
-	    #print "/RESULT:\n";
+	    #print STDERR "RESULT:\n";
+	    #dumpMe(\@noSubHeadersTable);
+	    #print STDERR "/RESULT:\n";
 
 	    push(@TimeTable, @timerow);
 	    
@@ -1358,7 +1376,7 @@ sub readSchedule
 	}
 
 	my $SegmentsInTimeLine=scalar(@TimeTable);
-	#print "TimeTable is :"; $dumper->dumpValue(\@TimeTable);
+	#print STDERR "TimeTable is :"; dumpMe(\@TimeTable);
 
 	# verify that:
 	# - colspan total spans all columns
@@ -1371,9 +1389,9 @@ sub readSchedule
 		$totalcolspan+=$r[$i]{colspan};
 	    }
 	    if ( $totalcolspan != $SegmentsInTimeLine ) {
-		print "ERROR: row $row has $totalcolspan column spans, not $SegmentsInTimeLine\n";
+		print STDERR "ERROR: row $row has $totalcolspan column spans, not $SegmentsInTimeLine\n";
 		for (my $i=1; $i<scalar(@r) ; $i++ ) {
-		    print "schedule for $row $i :"; $dumper->dumpValue(\%{$r[$i]});
+		    print STDERR "schedule for $row $i :"; dumpMe(\%{$r[$i]});
 		}
 	    }
 	}
@@ -1387,7 +1405,7 @@ sub readSchedule
 	for (my $i=0 ; $i< scalar(@DayTable) ; $i++) {
 	    if ( $removeChannelColumn) {
 		my @row=@{$DayTable[$i]};
-		#print "Ignoring Channel row: ";$dumper->dumpValue(\%{$row[0]});
+		#print STDERR "Ignoring Channel row: ";dumpMe(\%{$row[0]});
 		splice(@{$DayTable[$i]}, 0, 1);
 	    }
 	    push(@{$WholeTable[$i]}, @{$DayTable[$i]});
@@ -1422,7 +1440,7 @@ sub readSchedule
     for (my $nrow=0 ; $nrow< scalar(@WholeTable) ; $nrow++) {
 	my @row=@{$WholeTable[$nrow]};
 
-	if ( $debug > 1 ) { print "checking out row:$nrow:"; $dumper->dumpValue(\@row); }
+	if ( $debug > 1 ) { print STDERR "checking out row:$nrow:"; dumpMe(\@row); }
 
 	my $ch=$row[0];
 	my $channel;
@@ -1473,7 +1491,7 @@ sub readSchedule
 	}
 	
 	push(@Channels, $channel);
-	#if ( $debug > 1 ) { print "loaded channel:"; $dumper->dumpValue($self);}
+	#if ( $debug > 1 ) { print STDERR "loaded channel:"; dumpMe($self);}
 
 	# remove channel row
 	splice(@{$WholeTable[$nrow]}, 0,1);
@@ -1514,7 +1532,7 @@ sub readSchedule
 
     # merge cells that say cont to next, and next says cont from previous
     for (my $nrow=0 ; $nrow< scalar(@WholeTable) ; $nrow++) {
-	print "checking row $nrow\n" if ( $debug > 1 );
+	print STDERR "checking row $nrow\n" if ( $debug > 1 );
 	my @row=@{$WholeTable[$nrow]};
 
 	for (my $col=0 ; $col<scalar(@row)-1 ; $col++ ) {
@@ -1550,7 +1568,7 @@ sub readSchedule
     for (my $nrow=0 ; $nrow< scalar(@WholeTable) ; $nrow++) {
 	my @row=@{$WholeTable[$nrow]};
 
-	if ( $debug > 1 ) { print "checking out row:$nrow:"; $dumper->dumpValue(\@row); }
+	if ( $debug > 1 ) { print STDERR "checking out row:$nrow:"; dumpMe(\@row); }
 
 	for (my $col=0 ; $col<scalar(@row) ; $col++ ) {
 	    my $cell=$row[$col];
@@ -1619,10 +1637,10 @@ sub readSchedule
     $self->{Schedule}=\@WholeTable;
     $self->{TimeLine}=\@TimeLine;
     
-    print "Read Schedule with:";
-    print "".scalar(@{$self->{Channels}})." channels, ";
-    print "".scalar((keys %{$self->{Programs}}))." programs, ";
-    print "".(scalar(@{$self->{TimeLine}})/2)." hours\n";
+    print STDERR "Read Schedule with:";
+    print STDERR "".scalar(@{$self->{Channels}})." channels, ";
+    print STDERR "".scalar((keys %{$self->{Programs}}))." programs, ";
+    print STDERR "".(scalar(@{$self->{TimeLine}})/2)." hours\n";
 	    
     return(1);
 }
@@ -1633,7 +1651,7 @@ sub getAndParseDetails($$)
     my $nprog;
 
     my $url=$self->getDetailURL($prog_ref);
-    print "retrieving: $url..\n";
+    print STDERR "retrieving: $url..\n";
 		
     my $urldata=$self->getDetailURLData($url);
     if ( !defined($urldata) ) {
@@ -1642,8 +1660,8 @@ sub getAndParseDetails($$)
     }
 
     if ( $debug ) {
-	print "\tread ".length($urldata). " bytes of html\n";
-	print "urldata:\n'$urldata'\n" if ( $debug>1 );
+	print STDERR "\tread ".length($urldata). " bytes of html\n";
+	print STDERR "urldata:\n'$urldata'\n" if ( $debug>1 );
     }
 
     # grab url at imdb if one exists
@@ -1660,7 +1678,7 @@ sub getAndParseDetails($$)
 
     # remove some html tags for easier parsing
     $urldata=~s/<\/*nobr>//ogi;
-    $urldata=~s///og;
+    $urldata=~s/\r//og;
     $urldata=~s/\n//og;
     $urldata=~s/<font [^>]+>//ogi;
     $urldata=~s/<\/font>//ogi;
@@ -1702,7 +1720,7 @@ sub getAndParseDetails($$)
 		$min=$1;
 	    }
 	    else {
-		print "warning: failed to parse Duration field $desc\n";
+		print STDERR "warning: failed to parse Duration field $desc\n";
 	    }
 	    # don't replace duration, believe what is in the schedule grid instead.
 	    $nprog->{duration}=$min if ( defined($min) );
@@ -1793,8 +1811,8 @@ sub mergeDetails($$)
 
     if ( defined($nprog->{subtitle}) ) {
 	if ( defined($prog->{subtitle}) && $nprog->{subtitle} ne $prog->{subtitle} ) {
-	    print "warning: subtitle of $prog->{title} is different\n";
-	    print "warning: '$nprog->{subtitle}' != '$prog->{subtitle}'\n";
+	    print STDERR "warning: subtitle of $prog->{title} is different\n";
+	    print STDERR "warning: '$nprog->{subtitle}' != '$prog->{subtitle}'\n";
 	}
 	$prog->{subtitle}=$nprog->{subtitle};
 	delete($nprog->{subtitle});
@@ -1802,8 +1820,8 @@ sub mergeDetails($$)
     
     if ( defined($nprog->{year}) ) {
 	if ( defined($prog->{year}) && $nprog->{year} ne $prog->{year} ) {
-	    print "warning: year of $prog->{title} is different\n";
-	    print "warning: '$nprog->{year}' != '$prog->{year}'\n";
+	    print STDERR "warning: year of $prog->{title} is different\n";
+	    print STDERR "warning: '$nprog->{year}' != '$prog->{year}'\n";
 	}
 	#print STDERR "$prog->{prog_ref}: year is $str\n";
 	$prog->{year}=$nprog->{year};
@@ -1819,10 +1837,10 @@ sub mergeDetails($$)
 	if ( defined($prog->{duration}) ) {
 	    if ( $nprog->{duration} ne $prog->{duration} ) {
 		if ( $debug ) {
-		    print "warning: duration of $prog->{title} is different\n";
-		    print "warning: '$nprog->{duration}' != '$prog->{duration}'\n";
+		    print STDERR "warning: duration of $prog->{title} is different\n";
+		    print STDERR "warning: '$nprog->{duration}' != '$prog->{duration}'\n";
 		    if ( defined($prog->{contFromPreviousListing}) ) {
-			print "warning: was expected (cont from previous listing)\n";
+			print STDERR "warning: was expected (cont from previous listing)\n";
 		    }
 		}
 	    }
@@ -1839,8 +1857,8 @@ sub mergeDetails($$)
 
     if ( defined($nprog->{desc}) ) {
 	if ( defined($prog->{desc}) && $nprog->{desc} ne $prog->{desc} ) {
-	    print "warning: description of $prog->{title} is different\n";
-	    print "warning: '$nprog->{desc}' != '$prog->{desc}'\n";
+	    print STDERR "warning: description of $prog->{title} is different\n";
+	    print STDERR "warning: '$nprog->{desc}' != '$prog->{desc}'\n";
 	}
 	#print STDERR "$prog->{prog_ref}: description is $nprog->{desc}\n";
 	if ( length($nprog->{desc}) ) {
@@ -1851,8 +1869,8 @@ sub mergeDetails($$)
 
     if ( defined($nprog->{director}) ) {
 	if ( defined($prog->{director}) && $nprog->{director} ne $prog->{director} ) {
-	    print "warning: director of $prog->{title} is different\n";
-	    print "warning: '$nprog->{director}' != '$prog->{director}'\n";
+	    print STDERR "warning: director of $prog->{title} is different\n";
+	    print STDERR "warning: '$nprog->{director}' != '$prog->{director}'\n";
 	}
 	#print STDERR "$prog->{prog_ref}: director is $nprog->{director}\n";
 	$prog->{director}=$nprog->{director};
@@ -1864,7 +1882,7 @@ sub mergeDetails($$)
 	    my @lactors=@{$prog->{actors}};
 	    my $out=0;
 	    if ( scalar(@lactors) != scalar(@actors) ) {
-		print "warning: actor list different size\n";
+		print STDERR "warning: actor list different size\n";
 		$out++;
 	    }
 	    my $top=scalar(@lactors);
@@ -1873,11 +1891,11 @@ sub mergeDetails($$)
 	    }
 	    for (my $num=0; $num<$top ; $num++ ) {
 		if ( $lactors[$num] ne $actors[$num] ) {
-		    print "warning: actor $num '".$lactors[$num]." != ".$actors[$num]."\n";
+		    print STDERR "warning: actor $num '".$lactors[$num]." != ".$actors[$num]."\n";
 		    $out++;
 		}
 	    }
-	    print "warning: actor list different for $prog->{title} in $out ways\n" if ( $out );
+	    print STDERR "warning: actor list different for $prog->{title} in $out ways\n" if ( $out );
 	}
 	$prog->{actors}=\@actors;
 	#print STDERR "$prog->{prog_ref}: actors defined as ". join(",", @actors)."\n";
@@ -1891,8 +1909,8 @@ sub mergeDetails($$)
 	delete($nprog->{ratings});
     }
     if ( scalar(keys %{$nprog}) != 0 ) {
-	print "$prog->{pref}: ignored scaped values of nprog:"; 
-	$dumper->dumpValue($nprog);
+	print STDERR "$prog->{pref}: ignored scaped values of nprog:"; 
+	dumpMe($nprog);
     }
     return($prog);
 }
@@ -1920,7 +1938,7 @@ sub expandDetails
 	$done++;
 	my $percentDone=($done*100)/$count;
 	if ( $percentDone > 1 && $percentDone%10 == 0 ) {
-	    printf "resolved %.0f%% of the programs.. %d to go\n", $percentDone, $count-$done;
+	    printf STDERR "resolved %.0f%% of the programs.. %d to go\n", $percentDone, $count-$done;
 	}
 	if ( $done % 10 == 0 ) {
 	    # flush db every now and again
@@ -1978,7 +1996,13 @@ sub getChannelList
 {
     my ($self)=@_;
 
-    return(@{$self->{Channels}})
+    if ( defined $self->{Channels} ) {
+	return (@{$self->{Channels}});
+    }
+    else {
+	warn "channels list undefined";
+	return ();
+    }
 }
 
 # create a conversion string

@@ -1,29 +1,38 @@
 #!/usr/bin/perl -w
 use strict;
-use Log::TraceMessages qw(t d); Log::TraceMessages::check_argv();
 use LWP::Simple;
-use HTML::Parser;
-use HTML::TokeParser;
-use Date::Manip 5.40;
+use Getopt::Long;
+use Tie::IxHash;
+use Log::TraceMessages qw(t d); Log::TraceMessages::check_argv();
+use Date::Manip;
 use XML::Writer;
-use URI;
-use Term::ProgressBar;
-use Tie::RefHash;
-use XMLTV;
 use UK_TZ;
+use XMLTV;
+use Tie::RefHash;
+use Term::ProgressBar;
 
-# Memoize some subroutines if possible (25x speedup)
+sub check_ananova_usage();
+sub get_regions();
+
+# PHP page provided by Ananova to access their internal listings data.
+# This is used as an inital substring of all the URLs gotten by this
+# program.
+# 
+my $A = 'http://www.ananova.com/tv_listings/_tv_raw.php';
+
+# Memoize some subroutines if possible
 eval { require Memoize };
 if ($@) {
-    warn "could not load Memoize module, things will run slowly";
+    warn "could not load Memoize module, things will run slowly\n";
 }
 else {
-    foreach (qw/parse_uk_date date_to_uk
-	        ParseDate UnixDate DateCalc Date_Cmp
-                ParseDateDelta/)
-    {
-	Memoize::memoize($_) or die "cannot memoize $_: $!";
-    }
+    # FIXME
+#     foreach (qw/parse_uk_date date_to_uk
+# 	        ParseDate UnixDate DateCalc Date_Cmp
+#                 ParseDateDelta/)
+#     {
+# 	Memoize::memoize($_) or die "cannot memoize $_: $!";
+#     }
 }
 
 # Things will go horribly wrong if Ananova change pages from one day
@@ -33,448 +42,976 @@ else {
 my $today = ParseDate('today'); die if not defined $today;
 END {
     if (UnixDate(ParseDate('today'), '%Q') ne UnixDate($today, '%Q')) {
-	warn "current day has changed, results may be messed up";
+	warn "current day has changed, results may be messed up\n";
     }
 }
-
-my %CHANNELS = (bbc1    => [ 'bbc1.bbc.co.uk' ],
-		bbc2    => [ 'bbc2.bbc.co.uk' ],
-		carlton => [ 'carlton.com' ],
-		ch4     => [ 'channel4.com', 'Channel 4' ],
-		ch5     => [ 'channel5.co.uk', 'Channel 5' ],
-	       );
-my $NUMDAYS = 7;
-
-# Quicker version for testing
-#%CHANNELS = (bbc1 => [ 'bbc1.bbc.co.uk' ]); $NUMDAYS = 1;
 
 # What language the pages are in.  This has no real effect :-)
 my $LANG = 'en';
 
+# Set up an XML::Writer.
 my $writer = new XML::Writer(DATA_MODE   => 1,
 			     DATA_INDENT => 2 );
-$writer->xmlDecl();
+$writer->xmlDecl("ISO-8859-1", "1.0");
 { local $^W = 0; $writer->doctype('tv', undef, 'xmltv.dtd') }
-$writer->startTag('tv');
+$writer->startTag('tv',
+		  'source-info-url'     =>
+	  'http://www.ananova.com/tv_listings/_tv_full_listings.html',
+		  'source-info-name'    => 'Ananova',
+		  'source-data-url'     => $A,
+		  'generator-info-name' => 'XMLTV/0.3.0',
+		  'generator-info-url'  =>
+	  'http://www.doc.ic.ac.uk/~epa98/work/apps/xmltv/',
+		 );
 
-foreach my $ch (sort keys %CHANNELS) {
-    my $ch_data = $CHANNELS{$ch};
-    my $ch_internal = shift @$ch_data;
-    my $junk_test_code = join(' || ', map('/^\s*\Q' . $_ . '\E\s*$/i', $ch, @$ch_data));
-    t "\$junk_test_code: $junk_test_code";
-    my $junk_test = eval "sub { $junk_test_code }";
+my $bar = new Term::ProgressBar('getting list of channels', 4);
+check_ananova_usage(); update $bar;
 
-    foreach my $day (1 .. $NUMDAYS) {
-	# Work out the actual day this number corresponds to - 1 is
-	# today.
+my $regions = get_regions(); update $bar;
+#t 'regions: ' . d $regions;
+
+# $ch_types maps channel id to type, $ch_pretty maps it to pretty
+# name.  However, the pretty names in the channel file are not
+# definitive; they're used to print progress messages, but the name
+# in the listings file itself takes precedence.
+# 
+my ($ch_types, $ch_pretty) = get_ch_types(); update $bar;
+my %ch_pretty_definitive; # whether the name in $ch_pretty is defin.
+
+my %ch_to_output = get_ch_to_output();
+t '\%ch_to_output=' . d \%ch_to_output;
+
+# We've set the type of 'radio' and 'satellite' channels.  Now deal
+# with the terrestrial channels, which have a region set.  We should
+# find that every channel fits into radio, xor satellite, xor one
+# particular region.
+# 
+# We end up with a list of [ day, type, channel, filename ], where
+# type is one of 'radio', 'satellite', or a region code.
+# 
+my @files;
+my %used_ch_types;
+
+# Some entries in show=dir are for non-terrestrial channels which
+# don't appear in show=channels.  This means they are old files which
+# didn't get deleted, although they should have been.
+# 
+my %duff_channels;
+END {
+    my @duff = sort keys %duff_channels;
+    if (@duff) {
+	# Don't bother warning, this error almost always happens and
+	# the Ananova people are aware of the inconsistency.
 	# 
-	my $day_offset = $day-1;
-	t 'day offset: ' . d $day_offset;
-	my $day_date = DateCalc($today, "+ $day_offset days");
-	die if not defined $day_date;
 
-	my $last_start;
-	my @progs_this_day;
+# 	warn <<END
+# The following channels had listings files, but were not mentioned in
+# the listing of channels:
 
-	my @prog_urls = prog_urls($ch, $day);
-	my $bar = new Term::ProgressBar("channel $ch_internal, day $day",
-					scalar @prog_urls);
-	t 'URLs of individual programmes: ' . d \@prog_urls;
-	foreach my $url (@prog_urls) {
-	    t "getting url: $url";
-	    my $page = get $url;
-	    if (not defined $page) {
-		warn "cannot get $url";
-		next;
-	    }
-	    t "got page: $page";
-	    my $r = get_text($page, [ qw(color bgcolor class) ]);
-	    t 'got bits: ' . d $r;
-	    my $a = arrange_text_by_type($r);
-	    t 'by type: ' . d $a;
-	    my $prog = typed_text_to_programme($a);
-	    if (not defined $prog) {
-		warn "couldn't parse content of $url\n";
-		next;
-	    }
-	    $prog->{channel} = $ch_internal;
-	    my $junk = delete $prog->{JUNK};
-	    if (defined $junk) {
-		foreach (@$junk) {
-		    warn "throwing away text: $_"
-		      unless &$junk_test;
-		}
-	    }
+# @duff
 
-	    t 'programme before munging time: ' . d $prog;
-	    push @progs_this_day, $prog;
-	    update $bar;
-	}
-	date_programmes(\@progs_this_day, $day_date);
-	
-	# Clumpidx stuff
-	my $rel = new_relation();
-	add_clumpidx(\@progs_this_day, $rel);
-	t 'related programmes: ' . d($rel);
-
-	write_programme($writer, $_) foreach @progs_this_day;
+# The listings files are probably old ones, they haven\'t been fetched.
+END
+  ;
     }
 }
-$writer->endTag('tv');
+    
+foreach (get_dir()) {
+    my ($orig, $day, $ch, $region) = @$_;
+    my $has_type = (defined $ch_types->{$ch});
+    my $has_region = (defined $region);
+    ++ $used_ch_types{$ch};
 
-
-# get_text()
-# 
-# Extract bits of text from some HTML.  Each 'bit' is a hashref with a
-# key CONTENT, the actual text, and additional keys you specify.  The
-# value of each extra key is whatever was set as an HTML attribute by
-# the innermost enclosing element of the text that set this attribute.
-# 
-# Parameters:
-#   HTML string
-#   listref of attributes to look for
-# 
-sub get_text($$) {
-    local $Log::TraceMessages::On = 0;
-    my $html = shift;
-    local *attrs = shift; use vars '@attrs';
-    t 'attrs: ' . d \@attrs;
-
-    my %attrs;
-    foreach (@attrs) {
-	$attrs{$_}++ && warn "attr $_ mentioned twice";
+    if (not $has_type and not $has_region) {
+	# So the channel is not listed as 'radio' or 'satellite', and
+	# neither does it have a region.  This probably means it's an
+	# old file which is still lying around in dir.
+	# 
+	$duff_channels{$ch} = 1;
     }
-
-    my @stack;
-    my %default; # default is nothing for anything
-    push @stack, \%default;
-
-    my @r;
-
-    my $start_h = sub {
-	local *v = shift; use vars '%v';
-	my %new_state = %{$stack[$#stack]};
-	foreach (keys %attrs) {
-	    if (defined $v{$_}) {
-		$new_state{$_} = $v{$_};
-	    }
+    elsif (not $has_type and $has_region) {
+	$ch_types->{$ch} = $region;
+	push @files, [ $day, $region, $ch, $orig ];
+    }
+    elsif ($has_type and not $has_region) {
+	if ($ch_types->{$ch} eq 'satellite' or $ch_types->{$ch} eq 'radio') {
+	    # Satellite and radio channels do not have a region, okay.
+	    push @files, [ $day, $ch_types->{$ch}, $ch, $orig ];
 	}
-	push @stack, \%new_state;
-	t 'pushed new state onto stack, now: ' . d \@stack;
-    };
-
-    my $end_h = sub {
-	pop @stack;
-	t 'popped stack, now: ' . d \@stack;
-	if (not @stack) {
-	    warn "mismatched tags in input\n";
-	    push @stack, \%default;
+	else {
+	    warn "channel $ch has unknown type $ch_types->{$ch}";
 	}
-    };
+    }
+    elsif ($has_type and $has_region) {
+	if ($ch_types->{$ch} eq $region) {
+	    # Encountered the same region as before, okay.
+	    push @files, [ $day, $region, $ch, $orig ];
+	}
+	else {
+	    warn "channel $ch has changed from $ch_types->{$ch} to $region";
+	}
+    }
+    else { die }
+}
+#t 'files: ' . d \@files;
+update $bar;
 
-    my $text_h = sub {
-	local $_ = shift;
-	return if not /\S/;
-	s/^\s+//; s/\s+$//; s/\000//g;
-	my %h = %{$stack[$#stack]};
-	$h{CONTENT} = kludge_text($_);
-	t 'text bit: ' . d \%h;
-	push @r, \%h;
-    };
-
-    my $p = HTML::Parser->new(api_version => 3,
-			      start_h => [ $start_h, 'attr'  ],
-			      end_h   => [ $end_h,   ''      ],
-			      text_h  => [ $text_h,  'dtext' ],
-			     );
-    $p->unbroken_text(1);
-    $p->parse($html);
-    $p->eof();
-    return \@r;
+# Check that there are no redundant entries in the channel data.
+foreach (keys %$ch_types) {
+    unless ($used_ch_types{$_}) {
+	warn "channels data mentions $_ ($ch_pretty->{$_}), but not used\n";
+    }
 }
 
-
-# arrange_text_by_type()
-# 
-sub arrange_text_by_type($) {
-    local *bits = shift; use vars '@bits';
-
-    # Try to match each bit against each of these in turn to find out
-    # what 'type' it is.  They are matched top to bottom, so the more
-    # specific ones come first.
-    # 
-    my @types = ([ 'time_and_channel', { bgcolor => '#FFFFFF',
-					 class   => 'helvsmall',
-					 color   => '#990099' } ],
-		 [ 'title_and_stuff',  { bgcolor => '#cccccc',
-					 class  => 'helvsmall' } ],
-		 [ 'desc',             { bgcolor => '#FFFFFF',
-					 class => 'helvsmallnobold' } ],
-		 [ 'page_title',       {} ]);
-
-    my %bits_of_type;
-    foreach my $bit (@bits) {
-	t 'trying to match bit: ' . d $bit;
-	my $found_type;
-	TYPE: foreach my $type (@types) {
-	    my $type_name = $type->[0];
-	    local *attrs = $type->[1]; use vars '%attrs';
-	    foreach (keys %attrs) {
-		t 'testing attr: ' . d $_;
-		# Undefined attrs as part of the type template are not
-		# allowed.
-		# 
-		if (not defined $bit->{$_}) {
-		    t 'nope, does not have this attr defined';
-		    next TYPE;
-		}
-		if ($bit->{$_} ne $attrs{$_}) {
-		    t 'nope, has ' . d($bit->{$_}) . ' rather than ' . d($attrs{$_});
-		    next TYPE;
-		}
+# Check for --days option.
+my $opt_days;
+GetOptions('days=i' => \$opt_days);
+    
+# Now work out which of @files we actually want to download.
+my (%type_pretty, %wanted_type);
+my $want_all;
+if (defined $ARGV[0] and $ARGV[0] eq 'ALL') {
+    $want_all = 1;
+}
+else {
+    %type_pretty = reverse %$regions;
+    $type_pretty{$_} = $_ foreach qw(radio satellite);
+    foreach my $arg (@ARGV) {
+	my $t;
+	foreach (keys %type_pretty) {
+	    if ($type_pretty{$_} =~ /\Q$arg\E/i) {
+		$t = $_;
+		last;
 	    }
-	    t 'match successful';
-	    $found_type = $type_name;
+	}
+	if (not defined $t) {
+	    warn "'$arg' does not match any known channel type\n";
+	    usage();
+	}
+	else {
+	    $wanted_type{$t}++
+	      && warn "channel type $type_pretty{$t} mentioned twice\n";
+	}
+    }
+    if (not keys %wanted_type) {
+	my $default;
+	foreach (keys %type_pretty) {
+	    if ($type_pretty{$_} =~ /carlton/i) {
+		$default = $_;
+		++ $wanted_type{$_};
+		last;
+	    }
+	}
+	if (keys %wanted_type) {
+	    warn "no channel types given, assuming $type_pretty{$default}\n";
+	    usage();
+	}
+	else {
+	    warn "no channel types given and default 'carlton' not found, "
+	      . "giving up\n";
+	    usage();
+	    exit(1);
+	}
+    }
+    die if not keys %wanted_type;
+}
+
+# At present, the Ananova site doesn't have any handling for satellite
+# versions of terrestrial channels.  For example, the special digital
+# versions of BBC1 and BBC2.  These are not listed anywhere,
+# although they're a standard part of Sky Digital.  As a stopgap,
+# users need to choose a terrestrial region (probably 'Carlton') as
+# well.  Hopefully Ananova will get a schedule feed for BBC1, BBC2, C4
+# and C5 digital, so this workaround can go away.  (And I hear that
+# ITV will soon be available on Sky Digital too.)
+# 
+# We could also warn about not getting the radio channels when you
+# choose 'satellite', but that's more obviously something you need to
+# specify separately.
+# 
+if ($wanted_type{satellite}) {
+    my $also_chose_terrestrial = 0;
+    foreach (keys %wanted_type) {
+	if ($_ ne 'radio' and $_ ne 'satellite') {
+	    $also_chose_terrestrial = 1;
 	    last;
 	}
-	if (not defined $found_type) {
-	    # This won't happen with the types I defined, since
-	    # 'title' matches everything.
-	    # 
-	    local $Log::TraceMessages::On = 1;
-	    warn "unknown bit: " . d $bit;
-	}
-	else {
-	    push @{$bits_of_type{$found_type}}, $bit->{CONTENT};
-	}
     }
-    
-    return \%bits_of_type;
+    unless ($also_chose_terrestrial) {
+	warn <<END
+You have selected to grab satellite listings.  At present, the
+five terrestrial channels are not included under 'satellite', although
+they may be available on some services such as Sky Digital.
+
+You might want to specify the region 'Carlton' in addition to
+'satellite', to make sure you get all the channels.  (Similarly
+'radio' if you want radio stations.)
+END
+  ;
+    }
 }
-	    
 
-# typed_text_to_programme()
+# Filter out the files we want to download - those with the correct
+# channel type.
 # 
-# Returns a hash of programme details, but with the following
-# differences: 
-# 
-# - Instead of 'start', the hash has 'time' which is hours and minutes
-# and optionally a timzeone.  It's up to you to convert this into a
-# proper date and time, because the grabbed pages themselves don't
-# contain a date.
-# 
-# - Instead of 'end', there may be 'length' which is of the form 'X
-# minutes'.  You can probably add this to the start time and date to
-# get the stop time.
-# 
-# - The extra key JUNK gives a listref of text which was found, but
-# didn't map to any of the programme details.  You should examine this
-# to make sure no useful information is being thrown away, and then
-# get rid of it.  (Usually, unrecognized bits of text are warned
-# about to stderr rather than placed in JUNK.  But sometimes it's not
-# possible for this sub to know what's okay and what isn't, so passing
-# it back to the caller is easiest.)
-# 
-# Parameter:
-#   reference to (type => [ items ]) hash
-# 
-sub typed_text_to_programme($) {
-    local *ts = shift; use vars '%ts';
-    my %r;
+@files = grep {
+    ($want_all or $wanted_type{$_->[1]})
+      && (not defined $opt_days or $opt_days >= $_->[0])
+  } @files;
+$bar = new Term::ProgressBar('downloading listings', scalar @files);
+foreach (@files) {
+    my ($day, $type, $ch, $filename) = @$_;
+    die if not ($want_all or $wanted_type{$type});
+    die if defined $opt_days and $day > $opt_days;
 
-    my $expect_at_least_one = sub {
-	my $name = shift;
-	my $bits = $ts{$name};
-	if (not defined $bits) {
-	    warn "expected some bits of text of type $name, got none";
-	    return undef;
-	}
-	elsif (@$bits == 0) {
-	    warn "shouldn't get here - empty list of bits";
-	    return undef;
+    # Work out the actual day this number corresponds to: 1 is
+    # today.
+    # 
+    my $day_offset = $day-1;
+    t 'day offset: ' . d $day_offset;
+    my $day_date = DateCalc($today, "+ $day_offset days");
+    die if not defined $day_date;
+
+    # Get a list of programmes from this filename.
+    my $progs = get_file($day_date, $ch, $filename);
+
+    # Add the correct channel identifier.  This is partly worked out
+    # from the global $ch_pretty, which gets set by get_file(), so we
+    # can't work out the identifier until this point.
+    # 
+    my $ch_output = ch_output($ch);
+    $_->{channel} = $ch_output foreach @$progs;
+
+    # Fix the dates.
+    date_programmes($progs, $day_date);
+	
+    # Add clumpidx's.
+    my $rel = new_relation();
+    add_clumpidx($progs, $rel);
+    t 'related programmes: ' . d($rel);
+    
+    # Write them out.
+    write_programme($writer, $_) foreach @$progs;
+
+    update $bar;
+}
+
+# Finish writing programmes.
+$writer->endTag('tv');
+
+# Now write the channels file.  Remember, %{$ch_pretty} maps Ananova
+# id to pretty name, %ch_to_output maps it to XMLTV channel id.
+# 
+#$Log::TraceMessages::On = 1;
+my %channels_output;
+foreach (keys %$ch_pretty) {
+    next unless $want_all or $wanted_type{$ch_types->{$_}};
+    my $o = $ch_to_output{$_};
+    my $p = $ch_pretty->{$_}; die if not defined $p;
+    if (defined $o) {
+	# Don't need to warn about more than one channel with the same
+	# output id, because Channel 4 and Channel 5 are considered by
+	# Ananova as split into regions, but each region is in fact
+	# the same.  Likewise some things like the two versions of
+	# Meridian (different for BBC, but not ITV).
+	# 
+	push @{$channels_output{$o}}, [ $LANG, $p ];
+    }
+    else { die "don't know RFC2838-style name for $_ ($p)" }
+}
+# Add some extra pretty names (mostly channel numbers, a few
+# abbreviations of long names).  These are hardcoded here because
+# there wasn't a better place for them - arguably the listings grabber
+# for a particular country is the place to store that country's
+# particular channel numbers.
+# 
+my %channel_numbers = ('theadultchannel.co.uk' => 'Adult',
+		       'anglia.tv.co.uk' => 3,
+		       'south-east.bbc1.bbc.co.uk' => 1,
+		       'east.bbc1.bbc.co.uk' => 1,
+		       'ireland.bbc1.bbc.co.uk' => 1,
+		       'midlands.bbc1.bbc.co.uk' => 1,
+		       'north.bbc1.bbc.co.uk' => 1,
+		       'north-east.bbc1.bbc.co.uk' => 1,
+		       'north-east.bbc1.bbc.co.uk' => 1,
+		       'north-west.bbc1.bbc.co.uk' => 1,
+		       'south.bbc1.bbc.co.uk' => 1,
+		       'scotland.bbc1.bbc.co.uk' => 1,
+		       'scotland.bbc1.bbc.co.uk' => 1,
+		       'south-east.bbc1.bbc.co.uk' => 1,
+		       'south-west.bbc1.bbc.co.uk' => 1,
+		       'south-west.bbc1.bbc.co.uk' => 1,
+		       'west.bbc1.bbc.co.uk' => 1,
+		       'wales.bbc1.bbc.co.uk' => 1,
+		       'south-east.bbc2.bbc.co.uk' => 2,
+		       'east.bbc2.bbc.co.uk' => 2,
+		       'ireland.bbc2.bbc.co.uk' => 2,
+		       'midlands.bbc2.bbc.co.uk' => 2,
+		       'north.bbc2.bbc.co.uk' => 2,
+		       'north-east.bbc2.bbc.co.uk' => 2,
+		       'north-east.bbc2.bbc.co.uk' => 2,
+		       'north-west.bbc2.bbc.co.uk' => 2,
+		       'south.bbc2.bbc.co.uk' => 2,
+		       'scotland.bbc2.bbc.co.uk' => 2,
+		       'scotland.bbc2.bbc.co.uk' => 2,
+		       'south-east.bbc2.bbc.co.uk' => 2,
+		       'south-west.bbc2.bbc.co.uk' => 2,
+		       'south-west.bbc2.bbc.co.uk' => 2,
+		       'west.bbc2.bbc.co.uk' => 2,
+		       'wales.bbc2.bbc.co.uk' => 2,
+		       'bloomberg.com' => 'Bloomberg',
+		       'border-tv.com' => 3,
+		       'bravo.co.uk' => 'Bravo',
+		       'british.eurosport.com' => 'Eurosport',
+		       'carlton.com' => 3,
+		       'central.carlton.com' => 3,
+		       'channel4.com' => 4, 
+		       'channel5.co.uk' => 5,
+		       'christian-channel-europe.god-digital.com'
+		           => 'Christian',
+		       'europe.cnbc.com' => 'CNBC',
+		       'discoveryeurope.com' => 'Discovery',
+		       'plus-1.discoveryeurope.com' => 'Discovery+1',
+		       'sci-trek.discoveryeurope.com' => 'Sci-Trek',
+		       'disneychannel.disney.co.uk' => 'Disney',
+		       'challengetv.co.uk' => 'Challenge',
+		       'fantasy.televisionx.co.uk' => 'Fantasy',
+		       'filmfour.channel4.com' => 'FilmFour',
+		       'foxkids.co.uk' => 'Fox Kids',
+		       'plus-1.foxkids.co.uk' => 'Fox Kids+1',
+		       'grampiantv.co.uk' => 3,
+		       'granadatv.co.uk' => 3, 
+		       'breeze.granadatv.co.uk' => 'Breeze',
+		       'men.granadatv.co.uk' => 'Men & Motors',
+		       'thehistorychannel.co.uk' => 'History',
+		       'wales.htv.co.uk' => 3,
+		       'west.htv.co.uk' => 3,
+		       'sport-plus.itv.co.uk' => 'ITV Sport Plus',
+		       'landscapetv.com' => 'Landscape',
+		       'meridian.tv.co.uk' => 3,
+		       'nationalgeographic.co.uk' => 'National Geographic',
+		       'playboy.com' => 'Playboy',
+		       'racingchannel.com' => 'Racing',
+		       'radio-1.bbc.co.uk' => 'R1',
+		       'radio-2.bbc.co.uk' => 'R2',
+		       'radio-3.bbc.co.uk' => 'R3',
+		       'radio-4.bbc.co.uk' => 'R4',
+		       'radio-5-mw.bbc.co.uk' => 'R5',
+		       's4c.co.uk' => 'S4C',
+		       'digital.s4c.co.uk' => 'S4C',
+		       'cable.uk.scifi.com' => 'Sci-Fi',
+		       'digital.uk.scifi.com' => 'Sci-Fi',
+		       'scottishtv.co.uk' => 3,
+		       'shop-tv.co.uk' => 'Shop',
+		       'box-office-digital.sky.com' => 'Sky Box Office',
+		       'sky-one.sky.com' => 'S1', 
+		       'eurosport.sky.com' => 'Eurosport',
+		       'itvdigital.moviemax.sky.com' => 'Sky Moviemax',
+		       'cinema.sky.com' => 'Sky Cinema',
+		       'ondigital.sky-one.sky.com' => 'S1',
+		       'ondigital.premier.sky.com' => 'Sky Premier',
+		       'widescreen.premier.sky.com' => 'Sky Premier',
+		       'setindia.com' => 'SETI',
+		       'tcm.turner.com' => 'TCM',
+		       'home.discoveryeurope.com' => 'Discovery Home',
+		       'travelchannel.co.uk' => 'Travel',
+		       'trouble.co.uk' => 'Trouble',
+		       'tvasia.com' => 'Zee',
+		       'tvtravelshop.co.uk' => 'Travel Shop',
+		       'tttv.granadatv.co.uk' => 3,
+		       'utv.co.uk' => 3,
+		       'westcountry.carlton.com' => 3,
+		       'yorkshire.granadatv.co.uk' => 3,
+		      );
+foreach (keys %channels_output) {
+    my $extra = $channel_numbers{$_};
+    if (defined $extra) {
+	my $entry;
+	if ($extra =~ tr/0-9//c) {
+	    # Not a channel number, should have a 'language'.
+	    $entry = [ $LANG, $extra ];
 	}
 	else {
-	    return $bits;
+	    $entry = [ undef, $extra ];
 	}
-    };
-
-    my $expect_exactly_one = sub {
-	my $name = shift;
-	my $bits = $expect_at_least_one->($name);
-	if (@$bits == 1) {
-	    return $bits->[0];
-	}
-	elsif (@$bits >= 2) {
-	    warn "expected exactly one bit of text of type $name, got: " . join(', ', @$bits);
-	    return $bits->[0];
-	}
-	else { die }
-    };
-
-    my $expect_at_most_one = sub {
-	my $name = shift;
-	my $bits = $ts{$name};
-	if (not defined $bits) {
-	    return undef;
-	}
-	elsif (@$bits == 0) {
-	    warn "shouldn't get here - empty list of bits";
-	    return undef;
-	}
-	elsif (@$bits == 1) {
-	    return $bits->[0]
-	}
-	elsif (@$bits >= 2) {
-	    warn "expected at most one bit of text of type $name, got: " . join(', ', @$bits);
-	    return $bits->[0];
-	}
-	else { die }
-    };
-
-    # Time
-    my $time_and_channel = $expect_exactly_one->('time_and_channel');
-    if ($time_and_channel =~ s/^(\d\d?:\d\d)\s*(GMT|UT|BST|)\s*//) {
-	$r{time} = $1;
-	$r{time} .= " $2" if length $2;
-    }
-    else {
-	warn "line does not contain a valid time: $time_and_channel";
-    }
-    push @{$r{JUNK}}, $time_and_channel if $time_and_channel =~ /\S/;
-
-    # Although the DTD says you can have several descriptions, we
-    # don't expect Ananova to return more than one.
-    # 
-    my $desc =  $expect_at_most_one->('desc');
-    $r{desc} = [ $desc ] if defined $desc;
-
-    # Programme title and other details
-    my ($subtitles, $repeat, $length);
-    my ($expect_sub_title, $expect_cast) = (0, 0);
-    foreach (@{$ts{title_and_stuff}}) {
-	if (/^(\d+) (?:mins|minutes)$/) {
-	    my $new_length = "$1 minutes";
-	    if (not defined $r{length}) {
-		$r{length} = $new_length;
+	
+	# Don't want to add it if it's already in the list.
+	my $already = 0;
+	foreach (@{$channels_output{$_}}) {
+	    t 'checking existing entry: ' . d $_;
+	    next if $_->[1] ne $entry->[1];
+	    if (not defined $_->[0] and not defined $entry->[0]) {
+		$already = 1;
+		last;
 	    }
-	    elsif ($r{length} eq $new_length) {
-		warn "length $new_length seen twice";
+	    if (defined $_->[0] and defined $entry->[0]
+		and $_->[0] eq $entry->[0]) {
+		$already = 1;
+		last;
+	    }
+	}
+	unless ($already) {
+	    push @{$channels_output{$_}}, $entry;
+	}
+    }
+}
+t 'writing channels hash: ' . d \%channels_output;
+write_channels(\%channels_output);
+exit();
+
+
+# Check that the usage message has not changed (if it has, this
+# program probably needs changing).
+# 
+sub check_ananova_usage() {
+    (my $usage = get $A) or die "cannot get $A";
+    $usage =~ s/^\s*\#\s*//gm; $usage =~ s/(\s)\s+/$1/g;
+    $usage =~ /
+useage: \?show=<request>
+where request is one of \[regions\|channels\|dir\|<file>\]
+\?show=regions outputs a list of regions and region codes
+\?show=channels outputs a list of channel codes and names
+\?show=dir outputs the list of currently valid file names/
+  or warn "usage message has changed to: $usage\n";
+}
+
+
+# Return a reference to an ordered hash mapping region pretty name to
+# Ananova internal region name.
+# 
+sub get_regions() {
+    my $url =  "$A?show=regions";
+    (my $data = get $url) or die "cannot get $url";
+#    t "got regions page: $data";
+    my %r; tie %r, 'Tie::IxHash';
+    foreach (split /\n/, $data) {
+	t "doing line: $_";
+	s/^\s+//; s/\s+$//;
+	s/\#.*//;
+	next if $_ eq '';
+	if (/^region\.((?:[a-z]+_)?\d+)=(.+)$/) {
+	    $r{$2} = $1;
+	}
+	else {
+	    warn "bad line from $url: $_";
+	}
+    }
+    if (not keys %r) {
+	warn "couldn't get any region data from $url";
+    }
+    return \%r;
+}
+    
+
+# Get the list of Ananova 'filenames' and parse each filename into a
+# tuple of:
+# 
+# [ original filename, day number, channel id, region ]
+# 
+# Region may be undef, and channel id will also contain the region
+# details (so that bbc1_2 and bbc1ea_0 are distinct channels).
+# 
+# Returns a list of these tuples (er, listrefs).
+# 
+sub get_dir() {
+    local $Log::TraceMessages::On = 0;
+    my $url =  "$A?show=dir";
+    (my $data = get $url) or die "cannot get $url";
+#    t "got dir page: $data";
+
+    my @r;
+    foreach (split /\n/, $data) {
+	t "doing line: $_";
+	s/^\s+//; s/\s+$//;
+	s/\#.*//;
+	next if $_ eq '';
+	
+	my $orig = $_;
+
+	s/^day(\d+)_// or die "bad Ananova filename $_ (no 'dayX_')";
+	my $day = $1;
+	my $channel = $_;
+
+	my $region;
+	foreach my $r (values %$regions) {
+	    if ($r =~ /\D/ && s/$r$//) {
+		# Ends with the region code itself.  This isn't
+		# applicable if the region code is just a number.
+		# 
+		$region = $r;
+		last;
+	    }
+	    
+	    $r =~ /(\d+)$/ or die "bad region code $r";
+#	    t "just the number of region: $1";
+	    if (/_$1$/) {
+		# Ends with _ and just the number of the region.
+		$region = $r;
+		last;
+	    }
+	}
+
+	if (not defined $region) {
+	    if (/^(?:[a-z]+_)?[a-z0-9]+$/) {
+		# No region at all, okay.
 	    }
 	    else {
-		warn "seen length $r{length} but also $new_length";
+		warn "bad Ananova filename fragment $_";
+		next;
 	    }
 	}
-	elsif (not defined $r{title}) {
-	    # Assume that the first bit of text of this type which we
-	    # can't identify as being something else must be the
-	    # title. 
-	    # 
-	    # A title with a colon at the end signifies a programme
-	    # with title and 'sub-title', for example 'Kilroy: Debt is
-	    # Driving Us Apart'.
-	    # 
-	    if (s/\s*:\s*$//) {
-		$expect_sub_title = 1;
+
+	push @r, [ $orig, $day, $channel, $region ];
+    }
+    return @r;
+}
+
+
+# Get details of the different channel names.  Returns a list of two
+# hashrefs: the first maps channel internal name to type ('radio' or
+# 'satellite'), the second maps it to pretty name.
+# 
+sub get_ch_types() {
+    local $Log::TraceMessages::On = 0;
+    my $url =  "$A?show=channels";
+    (my $data = get $url) or die "cannot get $url";
+#    t "got channels page: $data";
+
+    my (%type, %pretty);
+    my %seen_pretty;
+    foreach (split /\n/, $data) {
+	t "doing line: $_";
+	s/^\s+//; s/\s+$//;
+	s/\#.*//;
+	next if $_ eq '';
+	
+	if (/^(radio|satellite)\.([a-z0-9_]+)=(.+)$/) {
+	    t 'matched';
+	    my ($type, $ch, $pretty) = ($1, $2, $3);
+	    t "type=$type, ch=$ch, pretty=$pretty";
+	    if (defined $type{$ch}) {
+		warn "channel $ch seen twice";
+		next;
 	    }
-	    push @{$r{title}}, $_;
-	}
-	elsif ($expect_sub_title) {
-	    push @{$r{sub_title}}, $_;
-	    $expect_sub_title = 0;
+	    if ($seen_pretty{lc $pretty}++) {
+		warn "channel pretty name $pretty seen twice";
+		next;
+	    }
+
+	    t "setting type of $ch to $type";
+	    $type{$ch} = $type;
+	    t "setting pretty name of $ch to $pretty";
+	    $pretty{$ch} = $pretty;
 	}
 	else {
-	    # Probably a string like 'repeat, subtitles'.
-	    my @bits = split /\s*,\s*/;
-	    foreach (@bits) {
-		if ($_ eq 'subtitles') {
-		    # The DTD allows several sets of subtitles, but
-		    # British TV never has more than one.
-		    # 
-		    warn "seen 'subtitles' twice" if defined $r{subtitles};
-		    $r{subtitles} = [ 'teletext' ];
-		}
-		elsif ($_ eq 'repeat') {
-		    # In the XMLTV format, the previously-shown
-		    # element can have an attribute channel saying
-		    # what channel the old screening was on.  In UK TV
-		    # listings, 'repeat' often means 'seen before on
-		    # this channel', but not always.  The BBC channels
-		    # in particular have 'repeats' which were shown on
-		    # a different BBC channel before.  So we can't
-		    # reliably set the channel attribute from these
-		    # listings data.
-		    # 
-		    $r{previously_shown}++ && warn "seen 'repeat' twice";
-		}
-		elsif ($_ eq 'stereo') {
-		    # In XMLTV files, this would be
-		    # <audio><stereo>stereo</stereo></audio>.
-		    # 
-		    $r{stereo}++ && warn "seen 'stereo' twice";
-		}
-		elsif (m!^Episode ([0-9/]+)$!) {
-		    # Assume that Ananova numbers episodes from 1; but
-		    # XMLTV - like all good languages - counts from 0.
-		    # 
-		    (my $new_episode_num = $1) =~ s/^(\d+)/$1 - 1/e;
-		    if (not defined $r{episode_num}) {
-			$r{episode_num} = $new_episode_num;
-		    }
-		    elsif ($new_episode_num eq $r{episode_num}) {
-			warn "episode number $new_episode_num seen twice";
-		    }
-		    else {
-			warn "seen episode number $r{episode_num} but also $new_episode_num";
-		    }
-		}
-		elsif (/^Cast:\s*(.+)/) {
-		    $expect_cast = 1;
-		    push @{$r{credits}{actor}}, $1;
-		}
-		elsif ($_ eq 'new') {
-		    $r{new}++ && warn "'new' seen twice";
-		}
-		elsif (/^Director:\s*(.+)/) {
-		    push @{$r{credits}{director}}, $1;
-		}
-		elsif ($_ eq 'B&W' or $_ eq 'B and W') {
-		    my $new_colour = 0;
-		    if (not defined $r{colour}) {
-			$r{colour} = $new_colour;
-		    }
-		    elsif ($new_colour eq $r{colour}) {
-			warn "colour boolean $new_colour seen twice";
-		    }
-		    else {
-			warn "seen colour $r{colour} but also $new_colour";
-		    }
-		}
+	    warn "bad line in channels listing: $_\n";
+	}
+    }
+    return (\%type, \%pretty);
+}
 
-		# If we haven't matched anything so far, try assuming
-		# that it's the name of a cast member.
-		# 
-		elsif ($expect_cast) {
-		    # Everything after the 'Cast:' text is assumed to
-		    # be the name of a member of the cast.
-		    # 
-		    warn "$_ may not be a cast member" if tr/://;
-		    push @{$r{credits}{actor}}, $_;
-		}
-		else {
-		    warn "unknown bit of programme information $_";
-		}
-	    }
+
+# Usage message
+my $shown_usage = 0;
+sub usage() {
+    return if $shown_usage++;
+    my $msg = <<END
+usage: $0 [--days N] channel-type...
+
+A channel type is either a TV region or a method of broadcasting.  You
+should choose the channel types you are able to receive.  The available
+types are:
+
+END
+  ;
+    $msg .= join("\n", sort values %type_pretty) . "\n";
+    $msg .= <<END
+
+You can abbreviate these names by giving a case-insensitive substring,
+for example 'Tyne Tees' could be abbreviated to 'tyne'.  The special
+value 'ALL' means get every available channel.
+END
+  ;
+    warn $msg;
+}
+    
+
+# Get data for a particular day.
+# 
+# Parameters:
+#   date expected in file (in Date::Manip format)
+#   channel id, used to check pretty name in file
+#   'filename'
+# 
+# Uses global $ch_pretty hashref.
+# 
+# Returns: reference to list of programme details, or undef if error.
+# These won't have proper start and stop times; instead they have a
+# 'time' key and you should use date_programmes() or similar to fix up
+# the list of programmes afterwards.  Also the channel is not
+# included, you should add that to each programme (probably in RFC2838
+# style) afterwards.
+# 
+sub get_file($$$) {
+    my ($date_expected, $ch, $file) = @_;
+    my $url =  "$A?show=$file";
+
+    (my $data = get $url) or die "cannot get $url";
+
+    my @lines = split /\n/, $data;
+    foreach (@lines) { s/^\s+//; s/\s+$//; s/\#.*// }
+    @lines = grep { length } @lines;
+
+    if (not @lines) {
+	# No non-comment lines.  This could be because the PHP script
+	# is returning 'file not found'.  That happens if you request
+	# the directory listing, it contains obsolete files which
+	# (wrongly) are still around, and then your request for the
+	# file itself is handled by a different box where the file is
+	# in fact deleted.
+	# 
+	if ($data =~ /\n\# $file does not exist$/) {
+	    warn "file $file does not exist on server, probably should be removed from dir\n";
+	    return undef;
+	}
+	else {
+	    warn "cannot get data from $url, returns:\n$data";
+	    return undef;
 	}
     }
 
-    if (not defined $r{title}) {
-#	local $Log::TraceMessages::On = 1;
-	warn "no title found, skipping programme\n";
-	t 'managed to get: ' . d \%r;
+    # Check the date.  According to Ananova's comment there's some odd
+    # procedure you have to follow to make sure it is correct.
+    # 
+    my $page_date = shift @lines;
+    if (not $page_date =~
+/^((?:Sun|Mon|Tues|Wednes|Thurs|Fri|Satur)day)\|(\d\d)\|(\d\d)\|(\d\d\d\d)$/)
+    {
+	warn "bad date '$page_date' in file $url, skipping";
+	return undef;
+    }
+    my ($weekday, $dd, $mm, $yyyy) = ($1, $2, $3, $4);
+    t "got date: $weekday $yyyy-$mm-$dd";
+    my $dp = ParseDate("$yyyy-$mm-$dd");
+    if (not defined $dp) {
+	warn "bad date '$page_date' in file $url, skipping";
+	return undef;
+    }
+    t "parsed out date $dp, check it matches $weekday";
+    if (UnixDate($dp, '%A') ne $weekday) {
+	# Apparently you have to step backwards by one or two days
+	# until the date matches the weekday given.
+	# 
+	my $found = 0;
+	foreach (0, 1) {
+	    $dp = DateCalc($dp, '- 1 day'); die if not defined $dp;
+	    if (UnixDate($dp, '%A') eq $weekday) {
+		$found = 1;
+		last;
+	    }
+	}
+	if (not $found) {
+	    warn "weekday of $page_date is wrong in $url (even tried going back a couple of days)";
+	    return undef;
+        }
+    }
+    
+    # But does it match what we expect?
+    if (UnixDate($dp, '%Q') ne UnixDate($date_expected, '%Q')) {
+	warn "date from page $url (" . UnixDate($dp, '%Q') . ") is wrong (probably an old file)\n";
 	return undef;
     }
 
-    return \%r;
+    # Check the channel name is as expected (if we know what the
+    # pretty name should be for this channel).
+    # 
+    my $got_ch_pretty = shift @lines;
+    my $expected_pretty_name = $ch_pretty->{$ch};
+    if (defined $expected_pretty_name
+	and $got_ch_pretty ne $expected_pretty_name) {
+	if ($ch_pretty_definitive{$ch}) {
+	    warn
+"channel $ch changed name from '$expected_pretty_name' to '$got_ch_pretty'\n";
+	}
+	else {
+	    # Not definitive, in other words the new name takes
+	    # precedence (and is definitive).
+	    # 
+	    $ch_pretty->{$ch} = $got_ch_pretty;
+	    $ch_pretty_definitive{$ch} = 1;
+	}
+    }
+    else {
+	# Currently no pretty name defined.  Probably because it's a
+	# terrestrial channel and wasn't mentioned in the channels
+	# file.  We check elsewhere for channels in show=dir that
+	# aren't in show=channels, so here we needn't bother with
+	# validating, we can just set the name and carry on happily.
+	# 
+	$ch_pretty->{$ch} = $got_ch_pretty;
+    }
+
+    my $copyright = pop @lines;
+    if ($copyright !~ /^\(c\) Copyright/) {
+	warn "strange copyright message: $copyright\n";
+    }
+
+    if (@lines and $lines[0] =~
+	/^There are no listings available for this channel today\|\|/) {
+	return [];
+    }
+
+    # Right, got that cruft out of the way, each remaining line is a
+    # |-separated list of programme details.
+    # 
+    my @r;
+    my $prev_time;
+    foreach (@lines) {
+	my @fields = split /\|/, $_, -1; # toothpicks ahoy!
+	my $num_fields = scalar @fields;
+	if ($num_fields == 1 and $fields[0] =~ /copyright/i) {
+	    next;
+	}
+	if ($num_fields < 17 or $num_fields >= 22) {
+	    warn "wrong number of fields ($num_fields, need 17..21) "
+	      . "in line from $url: $_\n";
+	    warn "fields are: " . join("\n", @fields) . "\n";
+	    warn "skipping line\n";
+	    next;
+	}
+	my ($title, $time, $when, $episode_num, $episode_name, $cast,
+	    $director, $duration, $desc, $type, $subtitled, $bw,
+	    $stereo, $mono, $new, $repeat, $digital)
+	  = @fields;
+	my %p;
+	$p{title} = [ $title ];
+	
+	# The comment from Ananova says that the time is 'probably in
+	# time zone existing at 5:00am of the correct file date'.  I
+	# assume that means that it might not be, and it might instead
+	# have an explicit timezone.  We'll just use the old
+	# date-parsing routines to figure out the timezone.
+	# 
+	# That means that for now, we add an element 'time' to the
+	# programme details, and later on, date_programmes() turns
+	# this into a proper start and stop time.
+	# 
+	if (length $time) {
+	    if (not $time =~ /^\d\d?:\d\d$/) {
+		warn "bad time '$time' in line from page $url: $_";
+		warn "skipping line";
+		next;
+	    }
+	}
+	else {
+	    # No time was given for this programme.  This is probably
+	    # because it's contained in the same 'clump' as the
+	    # previous one, for example 'CBBC' at 6:45 is followed in
+	    # the listings by 'Teletubbies' without a time.
+	    # 
+	    # For this case, we give the programme the same time as
+	    # the previous one.  That's the way it appears in the
+	    # Ananova user-visible pages and it's what add_clumpidx()
+	    # expects.
+	    # 
+	    if (not defined $prev_time) {
+		warn "no time for first line from page $url: $_";
+		warn "skipping line";
+		next;
+	    }
+	    $time = $prev_time;
+	}
+
+	# For sanity-checking the time against 'when',
+	# comparing raw hours and minutes will probably be faster
+	# than using Date::Manip.
+	# 
+	$time =~ /^(\d\d?):(\d\d)$/ or die;
+	my ($hours, $minutes) = ($1, $2);
+	if (length($hours) == 1) {
+	    $hours = "0$hours";
+	    $time = "$hours:$minutes";
+	}
+	$p{time} = $time;
+	$prev_time = $time;
+	
+	# The 'when' attribute can be DAYTIME, EVENING or LATENIGHT.
+	# It seems a bit redundant to me.  But on the principle that
+	# no scrap of information should be thrown away, we check that
+	# it's sensible.
+	# 
+	if ($when eq 'DAYTIME') {
+	    if (5 <= $hours and $hours < 18) {
+		# Daytime is between 05:00 and 18:00.  It overlaps
+		# slightly with LATENIGHT.
+		# 
+	    }
+	    else {
+		warn "time $time is wrongly considered 'DAYTIME' "
+		  . "in line from url $url: $_\n";
+	    }
+	}
+	elsif ($when eq 'EVENING') {
+	    if (18 <= $hours) {
+		# Evening is from 18:00 until midnight.
+	    }
+	    else {
+		warn "time $time is wrongly considered 'EVENING' "
+		  . "in line from url $url: $_\n";
+	    }
+	}
+	elsif ($when eq 'LATENIGHT') {
+	    if ($hours < 7
+		or ($hours == 7 and $minutes == 0)) {
+		# Latenight is until 07:00 (or sometimes a programme
+		# just beginning at that time is still latenight).
+		# 
+	    }
+	    else {
+		warn "time $time is wrongly considered 'LATENIGHT' "
+		  . "in line from url $url: $_\n";
+	    }
+	}
+	else {
+	    warn "unknown 'when' specifier $when "
+	      . "in line from url $url: $_";
+	}
+
+	# Episode number.
+	if (length $episode_num) {
+	    if ($episode_num =~ m!^[0-9/]+$!) {
+		# Assume that Ananova numbers episodes from 1; but
+		# XMLTV - like all good languages - counts from 0.
+		# 
+		$episode_num =~ s/^(\d+)/$1 - 1/e;
+		$p{episode_num} = $episode_num;
+	    }
+	    else {
+		warn "bad episode number '$episode_num' "
+		  . "in line from url $url: $_";
+	    }
+	}
+
+	# Epsiode name.  This corresponds to the badly named
+	# 'sub-title' in XMLTV.
+	# 
+	if (length $episode_name) {
+	    $p{sub_title} = [ $episode_name ];
+	}
+
+	# Cast.
+	if (length $cast) {
+	    foreach (split /\s*,\s*/, $cast) {
+		push @{$p{credits}{actor}}, $_;
+	    }
+	}
+
+	# Director.
+	if (length $director) {
+	    foreach (split /\s*,\s*/, $director) {
+		push @{$p{credits}{director}}, $_;
+	    }
+	}
+	
+	# Ananova's idea of 'duration' is usually the original length
+	# of a film - not the length it is shown at on TV.  Now we do
+	# have a 'length' element in the XMLTV format, but that's
+	# meant for the length _as shown_, just not including adverts
+	# or other junk.  So we just discard duration.
+	# 
+	if ($duration ne '' and $duration !~ /^(\d+)\s+(?:mins|minutes)$/) {
+	    warn "bad duration $duration "
+	      . "in line from url $url: $_";
+	}
+
+	# Description.  Any special munging on this will happen later.
+	if (length $desc) {
+	    $p{desc} = [ $desc ];
+	}
+
+	# Programme type.
+	if (length $type) {
+	    foreach (split /\s*,\s*/, $type) {
+		push @{$p{category}}, lc $_;
+	    }
+	}
+
+	# Subtitles.  Assume that when Ananova say this, they mean
+	# teletext (I don't know what happens for foreign films with
+	# on-screen subtitles).
+	# 
+	if ($subtitled) {
+	    $p{subtitles} = [ 'teletext' ];
+	}
+	
+	# Black and white - in other words, not colour.
+	if ($bw) {
+	    $p{colour} = 0;
+	}
+	
+	# Stereo or mono.
+	if (not $stereo and not $mono) {
+	    # Just don't set any of the flags.
+	}
+	elsif (not $stereo and $mono) {
+	    $p{audio}{present} = 1;
+	    $p{audio}{stereo} = 'mono';
+	}
+	elsif ($stereo and not $mono) {
+	    $p{audio}{present} = 1;
+	    $p{audio}{stereo} = 'stereo';
+	}
+	else {
+	    warn "line in page $url has both stereo and mono: $_";
+	}
+
+	# Repeat or new.  I don't know whether these are necessarily
+	# mutually exclusive - you might have an instant repeat of the
+	# first episode of a new series have both.  So I won't bother
+	# checking that both are not set.
+	# 
+	if ($repeat) {
+	    $p{previously_shown} = 1;
+	}
+	if ($new) {
+	    $p{new} = 1;
+	}
+	    
+	# I don't know what the 'digital' flag is for: Ananova says
+	# 'if known to be available on as digital transmission'.  Just
+	# ignore it.
+	# 
+
+	# Finally there are four descriptions, with increasing levels
+	# of detail.  It might be a good idea to extend the XMLTV
+	# format to support several descriptions of differing length,
+	# but for now we just sanity-check them.
+	# 
+	my @descs = @fields[17..20];
+	foreach my $i (0 .. $#descs) {
+	    next if not defined $descs[$i] or not length $descs[$i];
+	    foreach my $j ($i+1 .. $#descs) {
+		next if not defined $descs[$j] or not length $descs[$j];
+		if (length $descs[$j] < length $descs[$i]) {
+		    warn
+"description $j ($descs[$j]) is shorter than description $i ($descs[$i]) "
+		      . "in line from url $url: $_";
+		}
+	    }
+	}
+	# The most detailed description should be the same as the main
+	# description.  Er, except when it is not present at all.
+	# 
+	if (defined $descs[3] and $descs[3] ne '' and $descs[3] ne $desc) {
+	    warn "description 3 ($descs[3]) isn't the same as main desc ($desc) "
+	      . "in line from url $url: $_";
+	}
+
+	# NB $p{channel} does not get set!
+
+	push @r, \%p;
+    }
+    return \@r;
 }
 
 
@@ -599,100 +1136,6 @@ sub date_programmes($$) {
 }
 
 
-# links()
-# 
-# Return a list of all links in an HTML document.  Based on the
-# example in the HTML::TokeParser documentation :-).
-# 
-sub links($) {
-    my $html = shift;
-    my @r;
-    my $p = HTML::TokeParser->new(\$html)
-      or die 'cannot instantiate HTML::TokeParser';
-    while (my $t = $p->get_tag('a')) {
-	my $href = $t->[1]{href};
-	push @r, $href if defined $href;
-    }
-    return @r;
-}
-
-
-# prog_urls()
-# 
-# Return a list of all URLs for programme details, given a particular
-# Ananova day number and Ananova channel id.
-# 
-# Parameters:
-#   Ananova channel id
-#   day number
-# 
-sub prog_urls($) {
-    my ($ch, $day) = @_;
-    my $index_uri = new URI
-"http://www.ananova.com/tv/tv_mainlisting.html?day=day$day&start=Start&c=$ch&h=1";
-    t 'getting index: ' . $index_uri->as_string();
-    my $index_html = get $index_uri;
-    t "got index html: $index_html";
-
-    my %seen;
-    my @r;
-    foreach (links($index_html)) {
-	my $u = new URI($_);
-	my $abs = $u->abs($index_uri);
-	if (not defined $abs) {
-	    warn "cannot absolutize $_";
-	    next;
-	}
-	if ($abs == $u) {
-	    # Absolute link (with http: or whatever) - assume to
-	    # somewhere unrelated.
-	}
-	elsif (m!/!) {
-	    # Absolute link somewhere on the same site - still assume
-	    # it's unrelated.
-	}
-	elsif (/^tv_det\.html\?c=\Q$ch\E&rs=&rid=2&n=(\d+)&d=day\Q$day\E$/) {
-	    # It's a relative link to tv_det.html, with the correct
-	    # channel and day number.  Add the absolute version to the
-	    # result list.
-	    # 
-	    warn "seen URL $_ twice" if $seen{$_}++;
-	    push @r, $abs;
-	}
-	else {
-	    warn "unrecognized URL in index page: $_";
-	}
-    }
-    return @r;
-}
-
-
-# kludge_text()
-# 
-# Fixes to strings of text from the HTML which wouldn't be necessary
-# if the whole XML-reading-and-writing system handled non-ASCII
-# characters and ligatures correctly.  But as it is, my nsgmls and
-# perl installations are slightly misconfigured; since they're just
-# the standard Red Hat packages, other people's will be also; and it's
-# easier to just work around the problems here.
-# 
-sub kludge_text($) {
-    local $_ = shift;
-
-    # Remove £ signs.
-    s/\xa3((?:\d|,)*)/($1 ne '') ? "$1 pounds" : ''/ge;
-    s/\Q&nbsp;\E/ /g;
-
-    # XML::Simple turns '&' into '&amp;', but nsgmls -wxml doesn't
-    # like this.
-    # 
-    s/\s*\Q\&amp\;\s*\E/ and /g;
-    s/\s*\Q&\E\s*/ and /g;
-
-    return $_;
-}
-
-
 # add_clumpidx()
 # 
 # Sometimes two programmes on a channel are given the same
@@ -791,6 +1234,276 @@ END
 
     t 'add_clumpidx() EXIT';
 }
+
+# Given an Ananova internal channel id, return the output
+# RFC2838-style name.  Where the name is not known, we invent one
+# based on ananova.com (using global $ch_pretty).
+# 
+# Parameter: Ananova internal channel identifier
+# Returns: funky domain name type string
+# 
+sub ch_output($) {
+    local $Log::TraceMessages::On = 0;
+    my $ch = shift;
+    if (not defined $ch_to_output{$ch}) {
+	my $pretty = $ch_pretty->{$ch};
+	$pretty = $ch if not defined $pretty;
+	my $munged = $pretty;
+	for ($munged) {
+	    t d $_;
+	    tr/ _/-/s;
+	    t d $_;
+	    tr/a-zA-Z0-9-//cd;
+	    t d $_;
+	    tr/A-Z/a-z/;
+	    t d $_;
+	}
+	my $new = "$munged.tv-listings.ananova.com";
+	warn "don't know RFC2838-style name for $pretty ($ch), using $new\n";
+	$ch_to_output{$ch} = $new;
+    }
+    return $ch_to_output{$ch};
+}
+	      
+	      
+# Return the list of what internal Ananova channel names map to what
+# XMLTV internal channel names.  This isn't fetched from the site,
+# it's just hardcoded here.
+# 
+sub get_ch_to_output() {
+    %ch_to_output =
+      ('adult' => 'theadultchannel.co.uk', # Adult Channel
+       'anglia_0' => 'anglia.tv.co.uk', # Anglia
+       'animalplanetdigital' => 'animalplanet.discoveryeurope.com', # Animal Planet (Digital)
+       'asianet' => 'asianet-tv.com', # Asia.net
+       'atlantic252' => 'atlantic252.com', # Atlantic 252
+       'bbc1_2' => 'south-east.bbc1.bbc.co.uk', # BBC1
+       'bbc1ea_0' => 'east.bbc1.bbc.co.uk', # BBC1 East Anglia
+       'bbc1irish_12' => 'ireland.bbc1.bbc.co.uk', # BBC1 Ireland
+       'bbc1mid_3' => 'midlands.bbc1.bbc.co.uk', # BBC1 Midlands
+       'bbc1n_14' => 'north.bbc1.bbc.co.uk', # BBC1 North
+       'bbc1ne_1' => 'north-east.bbc1.bbc.co.uk', # BBC1 North East
+       'bbc1ne_11' => 'north-east.bbc1.bbc.co.uk', # BBC1 North East
+       'bbc1nw_6' => 'north-west.bbc1.bbc.co.uk', # BBC1 North West
+       'bbc1s_9' => 'south.bbc1.bbc.co.uk', # BBC1 South
+       'bbc1scot_10' => 'scotland.bbc1.bbc.co.uk', # BBC1 Scotland
+       'bbc1scot_5' => 'scotland.bbc1.bbc.co.uk', # BBC1 Scotland
+       'bbc1se_15' => 'south-east.bbc1.bbc.co.uk', # BBC1 South East
+       'bbc1sw_13' => 'south-west.bbc1.bbc.co.uk', # BBC1 South West
+       'bbc1sw_4' => 'south-west.bbc1.bbc.co.uk', # BBC1 South West
+       'bbc1w_8' => 'west.bbc1.bbc.co.uk', # BBC1 West
+       'bbc1wales_7' => 'wales.bbc1.bbc.co.uk', # BBC1 Wales
+       'bbc2_2' => 'south-east.bbc2.bbc.co.uk', # BBC2
+       'bbc2ea_0' => 'east.bbc2.bbc.co.uk', # BBC2 East Anglia
+       'bbc2irish_12' => 'ireland.bbc2.bbc.co.uk', # BBC2 Ireland
+       'bbc2mid_3' => 'midlands.bbc2.bbc.co.uk', # BBC2 Midlands
+       'bbc2n_14' => 'north.bbc2.bbc.co.uk', # BBC2 North
+       'bbc2ne_1' => 'north-east.bbc2.bbc.co.uk', # BBC2 North East
+       'bbc2ne_11' => 'north-east.bbc2.bbc.co.uk', # BBC2 North East
+       'bbc2nw_6' => 'north-west.bbc2.bbc.co.uk', # BBC2 North West
+       'bbc2s_9' => 'south.bbc2.bbc.co.uk', # BBC2 South
+       'bbc2scot_10' => 'scotland.bbc2.bbc.co.uk', # BBC2 Scotland
+       'bbc2scot_5' => 'scotland.bbc2.bbc.co.uk', # BBC2 Scotland
+       'bbc2se_15' => 'south-east.bbc2.bbc.co.uk', # BBC2 South East
+       'bbc2sw_13' => 'south-west.bbc2.bbc.co.uk', # BBC2 South West
+       'bbc2sw_4' => 'south-west.bbc2.bbc.co.uk', # BBC2 South West
+       'bbc2w_8' => 'west.bbc2.bbc.co.uk', # BBC2 West
+       'bbc2wales_7' => 'wales.bbc2.bbc.co.uk', # BBC2 Wales
+       'bbcchoice' => 'choice.bbc.co.uk', # BBC Choice
+       'bbcknowledge' => 'knowledge.bbc.co.uk', # BBC Knowledge
+       'bbcnews24' => 'news-24.bbc.co.uk', # BBC News 24
+       'bbcparliament' => 'parliament.bbc.co.uk', # BBC Parliament
+       # Just for fun we'll use the Boston Business
+       # Consulting domain for the international (rather
+       # than British) BBC channels.
+       # 
+       'bbcprime' => 'prime.bbc.com', # BBC Prime
+       'bbcworld' => 'world-tv.bbc.com', # BBC World
+       'bloomberg' => 'bloomberg.com', # Bloomberg TV
+       'border_1' => 'border-tv.com', # Border
+       # FIXME can't find domain name for 'Box'
+       'box' => 'box.tv-listings.ananova.com',
+       'bravodigital' => 'bravo.co.uk', # Bravo (Digital)
+       'britisheurosport' => 'british.eurosport.com', # British Eurosport
+       'bsb_movie' => 'sky-premier.sky.com', # Sky Premier
+       'bsb_sports' => 'sky-sports-1.sky.com', # yes, really
+       'carlton_2' => 'carlton.com', # Carlton
+       'carltoncinema' => 'cinema.carlton.com', # Carlton Cinema
+       'carltonfood' => 'food.carlton.com', # Taste CFN
+       'cartoon' => 'uk.cartoonnetwork.com', # Cartoon Network
+       'central_3' => 'central.carlton.com', # Central
+       'ch4_0' => 'channel4.com', # Channel 4
+       'ch4_1' => 'channel4.com', # Channel 4
+       'ch4_10' => 'channel4.com', # Channel 4
+       'ch4_11' => 'channel4.com', # Channel 4
+       'ch4_12' => 'channel4.com', # Channel 4
+       'ch4_13' => 'channel4.com', # Channel 4
+       'ch4_14' => 'channel4.com', # Channel 4
+       'ch4_15' => 'channel4.com', # Channel 4
+       'ch4_2' => 'channel4.com', # Channel 4
+       'ch4_3' => 'channel4.com', # Channel 4
+       'ch4_4' => 'channel4.com', # Channel 4
+       'ch4_5' => 'channel4.com', # Channel 4
+       'ch4_6' => 'channel4.com', # Channel 4
+       'ch4_7' => 'channel4.com', # Channel 4
+       'ch4_8' => 'channel4.com', # Channel 4
+       'ch4_9' => 'channel4.com', # Channel 4
+       'ch5_0' => 'channel4.com', # Channel 5
+       'ch5_1' => 'channel4.com', # Channel 5
+       'ch5_10' => 'channel5.co.uk', # Channel 5
+       'ch5_11' => 'channel5.co.uk', # Channel 5
+       'ch5_12' => 'channel5.co.uk', # Channel 5
+       'ch5_13' => 'channel5.co.uk', # Channel 5
+       'ch5_14' => 'channel5.co.uk', # Channel 5
+       'ch5_15' => 'channel5.co.uk', # Channel 5
+       'ch5_2' => 'channel5.co.uk', # Channel 5
+       'ch5_3' => 'channel5.co.uk', # Channel 5
+       'ch5_4' => 'channel5.co.uk', # Channel 5
+       'ch5_5' => 'channel5.co.uk', # Channel 5
+       'ch5_6' => 'channel5.co.uk', # Channel 5
+       'ch5_7' => 'channel5.co.uk', # Channel 5
+       'ch5_8' => 'channel5.co.uk', # Channel 5
+       'ch5_9' => 'channel5.co.uk', # Channel 5
+       # FIXME: Ananova calls this 'Channel Islands'
+       'channel_4' => 'channel-islands.tv-listings.ananova.com',
+       'christian' => 'christian-channel-europe.god-digital.com', # God Channel
+       'classicfm' => 'classicfm.co.uk', # Classic FM
+       'cnbc' => 'europe.cnbc.com', # CNBC Europe
+       'cnn' => 'europe.cnn.com', # CNN
+       # FIXME cannot find domain for '.tv' - how do you type that into Google?
+       'computer' => 'dot-tv.tv-listings.ananova.com',
+       'cymru' => 'radio-cymru.bbc.co.uk', # Radio Cymru
+       'discoverycivilisations' => 'civilisations.discoveryeurope.com', # Discovery Civilisations
+       'discoverydigital' => 'discoveryeurope.com', # Discovery (Digital)
+       'discoverykids' => 'kids.discoveryeurope.com', # Discovery Kids
+       # Maybe 'Plus 1' means timewarped
+       # by one hour.  There needs to be
+       # some convention for that. 
+       'discoveryplus1' => 'plus-1.discoveryeurope.com', # Discovery Plus 1
+       'discoveryscitrek' => 'sci-trek.discoveryeurope.com', # Discovery Sci Trek
+       'discoverytravel' => 'travel.discoveryeurope.com', # Discovery Travel & Adventure
+       'discoverywings' => 'wings.discoveryeurope.com', # Discovery Wings
+       'disney' => 'disneychannel.disney.co.uk', # The Disney Channel
+       'e4' => 'e4.channel4.com', # E4
+       'family_channeldigital' => 'challengetv.co.uk', # Challenge TV (Digital)
+       'fantasy' => 'fantasy.televisionx.co.uk', # Fantasy Channel
+       'filmfour' => 'filmfour.channel4.com', # Film on Four
+       'filmfourextreme' => 'extreme.filmfour.channel4.com', # FilmFour Extreme
+       'filmfourplus1' => 'plus-1.filmfour.channel4.com', # FilmFour+1
+       'filmfourworld' => 'world.filmfour.channel4.com', # FilmFour World
+       'foxdigital' => 'foxkids.co.uk', # Fox Kids Network (Digital)
+       'foxplus1' => 'plus-1.foxkids.co.uk', # Fox Kids Plus 1
+       'grampian_5' => 'grampiantv.co.uk', # Grampian
+       'granada_6' => 'granadatv.co.uk', # Granada (site down ATM)
+       'granada_breezeondigital' => 'breeze.granadatv.co.uk', # Granada Breeze
+       'granada_men' => 'men.granadatv.co.uk', # Granada Men & Motors
+       'granada_plus' => 'plus.granadatv.co.uk', # Granada Plus
+       'historydigital' => 'thehistorychannel.co.uk', # History Channel (Digital)
+       'htvwales_7' => 'wales.htv.co.uk', # HTV Wales
+       'htvwest_8' => 'west.htv.co.uk', # HTV West
+       'itv2' => 'itv2.itv.co.uk', # ITV2
+       'itvsport' => 'sport.itv.co.uk', # ITV Sport
+       'itvsportplus' => 'sport-plus.itv.co.uk', # ITV Sport
+       'landscape' => 'landscapetv.com', # Landscape Channel
+       'm2' => 'm2europe.com',	# M2
+       'meridian_15' => 'meridian.tv.co.uk', # Meridian
+       'meridian_9' => 'meridian.tv.co.uk', # Meridian
+       'mtv' => 'mtv.co.uk',	# MTV
+       'mtvbase' => 'base.mtv.co.uk', # MTV Base
+       'mtvdance' => 'dance.mtv.co.uk', # MTV Dance
+       'mtvextra' => 'hits.mtv.co.uk', # MTV Hits
+       # musicchoice.co.uk is down
+       'musicchoiceblues' => 'blues.musicchoice.co.uk', # Music Choice Blues
+       'musicchoiceclassical' => 'classical.musicchoice.co.uk', # Music Choice Classical
+       'musicchoicecountry' => 'country.musicchoice.co.uk', # Music Choice Country
+       'musicchoicedance' => 'dance.musicchoice.co.uk', # Music Choice Dance
+       'musicchoiceeasy' => 'easy.musicchoice.co.uk', # Music Choice Easy
+       'musicchoicegold' => 'gold.musicchoice.co.uk', # Music Choice Gold
+       'musicchoicehits' => 'hits.musicchoice.co.uk', # Music Choice Hits
+       'musicchoicejazz' => 'jazz.musicchoice.co.uk', # Music Choice Jazz
+       'musicchoicelove' => 'love.musicchoice.co.uk', # Music Choice Love
+       'musicchoicerock' => 'rock.musicchoice.co.uk', # Music Choice Rock
+       'mutv' => 'mutv.manutd.com', # MUTV
+       'nagaeltachta' => 'rnag.ie', # Radio na Gaeltachta
+       'nationalgeographicdigital' => 'nationalgeographic.co.uk', # National Geographic (Digital)
+       'nickelodeon' => 'nickelodeon.co.uk', # Nickelodeon
+       'nickelodeonjr' => 'jr.nickelodeon.co.uk', # Nickelodeon Jr
+       'nickelodeonreplay' => 'replay.nickelodeon.co.uk', # Nickelodeon Replay
+       'paramount' => 'paramountcomedy.com', # Paramount Comedy
+       'performance' => 'performancetv.co.uk', # Performance
+       'playboy' => 'playboy.com', # Playboy Channel
+       'qvc' => 'qvcuk.com',	# QVC
+       'racing' => 'racingchannel.com', # The Racing Channel
+       'radio1' => 'radio-1.bbc.co.uk',
+       'radio2' => 'radio-2.bbc.co.uk',
+       'radio3' => 'radio-3.bbc.co.uk',
+       'radio4' => 'radio-4.bbc.co.uk',
+       'radio5mw' => 'radio-5-mw.bbc.co.uk',
+       # Ananova internal name wrong
+       'radioireland' => 'todayfm.com', # Today FM
+       'radioscotland' => 'radio-scotland.bbc.co.uk', # Radio Scotland
+       'radioulster' => 'radio-ulster.bbc.co.uk', # Radio Ulster
+       'rte1_12' => 'rte-1.rte.ie', # RTE 1
+       'rte2_12' => 'rte-2.rte.ie', # RTE 2
+       'rteradio1' => 'radio-1.rte.ie', # RTE Radio 1
+       'rteradio2' => '2-fm.rte.ie', # 2 FM
+       'rteradiofm3' => 'lyric-fm.rte.ie', # Lyric FM
+       's4c_7' => 's4c.co.uk',	# S4C (Welsh Channel 4)
+       's4cdigital' => 'digital.s4c.co.uk', # Channel 4 - Wales (Digital)
+       'scificable' => 'cable.uk.scifi.com', # Sci-Fi (Cable)
+       'scifidigital' => 'digital.uk.scifi.com', # Sci-Fi (Digital)
+       'scottish_10' => 'scottishtv.co.uk', # Scottish
+       'shop' => 'shop-tv.co.uk', # Shop!
+       'sky_boxofficedigital' => 'box-office-digital.sky.com', # Sky Box Office Digital
+       'sky_channel' => 'sky-one.sky.com', # Sky One
+       'sky_eurosport' => 'eurosport.sky.com', # Eurosport
+       'sky_moviemax2' => '2.moviemax.sky.com', # Sky Moviemax 2
+       'sky_moviemax3' => '3.moviemax.sky.com', # Sky Moviemax 3
+       'sky_moviemax4' => '4.moviemax.sky.com', # Sky Moviemax 4
+       'sky_moviemax5' => '5.moviemax.sky.com', # Sky Moviemax 5
+       'sky_moviemaxondigital' => 'itvdigital.moviemax.sky.com', # Sky Moviemax - Ondigital
+       'sky_movies' => 'moviemax.sky.com', # Sky Moviemax
+       'sky_moviesgolddigital' => 'cinema.sky.com', # Sky Cinema (Digital)
+       'sky_news' => 'sky-news.sky.com', # Sky News
+       'sky_oneondigital' => 'ondigital.sky-one.sky.com', # Sky One (Ondigital)
+       'sky_premier2' => '2.premier.sky.com', # Sky Premier 2
+       'sky_premier3' => '3.premier.sky.com', # Sky Premier 3
+       'sky_premier4' => '4.premier.sky.com', # Sky Premier 4
+       'sky_premierondigital' => 'ondigital.premier.sky.com', # Sky Premier - Ondigital
+       'sky_premierwidescreen' => 'widescreen.premier.sky.com', # Sky Premier - Widescreen
+       'sky_sports2' => '2.sports.sky.com', # Sky Sports 2
+       'sky_sports3' => '3.sports.sky.com', # Sky Sports 3
+       'sky_sportsnews' => 'news.sports.sky.com', # Sky Sports.comTV
+       'skycinema2' => '2.cinema.sky.com', # Sky Cinema 2
+       'sonytv' => 'setindia.com', # Sony Entertainment TV Asia
+       'talkradiouk' => 'talk-radio.co.uk', # Talk Sport, apparently
+       'tara' => 'taratv.net',	# TARA
+       'tcm' => 'tcm.turner.com', # TCM (Digital)
+       'tlcdigital' => 'home.discoveryeurope.com', # Discovery Home & Leisure (Digital)
+       'traveldigital' => 'travelchannel.co.uk', # The Travel Channel (Digital)
+       'troubledigital' => 'trouble.co.uk', # Trouble (Digital)
+       'tvasia' => 'tvasia.com', # ZEE TV (maybe not right)
+       'tvtravelshop' => 'tvtravelshop.co.uk', # TV Travel Shop
+       'tyne_11' => 'tttv.granadatv.co.uk', # North East
+       'ukarena' => 'uk-drama.flextech.telewest.co.uk', # UK Drama
+       'ukgold' => 'uk-gold.flextech.telewest.co.uk', # UK Gold
+       'ukgoldclassics' => 'uk-gold-2.flextech.telewest.co.uk', # UK Gold 2
+       'ukhorizons' => 'uk-horizons.flextech.telewest.co.uk', # UK Horizons
+       'ukliving' => 'living.flextech.telewest.co.uk', # Living
+       'ukplay' => 'play.flextech.telewest.co.uk', # Play UK
+       'ukstyle' => 'uk-style.flextech.telewest.co.uk', # UK Style
+       'ulster_12' => 'utv.co.uk', # Ulster
+       'vh1' => 'vh1online.co.uk', # VH1
+       'vh1classic' => 'classic.vh1online.co.uk', # VH1 Classic
+       'virgin' => 'virginradio.co.uk', # Virgin
+       'wales' => 'radio-wales.bbc.co.uk', # Radio Wales
+       'wellbeing' => 'wellbeing.com', # Wellbeing
+       'westcountry_13' => 'westcountry.carlton.com', # West Country
+       'worldsvc' => 'world-svc.bbc.com', # World Service
+       'ytv_14' => 'yorkshire.granadatv.co.uk', # Yorkshire
+      );
+    return %ch_to_output;
+}	      
 
 
 # Routines to handle a symmmetric 'relation'.  This is used to keep
