@@ -54,7 +54,7 @@ print STDERR "Timezone is $ENV{TZ}\n";
 my %cmds;
 
 #
-# build file list - for Perl scripts to 'do'
+# Add subroutines for do()ing Perl scripts we know about.
 #
 $files=PerlApp::get_bound_file("exe_files.txt");
 foreach my $exe (split(/ /,$files))
@@ -63,7 +63,15 @@ foreach my $exe (split(/ /,$files))
     $_=$exe;
     s!^.+/!!g;
 
-    $cmds{$_}=sub {do $exe};
+    $cmds{$_}=sub {
+	my $r = do $exe;
+	if (not defined $r)
+	{
+	    die "could not load $exe: $!" if defined $!;
+	    die "error compiling $exe: $@" if defined $@;
+	}
+	return $r;
+    };
 }
 
 #
@@ -122,8 +130,8 @@ if ($cmd eq 'tv_grab_uk' or $cmd eq 'tv_grab_uk_rt')
         $dir .= "/share/xmltv";
     	unless (-d $dir )
     	{
-	        die "directory $dir not found\n If not kept with the executable, specify with --share\n"
-	    }
+	    die "directory $dir not found\n If not kept with the executable, specify with --share\n"
+	}
         push @ARGV,"--share",$dir;
     }
 } # special tv_grab_uk, tv_grab_uk_rt processing
@@ -131,8 +139,13 @@ if ($cmd eq 'tv_grab_uk' or $cmd eq 'tv_grab_uk_rt')
 #
 # call the appropriate routine (note, ARGV was shifted above)
 #
-$return=$cmds{$cmd}->();
+$cmds{$cmd}->();
 
-die "$cmd:$! $@" unless (defined $return);
-
-exit $return;
+#
+# Ignore the return value - we assume that the %cmds subroutine will
+# have done that and die()d already if something went very wrong.
+#
+# Similarly, we know that any command run will have taken the trouble
+# to die() or exit() itself if it wanted to.  If it ran all the way
+# through and returned to the caller, we can assume things went okay.
+#
