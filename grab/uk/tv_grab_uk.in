@@ -85,6 +85,7 @@ sub get_copyright( $ );
 sub get_regions( $$ );
 sub get_dir( $$ );
 sub read_channels_page( $ );
+sub read_files_and_jump_around( $$$$$$ );
 sub read_file( $$$$$ );
 sub page_date_diff( $$ );
 sub date_programmes( $$ );
@@ -390,6 +391,31 @@ sub grab( @ ) {
     my @files = get_dir($index_pages->{dir}->{content},
 			$index_pages->{dir}->{url});
 
+    # Provide some means to go to the 'next' and 'previous' days'
+    # listings for a given channel+day.  This should not be needed,
+    # but occasionally Ananova's dates are screwed up and we need to
+    # thrash around continually trying to get the correct file.
+    #
+    my (%prev, %next);
+    my %by_aid_and_day; my %seen_filename;
+    foreach (@files) {
+	my ($filename, $day, $ananova_id) = @$_;
+	if ($seen_filename{$filename}++) {
+	    warn "filename $filename seen twice in dir";
+	    next;
+	}
+	warn "more than one file for Ananova id $ananova_id and day $day"
+	  if defined $by_aid_and_day{$ananova_id}->{$day};
+	$by_aid_and_day{$ananova_id}->{$day} = $filename;
+    }
+    foreach (@files) {
+	my ($filename, $day, $ananova_id) = @$_;
+	my $prev = $by_aid_and_day{$ananova_id}->{$day - 1};
+	$prev{$filename} = $prev if defined $prev;
+	my $next = $by_aid_and_day{$ananova_id}->{$day + 1};
+	$next{$filename} = $next if defined $next;
+    }
+
     # Now read the config file to find which files to download.  The
     # user can choose channels by type (radio or satellite), region,
     # XMLTV id, or 'ALL'.  But only some of these can be chosen with
@@ -559,7 +585,8 @@ sub grab( @ ) {
 	my $ch = XMLTV::Ananova_Channel->find_by_ananova_id($ananova_id);
 	die if not defined $ch;
 	my $g = $got->{$filename};
-	my $progs = read_file(\$day_date, $ch, $g->{content}, $filename, $g->{url});
+	my $progs = read_files_and_jump_around(\$day_date, $ch, $got, $filename,
+					      \%prev, \%next);
 	if (defined $progs) {
 	    date_programmes($progs, $day_date);
 	    add_clumpidx($progs);
@@ -742,7 +769,103 @@ sub read_channels_page( $ ) {
 }
 
 
-# Read data for a particular day.
+# read_files_and_jump_around()
+#
+# Read data for a particular day.  Ideally this would correspond to
+# one file on the server, and we would be able to construct the
+# filename based on the day and channel.  Unfortunately the server
+# sometimes screws up and gets some channels a certain number of days
+# out of sync, so we have to be prepared to retry with 'wrong' day
+# numbers specified in the hope of getting the right result.
+#
+# Parameters:
+#   - Reference to date you expect to get.  Due to a global kludge to
+#     move the whole grabber back in time by one day, this may be
+#     modified.  (FIXME this kludge may no longer be necessary?  Keep for now.)
+#   - Ananova channel id.
+#   - Hash mapping server filenames to hashes of 'url' and 'content';
+#     hopefully everything needed is already in here, but extra pages
+#     could be downloaded if necessary.  (FIXME objectify this)
+#   - Filename to download, which will 90% of the time be the right file.
+#   - 'Prev' hash mapping filename to previous-day's filename (or undef).
+#   - 'Next' hash, ditto.
+#
+# Returns: ref to list of programmes for that day, or undef.
+#
+# This has to be the silliest subroutine name I have ever used.
+#
+sub read_files_and_jump_around( $$$$$$ ) {
+    my ($date_expected_r, $ch, $downloads, $filename, $prev, $next) = @_;
+    die if ref $filename;
+#    local $Log::TraceMessages::On = 1;
+    t 'read_files_and_jump_around() ENTRY';
+    t 'date expected (passed by ref): ' . d $$date_expected_r;
+    t 'aid: ' . d $ch;
+    t 'filename to get: ' . d $filename;
+    my %already;
+
+  RECURSE: # heh, heh
+    my $url = $downloads->{$filename}->{url}; die if ref $url;
+    my $content = $downloads->{$filename}->{content}; die if ref $content;
+    if (not defined $url) {
+	t "necessary to download $filename extra";
+	my $new_download = get_pages('Additional download', [ $filename ]);
+	%$downloads = (%$downloads, %$new_download);
+	goto RECURSE;
+    }
+    my $r = read_file($date_expected_r, $ch, $content, $filename, $url);
+    if (ref $r eq 'ARRAY') {
+	return $r;
+    }
+    elsif (not defined $r) {
+	warn "something went wrong reading $filename from server";
+	return undef;
+    }
+    elsif (not ref $r and $r != 0) {
+	# At this point we do the 'jump around' bit by trying to find
+	# what filename we should use, given that the current one has
+	# the wrong date at the server end.
+	#
+	$already{$filename}++ && warn "trying to get $filename twice";
+	my $orig_filename = $filename;
+	my $succ;
+	if ($r > 0) {
+	    t "need to go backwards $r steps";
+	    $succ = $prev;
+	}
+	elsif ($r < 0) {
+	    $r = -$r;
+	    t "need to go forwards $r steps";
+	    $succ = $next;
+	}
+	else { die }
+
+	while ($r > 0) {
+	    $filename = $succ->{$filename}; die if ref $filename;
+	    return undef if not defined $filename;
+	    --$r;
+	}
+	if ($already{$filename}) {
+	    # Oops, already done this one.  Guess even more
+	    # wildly.
+	    #
+	    my $filename = $orig_filename;
+	    while ($already{$filename}) {
+		$filename = $succ->{$filename}; die if ref $filename;
+		return undef if not defined $filename;
+	    }
+	}
+	# Right, now $filename contains a successor filename that is
+	# vaguely in the right direction and hasn't been tried before.
+	#
+	warn "$orig_filename had wrong date, trying $filename\n";
+	goto RECURSE;
+    }
+    else { die }
+}
+
+
+# Read data for a particular listing 'file'.
 #
 # Parameters:
 #   reference to date expected in file (in Date::Manip format)
@@ -752,12 +875,20 @@ sub read_channels_page( $ ) {
 #   Ananova 'filename'
 #   Ananova URL
 #
-# Returns: reference to list of programme details, or undef if error.
-# These won't have proper start and stop times; instead they have a
-# 'time' key and you should use date_programmes() or similar to fix up
-# the list of programmes afterwards.  Also the channel is not
-# included, you should add that to each programme (probably in RFC2838
-# style) afterwards.
+# Returns:
+#   - If everything okay, reference to list of programme details.
+#   These won't have proper start and stop times; instead they have a
+#   'time' key and you should use date_programmes() or similar to fix up
+#   the list of programmes afterwards.
+#
+#   - If the date in the page was wrong (and so wrong that even
+#   applying magic kludges to go back one day globally), the return
+#   value is a number indicating (got day) - (expected day).  Eg if
+#   unexpectedly the file is two days behind, returns -1.  This number
+#   is relative to the new expected date (since the expected date is
+#   passed by reference and may be modified).
+#
+#   - If something more seriously wrong, undef.
 #
 # The expected date is used for two things.  For error checking, and
 # if read_file() gets a different date to the one expected but decides
@@ -768,6 +899,12 @@ my (%warned_shorter, $warned_wrong_date); # cut down on duplicate warnings
 sub read_file( $$$$$ ) {
     use vars '$date_expected'; local *date_expected = shift;
     my ($ch, $data, $file, $url) = @_;
+    t 'read_file() ENTRY';
+    t 'date expected (passed by ref): ' . d $date_expected;
+    t 'Ananova_Channel object: ' . d $ch;
+#    t 'content of page: ' . d $data;
+    t 'Ananova filename: ' . d $file;
+    t 'URL: ' . d $url;
     my @lines = split /\n/, $data;
     foreach (@lines) { s/^\s+//; s/\s+$//; s/\#.*// }
     @lines = grep { length } @lines;
@@ -797,8 +934,7 @@ sub read_file( $$$$$ ) {
 	return undef;
     }
     elsif ($date_diff != 0) {
-	warn "bad date in $file, skipping\n";
-	return undef;
+	return $date_diff;
     }
 
     # No need to check the display name, we assume it will be the same
@@ -1185,6 +1321,9 @@ sub read_file( $$$$$ ) {
 sub page_date_diff( $$ ) {
     use vars '$expected'; local *expected = shift;
     my $got = shift;
+    t 'page_date_diff() ENTRY';
+    t 'expected date (passed by ref): ' . d $expected;
+    t 'got date: ' . d $got;
 
     if (not $got =~
 /^((?:Sun|Mon|Tues|Wednes|Thurs|Fri|Satur)day)\|(\d\d)\|(\d\d)\|(\d\d\d\d)$/)
