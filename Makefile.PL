@@ -57,7 +57,7 @@ my %pm
 my %prereqs
   = (
      'LWP' => 0,
-     'XML::Twig' => 0,
+     'XML::Twig' => 3.08,
      'Date::Manip' => 5.4,
      'XML::Writer' => 0,
     );
