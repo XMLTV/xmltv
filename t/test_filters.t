@@ -107,20 +107,26 @@ foreach my $cmd (@cmds) {
 	}
 
 	if (-e $expected) {
-	    open(OUT, $out) or die "cannot open $out: $!";
-	    open(EXPECTED, $expected) or die "cannot open $expected: $!";
-	    local $/ = undef;
-	    my $out_content = <OUT>;
-	    my $expected_content = <EXPECTED>;
-
-	    if ($out_content ne $expected_content) {
-		warn "failure for @cmd, see $base.*\n";
-		print "not ok $test_num\n";
+	    if (-e $out) {
+		open(OUT, $out) or die "cannot open $out: $!";
+		open(EXPECTED, $expected) or die "cannot open $expected: $!";
+		local $/ = undef;
+		my $out_content = <OUT>;
+		my $expected_content = <EXPECTED>;
+		
+		if ($out_content ne $expected_content) {
+		    warn "failure for @cmd, see $base.*\n";
+		    print "not ok $test_num\n";
+		}
+		else {
+		    print "ok $test_num\n";
+		    unlink $out or warn "cannot unlink $out: $!";
+		    unlink $err or warn "cannot unlink $err: $!";
+		}
 	    }
 	    else {
-		print "ok $test_num\n";
-		unlink $out or warn "cannot unlink $out: $!";
-		unlink $err or warn "cannot unlink $err: $!";
+		warn "failure for @cmd, failed to produce output $out, see $base.err\n";
+		print "not ok $test_num\n";
 	    }
 	}
 	else {
