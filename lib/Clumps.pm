@@ -318,6 +318,7 @@ sub fix_clumps( $$$ ) {
 	    #
 	    my $start_last_new_unp = $new[-1]->{start};
 	    my $start_last_new = pd($start_last_new_unp);
+	    t 'last of the new programmes starts at: ' . d $start_last_new;
 
 	    # Add the programmes coming before @new to the output.
 	    # These should have stop times before @new's start.
@@ -349,6 +350,7 @@ sub fix_clumps( $$$ ) {
 	    # Slot in the new programmes.
 	    t 'got to orig show, slot in new programmes';
 	    push @new_all, @new;
+	    t 'so far, list of new programmes: ' . d \@new_all;
 
 	    # Now the shows at the end, after the programme which was
 	    # split.
@@ -371,6 +373,7 @@ sub fix_clumps( $$$ ) {
 		#
 		$old->{start} = $start_last_new_unp;
 		t "set start time to $old->{start}";
+		t 'adding programme to list: ' . d $old;
 
 		push @new_all, $old;
 	    }
