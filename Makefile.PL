@@ -420,7 +420,7 @@ foreach my $info (@opt_components) {
     push @to_clean, @{$info->{to_clean}}          if $info->{to_clean};
     push @deps, @{$info->{deps}}                  if $info->{deps};
     push @grab_need_share, @{$info->{grab_need_share}}
-    if $info->{grab_need_share};
+      if $info->{grab_need_share};
     for ($info->{do_uk_channel_pkgs}) {
 	if (defined) {
 	    die 'turn on, but not off' if not $_;
