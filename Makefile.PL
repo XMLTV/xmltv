@@ -130,7 +130,7 @@ my %recommended
      'Lingua::EN::Numbers::Ordinate' => 0,
      'Lingua::Preferred' => 0,
      'Memoize' => 0,
-     'Term::ProgressBar' => 0,
+     'Term::ProgressBar' => 2.03,
      'Compress::Zlib' => 0,
      'Unicode::String' => 0,
     );
