@@ -122,6 +122,7 @@ sub extract_channel_data( $$ );
 sub process_table( $$$$ );
 sub decode_char( $ );
 sub dc( $$ );
+sub likely_midnight_crossing( $$$ );
 
 my %COUNTRIES = (Sweden => 'se', Norway => 'no');
 
@@ -440,7 +441,7 @@ sub process_table( $$$$ ) {
 
     $today =~ tr/-//d;
     my $crossed_midnight = 0;
-    my %program = (channel => $ch_xmltv_id);
+    my %program;
     foreach my $row ($best_ts->rows()) {
 	t 'doing row of table: ' . d $row;
 
@@ -450,28 +451,31 @@ sub process_table( $$$$ ) {
 	t '...and: ' . d $third;
 
 	if ($first=~m/(\d\d:\d\d)/) {
-	    if (defined $program{title} && not defined $program{stop}) {
-		#We have a record without endtime. use next starttime as endtime
-		$program{stop} = utc_offset("$today $1", $BASE_TZ);
-		my $cmp = Date_Cmp($program{start}, $program{stop});
-		if ($cmp > 0) {
-		    unless ($crossed_midnight++) {
-			$today = nextday($today);
-			$program{stop} = utc_offset("$today $1", $BASE_TZ);
-		    }
-		    else {
-			delete $program{stop};
-		    }
+	    my $next_start = utc_offset("$today $1", $BASE_TZ);
+
+	    if (%program) {
+		# Write out the previous program.
+		die if not defined $program{start};
+		die if not defined $program{title};
+		my $time = $program{stop};
+		$time = $program{start} if not defined $time;
+
+		if (likely_midnight_crossing($time, $next_start, $today)
+		    and not $crossed_midnight++) {
+		    $today = nextday($today);
+		    $next_start = utc_offset("$today $1", $BASE_TZ);
 		}
 
-		if ($WRITE_ZERO_LENGTH or $cmp) {
+		if ($WRITE_ZERO_LENGTH
+		    or Date_Cmp($time, $next_start)) {
 		    $w->write_programme(\%program);
 		}
-		%program = (channel => $ch_xmltv_id);
 	    }
 
-	    $program{start} = utc_offset("$today $1", $BASE_TZ);
-	    
+	    %program = (channel => $ch_xmltv_id,
+			start => $next_start,
+		       );
+	
 	    if (defined $third) {
 		my $title_class = 'charteventname';
 		my %classes = ($title_class => sub {
@@ -505,19 +509,26 @@ sub process_table( $$$$ ) {
 		    }
 		    else {
 			$program{stop}=utc_offset("$today $1", $BASE_TZ);
-			my $cmp = Date_Cmp($program{start}, $program{stop});
-			if ($cmp > 0) {
+			if (likely_midnight_crossing($program{start}, $program{stop}, $today)
+			    and not $crossed_midnight++) {
 			    $today = nextday($today);
 			    $program{stop} = utc_offset("$today $1", $BASE_TZ);
 			}
 			
-			if ($WRITE_ZERO_LENGTH or $cmp) {
-			    $w->write_programme(\%program);
-			}
+			# Leave %program to be written on the next
+			# pass through the loop.
+			#
 		    }
-		    %program = (channel => $ch_xmltv_id);
 		}
 	    }			# if we have a time row.
+	}
+    }
+
+    if (%program) {
+	if ($WRITE_ZERO_LENGTH
+	    or not defined $program{stop} # length unknown
+	    or Date_Cmp($program{start}, $program{stop})) {
+	    $w->write_programme(\%program);
 	}
     }
 }
@@ -612,4 +623,35 @@ sub dc( $$ ) {
     die "DateCalc() failed with $err" if $err;
     die 'DateCalc() returned undef' if not defined $r;
     return $r;
+}
+
+# Given two programme times where the second is expected to be later
+# than the first, is it likely that the second one is wrong and should
+# be a day later?
+#
+# Third argument is the base day for the two times (just to save
+# calculating it again).
+#
+sub likely_midnight_crossing( $$$ ) {
+    my ($first, $second, $today) = @_;
+    return 0 unless Date_Cmp($first, $second) > 0;
+
+    # We don't want to assume midnight crossed every time a start time
+    # seems to be earlier.  We require the first time to be within
+    # this number of seconds before midnight, and the second time
+    # within this number after midnight, to count as a crossing.
+    #
+    my $thresh = 15000;
+
+    # The second time is in 'today' so we compare it against midnight
+    # today.  Remember, the second time passed in is possibly-wrong.
+    #
+    my $today_midnight = utc_offset("$today midnight", $BASE_TZ);
+    return 0 unless Delta_Format(DateCalc($today_midnight, $second), 0, '%st') < $thresh;
+
+    my $tomorrow = nextday($today);
+    my $tomorrow_midnight = utc_offset("$tomorrow midnight", $BASE_TZ);
+    return 0 unless Delta_Format(DateCalc($first, $tomorrow_midnight), 0, '%st') < $thresh;
+
+    return 1;
 }
