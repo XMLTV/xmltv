@@ -204,7 +204,26 @@ class TvGuide:
 		self.channels={}
 		self.dates=dates
 		self.quiet=quiet
-
+		
+		# Regular Expressions
+		self.time_expr1     = re.compile("([0-9]+):([0-9]+)\s*([aApP][mM])")
+		self.time_expr2	    = re.compile("([0-9]+):([0-9]+)")
+		self.time_expr3	    = re.compile("([0-9][0-9][0-9][0-9])")
+		self.date_expr	    = re.compile("^([\s\S]*)\(([0-9][0-9][0-9][0-9])\)([\s\S]*)$")
+		self.comments_expr  = re.compile("^(.*)\s*\((.*)\)\s*$")
+		self.episode_expr   = re.compile("^(.*)(?:\:|(?: {2,})|\t)(.*)$")
+		
+		# Some episode names are bad - eg "Earth: Final Conflict"
+		names = '###' # should match no episode name
+		f=open(SPECIAL_EPISODE_NAMES_FILE, 'r')
+		lines=f.readlines()
+		for l in lines:
+			if names :
+				names += "|(" + re.escape(string.strip(l)) + ")"
+			else:
+				names = "(" + re.escape(string.strip(l)) + ")"
+		self.specialEpisode_expr = re.compile("^" + names + ".*")
+		
 	def error(self,msg):
 		sys.stderr.write("%s\n" % (msg))
 
@@ -247,7 +266,7 @@ class TvGuide:
 	def gen_time(self, time):
 		"""Converts from a bunch of different time representations
 		   into a simple HHMM 24-hour clock representation"""
-		expr=re.compile("([0-9]+):([0-9]+)\s*([aApP][mM])")
+		expr=self.time_expr1
 		match = expr.match(time)
 		if match:
 			hour=int(match.group(1))
@@ -258,21 +277,33 @@ class TvGuide:
 				hour=0
 			return "%2.2d%2.2d" % (hour, minute)
 
-		expr = re.compile("([0-9]+):([0-9]+)")
+		expr = self.time_expr2
 		match = expr.match(time)
 		if match:
 			hour=int(match.group(1))
 			minute=int(match.group(2))
 			return "%2.2d%2.2d" % (hour, minute)
 
-		expr = re.compile("([0-9][0-9][0-9][0-9])")
+		expr = self.time_expr3
 		match = expr.match(time)
 		if match:
 			return match.group(1)
 		
 		self.error("Unable to convert time: '%s'" % (time))
 		return ""
-
+	
+	def get_episode(self, title):
+		"""Removes a episode title embedded in the title."""
+		episode = ""
+		episode_expr   = self.episode_expr				
+		specialEpisode_expr    = self.specialEpisode_expr
+		episode_match  = episode_expr.match(title)
+		if episode_match and (not specialEpisode_expr.match(title)):
+			title = episode_match.group(1)
+			episode = episode_match.group(2)
+#			print title + " " + episode + "\n"
+		return (title, episode)
+			
 	def get_comments(self, title):
 		"""Removes any comments embedded in the title. These
 		   are identified as anything at the end of the title
@@ -280,7 +311,7 @@ class TvGuide:
 		   Returns a tuple consisting of the modified title and
 		   the comments (with parenthesis removed)."""
 		comments=""
-		expr = re.compile("^(.*)\s*\((.*)\)\s*$")
+		expr = self.comments_expr
 		match = expr.match(title)
 		while match:
 			title=match.group(1)
@@ -319,7 +350,7 @@ class TvGuide:
 		"""Analyses the title and description to determine if there
 		   is an embedded date. Returns a tupple (title, desc, date)
 		   if there is a date, or None otherwise"""
-		expr = re.compile("^([\s\S]*)\(([0-9][0-9][0-9][0-9])\)([\s\S]*)$")
+		expr = self.date_expr 
 		match = expr.match(title)
 		if match:
 			return (match.group(1) + match.group(3), desc, match.group(2))
@@ -365,13 +396,18 @@ class TvGuide:
 		expr=re.compile(regexp)
 		matches=expr.findall(data)
 		if len(matches) == 0:
-			self.error("Error parsing program listing for " + name + " - perhaps the page has changed\nUrl: %s" % (url))
+			self.error("Error parsing program listing for " + name
+				   + " - perhaps the page has changed\n"
+#				   + "Page : " + data + "\n"
+				   + "Url: %s" % (url)
+				   )
 			return []
 		prevtime=""
 		for show in matches:
 			starttime=""
 			endtime=""
 			program=""
+			episode=""
 			desc=""
 			rating=None
 			categories=[]
@@ -388,6 +424,14 @@ class TvGuide:
 			if map[1] != -1:
 				program=self.clean_html(show[map[1]])
 				(program,comments)=self.get_comments(program)
+
+				# Turn 'Movie: X' into 'X' with category 'movie'.
+				old_program = program
+				program = re.sub('^Movie: ', '', program);
+				if program != old_program:
+					categories.append('movie')
+					
+				(program,episode) =self.get_episode(program)
 				for comment in string.split(comments, ","):
 					comment=string.strip(comment)
 					if comment == "": 
@@ -430,7 +474,7 @@ class TvGuide:
 			if chkdate:
 				(program,desc,create_date)=chkdate
 
-			retval.append([domain, program, starttime, endtime, desc, rating, create_date, categories, repeat, subtitled, part])
+			retval.append([domain, program, starttime, endtime, desc, rating, create_date, categories, repeat, subtitled, part, episode])
 
 		return retval
 
@@ -485,6 +529,10 @@ class TvGuide:
 			output.write('stop="%s" ' % (program[3]))
 		output.write ('channel="%s">\n' % (program[0]))
 		output.write('    <title>%s</title>\n' % (string.strip(self.html_encode(program[1]))))
+		
+		if string.strip(program[11]) != "":
+			output.write('    <sub-title>%s</sub-title>\n' % string.strip(self.html_encode(program[11])))
+			
 		if string.strip(program[4]) != "":
 			output.write('    <desc>%s</desc>\n' % (self.html_encode(string.strip(program[4]))))
 
@@ -544,6 +592,8 @@ if __name__ == '__main__':
 				sys.stderr.write("seen 'channels' line twice in %s\n" % config_file)
 				sys.exit(1)
 			channels=string.split(string.strip(l[9:]), ' ')
+		else:
+			sys.stderr.write("%s: bad line %s" % (config_file, l))
 	f.close()
 	if not channels:
 		sys.stderr.write("did not see any 'channels' line in %s\n" % config_file)
