@@ -5,6 +5,7 @@
 
 package XMLTV::Memoize;
 use Log::TraceMessages qw(t d);
+use File::Basename;
 
 # Add an undocumented option to cache things in a DB_File database.
 # You need to decide which subroutines should be cached: LWP::Simple's
@@ -41,7 +42,10 @@ sub check_argv( @ ) {
     @ARGV = @new_argv;
     return 0 if not $yes;
 
-    $filename = "$0.cache" if not defined $filename;
+    if (not defined $filename) {
+	my $basename = File::Basename::basename($0);
+	$filename = "$basename.cache";
+    }
     print STDERR "using cache $filename\n";
     require POSIX;
     require Memoize;
