@@ -28,18 +28,28 @@ sub check_argv( @ ) {
     while (@ARGV) {
 	local $_ = shift @ARGV;
 	if ($_ eq '--cache') {
+	    t 'found arg --cache';
 	    $yes = 1;
-	    $filename = shift @ARGV;
+	    t 'next arg: ' . d $ARGV[0];
+	    if ($ARGV[0] !~ /^-/) {
+		$filename = shift @ARGV;
+		t "set cache filename to $filename";
+	    }
+	    else {
+		t "not a filename, it's the next option";
+	    }
+	    last;
 	}
 	elsif (/^--cache=(.+)/) {
 	    ($yes, $filename) = (1, $1);
+	    last;
 	}
 	else {
 	    push @new_argv, $_;
 	    last if $_ eq '--';
 	}
     }
-    @ARGV = @new_argv;
+    @ARGV = (@new_argv, @ARGV);
     return 0 if not $yes;
 
     if (not defined $filename) {
