@@ -69,8 +69,7 @@ sub MY::install {
     my $inherited = shift->SUPER::install(@_);
 
     my %extra_deps = (doc_install => 'plaindoc_install',
-		      install_perl => 'share_install',
-		      install_site => 'share_install');
+		      install     => 'share_install');
     foreach (keys %extra_deps) {
 	$inherited =~ s/^(\s*$_\s+::\s.+)/$1 $extra_deps{$_}/m or die;
     }
@@ -119,7 +118,12 @@ sub MY::installbin {
 	$doc_files{$_} = File::Basename::basename($_);
     }
     my %share_files = ('grab/uk/channel_ids' => 'tv_grab_uk/channel_ids');
-
+    foreach (<grab/uk/channel_pkgs/*>) {
+	next if -d;
+	die if defined $share_files{$_};
+	(my $inst = $_) =~ s!^grab/uk/!tv_grab_uk/! or die;
+	$share_files{$_} = $inst;
+    }
     my %new_filetypes = (plaindoc => \%doc_files, share => \%share_files);
     my %seen_dir;
     foreach my $filetype (sort keys %new_filetypes) {
@@ -194,6 +198,7 @@ sub MY::clean {
     my $inherited = shift->SUPER::clean(@_);
     $inherited =~ s/\s+$//;
     $inherited .= "\n\t-rm -f filter/tv_grep\n";
+    $inherited .= "\n\t-rm -f grab/uk/tv_grab_uk\n";
     return $inherited;
 }
 
