@@ -59,7 +59,8 @@ my %pm
      'lib/Clumps.pm'              => '$(INST_LIBDIR)/XMLTV/Clumps.pm',
      'lib/Usage.pm'               => '$(INST_LIBDIR)/XMLTV/Usage.pm',
      'lib/Ask.pm'                 => '$(INST_LIBDIR)/XMLTV/Ask.pm',
-     'lib/UK_TZ.pm'           => '$(INST_LIBDIR)/XMLTV/UK_TZ.pm',
+     'lib/UK_TZ.pm'               => '$(INST_LIBDIR)/XMLTV/UK_TZ.pm',
+     'lib/Summarize.pm'           => '$(INST_LIBDIR)/XMLTV/Summarize.pm',
      'grab/Memoize.pm'            => '$(INST_LIBDIR)/XMLTV/Memoize.pm',
     );
 

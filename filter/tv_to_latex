@@ -33,7 +33,6 @@ spurious blank lines in the output.
 
 use strict;
 use IO::File;
-use Date::Manip; Date_Init('TZ=UTC');
 use POSIX 'tmpnam';
 use Getopt::Long;
 
@@ -72,19 +71,15 @@ BEGIN {
     }
 }
 
-use XMLTV qw(best_name);
-use XMLTV::TZ qw(gettz ParseDate_PreservingTZ);
+use XMLTV;
+use XMLTV::Summarize qw(summarize);
 use XMLTV::Usage <<END
 $0: convert listings to LaTeX source for printing
 usage: $0 [--help] [--output FILE] [FILE...]
 END
 ;
 
-# Prototype declarations
-sub chunk( $$ );
-sub start_date( $ );
 sub quote( $ );
-sub find_channel_names( $ );
 
 my ($opt_help, $opt_output);
 GetOptions('help' => \$opt_help, 'output=s' => \$opt_output) or usage(0);
@@ -104,38 +99,15 @@ if (defined $opt_output) {
 my $WIDTH = '0.7\textwidth';
 
 # Number of programmes in each table (should fit onto a page)
-my $CHUNK_SIZE = 30;
-
-# List of preferred languages.  Hopefully the environment variable
-# $LANG will be set.
-#
-my @PREF_LANGS;
-my $el = $ENV{LANG};
-if (defined $el and $el =~ /\S/) {
-    $el =~ s/\..+$//; # remove character set
-    @PREF_LANGS = ($el);
-}
-else {
-    @PREF_LANGS = ('en'); # change for your language - or just set $LANG
-}
+my $CHUNK_SIZE = 30; # at least 1, please
 
 ########
 # End of configuration
 #
 
-# Memoize some subroutines if possible
-eval { require Memoize };
-unless ($@) {
-    foreach (qw/start_date ParseDate UnixDate gettz ParseDate_PreservingTZ
-	     u8_to_latin1/) {
-	Memoize::memoize($_) or die "cannot memoize $_: $!";
-    }
-}
+# FIXME maybe memoize some stuff here
 
-# Comparison function for choosing what string to use in the printout.
-my $shorter = sub { length($_[0]) <=> length($_[1]) };
-
-# Print the start of the LaTeX document
+# Print the start of the LaTeX document.
 print <<'END';
 \documentclass[a4paper]{article}
 \usepackage[latin1]{inputenc}
@@ -144,7 +116,7 @@ print <<'END';
 \begin{flushleft}
 END
 
-# Parse stdin and make it into chunks of programmes
+# Read input and work out how to handle its encoding.
 my ($encoding, $credits, $ch, $progs) = @{XMLTV::parsefiles(@ARGV)};
 my $to_latin1;
 for ($encoding) {
@@ -167,132 +139,58 @@ for ($encoding) {
     }
 }
 
-my $ch_name = find_channel_names($ch);
-t 'preferred names: ' . d $ch_name;
-my @chunks = @{chunk($CHUNK_SIZE, $progs)};
-
-# Print each chunk as a table
-my ($curr_date, $curr_tz);
-foreach (@chunks) {
-    my @programmes = @$_;
-
-    my $chunk_date = start_date($programmes[0]);
-    if (not defined $curr_date or $curr_date ne $chunk_date) {
-	my $df = UnixDate($chunk_date, "%m-%d (%A)");
-	print "\\section*{\\sf $df}\n";
-	$curr_date = $chunk_date;
+my $table_size = 0; # 0 means no table currently open
+sub maybe_end_table() {
+    return if not $table_size;
+    print '\end{tabular} \\\\ ', "\n";
+    $table_size = 0;
+}
+# Pass in LaTeX source.
+sub print_row( $ ) {
+    my $tex = shift;
+    if ($table_size == $CHUNK_SIZE) {
+	maybe_end_table(); # back to 0
     }
 
-    print "\\begin{tabular}{r\@{--}lp{$WIDTH}r} \n";
-    my $top_of_table = 1;
-    foreach (@programmes) {
-	t 'doing programme: ' . d $_;
-	my %h = %$_;
-	my ($start, $stop, $channel) = @h{qw(start stop channel)};
+    print '\begin{tabular}{r@{--}lp{', $WIDTH, '}r} ', "\n"
+      if not $table_size++;
+    print $tex;
+}
 
-	t 'possible titles: ' . d $h{title};
-	my $title = best_name(\@PREF_LANGS, $h{title}, $shorter)->[0];
-	t 'chosen: ' . d $title;
-	warn "programme has no title" if not defined $title;
-
-	my $sub_title;
-	for ($h{'sub-title'}) {
-	    if (defined) {
-		t 'possible sub-titles: ' . d $h{'sub-title'};
-		warn "list of sub-titles but empty" if not @$_;
-		$sub_title = best_name(\@PREF_LANGS, $_, $shorter)->[0];
-		t 'chosen: ' . d $sub_title;
-		warn "could not find sub-title" if not defined $sub_title;
-	    }
-	}
-	
-	# Convert date-and-time to just hhmm, adding explicit timezone
-	# whenever it changes.
-	#
-	my $start_tz = gettz($start) || 'UTC';
-	my $start_p = ParseDate_PreservingTZ($start)
-	  or die "bad date '$start'";
-	my $start_h = UnixDate($start_p, '%R');
-
-	if ($top_of_table and not defined $curr_tz) {
-	    # Assume that the first listing on a page doesn't need an
-	    # explicit timezone.  (FIXME not perfect)
-	    #
-	    $curr_tz = $start_tz;
-	}
-	$top_of_table = 0;
-
-	my $stop_h;
-	if (defined $stop) {
-	    # Stop time is defined, sort out its timezone too
-	    my $stop_tz = gettz($stop) || 'UTC';
-	    my $stop_p = ParseDate_PreservingTZ($stop)
-	      or die "bad date '$stop'";
-	    $stop_h = UnixDate($stop_p, '%R');
-
-	    if ((not defined $curr_tz)
-		or ($curr_tz ne $start_tz)
-		or ($start_tz ne $stop_tz) )
-	    {
-		  # The timezone has changed somehow - make it explicit.
-		  $start_h .= " $start_tz";
-		  $stop_h .= " $stop_tz";
-		  undef $curr_tz;
-	    }
-
-	    if ($start_tz eq $stop_tz) {
-		# The programme starts and stops in the same TZ - we
-		# can assume that this is the one to use from now on.
-		#
-		$curr_tz = $start_tz;
-	    }
-	}
-	else {
-	    # Missing stop time.  Still need to check the timezone.
-	    if ((not defined $curr_tz) or ($curr_tz ne $start_tz)) {
-		$start_h .= " $start_tz";
-
-		# Well, not 100% sure that this timezone should apply
-		# from now on, since it was only mentioned as a start
-		# time, but in the absence of a contradicting stop
-		# time we'll use it.
-		#
-		$curr_tz = $start_tz;
-	    }
-	}
-
-	# Look up pretty name of channel.
-	if (defined $ch_name->{$channel}) {
-	    $channel = $ch_name->{$channel};
-	}
-
-	$channel = quote($to_latin1->($channel));
-	$title .= " // $sub_title" if defined $sub_title;
-	$title = quote($to_latin1->($title));
+my @summ = summarize($ch, $progs);
+foreach (@summ) {
+    die if not defined;
+    if (not ref) {
+	# Heading for a new day.
+	maybe_end_table();
+	print '\section*{\sf ', quote($to_latin1->($_)), "}\n";
+    }
+    else {
+	my ($start, $stop, $title, $sub_title, $channel)
+	  = map { defined() ? quote($to_latin1->($_)) : undef } @$_;
+	die if not defined $start;
+	die if not defined $title;
+	die if not defined $channel;
 
 	# Apparently, you have to put \smallskip _before_ each line
 	# (even the first) in order to get consistent spacing.  The
 	# blank line after $title is to explicitly end the paragraph,
 	# so that \raggedright takes effect.
 	#
-	# Er, this needs fixing.  See my post to comp.text.tex.
-	#
-	die 'no start'   if not defined $start_h;
-	$stop_h = '' if not defined $stop_h;
-	die 'no title'   if not defined $title;
-	die 'no channel' if not defined $channel;
-
-	print <<END;
+	$stop = '' if not defined $stop;
+	$title .= " // $sub_title" if defined $sub_title;
+	my $row = <<END
 \\smallskip
-$start_h & $stop_h &
+$start & $stop &
 { \\small \\raggedright
 $title
 } & $channel \\\\
 END
+;
+        print_row($row);
     }
-
-print "\\end{tabular} \\\\ \n";
 }
+maybe_end_table();
 print "\\end{flushleft}\n";
 
 # Acknowledgements
@@ -315,52 +213,9 @@ else { die }
 print "\\end{document}\n";
 
 
-# chunk()
-#
-# Split up a list of programmes into chunks of a certain maximum size,
-# also starting a new chunk for each day.
-#
-sub chunk( $$ ) {
-    die 'usage: chunk(chunk size, ref to list of programmes)'
-      if @_ != 2;
-    my ($chunksize, $list) = @_;
-
-    my @r;
-    my @currchunk = ();
-    while (@$list) {
-	push @currchunk, scalar (shift @$list);
-
-	if (@currchunk == $chunksize
-	    or @$list == 0
-	    or start_date($currchunk[-1]) ne start_date($list->[0]) )
-        {
-	    push @r, [ @currchunk ];
-	    @currchunk = ();
-	}
-    }
-    return \@r;
-}
-
-
-# start_date()
-#
-# Returns the day on which a programme starts, in the form YYYYMMDD.
-#
-sub start_date( $ ) {
-    my $prog = shift;
-    die "bad programme" if not defined $prog->{title};
-    die "no start date for $prog->{title}"
-      if not defined $prog->{start};
-
-    my $p = ParseDate_PreservingTZ($prog->{start});
-    die "bad start date for programme" if not defined $p or $p eq '';
-    return UnixDate($p, '%Q');
-}
-
-
 # quote()
 # 
-# Quote at least some characters which do funny things in LaTeX
+# Quote at least some characters which do funny things in LaTeX.
 # 
 # Parameters: string to quote
 # Returns: quoted version
@@ -389,41 +244,4 @@ sub quote( $ ) {
     s/\.{3,}\s*$/\\dotfill/mg;
 
     return $_;
-}
-
-# find_channel_names()
-#
-# Parameter: refhash of channels data from parsefiles()
-# Returns: ref to hash mapping channel id to printable channel name
-#
-sub find_channel_names( $ ) {
-    my $h = shift;
-    t 'channels hash: ' . d $h;
-    my %r;
-    foreach my $id (keys %$h) {
-	t 'doing id: ' . d $id;
-	my @names = @{$h->{$id}->{'display-name'}};
-	t 'names: ' . d \@names;
-	if (not @names) {
-	    warn "channels hash has no name for $id";
-	    next;
-	}
-	my $best = best_name(\@PREF_LANGS, \@names, $shorter)->[0];
-	t 'best name: ' . d $best;
-	if (not defined $best) {
-	    warn "couldn't get name for channel $id";
-	    $best = $id;
-	}
-
-	# There's no need to warn about more than one channel having
-	# the same human-readable name: that's deliberate (eg regional
-	# variants of the same channel may all have the same number).
-	# Maybe it could be checked when the channel id is actually
-	# looked up to get the name, that the name hasn't been used
-	# for a different channel id.  But we won't even do that for
-	# now.
-	#
-	$r{$id} = $best;
-    }
-    return \%r;
 }
