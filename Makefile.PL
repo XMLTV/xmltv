@@ -24,7 +24,8 @@ WriteMakefile
   (
    'NAME'          => 'XMLTV',
    # No VERSION_FROM, it's set in this file
-   'EXE_FILES'     => [ 'grab/na/tv_grab_na',
+   'EXE_FILES'     => [ 'grab/de/tv_grab_de',
+		        'grab/na/tv_grab_na',
 			'grab/uk/tv_grab_uk',
 			'filter/tv_extractinfo_en',
 			'filter/tv_grep',

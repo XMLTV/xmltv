@@ -1,0 +1,169 @@
+#!/usr/bin/perl -w
+# $Id$
+
+=head1 NAME
+
+tv_grab_de - Grab TV listings for Germany and Austria.
+
+=head1 SYNOPSIS
+
+tv_grab_de [--help] [--output FILE] [--days N]
+
+=head1 DESCRIPTION
+
+Output TV listings for several channels available in German-speaking
+countries.  The data comes from Gottfried SzingE<39>s database which
+is exported to XMLTV format.  The default is to grab as many days as
+possible from the current day onwards.
+
+B<--output FILE> write to FILE rather than standard output.
+
+B<--days N> grab N days starting from today, rather than as many as
+possible.
+
+=head1 SEE ALSO
+
+L<xmltv(5)>, L<http://yasd.dhs.org/>, L<http://yasd.dhs.org/xmltv/>
+
+=head1 AUTHOR
+
+Ed Avis, epa98@doc.ic.ac.uk
+
+=head1 BUGS
+
+The data source does not include full channels information and the
+channels are identified by short names rather than the RFC2838 form
+recommended by the XMLTV DTD.
+
+During summer time, for a period of one hour either side of midnight
+the calculation of 'today' may be wrong (could grab one hour too
+little or 23 hours too much).  Should check whether this does in fact
+happen.
+
+=cut
+
+use strict;
+use Getopt::Long;
+use Date::Manip;
+use Term::ProgressBar;
+use LWP::Simple;
+use Log::TraceMessages qw(t d); Log::TraceMessages::check_argv();
+use Compress::Zlib;
+
+use XMLTV;
+use XMLTV::Memoize;
+
+sub usage( ;$ );
+sub nextday( $ );
+
+# Things that aren't perfect with the listings source: channel ids,
+# lang="de".  Will ask for these to be changed sometime.
+#
+
+# Get options.
+XMLTV::Memoize::check_argv('get');
+my ($opt_days, $opt_help, $opt_output);
+GetOptions('days=i' => \$opt_days, 'help' => \$opt_help,
+	   'output=s' => \$opt_output);
+die 'number of days must not be negative'
+  if (defined $opt_days && $opt_days < 0);
+usage(1) if $opt_help;
+
+# Assume the listings source uses CET (see BUGS above).
+Date_Init('TZ=CET');
+my $now = ParseDate('now'); die if not defined $now;
+my $today = UnixDate($now, '%Q');
+
+my $URL_BASE = 'http://yasd.dhs.org/xmltv/';
+my $index = get("${URL_BASE}index.lst");
+my %urls; # by date
+foreach (split /\n/, $index) {
+    if (not /^(tv_(\d{8})\.xml\.gz);(\d+)$/) {
+	warn "unexpected entry in index: $_, skipping\n";
+	next;
+    }
+    my ($filename, $date, $size) = ($1, $2, $3);
+    if (defined $urls{$date}) {
+	warn "file for $date seen twice in index\n";
+    }
+    $urls{$date} = "$URL_BASE$filename";
+}
+
+my @to_get;
+my $days_left = $opt_days;
+for (my $day = $today; defined $urls{$day}; $day = nextday($day)) {
+    if (defined $days_left and $days_left-- == 0) {
+	last;
+    }
+    push @to_get, $urls{$day};
+}
+if (defined $days_left and $days_left > 0) {
+    warn "couldn't get all of $opt_days days, only "
+      . ($opt_days - $days_left) . "\n";
+}
+
+my $bar = new Term::ProgressBar('downloading listings', scalar @to_get);
+my @listingses;
+foreach (@to_get) {
+    t "downloading page: $_";
+    my $gzipped = get($_);
+    my $xml = Compress::Zlib::memGunzip($gzipped);
+
+    # The generated XML uses the old 'author' and 'source' attributes,
+    # which were replaced a while ago.  Work around this.
+    #
+    $xml =~ s{<tv source="(.+?)" author="(.+?)">}
+      {<tv source-info-url="$1" generator-info-name="$2">}
+	or warn "did not find <tv source=X author=Y> in file";
+
+    # Another problem is <length> with empty content.  It's okay for
+    # length to be unspecified, but if you give the element it must
+    # have content.
+    #
+    $xml =~ s{<length units="minutes"></length>}{}g;
+
+    push @listingses, XMLTV::parse($xml);
+    update $bar;
+}
+my %w_args = ();
+if (defined $opt_output) {
+    my $fh = new IO::File ">$opt_output";
+    die "cannot write to $opt_output\n" if not $fh;
+    %w_args = (OUTPUT => $fh);
+}
+XMLTV::write_data(XMLTV::cat(@listingses), %w_args);
+exit();
+
+
+# Parameter: if true, write 'help message' rather than 'usage
+# message', ie write to stdout and exit successfully.
+#
+# Todo: perhaps we should internationalize messages and docs?
+#
+sub usage( ;$ ) {
+    my $is_help = shift; $is_help = 0 if not defined $is_help;
+    my $msg = <<END
+$0: get Germany/Austria television listings in XMLTV format
+usage: $0 [--help] [--output FILE] [--days N]
+END
+  ;
+
+    if ($is_help) {
+	print $msg;
+	exit(0);
+    }
+    else {
+	print STDERR $msg;
+	exit(1);
+    }
+}
+
+
+# Bump a YYYYMMDD date by one.
+sub nextday( $ ) {
+    my $d = shift; $d =~ /^\d{8}$/ or die;
+    my $p = ParseDate($d); die if not defined $p;
+    my $n = DateCalc($p, '+ 1 day'); die if not defined $n;
+    return UnixDate($n, '%Q');
+}
+
