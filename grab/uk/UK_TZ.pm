@@ -31,7 +31,7 @@ use base 'Exporter'; use vars '@EXPORT';
 # parse_uk_date()
 #
 # Wrapper for ParseDate() that tries to guess what timezone a date is
-# in (UT or BST).  If the date already has either of these it is left
+# in (UTC or BST).  If the date already has either of these it is left
 # alone.
 #
 # This will probably fail horribly if you use it for dates which
@@ -40,14 +40,14 @@ use base 'Exporter'; use vars '@EXPORT';
 # make it work for some other countries.
 #
 # Parameters:
-#   unparsed date from the UK (or other places using UT/BST)
+#   unparsed date from the UK (or other places using UTC/BST)
 #
 #   (optional) timezone to assume if ambiguous (defaults to BST if not
 #   given or 'false')
 #
 # Returns: parsed date, or undef if error
 #
-# There's a one hour window where dates are ambigous; we assume UT for
+# There's a one hour window where dates are ambigous; we assume UTC for
 # these.  Similarly there's a one hour window
 # where dates without a timezone are impossible; we return undef on
 # those.
@@ -66,7 +66,7 @@ sub parse_uk_date($;$) {
     my $dp = ParseDate($date);
     die "bad date $date" if not defined $dp or $dp eq '';
 
-    # Start and end of summer time in that year, in UT
+    # Start and end of summer time in that year, in UTC
     my ($start_bst, $end_bst) = @{bst_dates(UnixDate($dp, '%Y'))};
 
     # The clocks shift backwards and forwards by one hour.
@@ -90,21 +90,21 @@ sub parse_uk_date($;$) {
 	return $dp;
     }
     elsif (Date_Cmp($dp, $start_bst_skipto) < 0) {
-	# Date is impossible (time goes from from $start_bst UT to
+	# Date is impossible (time goes from from $start_bst UTC to
 	# $start_bst_skipto BST).
 	#
 	return undef;
     }
     elsif (Date_Cmp($dp, $end_bst) < 0) {
 	# During summer time.
-	return Date_ConvTZ($dp, 'BST', 'UT');
+	return Date_ConvTZ($dp, 'BST', 'UTC');
     }
     elsif (Date_Cmp($dp, $end_bst_backfrom) <= 0) {
 #	warn("$date is ambiguous "
-#	     . "(clocks go back from $end_bst_backfrom BST to $end_bst UT), "
+#	     . "(clocks go back from $end_bst_backfrom BST to $end_bst UTC), "
 #	     . "assuming $default_tz" );
 
-	return Date_ConvTZ($dp, $default_tz, 'UT');
+	return Date_ConvTZ($dp, $default_tz, 'UTC');
     }
     else {
 	# Definitely after the end of summer time.
@@ -115,13 +115,13 @@ sub parse_uk_date($;$) {
 
 # date_to_uk()
 #
-# Take a date in UT and convert it to a BST date if needed.
+# Take a date in UTC and convert it to a BST date if needed.
 #
-# Parameters: date in UT (from ParseDate())
+# Parameters: date in UTC (from ParseDate())
 #
 # Returns ref to list of
 #   new date (maybe shifted by one hour),
-#   timezone of new date ('UT' or 'BST')
+#   timezone of new date ('UTC' or 'BST')
 #
 # For example, date_to_uk of 13:00 on June 10th 2000 would be 14:00
 # BST on the same day.  The input and output date are both in
@@ -144,7 +144,7 @@ sub date_to_uk($) {
 
     if (Date_Cmp($d, $start_bst) < 0) {
 	# Before the start of summer time.
-	return [ $d, 'UT' ];
+	return [ $d, 'UTC' ];
     }
     elsif (Date_Cmp($d, $end_bst) < 0) {
 	# During summer time.
@@ -152,27 +152,27 @@ sub date_to_uk($) {
     }
     else {
 	# After summer time.
-	return [ $d, 'UT' ];
+	return [ $d, 'UTC' ];
     }
 }
 
 
 # bst_dates()
 #
-# Return the dates (in UT) when British Summer Time starts and ends in
+# Return the dates (in UTC) when British Summer Time starts and ends in
 # a given year.
 #
 # According to <http://www.rog.nmm.ac.uk/leaflets/summer/summer.html>,
 # summer time starts at 01:00 on the last Sunday in March, and ends at
-# 01:00 on the last Sunday in October.  (That's 01:00 UT in both
+# 01:00 on the last Sunday in October.  (That's 01:00 UTC in both
 # cases, BTW.)  This has been the case since 1998 - earlier dates are
 # not handled.
 #
 # Parameters: year (only 1998 or later works)
 #
 # Returns: ref to list of
-#   start time and date of summer time (in UT)
-#   end time and date of summer time (in UT)
+#   start time and date of summer time (in UTC)
+#   end time and date of summer time (in UTC)
 #
 sub bst_dates($) {
     die 'usage: bst_dates(year)' if @_ != 1;
