@@ -385,6 +385,11 @@ windows_dist ::
 	done
 	rm -rfv $(INSTALLBIN) $(PREFIX)/lib/ $(INSTALLMAN1DIR) $(INSTALLMAN3DIR)
 	rmdir $(PREFIX)/man
+	# The following command will not be necessary when the source
+	# tree was checked out on a DOSish system.
+	#
+	find $(PREFIX) -type f | xargs unix2dos
+	mv -vi $(PREFIX)/doc/README* $(PREFIX)
 	@echo
 	@echo Part of a Windows distribution tree has been made in $(PREFIX)/.
 	@echo Now copy in the executables!
