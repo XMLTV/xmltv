@@ -894,7 +894,8 @@ sub scrapehtml($$$)
 		    if ( $preRest=~s;\s*(\*+)\s*$;; ) {
 			$self->setValue(\$prog, "star_rating", sprintf("%d/4", length($1)));
 		    }
-		    elsif ( $preRest=~s;\s*(\*+)\s*1/2\s*$;; ) {
+		    elsif ( $preRest=~s;\s*(\*+)\s*1/2\s*$;; ||
+			    $preRest=~s;\s*(\*+)\s*\+\s*$;; ) {
 			$self->setValue(\$prog, "star_rating", sprintf("%d.5/4", length($1)));
 		    }
 		    else {
