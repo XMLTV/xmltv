@@ -158,21 +158,23 @@ sub date_to_eur( $$ ) {
     # The clocks shift backwards and forwards by one hour.
     my $clock_shift = "1 hour";
 
+    my $use_tz;
     if (Date_Cmp($d, $start_dst) < 0) {
 	# Before the start of summer time.
-	return [ $d, $base_tz ];
+	$use_tz = $base_tz;
     }
     elsif (Date_Cmp($d, $end_dst) < 0) {
 	# During summer time.
 	my $base_tz_num = tz_to_num($base_tz);
 	die "bad timezone $base_tz" if not defined $base_tz_num;
-	my $summer_tz = sprintf('%+05d', $base_tz_num + 100); # one hour
-	return [ DateCalc($d, "+ $clock_shift"), $summer_tz ];
+	$use_tz = sprintf('%+05d', $base_tz_num + 100); # one hour
     }
     else {
 	# After summer time.
-	return [ $d, $base_tz ];
+	$use_tz = $base_tz;
     }
+    die if not defined $use_tz;
+    return [ Date_ConvTZ($d, 'UTC', $use_tz), $use_tz ];
 }
 
 
