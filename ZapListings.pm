@@ -12,6 +12,10 @@
 #
 #
 # $Log$
+# Revision 1.5  2001/11/11 17:49:22  epaepa
+# Fixed a couple of syntax errors (don't know whether I caused them last
+# time).
+#
 # Revision 1.4  2001/11/11 16:44:19  epaepa
 # Whoops, just realized that the last changelog message would itself get
 # keyword-expanded, causing no end of confusion.  I had to perform some
@@ -650,7 +654,7 @@ sub scrapehtml($$)
 		$prog->{subtitle}=massageText($1);
 	    }
 	    else {
-		print "FAILED to find subtitle\n" ( $self->{Debug} );
+		print "FAILED to find subtitle\n" if ( $self->{Debug} );
 	    }
 
 	    # categories may be " / " separated
@@ -660,7 +664,7 @@ sub scrapehtml($$)
 		}
 	    }
 	    else {
-		print "FAILED to find category\n" ( $self->{Debug} );
+		print "FAILED to find category\n" if ( $self->{Debug} );
 	    }
 
 	    #print "PREEXTRA: $desc\n";
