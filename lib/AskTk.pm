@@ -7,7 +7,7 @@ package XMLTV::AskTk;
 use strict;
 use base 'Exporter';
 our @EXPORT = qw(ask
-		 ask_password
+     ask_password
                  ask_question               askQuestion
                  ask_boolean_question       askBooleanQuestion
                  ask_many_boolean_questions askManyBooleanQuestions
@@ -18,12 +18,12 @@ use Carp qw(croak);
 BEGIN {
     eval { require Log::TraceMessages };
     if ($@) {
-	*t = sub {};
-	*d = sub { '' };
+  *t = sub {};
+  *d = sub { '' };
     }
     else {
-	*t = \&Log::TraceMessages::t;
-	*d = \&Log::TraceMessages::d;
+  *t = \&Log::TraceMessages::t;
+  *d = \&Log::TraceMessages::d;
     }
 }
 
@@ -45,9 +45,10 @@ sub say( $ );
 
 sub ask( $;$ ) {
     my $question = shift;
-    my $show = shift; $show = 1 if not defined $show;
+    my $show = shift; $show = "" if not defined $show;
+    
     my $textbox;
-	
+    
     $main_window = MainWindow->new;
 
     $main_window->title("Question");
@@ -57,25 +58,24 @@ sub ask( $;$ ) {
     $top_frame    = $main_window->Frame()->pack;
     $middle_frame = $main_window->Frame()->pack;
     $bottom_frame = $main_window->Frame()->pack(-side => 'bottom');
-	
+  
     $top_frame->Label(-height => 2)->pack;
-	
+  
     $top_frame->Label(-text => $question)->pack;
-	
+  
+    my $ans;
+    
     $bottom_frame->Button(-text    => "OK",
-			  -command => sub { goto(answer_ok2) },
-			  -width    => 10
-			 )->pack(-padx => 2, -pady => 4);
-								
+        -command => sub { $ans = $textbox->get(); $main_window->destroy;},
+        -width    => 10
+       )->pack(-padx => 2, -pady => 4);
+                
     $textbox = $middle_frame->Entry(-show => $show)->pack();
     MainLoop();
-	
-  answer_ok2:
-    my $ans = $textbox->get();
-    $main_window->destroy;
+  
     return $ans;
 }
-sub ask_password( $ ) { ask($_[0], 0) }
+sub ask_password( $ ) { ask($_[0], "*") }
 
 # Ask a question where the answer is one of a set of alternatives.
 #
@@ -105,9 +105,9 @@ sub askQuestion( $$@ ) { &ask_question }
 # Returns true or false, or undef if input could not be read.
 #
 sub ask_boolean_question( $$ ) {
-    my ($text, $default) = @_;	
+    my ($text, $default) = @_;  
     t "asking question $text, default $default";
-	
+  
     $main_window = MainWindow->new;
 
     $main_window->title('Question');
@@ -117,34 +117,25 @@ sub ask_boolean_question( $$ ) {
     $top_frame    = $main_window->Frame()->pack;
     $middle_frame = $main_window->Frame()->pack;
     $bottom_frame = $main_window->Frame()->pack(-side => 'bottom');
-	
+  
     $top_frame->Label(-height => 2)->pack;
     $top_frame->Label(-text => $text)->pack;
-	
+  
+    my $ans = 0;
+    
     $bottom_frame->Button(-text    => "Yes",
-			  # -command => sub {
-                          #     recreate_frames;
-			  #     draw_download_channels();
-                          # },
-			  -command => sub { goto(answer_yes) },
-			  -width => 10,
-			 )->pack(-side => 'left', -padx => 2, -pady => 4);
-	
+        -command => sub { $ans = 1; $main_window->destroy; },
+        -width => 10,
+       )->pack(-side => 'left', -padx => 2, -pady => 4);
+  
     $bottom_frame->Button(-text    => "No",
-			  # -command => sub { exit(0) },
-			  -command => sub { goto(answer_no) },
-			  -width => 10
-			 )->pack(-side => 'left', -padx => 2, -pady => 4);
-	
+        -command => sub { $ans = 0; $main_window->destroy; },
+        -width => 10
+       )->pack(-side => 'left', -padx => 2, -pady => 4);
+  
     MainLoop();
-	
-  answer_no:
-    $main_window->destroy;
-    return 0;
-	
-  answer_yes:
-    $main_window->destroy;
-    return 1;
+  
+    return $ans;
 }
 sub askBooleanQuestion( $$ ) { &ask_boolean_question }
 
@@ -224,17 +215,18 @@ sub ask_boolean_options( $$$@ ) {
 	
     $bottom_frame = $main_window->Frame()->pack(-side => 'bottom');
 	
+  my @cursel;
+  
     $bottom_frame->Button(-text    => 'OK',
-			  -command => sub { goto(answer_ok); },
+			  -command => sub { @cursel = $listbox->curselection; $main_window->destroy; },
 			  -width    => 10,
 			 )->pack(-padx => 2, -pady => 4);
 								
     MainLoop();
 
-  answer_ok:
     if( $allowedMany ) {
 	my @choices;
-	my @choice_numbers = $listbox->curselection;
+	my @choice_numbers = @cursel;
 			
 	$i=0;
 	foreach (@options) {
@@ -246,44 +238,41 @@ sub ask_boolean_options( $$$@ ) {
 	    }
 	    $i++;
 	}
-			
-	$main_window->destroy;
+	
 	return @choices;
 	
     }
     else {
-	my $ans = $options[$listbox->curselection];
-	$main_window->destroy;
+	my $ans = $options[$cursel[0]];
+	
 	return $ans;
     }
 }
 sub askBooleanOptions( $$$@ ) { &ask_boolean_options }
 
 sub say( $ ) {
-    my $question = shift;
-	
-    $main_window = MainWindow->new;
+  my $question = shift;
+  
+  $main_window = MainWindow->new;
 
-    $main_window->title("Information");
-    $main_window->minsize(qw(400 250));
-    $main_window->geometry('+250+150');
+  $main_window->title("Information");
+  $main_window->minsize(qw(400 250));
+  $main_window->geometry('+250+150');
 
-    $top_frame    = $main_window->Frame()->pack;
-    $middle_frame = $main_window->Frame()->pack;
-    $bottom_frame = $main_window->Frame()->pack(-side => 'bottom');
-	
-    $top_frame->Label(-height => 2)->pack;
-    $top_frame->Label(-text => $question)->pack;
-	
-    $bottom_frame->Button(-text    => "OK",
-			  -command => sub { goto(answer_ok3) },
-			  -width    => 10,
-			 )->pack(-padx => 2, -pady => 4);
-	
-    MainLoop();
-	
-  answer_ok3:
-    $main_window->destroy;
+  $top_frame    = $main_window->Frame()->pack;
+  $middle_frame = $main_window->Frame()->pack;
+  $bottom_frame = $main_window->Frame()->pack(-side => 'bottom');
+  
+  $top_frame->Label(-height => 2)->pack;
+  $top_frame->Label(-text => $question)->pack;
+  
+  $bottom_frame->Button(-text    => "OK",
+      -command => sub { $main_window->destroy; },
+      -width    => 10,
+     )->pack(-padx => 2, -pady => 4);
+  
+  MainLoop();
+    
 }
 
 
@@ -291,11 +280,11 @@ sub indexArray($@)
 {
     my $s=shift;
     my @array = @_;
-	
+  
     for (my $i = 0; $i < $#array; $i++) {
-	return $i if $array[$i] eq $s;
+  return $i if $array[$i] eq $s;
     }
-	
+  
     return -1;
 }
 
