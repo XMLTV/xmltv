@@ -60,8 +60,6 @@ The data source does not include full channels information and the
 channels are identified by short names rather than the RFC2838 form
 recommended by the XMLTV DTD.
 
-I havenE<39>t even considered what happens with DST issues.
-
 =cut
 
 ######################################################################
@@ -79,6 +77,7 @@ use XMLTV;
 use XMLTV::Memoize;
 use XMLTV::Ask;
 use XMLTV::Config_file;
+use XMLTV::Europe_TZ;
 # Todo: perhaps we should internationalize messages and docs?
 use XMLTV::Usage <<END
 $0: get Finnish television listings in XMLTV format
@@ -102,9 +101,8 @@ my $HEAD = { 'source-info-url'     => 'http://www.katso.fi/',
 # Whether zero-length programmes should be included in the output.
 my $WRITE_ZERO_LENGTH = 0;
 
-# default timezone (shouldn't be needed??)
-#my $TZ="EET";
-my $TZ="";
+# The winter timezone in Finland.  Summer time is one hour ahead of this.
+my $TZ="EET";
 
 # default language
 my $LANG="fi";
@@ -240,7 +238,6 @@ foreach (XMLTV::Config_file::read_lines($config_file)) {
 # begin main program
 
 # Assume the listings source uses EET (see BUGS above).
-#Date_Init("TZ=$TZ");
 my $now = DateCalc(ParseDate('now'), "$opt_offset days");
 die "No channels specified, run me with --configure\n"
   if not keys %channels;
@@ -344,11 +341,35 @@ sub make_programme_hash {
     $prog{channel}=$ch_xmltv_id;
     $prog{title}=[ [ $cur->{title}, $LANG ] ];
 
-    my $start=ParseDate("$date $cur->{time} $TZ");
-    my $stoptime=$next ? $next->{time} : undef;
-    my $stop=get_stop_time($date,$start,$stoptime);
-    $prog{start}=UnixDate($start,'%q %z');
-    $prog{stop}=UnixDate($stop,'%q %z');
+    my $cur_time = $cur->{time};
+    my $start=parse_eur_date("$date $cur_time", $TZ);
+    my ($start_base, $start_tz) = @{date_to_eur($start, $TZ)};
+    $prog{start}=UnixDate($start_base, '%q') . " $start_tz";
+
+    my $next_time = $next ? $next->{time} : undef;
+    if (defined $next_time) {
+	t '$cur_time=' . d $cur_time;
+	t '$next_time=' . d $next_time;
+	my $stop_date;
+	if ($next_time lt $cur_time) {
+	    # Must span midnight.  (Don't worry about start being
+	    # summer time and stop being winter: we assume the site is
+	    # sane enough to put them both in the same timezone and
+	    # avoid looking like stop < start.)
+	    #
+	    t '$next_time appears sooner, must be next day';
+	    $stop_date = nextday($date);
+	}
+	else {
+	    $stop_date = $date;
+	}
+	t '$stop_date set to: ' . d $stop_date;
+	my $stop = parse_eur_date("$stop_date $next_time", $TZ);
+	t 'stop time in UTC: ' . d $stop;
+	my ($stop_base, $stop_tz) = @{date_to_eur($stop, $TZ)};
+	t 'converted back to Finnish: ' . d [ $stop_base, $stop_tz ];
+	$prog{stop}=UnixDate($stop_base, '%q') . " $stop_tz";
+    }	
 
     # FIXME: parse description field further
     $prog{desc}=[ [ $cur->{desc}, $LANG ] ] if defined $cur->{desc};
@@ -367,25 +388,6 @@ sub bump_start_day {
     } else {
 	return 0;
     }
-}
-sub get_stop_time {
-    my ($date, $start, $stop) = @_;
-    my $today = UnixDate($date, '%Q');
-
-    my $longstop;
-    # FIXME: should honor $WRITE_ZERO_LENGTH
-    if (defined($stop)) {
-	$longstop = ParseDate("$today $stop $TZ");
-	my $cmp = Date_Cmp(UnixDate($start,'%H:%M'),
-			   UnixDate($longstop,'%H:%M'));
-
-	# test whether we passed midnight
-	my $day = $cmp>0 ? nextday($today) : $today;
-	return ParseDate("$day $stop $TZ");
-    }
-    # If stop time is not known, it's not known.  We do not make up
-    # some arbitrary time.
-    #
 }
 
 # program data is split as follows:
