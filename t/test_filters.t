@@ -57,16 +57,28 @@ foreach my $cmd (@cmds) {
 	die "two tests munge to $test_name"
 	  if $seen{$test_name}++;
 
-	my $in = "$tests_dir/$test";
+	my $in       = "$tests_dir/$test";
 	my $expected = "$tests_dir/$test_name.expected";
-	my $out = "$tests_dir/$test_name.out";
-	my $diff = "$tests_dir/$test_name.diff";
+	my $out      = "$tests_dir/$test_name.out";
+	my $diff     = "$tests_dir/$test_name.diff";
+
+
+	my $err      = "$tests_dir/$test_name.err";
 
 	my @cmd = (@$cmd, $in, '--output', $out);
 	$cmd[0] = "$cmds_dir/$cmd[0]";
 	if ($verbose) {
 	    print STDERR "test $test_num: @cmd\n";
 	}
+
+	# Redirect stderr to file $err.
+	open(OLDERR, '>&STDERR') or die "cannot dup stderr: $!\n";
+	if (not open(STDERR, ">$err")) {
+	    print OLDERR "cannot write to $err: $!\n";
+	    exit(1);
+	}
+
+	# Run the command.
 	if (system(@cmd)) {
 	    my ($status, $sig, $core) = ($? >> 8, $? & 127, $? & 128);
 	    if ($sig) {
@@ -74,6 +86,16 @@ foreach my $cmd (@cmds) {
 	    }
 	    warn "@cmd failed: $status, $sig, $core\n";
 	    print "not ok $test_num\n";
+	}
+
+	# Restore old stderr.
+	if (not close(STDERR)) {
+	    print OLDERR "cannot close $err: $!\n";
+	    exit(1);
+	}
+	if (not open(STDERR, ">&OLDERR")) {
+	    print OLDERR "cannot dup stderr back again: $!\n";
+	    exit(1);
 	}
 
 	if (-e $expected) {
@@ -85,6 +107,7 @@ foreach my $cmd (@cmds) {
 		print "ok $test_num\n";
 		unlink $diff or warn "cannot unlink $diff: $!";
 		unlink $out or warn "cannot unlink $out: $!";
+		unlink $err or warn "cannot unlink $err: $!";
 	    }
 	}
 	else {
@@ -94,6 +117,8 @@ foreach my $cmd (@cmds) {
 	    warn "creating $expected\n";
 	    rename($out, $expected)
 	      or die "cannot rename $out to $expected: $!";
+	    unlink $diff or warn "cannot unlink $diff: $!";
+	    unlink $err or warn "cannot unlink $err: $!";
 	}
     }
 }
