@@ -4,9 +4,21 @@
 
 package XMLTV::Ananova_Channel;
 use Carp ();
-use Log::TraceMessages qw(t d);
 use strict;
 use Tie::RefHash; # 5.6 version required
+
+# Use Log::TraceMessages if installed.
+BEGIN {
+    eval { require Log::TraceMessages };
+    if ($@) {
+	*t = sub {};
+	*d = sub { '' };
+    }
+    else {
+	*t = \&Log::TraceMessages::t;
+	*d = \&Log::TraceMessages::d;
+    }
+}
 
 my @all;
 my %idx_a; # index by Ananova id, to 'set' of objects

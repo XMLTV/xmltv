@@ -12,15 +12,19 @@ package XMLTV::UK_TZ;
 use Date::Manip; # no Date_Init(), that can be done by the app
 use XMLTV::TZ qw(gettz);
 
-# Memoize some of our own routines as well as gettz() from
-# XMLTV::TZ.  This all needs to be rationalized sometime.
+# Memoize some subroutines if possible.  FIXME commonize to
+# XMLTV::Memoize.  We are memoizing our own routines plus gettz() from
+# XMLTV::TZ, that too needs sorting out.
 #
-use Memoize;
-foreach (qw(parse_uk_date date_to_uk bst_dates
-            ParseDate UnixDate DateCalc Date_Cmp
-            ParseDateDelta gettz)) {
-    Memoize::memoize($_) or die "cannot memoize $_: $!";
+eval { require Memoize };
+unless ($@) {
+    foreach (qw(parse_uk_date date_to_uk bst_dates
+		ParseDate UnixDate DateCalc Date_Cmp
+		ParseDateDelta gettz)) {
+	Memoize::memoize($_) or die "cannot memoize $_: $!";
+    }
 }
+
 use base 'Exporter'; use vars '@EXPORT';
 @EXPORT = qw(parse_uk_date date_to_uk);
 

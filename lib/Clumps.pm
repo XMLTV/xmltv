@@ -28,7 +28,20 @@
 package XMLTV::Clumps;
 use Date::Manip; # no Date_Init(), that can be done by the app
 use Tie::RefHash;
-use Log::TraceMessages qw(t d);
+
+# Use Log::TraceMessages if installed.
+BEGIN {
+    eval { require Log::TraceMessages };
+    if ($@) {
+	*t = sub {};
+	*d = sub { '' };
+    }
+    else {
+	*t = \&Log::TraceMessages::t;
+	*d = \&Log::TraceMessages::d;
+    }
+}
+
 # Won't Memoize, you can do that yourself.
 use base 'Exporter'; use vars '@EXPORT_OK';
 @EXPORT_OK = qw(new_relation related relate unrelate nuke_from_rel

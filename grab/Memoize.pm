@@ -4,8 +4,20 @@
 #
 
 package XMLTV::Memoize;
-use Log::TraceMessages qw(t d);
 use File::Basename;
+
+# Use Log::TraceMessages if installed.
+BEGIN {
+    eval { require Log::TraceMessages };
+    if ($@) {
+	*t = sub {};
+	*d = sub { '' };
+    }
+    else {
+	*t = \&Log::TraceMessages::t;
+	*d = \&Log::TraceMessages::d;
+    }
+}
 
 # Add an undocumented option to cache things in a DB_File database.
 # You need to decide which subroutines should be cached: LWP::Simple's
@@ -21,6 +33,9 @@ use File::Basename;
 #
 # Currently only does SCALAR_CACHE memoization, but more could be
 # added if needed.
+#
+# Note that the Memoize module is not loaded unless --cache options
+# are found.
 #
 sub check_argv( @ ) {
     my ($yes, $filename);

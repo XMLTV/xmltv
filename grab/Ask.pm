@@ -4,9 +4,21 @@ package XMLTV::Ask;
 use strict;
 use base 'Exporter';
 use vars '@EXPORT';
-use Log::TraceMessages qw(t d);
 use Carp qw(croak);
 @EXPORT = qw(ask askQuestion askBooleanQuestion askManyBooleanQuestions);
+
+# Use Log::TraceMessages if installed.
+BEGIN {
+    eval { require Log::TraceMessages };
+    if ($@) {
+	*t = sub {};
+	*d = sub { '' };
+    }
+    else {
+	*t = \&Log::TraceMessages::t;
+	*d = \&Log::TraceMessages::d;
+    }
+}
 
 sub ask( $ );
 sub askQuestion( $$@ );

@@ -5,8 +5,6 @@ use strict;
 
 use vars '$VERSION'; $VERSION = '0.5';
 
-my $PREFIX = "/usr/local/";
-
 use vars '%extra_constants';
 %extra_constants
   = (INST_PLAINDOC   => 'blib/doc',
@@ -22,39 +20,53 @@ my %prereqs
      'Date::Manip' => 5.4,
      'XML::Writer' => 0,
      'XML::Simple' => 0,
-     'Log::TraceMessages' => 0,
-     'Lingua::Preferred' => 0,
-     'Lingua::EN::Numbers::Ordinate' => 0,
-     'Memoize' => 0,
-     'Term::ProgressBar' => 0,
-     'Tie::IxHash' => 0,
      'Unicode::String' => 0,
      'Compress::Zlib' => 0,
+     'CGI' => 0,
     );
+
+# 'Recommended but not required'.  It isn't currently handled to have
+# the same module in both sets.
+#
+my %recommended
+  = (
+     'Lingua::EN::Numbers::Ordinate' => 0,
+     'Lingua::Preferred' => 0,
+     'Memoize' => 0,
+     'Term::ProgressBar' => 0,
+    );
+
+# And Log::TraceMessages is 'suggested' but we don't warn about that.
 
 # MakeMaker's warning message can be intimidating, check ourselves
 # first.  This code can later be replaced with a less demanding
 # dependency checker that asks what you intend to run and picks those
 # dependencies.
 #
+# We warn about missing 'recommended' modules but don't abort because
+# of them.
+#
 my $err = 0;
-foreach my $p (sort keys %prereqs) {
+foreach my $p ((sort keys %prereqs), (sort keys %recommended)) {
+    my $required = (defined $prereqs{$p});
+    my $verbed = $required ? 'required' : 'recommended';
+    my $Verbed = uc(substr($verbed, 0, 1)) . substr($verbed, 1);
     eval "require $p";
     if ($@) {
 	if ($@ =~ /^Can\'t locate \S+\.pm in \@INC/) {
-	    warn "Required module $p seems not to be installed.\n";
+	    warn "$Verbed module $p seems not to be installed.\n";
 	}
 	else {
-	    warn "Required module $p failed to load: $@";
+	    warn "$Verbed module $p failed to load: $@";
 	}
-	++ $err;
+	++ $err if $required;
     }
     elsif ($p->VERSION < $prereqs{$p}) {
-	warn "Version $prereqs{$p} or later of module $p required\n";
-	++ $err;
+	warn "Version $prereqs{$p} or later of module $p $verbed\n";
+	++ $err if $required;
     }
 }
-exit(1) if $err;
+die "Required modules missing, not writing Makefile\n" if $err;
 
 WriteMakefile
   (

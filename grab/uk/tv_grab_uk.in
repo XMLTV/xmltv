@@ -60,14 +60,32 @@ user about new channels that have appeared on the Ananova site.
 use strict;
 use LWP::Simple;
 use Getopt::Long;
-use Tie::IxHash;
-use Log::TraceMessages qw(t d); Log::TraceMessages::check_argv();
 use Date::Manip;
 use Tie::RefHash;
-use Term::ProgressBar;
 use IO::File;
 use Tie::RefHash;
 use Data::Dumper;
+
+# Use Log::TraceMessages if installed.
+BEGIN {
+    eval { require Log::TraceMessages };
+    if ($@) {
+	*t = sub {};
+	*d = sub { '' };
+    }
+    else {
+	*t = \&Log::TraceMessages::t;
+	*d = \&Log::TraceMessages::d;
+	Log::TraceMessages::check_argv();
+    }
+}
+
+# Use Term::ProgressBar if installed.
+my $have_bar;
+BEGIN {
+    eval { require Term::ProgressBar };
+    $have_bar = not defined $@;
+}
 
 use XMLTV;
 # Modify the XMLTV module's tables to add a <distribution> element to
@@ -159,8 +177,13 @@ if (not defined $CONFIG_FILE) {
 	$CONFIG_FILE = 'tv_grab_uk';
     }
 }
-print STDERR "using config file $CONFIG_FILE\n";
-
+if (-e $CONFIG_FILE) {
+    print STDERR "using config file $CONFIG_FILE\n";
+}
+elsif (not $opt_configure) {
+    die "config file $CONFIG_FILE does not exist, run me with --configure\n";
+}
+ 
 # On Windows Date::Manip can have trouble finding the local timezone.
 # Since the output listings shouldn't depend on the local timezone
 # anyway, we just set it here.
@@ -185,17 +208,15 @@ sub ud {
     return UnixDate($internal, '%q') . ' ' . $tz;
 }
 
-# Memoize some date parsing routines.
-use Memoize;
+# Memoize some date parsing routines, if possible.  FIXME move to
+# XMLTV::Memoize.
+#
 eval { require Memoize };
-if ($@) {
-    warn "could not load Memoize module, things will run slowly\n";
-}
-else {
-     foreach (qw(parse_uk_date ParseDate UnixDate DateCalc Date_Cmp
-		 ParseDateDelta ud)) {
-	 Memoize::memoize($_) or warn "cannot memoize $_";
-     }
+unless ($@) {
+    foreach (qw(parse_uk_date ParseDate UnixDate DateCalc Date_Cmp
+		ParseDateDelta ud)) {
+	Memoize::memoize($_) or warn "cannot memoize $_";
+    }
 }
 
 # Download the two index pages now.
@@ -406,7 +427,7 @@ sub grab( @ ) {
     #
     my %wanted; tie %wanted, 'Tie::RefHash';
     open(CONF, $CONFIG_FILE)
-      or die "cannot read $CONFIG_FILE, run $0 --configure\n";
+      or die "cannot read $CONFIG_FILE: $!\n";
     my @all_chs = XMLTV::Ananova_Channel->all();
     while (<CONF>) {
 	s/\#.*//; s/^\s+//; s/\s+$//;
@@ -489,7 +510,8 @@ sub grab( @ ) {
 	warn "apparently nothing to download\n";
     }
 
-    my $bar = new Term::ProgressBar('downloading listings', scalar @to_get);
+    my $bar = new Term::ProgressBar('downloading listings', scalar @to_get)
+      if $have_bar;
     my @listingses;
     foreach (@to_get) {
 	t "downloading page: $_";
@@ -511,7 +533,7 @@ sub grab( @ ) {
 	    }
 	};
 	die "$_: $@" if $@;
-	update $bar;
+	update $bar if $have_bar;
     }
     my %w_args = ();
     if (defined $opt_output) {
@@ -1090,7 +1112,7 @@ sub get_pages( $$ ) {
     my %r;
     my $num_pages = scalar @pages;
     t "initializing progress bar with $num_pages items";
-    my $bar = new Term::ProgressBar($text, $num_pages);
+    my $bar = new Term::ProgressBar($text, $num_pages) if $have_bar;
 
     # FIXME currently multiple pages are not supported.
     my $max_at_once = 1;
@@ -1129,7 +1151,7 @@ sub get_pages( $$ ) {
 		die "really cannot fetch $url, giving up\n";
 	    }
 	}
-	update $bar;
+	update $bar if $have_bar;
 	foreach (@this_fetch) {
 	    die "page $_ requested twice" if defined $r{$_}->{content};
 	    $r{$_}->{content} = shift @got;
