@@ -321,7 +321,6 @@ my @opt_components
 		   ) ],
        prereqs => { 'Tk' => 0,
 		    'Tk::TableMatrix' => 0,
-		    'XML::Simple' => 0,
 		  } },
 
      { name => 'tv_pick_cgi',
