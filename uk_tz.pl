@@ -6,7 +6,9 @@
 # This is hardcoded for British timezones, but it shouldn't be too
 # hard to adapt for other countries in Europe.
 # 
-# -- Ed Avis, epa98@doc.ic.ac.uk, 2000-07-28
+# Actually, now there is some other general time stuff in here too.
+# 
+# -- Ed Avis, epa98@doc.ic.ac.uk, 2001-03-26
 # 
 
 
@@ -186,16 +188,37 @@ sub bst_dates($) {
 # Parameters: unparsed date string
 # Returns: timezone (a substring), or undef
 # 
-# The only timezones supported are UT (aka GMT) and BST.
+# We just pick up anything that looks like a timezone.
 # 
 sub gettz($) {
     die 'usage: gettz(unparsed date string)' if @_ != 1;
     local $_ = shift;
     die if not defined;
 
-    /(UT|GMT|BST)/    && return $1;
-    /(\+0000|\+0100)/ && return $1;
+    /\s([A-Z]{1,4})$/   && return $1;
+    /\s([+-]\d\d:?(\d\d)?)$/ && return $1;
     return undef;
 }
+
+
+# ParseDate_PreservingTZ()
+# 
+# A wrapper for Date::Manip's ParseDate() that makes sure the date is
+# stored in the timezone it was given in.  That's helpful when you
+# want to produce human-readable output and the user expects to see
+# the same timezone going out as went in.
+# 
+sub ParseDate_PreservingTZ($) {
+    die 'usage: ParseDate_PreservingTZ(unparsed date string)'
+      if @_ != 1;
+    my $u = shift;
+    my $p = ParseDate($u); return undef if not defined $p;
+    my $tz = gettz($u) || 'UT';
+#    print STDERR "date $u parsed to $p (timezone read as $tz)\n";
+    $p = Date_ConvTZ($p, undef, $tz);
+#    print STDERR "...converted to $p\n";
+    return $p;
+}
+
 
 1;

@@ -79,7 +79,7 @@ if ($@) {
     $memoize_avail = 0;
 }
 else {
-    foreach (qw/start_date ParseDate UnixDate gettz/) {
+    foreach (qw/start_date ParseDate UnixDate gettz ParseDate_PreservingTZ/) {
 	Memoize::memoize($_) or die "cannot memoize $_: $!";
     }
     $memoize_avail = 1;
@@ -124,6 +124,7 @@ foreach (@chunks) {
     }
 
     print "\\begin{tabular}{r\@{--}lp{$WIDTH}r} \n";
+    my $top_of_table = 1;
     foreach (@programmes) {
 	my %h = %$_;
 	my ($start, $stop, $channel) = @h{qw(start stop channel)};
@@ -135,25 +136,49 @@ foreach (@chunks) {
 	# Convert date-and-time to just hhmm, adding explicit timezone
 	# whenever it changes.
 	# 
-	foreach (\$start, \$stop) {
-	    next if not defined $$_;
-	    my $p = ParseDate($$_) or die "bad date '$$_'";
-	    my $tz = gettz($$_) || 'UT';
-	    $$_ = UnixDate($p, '%R');
+	my $start_tz = gettz($start) || 'UT';
+	my $start_p = ParseDate_PreservingTZ($start)
+	  or die "bad date '$start'";
+	my $start_h = UnixDate($start_p, '%R');
+
+	if ($top_of_table and not defined $curr_tz) {
+	    # Assume that the first listing on a page doesn't need an
+	    # explicit timezone.  (FIXME not perfect)
+	    # 
+	    $curr_tz = $start_tz;
+	}
+	$top_of_table = 0;
+
+	my $stop_h;
+	if (defined $stop) {
+	    # Stop time is defined, sort out its timezone too
+	    my $stop_tz = gettz($stop) || 'UT';
+	    my $stop_p = ParseDate_PreservingTZ($stop)
+	      or die "bad date '$stop'";
+	    $stop_h = UnixDate($stop_p, '%R');
 	    
-	    if (not defined $curr_tz) {
-		# First date on this page.  Just assume it doesn't
-		# need printing (FIXME).
+	    if ((not defined $curr_tz)
+		or ($curr_tz ne $start_tz)
+		or ($start_tz ne $stop_tz) )
+	    {
+		  # The timezone has changed somehow - make it explicit.
+		  $start_h .= " $start_tz";
+		  $stop_h .= " $stop_tz";
+		  undef $curr_tz;
+	    }
+	    
+	    if ($start_tz eq $stop_tz) {
+		# The programme starts and stops in the same TZ - we
+		# can assume that this is the one to use from now on.
 		# 
-		$curr_tz = $tz;
+		$curr_tz = $start_tz;
 	    }
-	    elsif ($curr_tz ne $tz) {
-		# Add timezone to printed hh:mm
-		$$_ .= " $tz";
-		$curr_tz = $tz;
-	    }
-	    else {
-		# Timezone hasn't changed, don't print it again
+	}
+	else {
+	    # Missing stop time.  Still need to check the timezone.
+	    if ((not defined $curr_tz) or ($curr_tz ne $start_tz)) {
+		$start_h .= " $start_tz";
+		undef $curr_tz;
 	    }
 	}
 
@@ -172,14 +197,14 @@ foreach (@chunks) {
 	# 
 	# Er, this needs fixing.  See my post to comp.text.tex.
 	# 
-	die 'no start'   if not defined $start;
-	$stop = '' if not defined $stop;
+	die 'no start'   if not defined $start_h;
+	$stop_h = '' if not defined $stop_h;
 	die 'no title'   if not defined $title;
 	die 'no channel' if not defined $channel;
 
 	print <<END;
 \\smallskip
-$start & $stop &
+$start_h & $stop_h &
 { \\small \\raggedright
 $title
 } & $channel \\\\
@@ -229,7 +254,7 @@ sub start_date($) {
     die "no start date for $prog->{title}"
       if not defined $prog->{start};
 
-    my $p = ParseDate($prog->{start});
+    my $p = ParseDate_PreservingTZ($prog->{start});
     die "bad start date for programme" if not defined $p or $p eq '';
     return UnixDate($p, '%Q');
 }
