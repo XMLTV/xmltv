@@ -1,7 +1,7 @@
 package XMLTV::Grab_XML;
 use strict;
 use Getopt::Long;
-use LWP::Simple;
+use LWP::Simple qw();
 use Date::Manip;
 use XMLTV;
 use XMLTV::Memoize;
@@ -88,6 +88,7 @@ it if you need to decompress the data or patch it up.
 =cut
 sub xml_from_data( $$ ) {
     my $pkg = shift;
+    t 'Grab_XML::xml_from_data()';
     return shift; # leave unchanged
 }
 
@@ -129,6 +130,22 @@ $0: get $country television listings in XMLTV format
 usage: $0 [--help] [--output FILE] [--days N] [--offset N] [--quiet]
 END
       ;
+}
+
+=item XMLTV::Grab_XML->get()
+
+Given a URL, fetch the content at that URL.  The default
+implementation calls LWP::Simple::get() but you might want to override
+it if you need to do wacky things with http requests, like cookies.
+
+Note that while this method fetches a page, C<xml_from_data()> does
+any further processing of the result to turn it into XML.
+
+=cut
+sub get( $$ ) {
+    my $pkg = shift;
+    my $url = shift;
+    return LWP::Simple::get($url);
 }
 
 =item XMLTV::Grab_XML->go()
@@ -205,7 +222,7 @@ sub go( $ ) {
 	    print STDERR "$url: $msg\n";
 	};
 
-	my $got = get($url);
+	my $got = $pkg->get($url);
 	if (not defined $got) {
 	    warn 'failed to download, skipping';
 	    next;
