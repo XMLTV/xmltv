@@ -114,7 +114,7 @@ foreach my $exe (split(/ /,$files))
     next unless length($exe)>3; #ignore trash
     $_=$exe;
     s!^.+/!!g;
-    push @cmds,$_;  # build command list (just in case)
+    $cmds{$_}=1;  # build command list (just in case)
 
     next unless $cmd eq $_;
 
@@ -131,10 +131,23 @@ foreach my $exe (split(/ /,$files))
 #
 if ($cmd eq "" )
    {
-	die "you must specify the program to run, for example: $0 tv_grab_fi --configure\n";
+	print STDERR "you must specify the program to run\n    for example: $0 tv_grab_fi --configure\n";
     }
 else
    {
-	die "$cmd is not a valid command. Valid commands are:\n".join(" ",@cmds)."\n";
+    print STDERR "$cmd is not a valid command.\n";
    }
+
+print STDERR "Valid commands are:\n";
+@cmds=sort keys %cmds;
+$rows = int($#cmds / 3)+1;
+
+map {$_='' unless defined $_} @cmds[0..($rows*3+2)];    
+unshift @cmds,undef;
+
+foreach (1..$rows)
+{
+   printf STDERR "    %-20s %-20s %-20s\n",@cmds[$_,$rows+$_,2*$rows+$_];
+}
+exit 1;
 
