@@ -32,6 +32,7 @@ WriteMakefile
 			'filter/tv_to_latex',
 			'filter/tv_cat',
 		      ],
+   'PL_FILES' => { 'filter/tv_grep.PL' => 'filter/tv_grep' },
    'PM'            => { 'XMLTV.pm'                   => '$(INST_LIBDIR)/XMLTV.pm',
 			'grab/na/ZapListings.pm'     => '$(INST_LIBDIR)/XMLTV/ZapListings.pm',
 			'grab/uk/Ananova_Channel.pm' => '$(INST_LIBDIR)/XMLTV/Ananova_Channel.pm',
@@ -144,5 +145,28 @@ END
     }
     $inherited .= "\n";
 
+    return $inherited;
+}
+
+# 'make clean' doesn't remove generated files from *.PL (see posting
+# to makemaker@perl.org).  Fix it.
+#
+sub MY::clean {
+    package MY;
+    my $inherited = shift->SUPER::clean(@_);
+    $inherited =~ s/\s+$//;
+    $inherited .= "\n\t-rm -f filter/tv_grep\n";
+    return $inherited;
+}
+
+# Creating tv_grep depends on tv_grep.in and XMLTV.pm (as well as
+# tv_grep.PL).
+#
+sub MY::processPL {
+    package MY;
+    my $inherited = shift->SUPER::processPL(@_);
+    # Add pm_to_blib as a dependency.
+    $inherited =~ s!^(\s*filter/tv_grep\s+::\s.+)!$1 filter/tv_grep.in pm_to_blib!m
+      or die "no filter/tv_grep in: $inherited";
     return $inherited;
 }
