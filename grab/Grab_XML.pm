@@ -192,12 +192,10 @@ sub go( $ ) {
 	  if defined;
     }
 
-    # Date::Manip has a bug where 'now' will be wrong if you change
-    # the timezone.  It won't be correctly converted from the system
-    # timezone to the new one.  So we call ParseDate('now') _before_
-    # date_init().
+    # Need to call parse_local_date() before any resetting of
+    # Date::Manip's timezone.
     #
-    my $now = DateCalc(ParseDate('now'), "$opt_offset days");
+    my $now = DateCalc(parse_local_date('now'), "$opt_offset days");
     die if not defined $now;
     $pkg->date_init();
     my $today = UnixDate($now, '%Q');

@@ -7,7 +7,7 @@ package XMLTV::TZ;
 use Date::Manip; # no Date_Init(), that can be done by the app
 # Won't Memoize, you can do that yourself.
 use base 'Exporter'; use vars '@EXPORT_OK';
-@EXPORT_OK = qw(gettz ParseDate_PreservingTZ tz_to_num);
+@EXPORT_OK = qw(gettz ParseDate_PreservingTZ tz_to_num parse_local_date);
 
 
 # gettz()
@@ -76,6 +76,38 @@ sub tz_to_num( $ ) {
     #
     $delta =~ /^([+-])0:0:0:0:(\d\d?):(\d\d?):0$/ or die "bad delta $delta";
     return sprintf('%s%02d%02d', $1, $2, $3);
+}
+
+
+# Date::Manip seems to have difficulty with changes of timezone: if
+# you parse some dates in a local timezone then do
+# Date_Init('TZ=UTC'), the existing dates are not changed, so
+# comparisons with later parsed dates (in UTC) will be wrong.  Script
+# to reproduce the bug:
+#
+# #!/usr/bin/perl -w
+# use Date::Manip;
+# # First parse a date in the timezone +0100.
+# Date_Init('TZ=+0100');
+# my $a = ParseDate('2000-01-01 00:00:00');
+# # Now parse another one, in timezone +0000.
+# Date_Init('TZ=+0000');
+# my $b = ParseDate('2000-01-01 00:00:00');
+# # The two dates should differ by one hour.
+# print Date_Cmp($a, $b), "\n";
+#
+# The script should print 0 but it prints -1.
+#
+# NB, use this function _before_ changing the default timezone to UTC,
+# if you want to parse some dates in the user's local timezone!
+#
+# Like ParseDate(), returns undef on error.
+#
+sub parse_local_date( $ ) {
+    my $d = shift;
+    my $pd = ParseDate($d);
+    return undef if not defined $pd;
+    return Date_ConvTZ($pd, Date_TimeZone(), 'UTC');
 }
 
 1;
