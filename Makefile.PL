@@ -9,7 +9,7 @@ sub test_special( $$ );
 sub targets( $ );
 
 use vars '$VERSION';
-$VERSION = '0.5.7';
+$VERSION = '0.5.8';
 
 use vars '%extra_constants';
 %extra_constants
