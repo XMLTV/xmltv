@@ -193,7 +193,7 @@ sub fix_clumps( $$$ ) {
     sub by_date {
 	by_start($a, $b)
 	  || by_clumpidx($a, $b)
-	    || die "programmes do not sort";
+	    || warn "programmes do not sort";
     }
 
     my @relatives = @{relatives($rel, $orig)};
