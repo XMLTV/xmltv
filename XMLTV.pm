@@ -4,19 +4,22 @@
 #
 
 package XMLTV;
+
 use strict;
+use base 'Exporter'; use vars qw(@EXPORT @EXPORT_OK);
+@EXPORT = ();
+@EXPORT_OK = qw(best_name list_programme_keys read_data write_data);
+
 use XML::DOM;
 use XML::Writer;
 use Log::TraceMessages qw(t d);
 use Date::Manip;
-use XMLTV::UK_TZ;
 use Memoize;
 use Lingua::Preferred qw(which_lang);
 use Carp;
+use Data::Dumper;
 
-use base 'Exporter'; use vars qw(@EXPORT @EXPORT_OK);
-@EXPORT = ();
-@EXPORT_OK = qw(best_name list_programme_keys read_data write_data);
+use XMLTV::UK_TZ;
 
 # Handlers for different subelements of programme.  First value is the
 # name of the element, second is a subroutine which turns the DOM node
@@ -1041,6 +1044,51 @@ sub best_name( $$;$ ) {
 }
 
 
+# cat()
+#
+# Concatenate (and merge) listings.  Programmes are catenated
+# together, channels are merged, for credits we just take the first
+# and warn if the others differ.
+#
+# See tv_cat(1) which is just a wrapper around this routine.
+#
+sub cat( @ ) {
+#    local $Log::TraceMessages::On = 1;
+    my $all_credits;
+    my %all_channels;
+    my @all_progs;
+
+    foreach (@_) {
+	t 'doing arg: ' . d $_;
+	die 'usage: cat([ encoding, credits, channels, progs ]...)'
+	  if ref ne 'ARRAY';
+	my ($encoding, $credits, $channels, $progs) = @$_;
+	die if $encoding ne 'UTF-8';
+
+	if (not defined $all_credits) {
+	    $all_credits = $credits;
+	}
+	elsif (Dumper($credits) ne Dumper($all_credits)) {
+	    warn "different files have different credits, taking from first file\n";
+	}
+
+	foreach (keys %$channels) {
+	    if (not defined $all_channels{$_}) {
+		$all_channels{$_} = $channels->{$_};
+	    }
+	    elsif (Dumper($all_channels{$_}) ne Dumper($channels->{$_})) {
+		warn "channel $_ differs between two files, taking first appearance\n";
+	    }
+	}
+
+	push @all_progs, @$progs;
+    }
+    $all_credits = {} if not defined $all_credits;
+
+    return [ 'UTF-8', $all_credits, \%all_channels, \@all_progs ];
+}
+
+
 ####
 # XMLTV::Writer
 #
@@ -1320,6 +1368,5 @@ sub call_handlers_write( $$$ ) {
     }
     t 'leftover keys: ' . d([ sort keys %$input ]);
 }
-
 
 1;
