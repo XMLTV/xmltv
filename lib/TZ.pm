@@ -4,6 +4,7 @@
 #
 
 package XMLTV::TZ;
+use Carp;
 use Date::Manip; # no Date_Init(), that can be done by the app
 # Won't Memoize, you can do that yourself.
 use base 'Exporter'; use vars '@EXPORT_OK';
@@ -18,9 +19,9 @@ use base 'Exporter'; use vars '@EXPORT_OK';
 # We just pick up anything that looks like a timezone.
 #
 sub gettz($) {
-    die 'usage: gettz(unparsed date string)' if @_ != 1;
+    croak 'usage: gettz(unparsed date string)' if @_ != 1;
     local $_ = shift;
-    die if not defined;
+    croak 'undef argument to gettz()' if not defined;
 
     /\s([A-Z]{1,4})$/        && return $1;
     /\s([+-]\d\d:?(\d\d)?)$/ && return $1;
@@ -36,7 +37,7 @@ sub gettz($) {
 # the same timezone going out as went in.
 #
 sub ParseDate_PreservingTZ($) {
-    die 'usage: ParseDate_PreservingTZ(unparsed date string)'
+    croak 'usage: ParseDate_PreservingTZ(unparsed date string)'
       if @_ != 1;
     my $u = shift;
     my $p = ParseDate($u); return undef if not defined $p;
