@@ -1,0 +1,458 @@
+#!/usr/bin/perl -w
+
+=pod
+
+=head1 NAME
+
+tv_grab_se_swedb - Grab TV listings for Sweden.
+
+=head1 SYNOPSIS
+
+tv_grab_se_swedb --help
+
+tv_grab_se_swedb [--config-file FILE] [--root-url URL] --configure 
+                 [--gui OPTION]
+
+tv_grab_se_swedb [--config-file FILE] [--root-url URL] [--output FILE] 
+                 [--days N] [--offset N] [--quiet] [--debug]
+                 [--channel xmltvid,xmltvid,...]
+
+=head1 DESCRIPTION
+
+Output TV and listings in XMLTV format for many stations
+available in Sweden. Data is downloaded from http://tv.swedb.se/ by default.
+
+First you must run B<tv_grab_se_swedb --configure> to choose which stations
+you want to receive.
+
+Then running B<tv_grab_se_swedb> with no arguments will get a listings for
+the stations you chose for five days including today.
+
+=head1 OPTIONS
+
+B<--configure> Prompt for which stations to download and write the
+configuration file.
+
+B<--config-file FILE> Set the name of the configuration file, the
+default is B<~/.xmltv/tv_grab_se_swedb.conf>.  This is the file written by
+B<--configure> and read when grabbing.
+
+B<--gui OPTION> Use this option to enable a graphical interface to be used.
+OPTION may be 'Tk', or left blank for the best available choice.
+Additional allowed values of OPTION are 'Term' for normal terminal output
+(default) and 'TermNoProgressBar' to disable the use of Term::ProgressBar.
+
+B<--output FILE> When grabbing, write output to FILE rather than
+standard output.
+
+B<--days N> When grabbing, grab N days rather than 5.
+
+B<--offset N> Start grabbing at today + N days.  N may be negative.
+
+B<--quiet> suppress the progress-bar normally shown on standard error.
+
+B<--debug> provide more information on progress to stderr to help in
+debugging.
+
+B<--channel xmltvid>  Disregard configuration file and only grab data for
+                      the specified channel(s). The parameter is a 
+                      commaseparated list of xmltv channel-ids.
+
+B<--root-url url>     Specify the url of the file describing all 
+                      available channels. The default is
+                      http://tv.swedb.se/xmltv/channels.xml.gz
+ 
+B<--help> print a help message and exit.
+
+=head1 ERROR HANDLING
+
+If the grabber fails to download data for some channel on a specific day, 
+it will print an errormessage to STDERR and then continue with the other
+channels and days. The grabber will exit with a status code of 1 to indicate 
+that the data is incomplete. 
+
+=head1 SUPPORTED CHANNELS
+
+For information on supported channels, see http://tv.swedb.se/
+
+=head1 AUTHOR
+
+Mattias Holmlund, mattias -at- holmlund -dot- se. This documentation
+and parts of the code copied from tv_grab_uk by
+Ed Avis, ed -at- membled -dot- com.
+
+=head1 BUGS
+
+=cut
+
+use strict;
+
+use XMLTV;
+use XMLTV::Ask;
+use XMLTV::ProgressBar;
+use XMLTV::Config_file;
+use XMLTV::Get_nice;
+
+use XML::LibXML;
+use Getopt::Long;
+use Date::Manip;
+use Compress::Zlib;
+use IO::Wrap qw/wraphandle/;
+use IO::Scalar;
+use File::Path;
+use LWP::Simple;
+
+my $opt = { days => 5,
+            offset => 0,
+            "config-file" => undef,
+            gui => undef,
+            configure => 0,
+            help => 0,
+            quiet => 0,
+            output => undef,
+            debug => 0,
+            channel => undef,
+            'root-url' => 'http://tv.swedb.se/xmltv/channels.xml.gz',
+          };
+
+my $res = GetOptions( $opt, qw/
+                      days=i
+                      offset=i
+                      config-file=s
+                      gui
+                      configure
+                      help|h
+                      quiet
+                      output=s
+                      debug
+                      channel=s
+                      root-url=s
+                      / );
+
+sub t;
+
+if( (not $res) or scalar(@ARGV) or $opt->{help} )
+{
+  print << 'EOH';
+tv_grab_se_swedb --help
+
+tv_grab_se_swedb [--config-file FILE] --configure [--gui OPTION]
+
+tv_grab_se_swedb [--config-file FILE] [--output FILE] [--days N]
+[--offset N] [--quiet] [--debug] [--channel xmltvid,xmltvid,...]
+
+EOH
+
+  exit(1);
+}
+
+XMLTV::Ask::init($opt->{'gui'});
+
+check_cache();
+
+my( $xmldecl, $channels ) = load_channels( $opt->{'root-url' } );
+
+# File that stores which channels to download.
+my $config_file
+  = XMLTV::Config_file::filename($opt->{'config-file' },
+                                 'tv_grab_se_swedb', not $opt->{debug} );
+
+if( $opt->{configure} )
+{
+    configure( $config_file );
+    exit;
+}
+
+# List of the ids of all channels that should be loaded.
+# This is loaded from the configuration file.
+my @channel_list = ();
+
+if( defined( $opt->{channel} ) )
+{
+    @channel_list = split ",", $opt->{channel};
+}
+else
+{
+    load_config( $config_file );
+}
+
+my( $odoc, $root );
+my $warnings = 0;
+
+my $fh;
+
+if (defined $opt->{output})
+{
+    t "Sending output to $opt->{output}.";
+    $fh = new IO::File "> $opt->{output}";
+    die "cannot write to $opt->{output}" if not $fh;
+}
+else
+{
+    $fh = wraphandle('STDOUT');
+}
+
+# Use the same xml declaration as the one in
+# channels.xml
+$fh->print( $xmldecl );
+$fh->print( '<!DOCTYPE tv SYSTEM "xmltv.dtd">' . "\n" );
+$fh->print( "<tv>\n" );
+
+# Write list of channels.
+t 'Writing list of channels.';
+
+foreach my $channel_id (@channel_list)
+{
+    if( not exists $channels->{$channel_id} )
+    {
+        print STDERR "Unknown channel $channel_id. See http://tv.swedb.se" . 
+            " for a list of available channels or run" . 
+            " tv_grab_se_swedb --configure to reconfigure.\n";
+        exit(1);
+    }
+
+    my( $channel_name, $url ) = @{$channels->{$channel_id}};
+   $fh->print( << "EOD" );
+  <channel id='$channel_id'>
+    <display-name lang='sv'>$channel_name</display-name>
+  </channel>
+EOD
+}
+
+my $now = ParseDate( 'now' );
+my $date =$now;
+$date = DateCalc( $now, "+$opt->{offset} days" ) 
+    if( $opt->{offset} );
+
+my $bar = undef;
+$bar = new XMLTV::ProgressBar( {
+    name => 'downloading listings',
+    count => $opt->{days} * @channel_list
+    }) if (not $opt->{quiet}) && (not $opt->{debug});
+
+for( my $i=0; $i < $opt->{days}; $i++ )
+{
+    t "Date: $date";
+    foreach my $channel_id (@channel_list)
+    {
+        t "  $channel_id";
+        my( $channel_name, $url ) = @{$channels->{$channel_id}};
+        print_data( $fh, $url, $channel_id, $date )
+            or warning( "Failed to download data for $channel_id on " . 
+                        UnixDate( $date, "%Y-%m-%d" ) . "." );
+        
+        $bar->update() if defined( $bar );
+    }
+    $date = DateCalc( $date, "+1 days" );
+}
+
+$bar->finish() if defined $bar;
+$fh->print( "</tv>\n" );
+$fh->close();
+
+# Signal that something went wrong if there were warnings.
+exit(1) if $warnings;
+
+# All data fetched ok.
+t "Exiting without warnings.";
+exit(0);
+
+sub t
+{
+    my( $message ) = @_;
+    print STDERR $message . "\n" if $opt->{debug};
+}
+
+sub warning
+{
+    my( $message ) = @_;
+    print STDERR $message . "\n";
+    $warnings++;
+}
+
+#
+# Configuration
+#
+
+sub load_config
+{
+    my( $config_file ) = @_;
+
+    my @lines = XMLTV::Config_file::read_lines( $config_file );
+
+    foreach my $line (@lines)
+    {
+        next unless defined $line;
+        my( $command, $param ) = split( /\s+/, $line );
+        die "Unknown command $command in config-file $config_file"
+            unless $command =~ /^\s*channel\s*$/;
+
+        $param =~ tr/\n\r //d;
+
+        push @channel_list, $param;
+    }
+}
+
+sub configure
+{
+    my( $config_file ) = @_;
+
+    XMLTV::Config_file::check_no_overwrite( $config_file );
+
+    # FIXME need to make directory
+    open(CONF, ">$config_file") or die "cannot write to $config_file: $!";
+
+    my @chan = sort { join( ".", reverse( split /\./, $a ) ) cmp 
+                     join( ".", reverse( split /\./, $b ) ) } 
+        keys %{$channels};
+
+    # Ask about Swedish channels first.
+    my @all = (grep( /\.se$/, @chan ), grep( !/\.se$/, @chan ));
+
+    my @wanted = ask_many_boolean(1,
+                    map { "get channel $channels->{$_}->[0] ($_)?" }
+                    @all );
+    foreach (@all) {
+        print CONF '# ' if not shift @wanted;
+        print CONF "channel $_\n";
+    }
+    close CONF or warn "cannot close $config_file: $!";
+    say("Finished configuration.");
+}
+
+sub load_channels
+{
+    my( $url ) = @_;
+    
+    my %channels;
+
+    my $compressed = get( $url )
+        or exit 1;
+
+    my $xmldata = Compress::Zlib::memGunzip( \$compressed );
+
+    my $xml = XML::LibXML->new;
+    
+    my $doc = $xml->parse_string($xmldata);
+
+    my $xmldecl = "<?xml version='" . $doc->version() . "' " . 
+        "encoding='" . $doc->encoding() . "'?>\n";
+
+    my $ns = $doc->find( "//channel" );
+
+    foreach my $node ($ns->get_nodelist)
+    {
+        my $id = $node->findvalue( '@id' );
+        my $name = $node->findvalue( 'display-name[1]' );
+        my $url = $node->findvalue( 'base-url' );
+        $channels{$id} = [ $name, $url ];
+    }
+
+    return ($xmldecl, \%channels);
+}
+
+sub print_data
+{
+    my( $fh, $rooturl, $channel_id, $date ) = @_;
+    
+    my $url = $rooturl . $channel_id . "_" . UnixDate( $date, "%Y-%m-%d" ) . 
+        ".xml.gz";
+
+    my $compressed = get( $url )
+        or return 0;
+
+    my $xmldata = Compress::Zlib::memGunzip( \$compressed );
+
+    my $in = new IO::Scalar \$xmldata;
+    while( my $line = $in->getline() )
+    {
+        last if $line =~ /<tv/;
+    }
+
+    while( my $line = $in->getline() )
+    {
+        last if $line =~ /<\/tv>/;
+        $fh->print( $line );
+    }
+
+    return 1;
+}
+
+# Check that HTTP::Cache::Transparent is loaded. This is necessary
+# to save bandwidth for tv.swedb.se. Please do not disable this
+# check. 
+#
+
+sub check_cache
+{
+    if( not defined( $HTTP::Cache::Transparent::VERSION ) )
+    {
+        eval { require HTTP::Cache::Transparent; };
+        if ( $@ )
+        {
+            say( << "EOERR" );
+            
+Please install the perl-module HTTP::Cache::Transparent. It can be 
+downloaded from http://search.cpan.org/dist/HTTP-Cache-Transparent
+                
+EOERR
+            exit 1;
+        }
+        else
+        {
+            if( ask_boolean( "You need to configure the http cache.\n" . 
+                             "Do you want to do it now?", 1 ) )
+            {
+                my $home = $ENV{HOME} | ".";
+                my $path = ask( 
+                  "You need to decide where the cache should be stored.\n" . 
+                  "The cache must be stored in its own directory.\n" .
+                  "The directory should NOT be cleared when you reboot.\n" .
+                  "The default is $home/.xmltv/cache\n\n" .
+                  "Where should the cache be stored?\n" . 
+                  "Leave empty to use the default location:\n" );
+
+                $path = "$home/.xmltv/cache" if( (not defined($path)) 
+                                                 or $path eq "" );
+                if( not -d $path )
+                {
+                    if( ask_boolean( "$path does not exist.\n" .
+                                     "Do you want me to create it?", 1 ) )
+                    {
+                        mkpath( $path );
+                    }
+                }
+
+                open( OUT, "> $home/.xmltv/cache.conf" )
+                    or die "Failed to write to $home/.xmltv/cache.conf";
+                print OUT "BasePath $path\n";
+                print OUT "# Verbose 1\n";
+                close( OUT );
+                say( "Cache configured." );
+                XMLTV::Get_nice::init_cache();
+            }
+            else
+            {
+                print STDERR "You must configure the cache.\n";
+                exit( 1 );
+            }
+        }
+    }
+}
+
+### Setup indentation in Emacs
+## Local Variables:
+## perl-indent-level: 4
+## perl-continued-statement-offset: 4
+## perl-continued-brace-offset: 0
+## perl-brace-offset: -4
+## perl-brace-imaginary-offset: 0
+## perl-label-offset: -2
+## cperl-indent-level: 2
+## cperl-brace-offset: 0
+## cperl-continued-brace-offset: 0
+## cperl-label-offset: -2
+## cperl-extra-newline-before-brace: t
+## cperl-merge-trailing-else: nil
+## cperl-continued-statement-offset: 2
+## End:
