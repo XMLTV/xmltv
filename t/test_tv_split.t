@@ -49,7 +49,7 @@ INPUT: foreach my $input (@inputs) {
     else {
 	$old_cwd = cwd;
     }
-    
+
     # Quick and dirty checking of XML files.  Before we start, read
     # the input XML and note how many programmes of each kind.
     #
@@ -105,7 +105,7 @@ INPUT: foreach my $input (@inputs) {
 	    $start =~ /^\d{4}(\d{2})/
 	      or die "$_:$.: don't understand start time $start\n";
 	    my $month = $1;
-	    
+	
 	    /channel="(.+?)"/ or die "$_:$.: no channel\n";
 	    my $channel = $1;
 
