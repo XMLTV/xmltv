@@ -409,86 +409,62 @@ sub process_table( $$$$$ ) {
     my $tree = HTML::TreeBuilder->new();
     $tree->parse($data);
 
-    my @datatables; 
-    # page consists of two main tables, split by an advertisement
-    # we need to reorder those tables, to grab continued column by column
-    # 
-    # actually we assign to @datatables like this:
+    # the page consists of two major tables, where one holds the data 
+    # until 'bout 20 o'clock, the other, i.e. lower, one the evening program
+    my $body = $tree->look_down("_tag"=>"body");
 
-    # UPPER MAJOR TABLE:
-    #  0      10    20
-    #  1      11    21
-    #         12
-    #
-    #  <<< the ad >>>
-    # LOWER MAJOR TABLE:
-    #  5      15    25
-    #         16
-    #
-    
-    my $i = 0;
-    my $lasttime = 0;
-    # assign to @datatables in order: 0, 2, 4, 1, 3, 5, etc.
-  table:
-    foreach my $tab($tree->look_down
-		    ("_tag"=>"table", "cellspacing"=>2)) {
-	# we must ignore the table surrounding all the data, which holds one
-	# sub-table for each day shown, ...
-	foreach($tab->content_list()) {
-	    next unless(ref eq "HTML::Element");
-	    next table
-		if($_->look_down("_tag"=>"table"));
-	}
+    # first scan for all tables in $body->content_list()
+    my %tables;
+    my $region = "upper";
+    foreach($body->content_list()) {
+	next unless(ref eq "HTML::Element");
+	next unless($_->tag eq "table");
 
-	# time is printed in <strong /> tags, require those to skip the
-	# headings - which we don't really care for ...
-	next unless($tab->look_down("_tag"=>"strong"));
+	# filter out tables without strong tags, as those don't hold data.
+	next unless($_->look_down("_tag"=>"strong"));
 
-	# especially on port.ro there aren't only two tables per day column,
-	# there are even more, split by images, etc.
-	#
-	# why the hell don't they continue the table and put the image
-	# right into a <tr><td> <img> </td></tr>  thingy??
-	#
-	# tsts...
-	#
+	# check whether it's one of the lower tables ...
+	$region = "lower"
+	    if($_->look_down("_tag"=>"img", "src"=>"/tv/kep/vonal.gif"));
 
-	# extract the first time specified in this table-piece ...
-	$tab->as_text() =~ m/([012][0-9]):([0-5][0-9])/
-	    or die "unable to parse returned html page";
-	my $time = $1 * 60 + $2;
-	$time += 24 * 60 if($time < 6 * 60 && ($i % 10 > 4));
-
-	#print "this: $time, last: $lasttime ...\n";
-
-	if($time < $lasttime) {
-	    # this table is in the same major table, but in the next column
-	    # since it's first time is before the last time of the prev. tab.
-	    $i = $i - ($i % 5) + 10;
-	}
-
-	if($time >= 20 * 60 && ($i % 10 < 5)) {
-	    # first time time's at least 20 o'clock => lower table
-	    $i = 5;
-	}
-
-
-	# lookup last time in this minor table ... (as base for comparing)
-	$tab->as_text() =~ m/.*([012][0-9]):([0-5][0-9])/
-	    or die "unable to parse returned html page";
-	$lasttime = $1 * 60 + $2;
-	$lasttime += 24 * 60 if($lasttime < 6 * 60 && ($i % 10 > 4));
-
-	
-	#print "assigning datatables entry ", $i, ".\n"; 
-	#$tab->dump();
-	$datatables[$i++] = $tab;
+	push @{$tables{$region}}, $_;
     }
 
-    my @program_data;
-    foreach(@datatables) {
-	push @program_data, get_program_data($_)
-	    if defined;
+    # indexes, pointing into table-lists, to continue parsing after break.
+    my %indexes = ("upper" => 0, "lower" => 0);
+
+    my @program_data; # the array, we push our programmes into ..
+    while(1) {
+	my $lasttime = 0;
+
+	foreach my $region ("upper", "lower") {
+	    while(1) {
+		my $tab = ($tables{$region})->[$indexes{$region}];
+		last unless(defined($tab)); # get outta here ...
+
+		# extract the first time specified in this table-piece ...
+		$tab->as_text() =~ m/([012][0-9]):([0-5][0-9])/
+		    or die "unable to parse returned html page";
+		my $time = $1 * 60 + $2;
+		$time += 24 * 60 if($time < 6 * 60 && $lasttime >= 24 * 60);
+
+		last if($time < $lasttime); # must be the next column ...
+
+		# parse this page's data ...
+		push @program_data, get_program_data($tab);
+
+		# lookup last time in this minor table ... (as base for comp.)
+		$tab->as_text() =~ m/.*([012][0-9]):([0-5][0-9])/
+		    or die "unable to parse returned html page";
+		$lasttime = $1 * 60 + $2;
+		if($lasttime < $time) { $lasttime += 24 * 60; } # bump one day.
+
+		# continue with next table ...
+		$indexes{$region} ++;
+	    } 
+	}
+
+	last unless($lasttime); # we found at least some data => continue.
     }
 
     if (not @program_data) {
