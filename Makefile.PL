@@ -267,8 +267,13 @@ my @opt_components
        prereqs => { 'HTML::TreeBuilder' => 0 } },
 
      { name => 'tv_grab_es',
-       blurb => 'Grabber for Spain',
+       blurb => 'Grabber for Spain - Analogic Terrestrial/Cable',
        exes => [ 'grab/es/tv_grab_es' ],
+       prereqs => { 'HTML::TreeBuilder' => 0 } },
+
+     { name => 'tv_grab_es_digital',
+       blurb => 'Grabber for Spain - Digital Satellite (D+)',
+       exes => [ 'grab/es/tv_grab_es_digital' ],
        prereqs => { 'HTML::TreeBuilder' => 0 } },
 
      { name => 'tv_grab_nl',
