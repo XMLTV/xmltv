@@ -46,6 +46,8 @@ sub ask( $ )
 #   default choice
 #   Remaining arguments are the choices available.
 #
+# Returns one of the choices, or undef if input could not be read.
+#
 sub askQuestion( $$@ )
 {
     my $question=shift(@_); die if not defined $question;
@@ -64,9 +66,8 @@ sub askQuestion( $$@ )
 	my $str = "$question [".join(',',@options)." (default=$default)] ";
 	while ( 1 ) {
 	    my $res=ask($str);
-	    if ( !defined($res) || $res eq "" ) {
-		return($default);
-	    }
+	    return undef if not defined $res;
+	    return $default if $res eq '';
 
 	    # Check for exact match, then for substring matching.
 	    foreach (@options) {
@@ -102,12 +103,11 @@ sub askQuestion( $$@ )
 	while (!defined($r) ) {
 	    $r = askQuestion('Select one:',
 			     $default_num, 0 .. $optnum);
-	    if ( defined($r) && defined($num_to_choice{$r}) ) {
-		return $num_to_choice{$r};
-	    }
+	    return undef if not defined $r;
+	    for ($num_to_choice{$r}) { return $_ if defined }
 	    print "invalid response, please choose one of "
 	      .0 .. $optnum."\n\n";
-	    $r=undef;
+	    undef $r;
 	}
     }
 }
@@ -117,19 +117,16 @@ sub askQuestion( $$@ )
 # Parameters: question text,
 #             default (true or false)
 #
-# Returns true or false.
+# Returns true or false, or undef if input could not be read.
 #
 sub askBooleanQuestion( $$ )
 {
     my ($text, $default) = @_;
     my $r = askQuestion($text, ($default ? 'yes' : 'no'), 'yes', 'no');
-    if ($r eq 'yes') {
-	return 1;
-    }
-    elsif ($r eq 'no') {
-	return 0;
-    }
-    else { die }
+    return undef if not defined $r;
+    return 1 if $r eq 'yes';
+    return 0 if $r eq 'no';
+    die;
 }
 
 # Ask yes/no questions with option 'default to all'.
@@ -137,7 +134,8 @@ sub askBooleanQuestion( $$ )
 # Parameters: default (true or false),
 #             question texts (one per question).
 #
-# Returns: lots of booleans, one for each question.
+# Returns: lots of booleans, one for each question.  If input cannot
+# be read, then a partial list is returned.
 #
 sub askManyBooleanQuestions( $@ )
 {
@@ -147,6 +145,7 @@ sub askManyBooleanQuestions( $@ )
 	my $q = shift @_;
 	my $r = askQuestion($q, ($default ? 'yes' : 'no'),
 			    'yes', 'no', ($default ? 'all' : 'none'));
+	last if not defined $r;
 	if ($r eq 'yes') {
 	    push @r, 1;
 	}
