@@ -198,7 +198,7 @@ if ($opt_yes) {
     *ask = sub { print "$_[0] yes\n"; 1 };
 }
 else {
-    do 'lib/Ask/Term.pm' or die 'could not load lib/Ask/Term.pm, aborting';
+    require 'lib/Ask/Term.pm';
     *ask = \&XMLTV::Ask::Term::ask_boolean;
 }
 
@@ -361,6 +361,15 @@ my @opt_components
        blurb => 'Grabber for Sweden',
        exes => [ 'grab/se/tv_grab_se' ],
        prereqs => { 'XML::LibXML' => 0 } },
+
+#     { name => 'tv_grab_se_swedb',
+#       blurb => 'Grabber for Sweden',
+#       exes => [ 'grab/se_swedb/tv_grab_se_swedb' ],
+#       prereqs => { 'XML::LibXML' => 0,
+#                    'Compress::Zlib' => 0,
+#                    'IO::Stringy' => 0,
+#                  },
+#     },
 
      { name => 'tv_grab_fr',
        blurb => 'Grabber for France',
