@@ -90,7 +90,15 @@ Ed Avis, ed -at- membled -dot- com.
 The grabber for Viasat (TV3, TV8 and ZTV) does not fetch any desriptions
 for the programmes, since it would then have to fetch one html-page
 per programme. It does however store a url for each programme where the
-description can be found.
+description can be found. It also sometimes cannot find the stop-time
+for the last show of the day.
+
+The grabbers for Eurosport, Yle and Kanal 5 skips the last programme
+for each day since the input doesn't contain any end-time that programme.
+
+The grabber for MTV just assumes that the last show of the day ends at
+midnight.
+
 
 =cut
 
@@ -1120,129 +1128,18 @@ sub get_data_kanal5
 
 ##########################################
 #
-# eurosport.com
+# eurosporttv.se
 #
 ##########################################
 
-my $eurosport_html = {};
-my $eurosport_dates = {};
-my @eurosport_table_queue;
-my $eurosport_table_loaded = {};
-
-# Find the date of a page to see if it's the one we want.
-sub find_date_eurosport
-{
-    my ( $url ) = @_;
-
-    my $html = $eurosport_html->{$url};
-
-    my $doc = parse_xml( $html );
-    if( not defined( $doc ) )
-    {
-        return undef;
-    }
-
-    my $ns = $doc->find( "//td[\@class='tabletitre']/child::text()" );
-
-    if ($ns->size() != 1)
-    {
-	return undef;
-    }
-
-    my @nodes = $ns->get_nodelist;
-    my $date = $nodes[0]->textContent();
-
-    if (defined $date) {
-	$date =~ s/.*ON\s//;
-	$date =~ s/\///g;
-
-	$eurosport_dates->{$date} = $url;
-    }
-}
-
-# Find links to other pages that we might want to look at.
-sub find_table_urls_eurosport
-{
-    my ( $url ) = @_;
-    
-    my $html = $eurosport_html->{$url};
-
-    my $doc = parse_xml( $html );
-    if( not defined( $doc ) )
-    {
-	# Hopefully not fatal.
-        return;
-    }
-
-    my $ns = $doc->find( "//a[text()='TV Schedule']" );
-
-    if (defined $ns) {
-	my @nodes = $ns->get_nodelist;
-	my $scheduleurl = $nodes[0]->getAttribute("href");
-
-	if ($scheduleurl =~ /\S/) {
-	    $scheduleurl = URI->new($scheduleurl)->abs($url);
-	    push @eurosport_table_queue, $scheduleurl;
-	}
-    }
-
-    my $ns2 = $doc->find( "//a" );
-
-    if (defined $ns2) {
-	my @nodes = $ns2->get_nodelist;
-
-	for my $node (@nodes) {
-	    my $nstr = $node->textContent;
-
-	    if ($nstr =~ /^\s*..\s*([0-9][0-9])\/([0-9][0-9])$/) {
-		my $month = $1;
-		my $day = $2;
-		my $scheduleurl = $node->getAttribute("href");
-		$scheduleurl = URI->new($scheduleurl)->abs($url);
-		if ($scheduleurl =~ /\S/) {
-		    for my $tryday (0, 1, 2, 3, 4, 5, 6, 7, 8) {
-			my $trydate = increase_date( $today, $tryday );
-			if ($trydate =~ /$month$day$/) {
-			    $eurosport_dates->{$trydate} = $scheduleurl;
-			}
-		    }
-		}
-	    }
-	}
-    }
-}
-
-# Download and index a page.
-sub load_url_eurosport
-{
-    my( $url ) = @_;
-
-    $eurosport_html->{$url} =
-	( URI->new( $url ), decode_utf8( get_nice( $url ) ) );
-
-    find_date_eurosport($url);
-    find_table_urls_eurosport($url);
-}
-
-# Work through queue of pages until we find the one we want.
+# Get the URL for a certain date.
 sub get_url_by_date_eurosport
 {
     my( $date ) = @_;
 
-    while (@eurosport_table_queue and !defined($eurosport_dates->{$date})) {
-	my $tryurl = shift @eurosport_table_queue;
-	unless (defined ($eurosport_table_loaded->{$tryurl})) {
-	    get_html_eurosport($tryurl);
-	    $eurosport_table_loaded->{$tryurl} = 1;
-	}
-    }
-    
-    if (defined ($eurosport_dates->{$date})) {
-	return $eurosport_dates->{$date};
-    } else {
-	# print "FAILED: $date\n";
-	return undef;
-    }
+    $date =~ /^(....)(..)(..)/;
+    my $dashdate = "$1-$2-$3";
+    return "http://www.eurosporttv.se/default.aspx?sdate=$dashdate&stype=true"
 }
 
 # Download, index and return HTML.
@@ -1250,11 +1147,7 @@ sub get_html_eurosport
 {
     my( $url ) = @_;
 
-    unless (defined ($eurosport_html->{$url})) {
-	load_url_eurosport($url);
-    }
-
-    return $eurosport_html->{$url};
+    return ( URI->new( $url ), decode( "ISO-8859-1", get_nice( $url ) ) );
 }
 
 # The programme table parser.
@@ -1267,8 +1160,8 @@ sub get_programmes_eurosport
     {
         return undef;
     }
-    
-    my $ns = $doc->find("//td[\@class='tvschtitre']/parent::tr/parent::table/parent::td/parent::tr/td/table/descendant::td[\@class='tvschtitre' or \@class='tvschtitrelive' or \@class='tvschtext']" );
+
+    my $ns = $doc->find("//tr[\@class='scheduleBox']/parent::table/descendant::td" );
     
     if( $ns->size() == 0 )
     {
@@ -1300,13 +1193,13 @@ sub get_programmes_eurosport
 			    channel => $channel,
 			    start   => utc_offset( "$progdate$starttime", LOCAL_TZ ),
 			    stop    => utc_offset( "$nextdate$nextstart", LOCAL_TZ ),
-			    title   => [ [$title, LANG ] ],
+			    title   => [ [norm($title), LANG ] ],
 			    );
 		$prog{url} = [URI->new($progurl)->abs($base)] if $progurl =~ /\S/;
 		if ($progdesc =~ /\S/) {
 		    $progdesc =~ s/^\s*//;
 		    $progdesc =~ s/\s*$//;
-		    $prog{desc} = [ [ $progdesc, LANG ] ];
+		    $prog{desc} = [ [ norm($progdesc), LANG ] ];
 		}
 		
 		push @programmes, \%prog;
@@ -1318,21 +1211,22 @@ sub get_programmes_eurosport
 	    $progdesc = "";
 	    $progurl = "";
 	} elsif ($title eq "") {
-	    $title = $nstr;
+	    my $child = $node->firstChild();
+	    $title = $child->textContent();
+	    while ($title !~ /\S/) {
+		if ($child = $child->nextSibling()) {
+		    $title = $child->textContent();
+		}
+	    }
+	    while($child and $child = $child->nextSibling()) {
+		$progdesc .= $child->textContent();
+	    }
+	    
 	    $title =~ s/^\s*//gs;
 	    $title =~ s/\s*$//gs;
 
-	    my $links = $doc->find("a");
-	    if( $links->size() > 0 )
-	    {
-		foreach my $linknode ($links->get_nodelist) {
-		    my $attributelist = $linknode->attributes;
-		    my $href = $attributelist->getNamedItem("href");
-		    if (defined $href) {
-			$progurl = $href->textContent;
-		    }
-		}
-	    }
+	    $progdesc =~ s/^\s*//gs;
+	    $progdesc =~ s/\s*$//gs;
 	} else {
 	    my $desc = $nstr;
 	    $desc =~ s/^\s*//gs;
@@ -1352,24 +1246,18 @@ sub get_data_eurosport
 {
     my( $w, $channel, $date ) = @_;
     
-    # Initialize the URL queue if it hasn't been done yet.
-    get_html_eurosport("http://www.eurosport.com/");
-    
     my $url = get_url_by_date_eurosport($date);
-    unless (defined $url) {
-        warning( "Failed to find url for $channel on $date." );
-	return;
-    }
+
     my $html = get_html_eurosport($url);
     unless (defined $html) {
         warning( "Failed to fetch html for $channel on $date." );
 	return;
     }
 
-    my $programmes = get_programmes_eurosport($channel, $date, "http://www.eurosport.com/", $html);
+    my $programmes = get_programmes_eurosport($channel, $date, "http://www.eurosporttv.se/", $html);
 
     unless (defined $programmes) {
-        warning( "Failed to parse html for $channel on $date." );
+        warning( "Failed to find programmes for $channel on $date." );
 	return;
     }
 
