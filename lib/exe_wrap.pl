@@ -60,7 +60,7 @@ print STDERR "Timezone is $ENV{TZ}\n";
 $cmd = shift || "";
 
 # --version (and abbreviations thereof)
-my $VERSION = '0.5.29';
+my $VERSION = '0.5.30';
 if (index('--version', $cmd) == 0 and length $cmd >= 3) {
     print "xmltv $VERSION\n";
     exit;
