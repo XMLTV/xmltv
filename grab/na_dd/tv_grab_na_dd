@@ -20,7 +20,7 @@ tv_grab_na_dd - Grab TV listings for North America using Zap2IT's Data Direct se
                   [--reprocess] [--auto-config add|ignore]
                   [--days N]  [--offset N] [--quiet]
                   [--old-chan-id] [--low-mem] [--output FILE]
-                  [--list-channel]
+                  [--list-channel] [--tz-offset n]
 
 =head1 DESCRIPTION
 
@@ -91,8 +91,10 @@ grab I<n> days.  The default is 7.
 
 =item --offset I<n>
 
-start N days in the future.  The default is to start
-from today.
+start N days after the default. The default is to start at midnight today (UTC).
+To get today's listings you may need "--offset -1" depending on your timezone and time of day.
+
+(for convience, if tz-offset is specified, you get mignight at that zone)
 
 =item --quiet
 
@@ -113,6 +115,10 @@ write xml to I<file> rather than standard output.
 =item --list-channel
 
 same as L<--days> 0
+
+=item --tz-offset n
+
+use N as a timezone  offset.  Default is UTC.
 
 =back
 
@@ -221,8 +227,8 @@ To Configure
 To get listings
     $0 [--config-file FILE] [--dd-data FILE]
                   [--reprocess] [--auto-config add|ignore]
-                  [--days N]  [--offset N] [--quiet]  [--old-chan-id] [--low-mem]
-                  [--output FILE]
+                  [--days N]  [--offset N.N] [--quiet]  [--old-chan-id] [--low-mem]
+                  [--output FILE] [--tz-offset n]
 END
 ;
 
@@ -242,8 +248,7 @@ my $bar;                # handle for status bar
 my $count;              # record count (for status bar)
 my $DEBUG          =0;  # debug mode
 my $config_file;        # config file name
-my $tz;                 # TZ values to avoid date::manip when speed counts
-my $tz_offset;
+my $tz_offset=0;
 my $start_time=time();
 my $prog_count=0;        # record count;
 
@@ -271,6 +276,7 @@ my $opt_reprocess  =''; # reprocess dd data
 my $opt_auto_config  =''; # auto add/ignore channels
 my $opt_list_channels=''; # 
 my $opt_list_lineups=''; # 
+my $opt_tz_offset="+0000";
 
 #
 # Process command line
@@ -299,17 +305,22 @@ GetOptions(
            'auto_config=s' => \$opt_auto_config,
            'list-channels' => \$opt_list_channels,
            'list-lineups'  => \$opt_list_lineups,
+           'tz-offset=s'   => \$opt_tz_offset,
            'debug'         => \$DEBUG,
 	  )
   or usage(0);
 usage(1) if $opt_help;
-
 die 'number of days must not be negative' if ($opt_days < 0);
 die "must specify --dd_data during reprocess\n" if $opt_reprocess and not $opt_dd_data;
 die "--auto-config must be 'add' or 'ignore'\n" if $opt_auto_config && $opt_auto_config !~ /^(add|ignore)$/;
+die "--tz-offset must be [+/-]####, for example +0500\n" if $opt_tz_offset!~ /[+-]\d\d\d\d/;
 
 $opt_days    = 0 if $opt_configure || $opt_list_channels || $opt_list_lineups;
 $config_file = XMLTV::Config_file::filename($opt_config_file, 'tv_grab_na_dd', $opt_quiet);
+
+$tz_offset = substr($opt_tz_offset,0,3)*3600+substr($opt_tz_offset,3,2)*60;
+$opt_tz_offset='UTC' unless $tz_offset;
+print STDERR "Using TZ=<$opt_tz_offset> offset=<$tz_offset>\n" if $DEBUG;
 
 ########################################################################
 #
@@ -381,7 +392,8 @@ die "You must specify a username.\n" unless $dd_user;
 # compute start/stop time
 #
 {
-    my $start = DateCalc(" Midnight","+ $opt_offset days") || die "Can't compute <$opt_offset> days\n";
+    Date_Init("TZ=UTC");
+    my $start = DateCalc("Midnight","+ $opt_offset days") || die "Can't compute <$opt_offset> days\n";
     my $stop  = DateCalc($start,"+ $opt_days   days") || die "Can't compute <$opt_days> days\n";
 
 #
@@ -394,16 +406,8 @@ die "You must specify a username.\n" unless $dd_user;
     $dd_start=UnixDate(Date_ConvTZ($start,"","UTC"),"%Y-%m-%dT%H:%M:%SZ");
     $dd_stop =UnixDate(Date_ConvTZ($stop ,"","UTC"),"%Y-%m-%dT%H:%M:%SZ");
 
-    print STDERR "dd_start: $dd_start\n" if $DEBUG;
-    print STDERR "dd_stop : $dd_stop\n" if $DEBUG;
-
-#
-# generate these values to avoid date::manip later
-#     this code is twice as fast!
-#
-    $tz = UnixDate("now","%z");
-    $tz_offset = substr($tz,0,3)*3600+substr($tz,3,2)*60;
-    print "Using TZ=<$tz> offset=<$tz_offset>\n" if $DEBUG;
+    print STDERR "dd_start: $start,$dd_start\n" if $DEBUG;
+    print STDERR "dd_stop : $stop,$dd_stop\n" if $DEBUG;
 } # compute date
 
 #
@@ -808,7 +812,7 @@ $twig=XML::Twig->new( twig_roots => { schedule => 1 }, twig_handlers => {
 		                             $gStart[5] + 1900,
 					     $gStart[4] + 1,
 					     @gStart[3,2,1,0],
-					     $tz);
+					     $opt_tz_offset);
 
                      my $h = substr($_->{duration},2,2);
                      my $m = substr($_->{duration},5,2);
@@ -818,7 +822,7 @@ $twig=XML::Twig->new( twig_roots => { schedule => 1 }, twig_handlers => {
 		                            $gStop[5] + 1900,
 					    $gStop[4] + 1,
 					    @gStop[3,2,1,0],
-					    $tz);
+					    $opt_tz_offset);
 
                      $prog{channel} = $chan_id{$_->{station}};
                      $prog{'previously-shown'}={}           if exists $_->{repeat};
