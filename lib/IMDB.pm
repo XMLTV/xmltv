@@ -853,7 +853,12 @@ sub readCastOrDirectors($$$)
 	die "why are we here ?";
     }
 
-    open(FD, "< $file") || return(-2);
+    if ( $file=~m/\.gz$/o ) {
+	open(FD, "gzip -c -d $file |") || return(-2);
+    }
+    else {
+	open(FD, "< $file") || return(-2);
+    }
     while(<FD>) {
 	if ( m/^$header/ ) {
 	    if ( !($_=<FD>) || !m/^===========/o ) {
