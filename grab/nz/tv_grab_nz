@@ -1,0 +1,369 @@
+#!/usr/bin/env python
+
+import urllib
+import re
+import time
+import sys
+import getopt
+import string
+
+
+shortargs='hn:qo:cf:'
+longargs=['help','days=', 'quiet', 'output=', 'configure', 'offset=']
+
+def usage ():
+        sys.stderr.write("Usage: tv_grab_nz.py [OPTION]...\n")
+        sys.stderr.write("   -h, --help            display this message\n")
+	sys.stderr.write("   -q, --quiet		quiet output\n")
+        sys.stderr.write("   -n, --days=N		get listing for the next N days (default: 7)\n")
+	sys.stderr.write("   -o, --output=FILE	output to FILE rather than stdout (default: stdout)\n")
+#	sys.stderr.write("   -c, --configure	nop\n")
+	sys.stderr.write("   -f, --offset=N	skip N days of listings (from today) (default: 0)\n")
+        sys.stderr.write("\n")
+
+try:
+        opts, args= getopt.getopt(sys.argv[1:], shortargs, longargs)
+except getopt.error:
+        usage()
+        sys.exit(2)
+
+ndays=7
+quiet=0
+offset=0
+output_file=None
+for o, a in opts:
+        if o in ("-h", "--help"):
+                usage()
+                sys.exit()
+        if o in ("-n", "--days"):
+                ndays=int(a)
+	if o in ("-q", "--quiet"):
+		quiet=1
+	if o in ("-c", "--configure"):
+		sys.stderr.write("no configuration supported\n")
+		sys.exit()
+	if o in ("-o", "--output"):
+		output_file=a
+	if o in ("-f", "--offset"):
+		offset=int(a)
+
+if offset >= 7 or offset < 0:
+	sys.stderr.write("Cannot skip more than a week ahead, or less than 0\n")
+	sys.exit(1)
+
+if offset+ndays > 7 or offset+ndays < 1:
+        sys.stderr.write("Cannot get more than 7 days ahead or less than 1\n")
+        sys.exit(1)
+
+class TvGuide:
+	"""A class for downloading TV listings from webpages and reformatting
+	   them into the xmltv format"""
+
+	def __init__(self, dates, quiet):
+		"""Dates defines a list of days in number of seconds 
+		   since Epoch format (that returned by time.time()) 
+		   for which the channels should be downloaded.
+		   Quiet is a boolean on whether or not to display error
+		   messages"""
+		self.channels={}
+		self.dates=dates
+		self.quiet=quiet
+
+	def error(self,msg):
+		sys.stderr.write("%s\n" % (msg))
+
+	def progress(self, msg):
+		if not self.quiet:
+			sys.stderr.write("%s" % (msg))
+
+	def progress_update(self):
+		if not self.quiet:
+			sys.stderr.write("#")
+			
+
+	def add_channel(self,domain,name,url_string,regexp,map,deletes):
+		"""Adds a channel definition. Map defines how 
+		   the elements in the regexp get transformed 
+		   into the time/name/description fields. Deletes
+		   defines a list of regular expressions to delete 
+		   before searching for the matches"""
+		self.channels[domain] = (name,url_string,regexp,map,deletes)
+
+	def clean_html(self, text):
+		"""Removes anything from the html that would conflict with
+		   the XML output"""
+		text = re.sub("\x92", "", text) # PrimeTV had this one
+		text = re.sub("\x96", "", text) # And this
+		text = re.sub("\0222", "", text) # And this
+		text = re.sub("\0226", "", text) # And this
+		text = re.sub("&nbsp;", " ", text)
+		text = re.sub("&amp;", "&", text)
+		text = re.sub("&#39;", "'", text)
+#		text = re.sub("\?", "'", text)
+        	text = re.sub("<[^>]*>","",text)
+		return text
+
+	def html_encode(self, text):
+		"""Converts special characters to escape codes"""
+		text = re.sub("&", "&amp;", text)
+		return text
+
+	def gen_time(self, time):
+		"""Converts from a bunch of different time representations
+		   into a simple HHMM 24-hour clock representation"""
+		expr=re.compile("([0-9]*):([0-9]*)\s*([aApP][mM])")
+		match = expr.match(time)
+		if match:
+			hour=int(match.group(1))
+			minute=int(match.group(2))
+			if string.upper(match.group(3)) == "PM" and hour < 12:
+				hour=hour+12
+			if string.upper(match.group(3)) == "AM" and hour == 12:
+				hour=0
+			return "%2.2d%2.2d" % (hour, minute)
+
+		expr = re.compile("([0-9]*):([0-9]*)")
+		match = expr.match(time)
+		if match:
+			hour=int(match.group(1))
+			minute=int(match.group(2))
+			return "%2.2d%2.2d" % (hour, minute)
+
+		expr = re.compile("([0-9][0-9][0-9][0-9])")
+		match = expr.match(time)
+		if match:
+			return match.group(1)
+
+		return time
+
+	def get_comments(self, title):
+		"""Removes any comments embedded in the title. These
+		   are identified as anything at the end of the title
+		   which is enclosed in '(', ')'
+		   Returns a tuple consisting of the modified title and
+		   the comments (with parenthesis removed)."""
+		comments=""
+		expr = re.compile("^(.*)\s*\((.*)\)\s*$")
+		match = expr.match(title)
+		while match:
+			title=match.group(1)
+			if comments != "":
+				comments=match.group(2)+","+comments
+			else:
+				comments=match.group(2)
+			match = expr.match(title)
+
+		return (title, comments)
+
+	def is_repeat(self, comment):
+		return string.upper(comment) in ['RPT', 'REPEAT']
+
+	def is_subtitled(self, comment):
+		return string.upper(comment) in ['SUB-TITLED', 'SUBTITLED']
+
+	def is_category(self, comment):
+		"""Returns true if comment is a known category, or false
+		   otherwise"""
+		return string.upper(comment) in ['LIVE']
+
+	def is_rating(self, comment):
+		"""Returns true if comment is a known rating, or false 
+		   otherwise"""
+		return string.upper(comment) in ['G', 'PG', 'PGR', 'AO']
+
+	def is_year(self, comment):
+		return len(comment) == 4 and str(string.atoi(comment)) == comment
+
+	def get_date(self, title, desc):
+		"""Analyses the title and description to determine if there
+		   is an embedded date. Returns a tupple (title, desc, date)
+		   if there is a date, or None otherwise"""
+		expr = re.compile("^([\s\S]*)\(([0-9][0-9][0-9][0-9])\)([\s\S]*)$")
+		match = expr.match(title)
+		if match:
+			return (match.group(1) + match.group(3), desc, match.group(2))
+		match = expr.match(desc)
+		if match:
+			return (title, match.group(1) + match.group(3), match.group(2))
+		return None
+
+	def get_programs(self, domain, date):
+		"""Downloads a webpage for the channel in 'name', and
+		   extracts all of the program definitions as specified
+		   by the appropriate regular expression & map.
+		   Uses date to build some available substitues for inside
+		   the channel url"""
+		name,url_string,regexp,map,deletes = self.channels[domain]
+		retval=[]
+
+		dow_index=self.dates.index(date)
+		day=time.localtime(date)
+		date="%4.4d%2.2d%2.2d" % (day[0], day[1], day[2])
+		dow=string.lower(time.strftime("%A",day))
+		dow_number=int(day[6]) % 7 # 0-6 Mon-Sun
+		timezone=-time.timezone/3600
+
+#		print "Getting programs for: " + name
+		url=eval(url_string)
+		f = urllib.urlopen(url)
+		if f == None:
+			self.error("Error downloading program listing for " + name)
+			return []
+
+		data=f.read()
+		self.progress_update()
+
+		for d in deletes:
+			expr=re.compile(d)
+			data=expr.sub("", data)
+
+		expr=re.compile(regexp)
+		matches=expr.findall(data)
+		if len(matches) == 0:
+			self.error("Error parsing program listing for " + name + " - perhaps the page has changed\nUrl: %s" % (url))
+			return []
+		prevtime=""
+		for show in matches:
+			starttime=""
+			endtime=""
+			program=""
+			desc=""
+			rating=None
+			categories=[]
+			repeat=""
+			subtitled=""
+			create_date=""
+
+			if map[0] != -1:
+				starttime=date+self.gen_time(self.clean_html(show[map[0]]))
+			if map[1] != -1:
+				program=self.clean_html(show[map[1]])
+				(program,comments)=self.get_comments(program)
+				for comment in string.split(comments, ","):
+					comment=string.strip(comment)
+					if comment == "": 
+						continue
+					if self.is_rating(comment):
+						rating=comment
+					elif self.is_repeat(comment):
+						repeat=comment
+					elif self.is_subtitled(comment):
+						subtitled=comment
+					elif self.is_category(comment):
+						categories.append(comment)
+					elif self.is_year(comment):
+						create_date = comment
+					else:
+						self.error("Invalid comment: "+comment+" from " + comments + ", " + program + " on channel " + domain + "\n")
+						
+				if string.upper(program) == program:
+					program=string.capwords(program)
+
+			if map[2] != -1:
+				desc=self.clean_html(show[map[2]])
+
+			if map[3] != -1:
+				endtime=date+self.gen_time(self.clean_html(show[map[3]]))
+
+			chkdate=self.get_date(program, desc)
+			if chkdate:
+				(program,desc,create_date)=chkdate
+
+			retval.append([domain, program, starttime, endtime, desc, rating, create_date, categories, repeat, subtitled])
+
+		return retval
+
+	def get_all_programs(self):
+		"""Downloads the programs for all of the channels"""
+		retval=[]
+		for channel in self.channels.keys():
+			for d in self.dates:
+				retval.extend(self.get_programs(channel, d))
+		return retval
+
+	def display_program_xml(self, output_file):
+		"""Generates the xmltv output file. If output_file is not None
+		   then it specifies the location to dump to, otherwise stdout
+		   is used"""
+		self.progress("Downloading listings: ")
+		programs=self.get_all_programs()
+		self.progress("\n")
+
+		if output_file == None:
+			output=sys.stdout
+		else:
+			output=open(output_file,'w')
+		output.write('<?xml version="1.0" encoding="UTF-8"?>\n')
+		output.write('<!DOCTYPE tv SYSTEM "xmltv.dtd">\n\n')
+#		output.write('<tv generator-info-name="NZ python generator" date="%s">\n' % (self.date))
+		output.write('<tv generator-info-name="NZ python generator">\n')
+
+		for channel in self.channels.keys():
+			self.display_channel_xml(channel, output)
+
+		self.progress("Building output: ")
+
+		for prog in programs:
+			self.display_program_xml_program(prog, output)
+			self.progress_update()
+		self.progress("\n")
+
+		output.write('</tv>\n')
+		if output_file != None:
+			output.close()
+
+	def display_channel_xml(self, domain, output):
+		name,url_string,regexp,map,deletes = self.channels[domain]
+		output.write('  <channel id="%s">\n' % (domain))
+		output.write('    <display-name>%s</display-name>\n' % (name))
+		output.write('  </channel>\n')
+
+	def display_program_xml_program(self, program, output):
+		output.write('  <programme start="%s" ' % (program[2]))
+		if string.strip(program[3]) != "":
+			output.write('stop="%s" ' % (program[3]))
+		output.write ('channel="%s">\n' % (program[0]))
+		output.write('    <title>%s</title>\n' % (string.strip(self.html_encode(program[1]))))
+		if string.strip(program[4]) != "":
+			output.write('    <desc>%s</desc>\n' % (self.html_encode(string.strip(program[4]))))
+
+		if string.strip(program[6]) != "":
+			output.write('    <date>%s</date>\n' % (string.strip(program[6])))
+		
+		for category in program[7]:
+			output.write('    <category>%s</category>\n' % (string.strip(category)))
+		if string.strip(program[8]) != "":
+			output.write('    <previously-shown />\n')
+
+		if string.strip(program[9]) != "":
+			output.write('    <subtitles />\n')
+
+		if program[5] and string.strip(program[5]) != "":
+			output.write('    <rating system="NZBSA">\n')
+			output.write('      <value>%s</value>\n' % (string.strip(program[5])))
+			output.write('    </rating>\n')
+
+		output.write('  </programme>\n')
+
+
+if __name__ == '__main__':
+	dates=[]
+	for i in range(offset,ndays+offset):
+	 	dates.append(time.time() + 60 * 60 * 24 * i)
+#	dow_index=i
+#	day=time.localtime(time.time() + 60 * 60 * 24 * i)
+#	date="%4.4d%2.2d%2.2d" % (day[0], day[1], day[2])
+#	dow=string.lower(time.strftime("%A",day))
+#	dow_number=int(day[6]) % 7 # 0-6 Mon-Sun
+#	timezone=-time.timezone/3600
+
+	guide=TvGuide(dates, quiet)
+
+	guide.add_channel("tvone.nzoom.com", "TV1", '"http://ontv.nzoom.com/tvoneschedules/0,1982,%s,00.html" % (dow)', "<tr><td><b><span class=red>([0-9]*:[0-9]* [ap]m)</span> - (.*)</b></td></tr>(.*<td height=15>&nbsp;</td></tr>)\"\);", [0, 1, 2, -1], [])
+	guide.add_channel("tv2.nzoom.com", "TV2", '"http://tv2.nzoom.com/tv2_subcategory/0,2559,318-322-%s,00.html" % (dow)', "<[bB]>([^<]*)</[bB]>\s*([0-9]*:[0-9]*)[- :0-9]*(<br>([^<]*))?</td></tr>", [1,0,3, -1], [])
+	guide.add_channel("tv3.co.nz", "TV3", '"http://www.tv3.co.nz/listings/index.cfm?day=%d" % (dow_index)', '<tr valign="top"><td align="right" width="65"><span class="listingstext"><b>([0-9]*:[0-9]*&nbsp;[AP]M) \|</b></span></td>\s*<td>\s*<span class="listingstext">\s*([^<]*)<br>', [0,1,-1, -1], ['Prime Time Shows[\S\s]*$'])
+	guide.add_channel("tv4.co.nz", "TV4", '"http://www.tv4.co.nz/default.cfm?pageID=%d" % (((dow_number + 1) % 7) + 3)', '<airtime>([0-9]*:[0-9]* [AP]M)</airtime></b></font><br></td>\s*<td width="5"><img src="images/clearpixel.gif" width="5" height="1"></td>\s*<td align="left" valign="top"><font face="Verdana, Arial, Helvetica, sans-serif" size="-2" color="Black"><show>([^<]*)</show>',[0, 1, -1, -1], [])
+# There is a bug in the way the day is calculated for PrimeTV - not too sure
+	guide.add_channel("primetv.co.nz", "PrimeTV", '"http://www.primetv.co.nz/whatson.asp?dayID=%d&num=%d" % (((10 + dow_index) % 14)+1, dow_index)', '<td height=30 bgcolor=\#[0-9A-F]*>([0-9]*:[0-9]*[ap]m) : ([^<]*)</TD>', [0, 1, -1, -1], [])
+ 
+	guide.display_program_xml(output_file)
