@@ -874,13 +874,14 @@ sub write_with_lang( $$$ ) {
 #
 # Parameters:
 #     reference to list of languages (in Lingua::Preferred format),
-#     reference to list of [string, language] pairs.
+#     reference to list of [string, language] pairs, or undef.
 #     (optional) function that compares two strings of text and
 #       returns 1 if its first argument is better than its second
 #       argument, or 0 if equally good, or -1 if first argument worse.
 #
-# Returns: [s, l] pair, where s is the best of the strings to use
-# and l is its language.
+# Returns: [s, l] pair, where s is the best of the strings to use and
+# l is its language.  This pair is 'live' - it is one of those from
+# the list passed in.
 #
 # There could be some more fancy scheme where both length and language
 # are combined into some kind of goodness measure, rather than
@@ -889,7 +890,8 @@ sub write_with_lang( $$$ ) {
 #
 sub best_name( $$;$ ) {
     my $wanted_langs = shift;
-    my @pairs = @{shift()};
+    my $pairs = shift; return undef if not defined $pairs;
+    my @pairs = @$pairs;
     my $compare = shift;
 
     my @avail_langs;
@@ -904,28 +906,29 @@ sub best_name( $$;$ ) {
     }
 
     my $pref_lang = which_lang($wanted_langs, \@avail_langs);
+
+    # Gather up [text, lang] pairs which have the desired language.
     my @candidates;
-    my %cand_lang;
     foreach (@pairs) {
 	my ($text, $lang) = @$_;
 	next unless ((not defined $lang)
 		     or (defined $pref_lang and $lang eq $pref_lang));
-	push @candidates, $text;
-
-	# Remember the language of this string.  If we get the same
-	# string twice, once with a language and once without, then
-	# only the first occurrence is remembered.  This is reasonable
-	# and getting the same string twice is pathological anyway.
-	#
-	$cand_lang{$text} = $lang unless exists $cand_lang{$text};
+	push @candidates, $_;
     }
 
     return undef if not @candidates;
-    # Some unnecessary comparisons, but who cares.
-    @candidates = sort { $compare->($a, $b) } @candidates
+
+    # If a comparison function was passed in, use it to compare the
+    # text strings from the candidate pairs.
+    #
+    @candidates = sort { $compare->($a->[0], $b->[0]) } @candidates
       if defined $compare;
-    my $chosen = $candidates[0];
-    return [ $chosen, $cand_lang{$chosen} ];
+
+    # Pick the first candidate.  This will be the one ordered first by
+    # the comparison function if given, otherwise the earliest in the
+    # original list.
+    #
+    return $candidates[0];
 }
 
 
