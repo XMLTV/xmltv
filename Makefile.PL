@@ -37,7 +37,7 @@ my $opt_yes = 0;
 GetOptions('nodeps' => \$opt_nodeps, 'yes' => \$opt_yes);
 
 our $VERSION;
-$VERSION = '0.5.23';
+$VERSION = '0.5.24';
 
 # Fragment of Makefile text to give the directory where files should
 # be installed.
