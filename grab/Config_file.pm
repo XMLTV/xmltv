@@ -5,14 +5,16 @@ use XMLTV::Ask;
 # First argument is an explicit config filename or undef.  The second
 # argument is the name of the current program (probably best not to
 # use $0 for this).  Returns the config filename to use (the file may
-# not necessarily exist).
+# not necessarily exist).  Third argument is a 'quiet' flag (default
+# false).
 #
 # May do other magic things like migrating a config file to a new
 # location.
 #
-sub filename( $$ ) {
-    my ($explicit, $progname) = @_;
+sub filename( $$;$ ) {
+    my ($explicit, $progname, $quiet) = @_;
     return $explicit if defined $explicit;
+    $quiet = 0 if not defined $quiet;
 
     my $home = $ENV{HOME};
     $home = '.' if not defined $home;
@@ -28,6 +30,7 @@ sub filename( $$ ) {
 	  or die "cannot rename $old to $new: $!";
     }
 
+    print STDERR "using config filename $new\n" unless $quiet;
     return $new;
 }
 
@@ -50,6 +53,44 @@ END
 	    exit 0;
 	}
     }
+}
+
+# Take a filename and return a list of lines with comments and
+# leading/trailing whitespace stripped.  Blank lines are returned as
+# undef, so the number of lines returned is the same as the original
+# file.
+#
+# Dies ('run --configure') if the file doesn't exist.
+#
+# Arguments:
+#   filename
+#
+#   (optional, default false) whether the file is created at xmltv
+#     installation.  This controls the message given when it's not
+#     found.  If false, you need to run --configure; if true, xmltv
+#     was not correctly installed.
+#
+sub read_lines( $;$ ) {
+    my ($f, $is_installed) = @_;
+    $is_installed = 0 if not defined $is_installed;
+    local *FH;
+    if (not -e $f) {
+	if ($is_installed) {
+	    die "cannot find $f, xmltv was not installed correctly\n";
+	}
+	else {
+	    die "config file $f does not exist, run me with --configure\n";
+	}
+    }
+    open(FH, $f) or die "cannot read $f: $!\n";
+    my @r;
+    while (<FH>) {
+	s/\#.*//; s/^\s+//; s/\s+$//;
+	undef $_ if not length;
+	push @r, $_;
+    }
+    close FH or die "cannot close $f: $!\n";
+    return @r;
 }
 
 1;
