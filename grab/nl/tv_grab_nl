@@ -76,14 +76,7 @@ use HTML::TreeBuilder;
 use HTML::Entities; # parse entities
 use IO::File;
 use URI;
-
 use Date::Manip;
-# We do this so that the dates appearing in web pages can be parsed.
-# But this means we have to use Dutch in _all_ calls to ParseDate().
-# Aargh!
-#
-Date_Init('Language=Dutch');
-
 use XMLTV;
 use XMLTV::Memoize;
 use XMLTV::Ask;
@@ -123,7 +116,7 @@ sub get_channels();
 sub process_summary_page( $$$ );
 sub get_courteous( $ );
 sub get_courteous_aux( $ );
-
+sub parse_dutch_date( $ );
 
 # Whether zero-length programmes should be included in the output.
 my $WRITE_ZERO_LENGTH = 0;
@@ -294,7 +287,7 @@ close(CONF); # close the configuration file as well
 ######################################################################
 # begin main program
 
-my $now = DateCalc(ParseDate('nu'), "+ $opt_offset dagen");
+my $now = DateCalc(ParseDate('now'), "+ $opt_offset days");
 die if not defined $now;
 
 my @to_get;
@@ -309,7 +302,8 @@ foreach $ch_did (@channels) {
     for (my $i = $opt_offset;$i<($opt_offset + $opt_days);$i++) {
 	my $url = 'http://www.tvgids.nl/zoekprogramma.php'
 	  . "?station=$ch_did&interval=$i";
-	my $day = UnixDate(DateCalc($today, "+ $i dagen"), '%Y-%m-%d');
+	my $day = UnixDate(DateCalc($today, "+ $i days"), '%Y-%m-%d');
+	die if not defined $day;
 	push @to_get, [ $url, $day, $ch_xid, $ch_did ];
     }
 }
@@ -672,15 +666,15 @@ sub write_details( $$$$$ ) {
 	}
 	die if not defined $tot;
 
-	$van = DateCalc($van, '+ 1 dag') if $next_day;
-	$tot = DateCalc($tot, '+ 1 dag') if $next_day;
+	$van = DateCalc($van, '+ 1 day') if $next_day;
+	$tot = DateCalc($tot, '+ 1 day') if $next_day;
 	if (Date_Cmp($van, $tot) > 0) {
 	    t "programme in $master_url seems to run from $van to $tot, must straddle midnight";
 	    if ($next_day++) {
 		warn "seeming to span more than one midnight, skipping rest of page";
 		return;
 	    }
-	    $tot = DateCalc($tot, '+ 1 dag');
+	    $tot = DateCalc($tot, '+ 1 day');
 	}
 
 	# Sometimes it happens that the start time of this programme
@@ -904,7 +898,7 @@ sub process_summary_page( $$$ ) {
     }
     if ($bits[0]->[0] eq 'lijst_zender') {
 	my $date_str = $bits[0]->[2];
-	my $d = ParseDate($date_str);
+	my $d = parse_dutch_date($date_str);
 	if (defined $d) {
 	    die "date in page $d ($date_str) doesn't match expected $official_day"
 	      if UnixDate($d, '%Q') ne UnixDate($official_day, '%Q');
@@ -957,7 +951,7 @@ sub process_summary_page( $$$ ) {
 	my $stop = ParseDate("$day $stop_hh:$stop_mm");
 	die if not defined $stop;
 	if (Date_Cmp($start, $stop) > 0) {
-	    $day = UnixDate(DateCalc($day, '+ 1 dag'), '%Y-%m-%d');
+	    $day = UnixDate(DateCalc($day, '+ 1 day'), '%Y-%m-%d');
 	    $stop = ParseDate("$day $stop_hh:$stop_mm");
 	    die if not defined $stop;
 	    die unless Date_Cmp($start, $stop) < 0;
@@ -994,18 +988,73 @@ sub get_courteous( $ ) {
 sub get_courteous_aux( $ ) {
     my $url = shift;
     my $r = LWP::Simple::get($url);
-    
+
     # At the moment download failures seem rare, so the script dies if
     # any page cannot be fetched.  We could later change this routine
     # to return undef on failure.  But dying here makes sure that a
     # failed page fetch doesn't get stored in XMLTV::Memoize's cache.
     #
     die "could not fetch $url, aborting\n" if not defined $r;
-    
+
     # Be nice to the server.  Technically we don't need to do this
     # after the very last fetch, but sleeping every time is simpler.
     #
     sleep(rand 5);
-    
+
     return $r;
+}
+
+# Parse date strings that are in Dutch.  'Why not just call
+# Date_Init("Language=Dutch")?' I hear you ask.  The trouble is that
+# Date::Manip's language is a global setting and having set it to
+# Dutch we cannot use code that expects English - either in this file
+# or in any libraries.  The least insane way to proceed is to turn
+# Dutch to English strings here.
+#
+# The conversions to make, however, are swiped from the Date::Manip
+# code.
+#
+sub parse_dutch_date( $ ) {
+    for (my $tmp = $_[0]) {
+	s/\bjanuari\b/January/g;
+	s/\bjan\b/January/g;
+	s/\bfebruari\b/February/g;
+	s/\bfeb\b/February/g;
+	s/\bmaart\b/March/g;
+	s/\bmaa\b/March/g;
+	s/\bmrt\b/March/g;
+	s/\bapril\b/April/g;
+	s/\bapr\b/April/g;
+	s/\bmei\b/May/g;
+	s/\bmei\b/May/g;
+	s/\bjuni\b/June/g;
+	s/\bjun\b/June/g;
+	s/\bjuli\b/July/g;
+	s/\bjul\b/July/g;
+	s/\baugustus\b/August/g;
+	s/\baug\b/August/g;
+	s/\bseptember\b/September/g;
+	s/\bsep\b/September/g;
+	s/\boctober\b/October/g;
+	s/\boktober\b/October/g;
+	s/\boct\b/October/g;
+	s/\bokt\b/October/g;
+	s/\bnovember\b/November/g;
+	s/\bnov\b/November/g;
+	s/\bdecember\b/December/g;
+	s/\bdec\b/December/g;
+
+	s/\bzondag\b/Sunday/g;
+	s/\bmaandag\b/Monday/g;
+	s/\bdinsdag\b/Tuesday/g;
+	s/\bwoensdag\b/Wednesday/g;
+	s/\bdonderdag\b/Thursday/g;
+	s/\bvrijdag\b/Friday/g;
+	s/\bzaterdag\b/Saturday/g;
+
+	my $r = ParseDate($_);
+	die "could not parse date $_ (from Dutch $_[0])"
+	  if not defined $r;
+	return $r;
+    }
 }
