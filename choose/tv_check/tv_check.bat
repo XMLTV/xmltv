@@ -16,11 +16,6 @@ REM Run with a parameter of C, --configure mode is run.
 REM
 
 REM
-REM Set time Zone
-REM
-SET TZ=US/Central
-
-REM
 REM set default directory
 REM
 C:
