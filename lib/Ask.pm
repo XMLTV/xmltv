@@ -19,7 +19,12 @@ BEGIN {
 	*d = \&Log::TraceMessages::d;
     }
 
-    if ((defined($ENV{DISPLAY}) || $^O eq 'MSWin32') && eval { require Tk }) {
+    # For now we do graphical configuration only if the undocumented
+    # XMLTV_TK environment variable is set to a true value.
+    #
+    if ($ENV{XMLTV_TK}
+	and (defined($ENV{DISPLAY}) || $^O eq 'MSWin32')
+	and eval { require Tk }) {
 	require XMLTV::AskTk; XMLTV::AskTk->import;
 	*XMLTV::Ask:: = *XMLTV::AskTk::;
     }
