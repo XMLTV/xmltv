@@ -890,7 +890,7 @@ sub applyFound($$$)
 		my $name=$idInfo->{title};
 		my $found=0;
 		for my $v (@{$prog->{title}}) {
-		    if ( $v->[0]=~m/^$name$/ ) {
+		    if ( $v->[0]=~m/^$name$/i ) {
 			$found=1;
 		    }
 		    else {
