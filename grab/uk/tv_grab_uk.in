@@ -93,11 +93,15 @@ BEGIN {
 }
 
 use XMLTV;
-# Modify the XMLTV module's tables to add a <distribution> element to
-# <channel>s.  We assume each channel has exactly one distribution
-# method.
+# We modify the XMLTV module's tables to add a <distribution> element
+# to <channel>s.  We assume each channel has exactly one distribution
+# method.  This list is to replace @XMLTV::Channel_Handlers where
+# support for the extra element is needed.
 #
-push @XMLTV::Channel_Handlers, [ 'distribution', 'scalar', '1' ];
+my @new_channel_handlers
+  = (@XMLTV::Channel_Handlers,
+     [ 'distribution', 'scalar', '1' ],
+    );
 
 use XMLTV::TZ qw(gettz);
 use XMLTV::UK_TZ;
@@ -626,7 +630,10 @@ sub grab( @ ) {
  		$msg = "warning: something's wrong" if not defined $msg;
 		print STDERR "$url: $msg\n";
 	    };
-	    eval { $r = XMLTV::parse($xml) };
+	    eval {
+		local @XMLTV::Channel_Handlers = @new_channel_handlers;
+		$r = XMLTV::parse($xml);
+	    };
 	    die "$url: $@" if $@;
 	}
 	push @listingses, $r;
@@ -688,12 +695,14 @@ sub grab( @ ) {
 	t "doing channel $_";
 	my $progs = $by_ch{$_};
 	t 'progs are: ' . d $progs;
+	foreach (@$progs) { die if not defined }
 
 	# Get rid of Ananova's bizarre system for follow-on
 	# programmes.  The XMLTV way of dealing with them is not ideal
 	# either, but it's the standard right now.
 	#
 	fix_times($progs);
+	foreach (@$progs) { die if not defined }
 
 	# Remove the occasional zero-length programmes which pop up.  NB
 	# we rely here on the ordering which Ananova generates within each
@@ -722,7 +731,7 @@ sub grab( @ ) {
 #
 sub add_display_names( $ ) {
     my $ch = shift;
-    foreach (keys %$ch) {
+  CH: foreach (keys %$ch) {
 	my $ch_obj = XMLTV::Ananova_Channel->find_by_xmltv_id($_);
 	if (not defined $ch_obj) {
 	    # Shouldn't happen.
@@ -734,6 +743,10 @@ sub add_display_names( $ ) {
 	    #
 	    my @new = ();
 	    foreach ($ch_obj->get_display_names()) {
+		if (not defined) {
+		    warn "got undef display name from get_display_names()";
+		    next CH; # leave this one alone
+		}
 		if (not tr/0-9//c) {
 		    # Only numbers, this name is language independent.
 		    push @new, [ $_ ];
@@ -879,7 +892,10 @@ sub read_channels_page( $$ ) {
     t 'parsing XML for channels page: ' . d $xml;
     {
 	local $Log::TraceMessages::On = 0;
-	eval { $data = XMLTV::parse($xml) };
+	eval {
+	    local @XMLTV::Channel_Handlers = @new_channel_handlers;
+	    $data = XMLTV::parse($xml);
+	};
 	die "$url: $@" if $@;
     }
     my ($encoding, $credits, $channels, $progs) = @$data;
@@ -1334,18 +1350,21 @@ sub fix_zero_length( $ ) {
     # Consider all consecutive pairs of programmes.
     my $last = $#progs - 1;
     for (my $i = 0; $i <= $last; $i++) {
-	my $first = $progs[$i]; die if not defined $first;
+	my $first = $progs[$i];
+	if (not defined $first) {
+	    # But we already checked that each elem of @progs was
+	    # defined!
+	    #
+	    warn "strange, found undef element \$progs[$i], skipping\n";
+	    next;
+	}
+
 #	t 'first: ' . d $first;
 	die if not defined $first->{start};
 	die if not defined $first->{channel};
 	die if not defined $progs[$i+1];
 	die if not defined $progs[$i+1]->{start};
 	die if not defined $progs[$i+1]->{channel};
-	if ($first->{channel} eq '622.tv-listings.ananova.com') {
-	    t 'urk!';
-	    t 'first: ' . d $first;
-	    t 'second: ' . d $progs[$i+1];
-	}
 
 	my $first_stop = $first->{stop};
 	next if not defined $first_stop;
