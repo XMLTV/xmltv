@@ -136,6 +136,7 @@ sub special_new_series( $ );
 sub special_year( $ );
 sub special_tv_movie( $ );
 sub special_teletext_subtitles( $ );
+sub special_useless( $ );
 sub check_time_fits( $$ );
 sub cst( $ );
 sub no_shared_scalars( $ );
@@ -388,12 +389,12 @@ sub munge( $ ) {
        \&special_year,
        \&special_tv_movie,
        \&special_teletext_subtitles,
+       \&special_useless,
 
        # There are three handlers specific to Ananova / UK listings.  I
        # haven't yet decided what to do with them: should they be in this
        # program and enabled with a special flag, or moved into the
-       # Ananova grabber?  special_multipart() is also somewhat
-       # Ananova-specific.
+       # Ananova grabber?
        #
        # They haven't been ported to the new XMLTV.pm data structures, so
        # leave them commented for now.
@@ -512,11 +513,11 @@ sub special_category( $ ) {
 
 # special_multipart()
 #
-# Channel Four's '4Learning' is a collection of several programmes
-# stuffed into one entry.  Times and titles are given as part of the
-# description.  This attempts to decode the description and make
-# individual programmes.  Other shows follow the same pattern, eg
-# 'GMTV'.
+# Often TV listings contain several programmes stuffed into one entry,
+# which might have made sense for a printed guide to save space, but
+# is stupid for electronic data.  This special handler looks at the
+# programme description and haphazardly attempts to split the
+# programme into its components.
 #
 # Parameters: a 'programme' hash reference
 # Returns: reference to list of sub-programmes, or undef if programme
@@ -541,6 +542,7 @@ sub special_multipart( $ ) {
     t 'testing description for multipart: ' . d $desc;
     local $_ = $desc;
     my @words = split;
+    my @poss_times = split /[ ,;-]/;
     my @r;
     my ($p_start, $p_stop) = (pd($p->{start}), pd($p->{stop}));
     # Assume that the timezone for every time listed in the
@@ -620,9 +622,9 @@ sub special_multipart( $ ) {
 	my $count = 0;
 	my $first_word_is_time = 0;
 	my $prev;
-	for (my $pos = 0; $pos < @words; $pos++) {
-	    t "testing word $words[$pos] at position $pos";
-	    my $w = $words[$pos];
+	for (my $pos = 0; $pos < @poss_times; $pos++) {
+	    t "testing word $poss_times[$pos] at position $pos";
+	    my $w = $poss_times[$pos];
 	    t "word is '$w'";
 	    my $i = $interp->($w);
 	    if (not defined $i) {
@@ -687,6 +689,10 @@ sub special_multipart( $ ) {
     die if not defined $split->[2];
     use vars '@pps'; local *pps = $split->[0];
     t 'got list of pseudo-programmes: ' . d \@pps;
+    if (not @pps) {
+	warn "programme looked like a multipart, but couldn't grok it";
+	return undef;
+    }
     foreach (@pps) {
 	die if not defined;
 	die if not keys %$_;
@@ -854,6 +860,19 @@ sub multipart_split_desc( $$ ) {
 	}
     }
 
+    # Look for pairs of times 'from-to'.
+    foreach (@words) {
+	if (/^([0-9.:]+)-([0-9.:]+)$/) {
+	    my ($from, $to) = ($1, $2);
+	    if (defined $interp->($from) and defined $interp->($to)) {
+		return multipart_split_desc_fromto(\@words, $interp);
+	    }
+	}
+    }
+
+    # If it doesn't look like any of those, then it should be the old
+    # style of 'time title. description'.
+    #
     return multipart_split_desc_ananova(\@words, $interp);
 }
 # And these routines handle the different styles.
@@ -1090,6 +1109,84 @@ sub multipart_split_desc_simple( $$ ) {
     # No 'errors' but lots of 'common text'.
     return [ \@r, join(' ', @common), [] ];
 }
+sub multipart_split_desc_fromto( $$ ) {
+    use vars '@words'; local *words = shift;
+    my $interp = shift;
+    my @r;
+    my @errors;
+
+    # This routine is limited a bit because it's expected to return
+    # hashes with just 'time'.  But we know more than that, we know
+    # both start time and stop time for each subprogramme.  That
+    # information would be thrown away.
+    #
+    # For now, it seems that this kind of multipart programme always
+    # has one part beginning when the previous one ended, so we can
+    # just check that this property holds.  Then there will be no loss
+    # of stop-time information.
+    #
+    my ($last_start, $last_stop);
+    my @title = ();
+    my $done_title = 0;
+    my @desc = ();
+    foreach (@words) {
+	if (/^([0-9.:]+)-([0-9.:]+)$/
+	    and defined(my $istart = $interp->($1))
+	    and defined(my $istop = $interp->($2))) {
+	    # It's a pair of times.
+	    if (defined $last_start) {
+		# Deal with the previous subprogramme.
+		warn "mismatch between stop time $last_stop and start time $istart"
+		  if $last_stop ne $istart;
+		my %p = ( time => $last_start, main_title => join(' ', @title) );
+		$p{main_desc} = join(' ', @desc) if @desc;
+		push @r, \%p;
+	    }
+	    ($last_start, $last_stop) = ($istart, $istop);
+	    @title = ();
+	    $done_title = 0;
+	    @desc = ();
+	}
+	elsif (/:$/) {
+	    # A colon ends the title.
+	    if (not $done_title) {
+		(my $tmp = $_) =~ s/:$//;
+		push @title, $tmp;
+		$done_title = 1;
+	    }
+	    else {
+		warn "seen colon in description: '$_'";
+		push @desc, $_;
+	    }
+	}
+	elsif ($_ eq 'with') {
+	    # Also 'with' can end a title, as in 'News with...'.  This
+	    # is probably the only time I've seen a use for the
+	    # convention that words in titles should be capitalized.
+	    #
+	    # The 'with' stuff goes into the description, where some
+	    # other handler can pick it up.
+	    #
+	    $done_title = 1;
+	    push @desc, $_;
+	}
+	else {
+	    if (not $done_title) {
+		push @title, $_;
+	    }
+	    else  {
+		push @desc, $_;
+	    }
+	}
+    }
+    if (defined $last_start) {
+	my %p = ( time => $last_start, main_title => join(' ', @title) );
+	$p{main_desc} = join(' ', @desc) if @desc;
+	push @r, \%p;
+    }
+
+    return [ \@r, undef, [] ];
+}
 # Is a time string using the 12 hour or 24 hour clock?  Returns a pair
 # of two booleans: the first means it could be 12h, the seecond that
 # it could be 24h.  Expects an h.mm or hh.mm time string.  If the
@@ -1211,7 +1308,8 @@ sub special_credits( $ ) {
 	   [ sub {
 		 s{(\b[a-z]\w+\s+)(?:(?:guest|virtual|new\s+)?presenters?)\s+($NAMES_RE)}{$1$2}o
 		   && return $2;
-		 s{(^|\.\?)\s*($NAMES_RE)\s+presents?\s*(\.|,|\w|\Z)}{$1 . uc $3}oe
+		 s{(^|\.\?)\s*($NAMES_RE)\s+(?:(?:presents?)|(?:rounds?\s+up))\s*(\.|,|\w|\Z)}
+                  {$1 . uc $3}oe
 		   && return $2;
 		 s{Presenters?\s+($NAMES_RE)}{$1}o
 		   && return $1;
@@ -1539,6 +1637,24 @@ sub special_teletext_subtitles( $ ) {
     push @{$p->{subtitles}}, { type => 'teletext' };
     scrub_empty($p->{desc});
     return [ $p ];
+}
+
+
+# Remove stock phrases that have no meaning.
+sub special_useless( $ ) {
+    die 'usage: special_useless(programme)' if @_ != 1;
+    my $p = shift;
+
+    # FIXME need to commonize hog-butchering with special_credits().
+    my $changed = 0;
+    foreach (@{$p->{desc}}) {
+	for ($_->[0]) {
+	    $changed |= s/^(?:a\s+|)round-up\s+of\s+(\w)/uc $1/ie;
+	}
+    }
+
+    return [ $p ] if $changed;
+    return undef;
 }
 
 
