@@ -273,7 +273,7 @@ sub getForms($)
 		$form->{attrs}->{$attr}=$1;
 	    }
 	    else {
-		$formAttrs=~s/^([^\s]+)\s*//o;
+		$formAttrs=~s/^(\S+)\s*//o;
 		$form->{attrs}->{$attr}=$1;
 	    }
 	    $formAttrs=~s/\s+$//o;
@@ -290,7 +290,7 @@ sub getForms($)
 		    $input->{$attr}=$1;
 		}
 		else {
-		    $inputAttrs=~s/^([^\s]+)\s*//o;
+		    $inputAttrs=~s/^(\S+)\s*//o;
 		    $input->{$attr}=$1;
 		}
 		$inputAttrs=~s/\s+$//o;
@@ -321,7 +321,7 @@ sub getForms($)
 			    $select->{attrs}->{$attr}=$1;
 			}
 			else {
-			    $selectAttrs=~s/^([^\s]+)\s*//o;
+			    $selectAttrs=~s/^(\S+)\s*//o;
 			    $select->{attrs}->{$attr}=$1;
 			}
 			$selectAttrs=~s/\s+$//o;
@@ -345,7 +345,7 @@ sub getForms($)
 				$option->{attrs}->{$attr}=$1;
 			    }
 			    else {
-				$optionAttrs=~s/^([^\s]+)\s*//o;
+				$optionAttrs=~s/^(\S+)\s*//o;
 				$option->{attrs}->{$attr}=$1;
 			    }
 			    $optionAttrs=~s/\s+$//o;
@@ -371,7 +371,7 @@ sub getForms($)
 		    $textArea->{$attr}=$1;
 		}
 		else {
-		    $textAreaAttrs=~s/^([^\s]+)\s*//o;
+		    $textAreaAttrs=~s/^(\S+)\s*//o;
 		    $textArea->{$attr}=$1;
 		}
 		$textAreaAttrs=~s/\s+$//o;
@@ -1645,9 +1645,9 @@ sub scrapehtml($$$)
 		    # example "French with English subtitles"
 		    # example "French and English subtitles"
 		    # example "Japanese; English subtitles"
-		    elsif ( $i=~/^\(([^\s]+)\s+with\s+([^\s]+) subtitles\)$/io ||
-			    $i=~/^\(([^\s]+)\s+and\s+([^\s]+) subtitles\)$/io ||
-			    $i=~/^\(([^\s|;|,|\/]+)[\s;,\/]*\s*([^\s]+) subtitles\)$/io) {
+		    elsif ( $i=~/^\((\S+)\s+with\s+(\S+) subtitles\)$/io ||
+			    $i=~/^\((\S+)\s+and\s+(\S+) subtitles\)$/io ||
+			    $i=~/^\(([^\s|;|,|\/]+)[\s;,\/]*\s*(\S+) subtitles\)$/io) {
 			my $lang=$1;
 			my $sub=$2;
 
@@ -1675,8 +1675,8 @@ sub scrapehtml($$$)
 			if ( $declaration=~s/^\(//o && $declaration=~s/\)$//o ) {
 			    # '(Hindi and English)'
 			    # '(Hindi with English)'
-			    if ( $declaration=~/^([^\s]+)\s+and\s+([^\s]+)$/io ||
-				 $declaration=~/^([^\s]+)\s+with\s+([^\s]+)$/io ) {
+			    if ( $declaration=~/^(\S+)\s+and\s+(\S+)$/io ||
+				 $declaration=~/^(\S+)\s+with\s+(\S+)$/io ) {
 				my $lang=$1;
 				my $sub=$2;
 				
