@@ -31,6 +31,7 @@ sub date_programmes($$);
 sub add_clumpidx($$);
 sub ch_output($);
 sub get_ch_to_output();
+sub get_channel_pkgs();
 sub new_relation();
 sub related($$$);
 sub relate($$$);
@@ -151,6 +152,12 @@ my %ch_pretty_definitive; # whether the name in $ch_pretty is defin.
 my %output_to_number = get_output_to_number();
 t '\%output_to_number=' . d \%output_to_number;
 
+# Hardcoded channel packages.  It is planned to move these to separate
+# files, but I didn't have time to reorganize the directory structure
+# before the 0.4 release.
+#
+my %channel_pkgs = get_channel_pkgs();
+
 # We've set the type of 'radio' and 'satellite' channels.  Now deal
 # with the terrestrial channels, which have a region set.  We should
 # find that every channel fits into radio, xor satellite, xor one
@@ -223,7 +230,7 @@ foreach (get_dir()) {
     }
     else { die }
 }
-#t 'files: ' . d \@files;
+t 'files: ' . d \@files;
 update $bar;
 
 # Check that there are no redundant entries in the channel data.
@@ -234,7 +241,9 @@ foreach (keys %$ch_types) {
 }
 
 # Now work out which of @files we actually want to download.
-my (%type_pretty, %wanted_type);
+# %wanted_ch says which Ananova channel ids we want to download.
+#
+my (%type_pretty, %wanted_type, %wanted_ch);
 my $want_all;
 if (defined $ARGV[0] and $ARGV[0] eq 'ALL') {
     $want_all = 1;
@@ -244,22 +253,56 @@ else {
     $type_pretty{$_} = $_ foreach qw(radio satellite);
     foreach my $arg (@ARGV) {
 	my $t;
-	foreach (keys %type_pretty) {
+
+	# See whether the argument matches a region.
+	foreach (sort keys %type_pretty) {
 	    if ($type_pretty{$_} =~ /\Q$arg\E/i) {
+		print STDERR "getting region $type_pretty{$_}\n";
 		$t = $_;
 		last;
 	    }
 	}
-	if (not defined $t) {
-	    warn "'$arg' does not match any known channel type\n";
-	    usage();
-	}
-	else {
+	if (defined $t) {
 	    $wanted_type{$t}++
 	      && warn "channel type $type_pretty{$t} mentioned twice\n";
+	    next;
+	}
+	
+	# Nope, but maybe it matches a channel package.
+	foreach (sort keys %channel_pkgs) {
+	    if ($_ eq $arg) {
+		print STDERR "getting channel package $_\n";
+		$t = $_;
+		last;
+	    }
+	}
+	if (defined $t) {
+	    foreach (@{$channel_pkgs{$t}}) {
+		++ $wanted_ch{$_};
+	    }
+	    next;
+	}
+
+	# Finally, perhaps it matches the name of a channel.
+	foreach (sort keys %$ch_pretty) {
+	    if ($ch_pretty->{$_} =~ /\Q$arg\E/i) {
+		print STDERR "getting channel $ch_pretty->{$_}\n";
+		$t = $_;
+		last;
+	    }
+	}
+	if (defined $t) {
+	    $wanted_ch{$t}++
+	      && warn "channel $ch_pretty->{$t} already chosen";
+	    next;
+	}
+	
+	if (not defined $t) {
+	    warn "'$arg' does not match any known channel type, package or channel\n";
+	    usage();
 	}
     }
-    if (not keys %wanted_type) {
+    if (not keys %wanted_type and not keys %wanted_ch) {
 	my $default;
 	foreach (keys %type_pretty) {
 	    if ($type_pretty{$_} =~ /carlton/i) {
@@ -269,66 +312,38 @@ else {
 	    }
 	}
 	if (keys %wanted_type) {
-	    warn "no channel types given, assuming $type_pretty{$default}\n";
+	    warn "no channel types, packages or channels given, assuming $type_pretty{$default}\n";
 	    usage();
 	}
 	else {
-	    warn "no channel types given and default 'carlton' not found, "
+	    warn "no channel types, packages or channels given and default 'carlton' not found, "
 	      . "giving up\n";
 	    usage();
 	    exit(1);
 	}
     }
-    die if not keys %wanted_type;
+    die if not keys %wanted_type and not keys %wanted_ch;
 }
 
-# At present, the Ananova site doesn't have any handling for satellite
-# versions of terrestrial channels.  For example, the special digital
-# versions of BBC1 and BBC2.  These are not listed anywhere,
-# although they're a standard part of Sky Digital.  As a stopgap,
-# users need to choose a terrestrial region (probably 'Carlton') as
-# well.  Hopefully Ananova will get a schedule feed for BBC1, BBC2, C4
-# and C5 digital, so this workaround can go away.  (And I hear that
-# ITV will soon be available on Sky Digital too.)
+# There used to be a warning that if you chose 'satellite' you'd need
+# to also pick a terrestrial region to get channels like BBC1.  This
+# is no longer the case since Ananova now has listings for BBC1
+# Digital and so on.  Besides, with the new channel packages
+# 'satellite' will probably not be used much.
 #
-# We could also warn about not getting the radio channels when you
-# choose 'satellite', but that's more obviously something you need to
-# specify separately.
-#
-if ($wanted_type{satellite}) {
-    my $also_chose_terrestrial = 0;
-    foreach (keys %wanted_type) {
-	if ($_ ne 'radio' and $_ ne 'satellite') {
-	    $also_chose_terrestrial = 1;
-	    last;
-	}
-    }
-    unless ($also_chose_terrestrial) {
-	warn <<END
-You have selected to grab satellite listings.  At present, the
-five terrestrial channels are not included under 'satellite', although
-they may be available on some services such as Sky Digital.
-
-You might want to specify the region 'Carlton' in addition to
-'satellite', to make sure you get all the channels.  (Similarly
-'radio' if you want radio stations.)
-END
-  ;
-    }
-}
 
 # Filter out the files we want to download - those with the correct
 # channel type.
 #
 @files = grep {
-    ($want_all or $wanted_type{$_->[1]})
+    ($want_all or $wanted_type{$_->[1]} or $wanted_ch{$_->[2]})
       && (not defined $opt_days or $opt_days >= $_->[0])
   } @files;
 
 # We want to get them in day order, so that we can get the first day's
-# listings first.  This is we need to get a complete day to get the
-# complete channel information, which must be written out before any
-# programmes.
+# listings first.  This is becuase we need to get a complete day to
+# get the complete channel information, which must be written out
+# before any programmes.
 #
 $bar = new Term::ProgressBar('downloading listings', scalar @files);
 my $first_day;
@@ -337,7 +352,7 @@ my @progs_todo;
 foreach (sort { $a->[0] <=> $b->[0] } @files) {
     my ($day, $type, $ch, $filename) = @$_;
     t "getting file for day $day, type $type, ch $ch, filename $filename";
-    die if not ($want_all or $wanted_type{$type});
+    die if not ($want_all or $wanted_type{$type} or $wanted_ch{$ch});
     die if defined $opt_days and $day > $opt_days;
     $first_day = $day if not defined $first_day;
 
@@ -568,20 +583,40 @@ my $shown_usage = 0;
 sub usage() {
     return if $shown_usage++;
     my $msg = <<END
-usage: $0 [--days N] channel-type...
+usage: $0 [--days N] channel-spec...
 
-A channel type is either a TV region or a method of broadcasting.  You
-should choose the channel types you are able to receive.  The available
-types are:
+There are three ways to choose which channels to download.  Pick a
+terrestrial region or channel type from:
 
 END
-  ;
-    $msg .= join("\n", sort values %type_pretty) . "\n";
+;
+    $msg .= join(', ', sort values %type_pretty) . "\n";
     $msg .= <<END
 
-You can abbreviate these names by giving a case-insensitive substring,
-for example 'Tyne Tees' could be abbreviated to 'tyne'.  The special
-value 'ALL' means get every available channel.
+'radio' means all radio stations and 'satellite' all satellite
+channels.  But if you have satellite, you probably want to pick one
+or more of the following channel packages:
+
+END
+;
+    my %channel_pkgs = get_channel_pkgs();
+    foreach (sort keys %channel_pkgs) {
+        # FIXME some of the pretty names are not set because the
+        # channel wasn't listed in show=dir.  We need to unify the
+        # pretty names and 'extra pretty names' and make it so that
+        # at least something is ready to display here.
+        #
+        $msg .= "$_: " . join(', ', map { $ch_pretty->{$_} || $_ }
+                                        @{$channel_pkgs{$_}} ) . "\n\n";
+    }
+
+    $msg .= <<END
+Or you can specify the names of individual channels directly.
+
+You can abbreviate names by giving a case-insensitive substring, for
+example 'Tyne Tees' could be abbreviated to 'tyne'.  The special value
+'ALL' means get every available channel, but this gives a very big
+output file!
 END
   ;
     warn $msg;
@@ -1332,7 +1367,7 @@ sub channels_output() {
     };
 
     foreach (keys %$ch_pretty) {
-	next unless $want_all or $wanted_type{$ch_types->{$_}};
+	next unless $want_all or $wanted_type{$ch_types->{$_}} or $wanted_ch{$_};
 	my $o = ch_output($_);
 	my $p = $ch_pretty->{$_}; die if not defined $p;
 
@@ -1401,8 +1436,7 @@ sub ch_output($) {
 # ch_output(), which may make up new names for stations not mentioned.
 #
 # This function is just a place to store the big hash below; it is
-# called only by ch_output().  ch_output() is the proper way to find
-# the output id of an Ananova channel id.
+# called only by ch_output() and get_channel_pkgs().
 #
 sub get_ch_to_output() {
     # It can be hard to decide whether two related channels should map
@@ -1751,6 +1785,7 @@ sub get_output_to_number() {
 			   'south-west.bbc1.bbc.co.uk' => 1,
 			   'west.bbc1.bbc.co.uk' => 1,
 			   'wales.bbc1.bbc.co.uk' => 1,
+			   'digital.bbc1.bbc.co.uk' => 1,
 			   'south-east.bbc2.bbc.co.uk' => 2,
 			   'east.bbc2.bbc.co.uk' => 2,
 			   'ireland.bbc2.bbc.co.uk' => 2,
@@ -1767,6 +1802,7 @@ sub get_output_to_number() {
 			   'south-west.bbc2.bbc.co.uk' => 2,
 			   'west.bbc2.bbc.co.uk' => 2,
 			   'wales.bbc2.bbc.co.uk' => 2,
+			   'digital.bbc2.bbc.co.uk' => 2,
 			   'bloomberg.com' => 'Bloomberg',
 			   'border-tv.com' => 3,
 			   'bravo.co.uk' => 'Bravo',
@@ -1830,10 +1866,160 @@ sub get_output_to_number() {
 			   'utv.co.uk' => 3,
 			   'westcountry.carlton.com' => 3,
 			   'yorkshire.granadatv.co.uk' => 3,
+			   'knowledge.bbc.co.uk' => 'BBC Know',
+			   'parliament.bbc.co.uk' => 'BBC Parl',
 			  );
     return %channel_numbers;
 }
 
+# Return a hash mapping package names to lists of Ananova channel ids.
+sub get_channel_pkgs() {
+    my %xmltvid_to_ananovaid = reverse %{get_ch_to_output()};
+    my %pkgs = (
+		# Free digital channels.  The terrestrial analogue
+		# versions are not included here because they come
+		# under their own region package (eg 'Tyne Tees').  I
+		# haven't included BBC1 Ireland, BBC1 Scotland
+		# etc. because I don't know whether they're
+		# universally available.
+		#
+		gratis => [qw(
+digital.bbc1.bbc.co.uk digital.bbc2.bbc.co.uk choice.bbc.co.uk
+knowledge.bbc.co.uk news-24.bbc.co.uk parliament.bbc.co.uk carlton.com
+channel4.com channel5.co.uk itv2.itv.co.uk bloomberg.com
+sky-news.sky.com tcm.turner.com qvcuk.com shop-tv.co.uk
+simplyshoppingtv.co.uk shop-america.tv-listings.ananova.com
+qvc1.qvcuk.com 2.tvtravelshop.co.uk screenshop.co.uk
+landmark-travel.tv-listings.ananova.com tvtravelshop.co.uk
+wellbeing.com)],
+
+		musicchoice => [qw(
+blues.musicchoice.co.uk classical.musicchoice.co.uk
+country.musicchoice.co.uk dance.musicchoice.co.uk
+easy.musicchoice.co.uk gold.musicchoice.co.uk hits.musicchoice.co.uk
+jazz.musicchoice.co.uk love.musicchoice.co.uk
+rock.musicchoice.co.uk)],
+
+		adult => [qw(
+theadultchannel.co.uk adults-only-1.itv.co.uk adults-only-2.itv.co.uk
+fantasy.televisionx.co.uk playboy.com
+red-hot-all-girl.tv-listings.ananova.com)],
+
+		factual => [qw(
+animalplanet.discoveryeurope.com knowledge.bbc.co.uk food.carlton.com
+dot-tv.tv-listings.ananova.com civilisations.discoveryeurope.com
+discoveryeurope.com kids.discoveryeurope.com
+plus-1.discoveryeurope.com sci-trek.discoveryeurope.com
+travel.discoveryeurope.com wings.discoveryeurope.com einstein.tv
+thehistorychannel.co.uk nationalgeographic.co.uk channelhealth.tv
+biography-channel.biography.com plus-1.home.discoveryeurope.com
+plus-1.thehistorychannel.co.uk home.discoveryeurope.com)],
+
+		news => [qw(
+news-24.bbc.co.uk parliament.bbc.co.uk bloomberg.com europe.cnn.com
+sky-news.sky.com itn.co.uk)],
+
+		# I couldn't decide what to call this ('ethnic'?) 
+		# until I realized that all the channels come from the
+		# same continent :-).
+		#
+		asia => [qw(
+asianet-tv.com setindia.com asia1tv.com banglatv.com
+pakistanichannel.com b4utv.com star-plus.startv.com tvasia.com)],
+
+		sport => [qw(
+british.eurosport.com sky-sports-1.sky.com extreme.com sport.itv.co.uk
+sport-plus.itv.co.uk sport-select.itv.co.uk mutv.manutd.com
+racingchannel.com eurosport.sky.com 2.sports.sky.com 3.sports.sky.com
+news.sports.sky.com 1.sports.sky.com 3.sports.sky.com
+extra.sports.sky.com 2.sports.sky.com)],
+
+		# Of course actual 'entertainment' is subjective.
+		entertainment => [qw(
+box.tv-listings.ananova.com bravo.co.uk e4.channel4.com
+challengetv.co.uk men.granadatv.co.uk itv-digital.men.granadatv.co.uk
+plus.granadatv.co.uk plus.granadatv.co.uk itv2.itv.co.uk
+sky-one.sky.com ondigital.sky-one.sky.com trouble.co.uk
+uk-gold.flextech.telewest.co.uk uk-gold-2.flextech.telewest.co.uk
+play.flextech.telewest.co.uk)],
+
+		# 'misc' are just those that didn't fit in elsewhere.
+		misc => [qw(
+prime.bbc.com world-tv.bbc.com europe.cnbc.com ftv.com landscapetv.com
+channel-9.tv-listings.ananova.com beti.tv studio.com utv2.utv.co.uk
+choice.bbc.co.uk)],
+
+		film => [qw(
+sky-premier.sky.com cinema.carlton.com filmfour.channel4.com
+extreme.filmfour.channel4.com plus-1.filmfour.channel4.com
+world.filmfour.channel4.com box-office-digital.sky.com
+2.moviemax.sky.com 3.moviemax.sky.com 4.moviemax.sky.com
+5.moviemax.sky.com itvdigital.moviemax.sky.com moviemax.sky.com
+cinema.sky.com 2.premier.sky.com 3.premier.sky.com 4.premier.sky.com
+ondigital.premier.sky.com widescreen.premier.sky.com 2.cinema.sky.com
+51.front-row.ntl.com 52.front-row.ntl.com 53.front-row.ntl.com
+54.front-row.ntl.com front-row.ntl.com b4utv.com tcm.turner.com)],
+
+		children => [qw(
+uk.cartoonnetwork.com kids.discoveryeurope.com
+disneychannel.disney.co.uk foxkids.co.uk plus-1.foxkids.co.uk
+nickelodeon.co.uk nickelodeon.co.uk nickelodeon.co.uk
+jr.nickelodeon.co.uk replay.nickelodeon.co.uk
+boomerang.cartoonnetwork.com toon.disney.co.uk playhouse.disney.co.uk
+plus-1.uk.cartoonnetwork.com plus-1.disneychannel.disney.co.uk)],
+
+		religion => [qw(
+christian-channel-europe.god-digital.com)],
+
+		classics => [qw(
+digitalclassics.tv tcm.turner.com uk-drama.flextech.telewest.co.uk
+uk-gold.flextech.telewest.co.uk uk-gold-2.flextech.telewest.co.uk
+uk-horizons.flextech.telewest.co.uk living.flextech.telewest.co.uk
+play.flextech.telewest.co.uk uk-style.flextech.telewest.co.uk)],
+
+		lifestyle => [qw(
+breeze.granadatv.co.uk plus-1.home.discoveryeurope.com
+home.discoveryeurope.com living.flextech.telewest.co.uk
+uk-style.flextech.telewest.co.uk wellbeing.com)],
+
+		music => [qw(
+m2europe.com mtv.co.uk base.mtv.co.uk dance.mtv.co.uk hits.mtv.co.uk
+blues.musicchoice.co.uk classical.musicchoice.co.uk
+country.musicchoice.co.uk dance.musicchoice.co.uk
+easy.musicchoice.co.uk gold.musicchoice.co.uk hits.musicchoice.co.uk
+jazz.musicchoice.co.uk love.musicchoice.co.uk rock.musicchoice.co.uk
+vh1online.co.uk classic.vh1online.co.uk)],
+
+		comedy => [qw(paramountcomedy.com)],
+
+		arts => [qw(
+performancetv.co.uk digital.performancetv.co.uk artsworld.com)],
+
+		# I hope that putting 'Travel Shop' etc in here is
+		# correct.
+		#
+		shop => [qw(
+qvcuk.com shop-tv.co.uk simplyshoppingtv.co.uk
+shop-america.tv-listings.ananova.com qvc1.qvcuk.com
+2.tvtravelshop.co.uk screenshop.co.uk
+landmark-travel.tv-listings.ananova.com tvtravelshop.co.uk
+wellbeing.com)],
+
+		scifi => [qw(
+cable.uk.scifi.com digital.uk.scifi.com)],
+
+		travel => [qw(
+travel.discoveryeurope.com 2.tvtravelshop.co.uk
+landmark-travel.tv-listings.ananova.com travelchannel.co.uk
+tvtravelshop.co.uk)],
+	       );
+
+    my %r;
+    foreach (keys %pkgs) {
+	$r{$_} = [ map { $xmltvid_to_ananovaid{$_} } @{$pkgs{$_}} ];
+    }
+    return %r;
+}
 
 # Routines to handle a symmmetric 'relation'.  This is used to keep
 # track of which programmes are sharing a clump so that fix_clumps()
