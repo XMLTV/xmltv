@@ -944,6 +944,7 @@ sub applyFound($$$)
 		    for my $name (splice(@{$details->{directors}},0,3)) {
 			push(@list, $name);
 		    }
+		    # preserve all existing directors listed if we did't already have them.
 		    if ( defined($prog->{credits}->{director}) ) {
 			for my $name (@{$prog->{credits}->{director}}) {
 			    my $found=0;
@@ -956,8 +957,8 @@ sub applyFound($$$)
 				push(@list, $name);
 			    }
 			}
-			$prog->{credits}->{director}=\@list;
 		    }
+		    $prog->{credits}->{director}=\@list;
 		}
 		else {
 		    $self->debug("not adding 'director' field to $idInfo->{qualifier} \"$title\"");
@@ -978,6 +979,7 @@ sub applyFound($$$)
 		for my $name (splice(@{$details->{actors}},0,3)) {
 		    push(@list, $name);
 		}
+		# preserve all existing actors listed if we did't already have them.
 		if ( defined($prog->{credits}->{actor}) ) {
 		    for my $name (@{$prog->{credits}->{actor}}) {
 			my $found=0;
@@ -990,8 +992,8 @@ sub applyFound($$$)
 			    push(@list, $name);
 			}
 		    }
-		    $prog->{credits}->{actor}=\@list;
 		}
+		$prog->{credits}->{actor}=\@list;
 	    }
 	}
 	if ( $self->{updatePresentors} ) {
