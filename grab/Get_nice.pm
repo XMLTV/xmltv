@@ -76,7 +76,7 @@ sub get_nice_aux( $ ) {
     return $r;
 }
 
-# Initialize HTTP::TransparentCache if the file
+# Initialize HTTP::Cache::Transparent if the file
 # ~/.xmltv/cache.conf exists.
 sub init_cache
 {
@@ -128,8 +128,8 @@ sub init_cache
     (-d $data{BasePath}) or mkdir($data{BasePath}, 0777)
       or die "cannot mkdir $data{BasePath}: $!";
 
-    require HTTP::TransparentCache;
-    HTTP::TransparentCache::init(\%data);
+    require HTTP::Cache::Transparent;
+    HTTP::Cache::Transparent::init(\%data);
 }
 
 1;
