@@ -1085,108 +1085,106 @@ sub scrapehtml($$$)
 		    else {
 			my $localmatch=0;
 
-			# 'Hindi and English'
-			# 'Hindi with English'
-			if ( $i=~/^\(([^\s]+)\s+and\s+([^\s]+)\)$/io ||
-			     $i=~/^\(([^\s]+)\s+with\s+([^\s]+)\)$/io ) {
-			    my $lang=$1;
-			    my $sub=$2;
-
-			    my $found1=0;
-			    my $found2=0;
-			    for my $k (@knownLanguages) {
-				$found1++ if ( $k eq $lang );
-				$found2++ if ( $k eq $sub );
-			    }
-
-			    # only print message if one matched and the other didn't
-			    if ( ! $found1 && $found2 ) {
-				print STDERR "identified possible candidate for new language $lang in $i\n";
-			    }
-			    if ( ! $found2 && $found1 ) {
-				print STDERR "identified possible candidate for new language $sub in $i\n";
-			    }
-			    if ( $found1 && $found2 ) {
-				$resultSure->{qualifiers}->{Language}=$lang;
-				$resultSure->{qualifiers}->{Dubbed}=$sub;
-				$localmatch++;
-			    }
-			}
-
-			# more language checks
-			# 'Hindi, English'
-			# 'Hindi-English'
-			# 'English/French'
-			# 'English/Oji-Cree'
-			# 'Hindi/Punjabi/Urdu', but I'm not sure what it means.
-			if ( ! $localmatch && $i=~m;[/\-,];o) {
-			    my $declaration=$i;
-			    $declaration=~s/^\(\s*//o;
-			    $declaration=~s/\s*\)$//o;
-
-			    my @arr=split(/[\/]|[\-]|[,]/, $declaration);
-			    my @notfound;
-			    my $matches;
-			    for my $lang (@arr) {
-				# chop off start/end spaces
-				$lang=~s/^\s*//o;
-				$lang=~s/\s*$//o;
-
-				my $found=0;
+			my $declaration=$i;
+			if ( $declaration=~s/^\(//o && $declaration=~s/\)$//o ) {
+			    # '(Hindi and English)'
+			    # '(Hindi with English)'
+			    if ( $declaration=~/^([^\s]+)\s+and\s+([^\s]+)$/io ||
+				 $declaration=~/^([^\s]+)\s+with\s+([^\s]+)$/io ) {
+				my $lang=$1;
+				my $sub=$2;
+				
+				my $found1=0;
+				my $found2=0;
 				for my $k (@knownLanguages) {
-				    if ( $k eq $lang ) {
-					$found++;
+				    $found1++ if ( $k eq $lang );
+				    $found2++ if ( $k eq $sub );
+				}
+				
+				# only print message if one matched and the other didn't
+				if ( ! $found1 && $found2 ) {
+				    print STDERR "identified possible candidate for new language $lang in $i\n";
+				}
+				if ( ! $found2 && $found1 ) {
+				    print STDERR "identified possible candidate for new language $sub in $i\n";
+				}
+				if ( $found1 && $found2 ) {
+				    $resultSure->{qualifiers}->{Language}=$lang;
+				    $resultSure->{qualifiers}->{Dubbed}=$sub;
+				    $localmatch++;
+				}
+			    }
+			    
+			    # more language checks
+			    # '(Hindi, English)'
+			    # '(Hindi-English)'
+			    # '(English/French)'
+			    # '(English/Oji-Cree)'
+			    # '(Hindi/Punjabi/Urdu)', but I'm not sure what it means.
+			    if ( ! $localmatch && $declaration=~m;[/\-,];o ) {
+				
+				my @arr=split(/[\/]|[\-]|[,]/, $declaration);
+				my @notfound;
+				my $matches=0;
+				for my $lang (@arr) {
+				    # chop off start/end spaces
+				    $lang=~s/^\s*//o;
+				    $lang=~s/\s*$//o;
+
+				    my $found=0;
+				    for my $k (@knownLanguages) {
+					if ( $k eq $lang ) {
+					    $found++;
+					    last;
+					}
+				    }
+				    if ( !$found ) {
+					push(@notfound, $lang);
+				    }
+				    $matches+=$found;
+				}
+				if ( $matches == scalar(@arr) ) {
+				    # put "lang/lang/lang" in qualifier since we don't know
+				    # what it really means.
+				    $resultSure->{qualifiers}->{Language}=$declaration;
+				    $localmatch++;
+				}
+				elsif ( $matches !=0  ) {
+				    # matched 1 or more, warn about rest
+				    for my $sub (@notfound) {
+					print STDERR "identified possible candidate for new language $sub in $i\n";
+				    }
+				}
+			    }
+
+			    if ( ! $localmatch ) {
+				# check for known languages 
+				my $found;
+				for my $k (@knownLanguages) {
+				    if ( $declaration=~/^$k$/i ) {
+					$found=$k;
 					last;
 				    }
 				}
-				if ( !$found ) {
-				    push(@notfound, $lang);
-				}
-				$matches+=$found;
-			    }
-			    if ( $matches == scalar(@arr) ) {
-				# put "lang/lang/lang" in qualifier since we don't know
-				# what it really means.
-				$resultSure->{qualifiers}->{Language}=$declaration;
-				$localmatch++;
-			    }
-			    elsif ( $matches !=0  ) {
-				# matched 1 or more, warn about rest
-				for my $sub (@notfound) {
-				    print STDERR "identified possible candidate for new language $sub in $i\n";
-				}
-			    }
-			}
 
-			if ( ! $localmatch ) {
-			    # check for known languages 
-			    my $found;
-			    for my $k (@knownLanguages) {
-				if ( $i=~/^\($k\)$/i ) {
-				    $found=$k;
-				    last;
+				if ( defined($found) ) {
+				    $resultSure->{qualifiers}->{Language}=$found;
+				    push(@sure, $declaration);
+				    next;
 				}
-			    }
-			    if ( defined($found) ) {
-				$resultSure->{qualifiers}->{Language}=$found;
-				push(@sure, $i);
-				next;
-			    }
 
-			    if ( $i=~/^\(/o && $i=~/\)$/o ) {
-				if ( $i=~/^\(``/o && $i=~/''\)$/o ) {
-				   if ( $self->{Debug} ) {
-				      print STDERR "ignoring what's probably a show reference $i\n";
-				   }
+				if ( $declaration=~/^``/o && $declaration=~/''$/o ) {
+				    if ( $self->{Debug} ) {
+					print STDERR "ignoring what's probably a show reference $i\n";
+				    }
 				}
 				else {
-				   print STDERR "possible candidate for program detail we didn't identify $i\n"
-				       unless $warnedCandidateDetail{$i}++;
+				    print STDERR "possible candidate for program detail we didn't identify $i\n"
+					unless $warnedCandidateDetail{$i}++;
 				}
+				$success=0;
+				push(@backup, $i);
 			    }
-
-			    $success=0;
-			    push(@backup, $i);
 			}
 		    }
 		}
