@@ -353,7 +353,6 @@ use LWP::UserAgent;
 use vars qw(@ISA);
 @ISA = qw(LWP::UserAgent);
 
-
 #
 # manually check requirements on LWP (libwww-perl) installation
 # leaving this subroutine here in case we need something less
@@ -1031,6 +1030,10 @@ sub scrapehtml($$$)
 		    }
 		    elsif ( $i=~/^\(Acción\)$/io ) { # action in french :)
 			push(@{$prog->{category}}, "Action");
+			next;
+		    }
+		    elsif ( $i=~/^\(Comedia\)$/io ) { # comedy in french :)
+			push(@{$prog->{category}}, "Comedy");
 			next;
 		    }
 
