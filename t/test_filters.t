@@ -76,6 +76,7 @@ foreach my $cmd (@cmds) {
 
 	my @cmd = (@$cmd, $in, '--output', $out);
 	$cmd[0] = "$cmds_dir/$cmd[0]";
+	$cmd[0] =~ s!/!\\!g if $^O eq 'MSWin32';
 	if ($verbose) {
 	    print STDERR "test $test_num: @cmd\n";
 	}
@@ -96,7 +97,6 @@ foreach my $cmd (@cmds) {
 	    warn "@cmd failed: $status, $sig, $core\n";
 	    print "not ok $test_num\n";
 	}
-
 	# Restore old stderr.
 	if (not close(STDERR)) {
 	    print OLDERR "cannot close $err: $!\n";
@@ -114,12 +114,20 @@ foreach my $cmd (@cmds) {
 		local $/ = undef;
 		my $out_content = <OUT>;
 		my $expected_content = <EXPECTED>;
-		
+		if (not close(OUT)) {
+		    print STDERR "cannot close $out: $!\n";
+		    exit(1);
+		}
+		if (not close(EXPECTED)) {
+		    print STDERR "cannot close $expected: $!\n";
+		    exit(1);
+		}
 		if ($out_content ne $expected_content) {
 		    warn "failure for @cmd, see $base.*\n";
 		    print "not ok $test_num\n";
 		}
 		else {
+
 		    print "ok $test_num\n";
 		    unlink $out or warn "cannot unlink $out: $!";
 		    unlink $err or warn "cannot unlink $err: $!";
