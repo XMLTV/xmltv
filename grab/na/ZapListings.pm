@@ -158,7 +158,8 @@ sub new
 				  env_proxy => 1,
 				  timeout => 180);
     bless ($self, $class);
-    $self->agent('Mozilla/5.0');
+    $self->agent('xmltv/0.5.7a');
+    #$self->agent('Mozilla/5.0');
     return $self;
 }
 
@@ -644,33 +645,23 @@ sub Form2Request($$)
 sub doRequest($$$)
 {
     my ($ua, $req, $debug)=@_;
+    my $cookie_jar=$ua->cookie_jar();
 
     if ( $debug ) {
-      main::statusMessage("==== req ====\n".$req->as_string());
-    }
-
-    my $cookie_jar=$ua->cookie_jar();
-    if ( defined($cookie_jar) ) {
-	if ( $debug ) {
-	    main::statusMessage("==== request cookies ====\n".$cookie_jar->as_string()."\n");
-	    main::statusMessage("==== sending request ====\n");
+      main::statusMessage("==== request ====\n".$req->as_string());
+	if ( defined($cookie_jar) ) {
+	  main::statusMessage("==== request cookies ====\n".$cookie_jar->as_string()."\n");
 	}
     }
 
     my $res = $ua->request($req);
     if ( $debug ) {
-	main::statusMessage("==== got response ====\n");
+      main::statusMessage("==== response status: ".$res->status_line." ====\n");
     }
 
     $cookie_jar=$ua->cookie_jar();
-    if ( defined($cookie_jar) ) {
-	if ( $debug ) {
-	    main::statusMessage("==== response cookies ====\n".$cookie_jar->as_string()."\n");
-	}
-    }
-
-    if ( $debug ) {
-	main::statusMessage("==== status: ".$res->status_line." ====\n");
+    if ( defined($cookie_jar) && $debug ) {
+      main::statusMessage("==== response cookies ====\n".$cookie_jar->as_string()."\n");
     }
 
     if ( $debug ) {
@@ -696,6 +687,7 @@ sub doRequest($$$)
     return($res);
 }
 
+# todo - change to freshmeat.net/projects-xml/xmltv/xmltv.xml
 sub getCurrentReleaseInfo($$)
 {
     my $url=shift;
@@ -864,7 +856,7 @@ sub getChannelList($$)
 
     if ( !defined($found) ) {
       main::errorMessage("invalid provider id, not valid of postal/zip code $self->{GeoCode}\n");
-	return(-1);
+	return(undef);
     }
 
     # ensure you have formSetting set up
@@ -873,21 +865,48 @@ sub getChannelList($$)
 
     my $req=$self->Form2Request($self->{ProviderForm});
     if ( !defined($req) ) {
-	return(-1);
+	return(undef);
     }
 
     my $res=&doRequest($self->{ua}, $req, $self->{Debug});
     if ( !$res->is_success || $res->content()=~m/your session has timed out/i ) {
 	# again.
 	$res=&doRequest($self->{ua}, $req, $self->{Debug});
+
+	# looks like some requests require two identical calls since
+	# the zap2it server gives us a cookie that works with the second
+	# attempt after the first fails
+	if ( !$res->is_success || $res->content()=~m/your session has timed out/i ) {
+	    # again.
+	    $res=&doRequest($self->{ua}, $req, $self->{Debug});
+	}
     }
 
-    # looks like some requests require two identical calls since
-    # the zap2it server gives us a cookie that works with the second
-    # attempt after the first fails
+    if ( !$res->is_success ) {
+	main::errorMessage("zap2it failed to give us a page: ".$res->code().":".
+			 HTTP::Status::status_message($res->code())."\n");
+	main::errorMessage("check postal/zip code or www site (maybe they're down)\n");
+	return(undef);
+    }
+
+    if ( !($res->content()=~m;<a href="([^\"]+)"[^>]+><B>All Channels</B></a>;ios) ) { 
+	main::errorMessage("zap2it gave us a grid listings, but no <All Channels> link\n");
+	return(undef);
+    }
+    $req=GET(URI->new_abs($1,$self->{formSettings}->{urlbase}));
+
+    $res=&doRequest($self->{ua}, $req, $self->{Debug});
     if ( !$res->is_success || $res->content()=~m/your session has timed out/i ) {
 	# again.
 	$res=&doRequest($self->{ua}, $req, $self->{Debug});
+
+	# looks like some requests require two identical calls since
+	# the zap2it server gives us a cookie that works with the second
+	# attempt after the first fails
+	if ( !$res->is_success || $res->content()=~m/your session has timed out/i ) {
+	    # again.
+	    $res=&doRequest($self->{ua}, $req, $self->{Debug});
+	}
     }
 
     if ( !$res->is_success ) {
@@ -898,20 +917,7 @@ sub getChannelList($$)
     }
 
     my $content=$res->content();
-    if ( 0 && $content=~m/>(We are sorry, [^<]*)/ig ) {
-	my $err=$1;
-	$err=~s/\n/ /og;
-	$err=~s/\s+/ /og;
-	$err=~s/^\s+//og;
-	$err=~s/\s+$//og;
-	main::errorMessage("ERROR: $err\n");
-	exit(1);
-    }
-    #$content=~s/>\s*</>\n</g;
 
-    # Probably this is not needed?  I think that calling dumpPage() if
-    # an error occurs is probably better.  -- epa
-    # 
     if ( $self->{Debug} ) {
 	open(FD, "> channels.html") || die "channels.html: $!";
 	print FD $content;
@@ -933,7 +939,7 @@ sub getChannelList($$)
 
     if ( !defined($self->{ChannelByTextForm}) ) {
       main::errorMessage("zap2it failed to give us a form to choose a Text Listings\n");
-	return(-1);
+	return(undef);
     }
 
     my @channels;
