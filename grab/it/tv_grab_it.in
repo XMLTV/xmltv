@@ -197,6 +197,7 @@ if ($opt_configure) {
     my $bar = new XMLTV::ProgressBar('getting list of channels', 1)
       if not $opt_quiet;
     my $content =  get_nice("$base");
+    local $SIG{__DIE__} = sub { die "$base: $_[0]" };
 
     if (!defined($content)) {
         die "Can't download $base!!\n";
@@ -216,9 +217,9 @@ if ($opt_configure) {
     foreach (@chs) {
         my $w = shift @want;
         warn("cannot read input, stopping channel questions"), last
-	  if not defined $w;
+            if not defined $w;
         # No need to print to user - XMLTV::Ask is verbose enough.
-
+ 
         # Print a config line, but comment it out if channel not wanted.
         print CONF '#' if not $w;
         my $name = shift @names;
@@ -309,19 +310,20 @@ foreach my $ch_id (@channels) {
     my $ch_xid=xmltv_chanid($ch_id);
 
     foreach my $day ($opt_offset .. $days2get + $opt_offset - 1) {
-	$url=$base
-	  ."?giorno2=".uri_escape(url_date($day))
-	    .'&channel='.url_channel($ch_id."&x=13&y=12");
-	push @to_get, [$url, $ch_xid, $day];
-	t "will get $ch_xid for day $day";
+    $url=$base
+      ."?giorno2=".uri_escape(url_date($day))
+        .'&channel='.url_channel($ch_id."&x=13&y=12");
+    push @to_get, [$url, $ch_xid, $day];
+    t "will get $ch_xid for day $day";
     }
     #we have to grab one page per channel just to get the icon, but it doesn't
     #matter since we're memoizing anyway
-    $w->write_channel({
-		       id => $ch_xid,
-		       'display-name' => [ [ $ch_id ] ],
-		       icon => [{src => get_icon($url)}]
-		      });
+    my %ch = (
+               id => $ch_xid,
+               'display-name' => [ [ $ch_id ] ],
+	     );
+    for (get_icon($url)) { $ch{icon} = [ { src => $_ } ] if defined }
+    $w->write_channel(\%ch);
     update $bar2 if not $opt_quiet;
 }
 $bar2->finish() if not $opt_quiet;
@@ -338,6 +340,15 @@ foreach (@to_get) {
 
     unless ($skipchannel{$canale}) {
 	my $content =  get_nice($url);
+	if ($content =~ /guida_tv.gif/) {
+	    die "The site is currently down for maintenance, can't get listings.\n";
+	    # I hope that when it comes back the layout will be the
+	    # same, and that they won't include guida_tv.gif on the
+	    # pages...
+	    #
+	}
+	local $SIG{__DIE__} = sub { die "$url: $_[0]" };
+
 	my @dati;
 	@dati = parse_page($content, $canale, $data)
 	  if page_check($content);
@@ -456,17 +467,19 @@ sub get_channels_list {
     my $chop_start="Seleziona il canale</option>";
     my $chop_end="</select>";
     #takes out everything we don't want
-    $content =~ /\Q$chop_start\E..(.*?)(\Q$chop_end\E)/s;
+    $content =~ /\Q$chop_start\E..(.*?)(\Q$chop_end\E)/s
+      or die "didn't see stuff between '$chop_start' and '$chop_end'";
     $content = $1;
 
     my @channels = split /\n/, $content;
 
     #we want just the names
     foreach $a (@channels) {
-        $a =~ />([^<]*)</s;
+        $a =~ />([^<]*)</s
+	  or die "didn't see stuff between > and <";
         $a = $1;
         $chan_hash{$a}=$a;
-    }
+        }
 
     return %chan_hash;
 }
@@ -502,7 +515,8 @@ sub parse_page {
     my $chop_start="i/ico_giorno_successivo.gif";
     my $chop_end="<!-- nb: width e height";
     #questo mi toglie tutto quello che non ' la tabella
-    $content =~ /\Q$chop_start\E(.*)\Q$chop_end\E/s;
+    $content =~ /\Q$chop_start\E(.*)\Q$chop_end\E/s
+      or die "didn't see stuff between '$chop_start' and '$chop_end'";
     $content =$1;
 
     my $p = HTML::Parser->new(api_version => 3);
@@ -517,24 +531,25 @@ sub parse_page {
 
 sub start_handler {
     my ($tagname, $attr) = @_;
-    if ($tagname eq 'td') {
-	if (defined $attr->{class}) {
-	    if ($attr->{class} eq 'txt2-b3') {
-		$in_time_start=1;
-	    }
-	    elsif ($attr->{class}=~/g-(.*)/) {
-		$category=$1;
-	    }
-	}
-    }
-    if ($tagname eq 'a') {
-	$in_title=1;
-	$attr->{href}=~/Full\('(.*)',0/;
-	$link=$1;
-    }
-    if (($in_extras) && ($tagname eq 'img')) {
-      SWITCH: for ($attr->{src}) {
-	    /(.*)prima/      && do {$premiere=1; last;};
+     if ($tagname eq 'td') {
+         if (defined $attr->{class}) {
+             if ($attr->{class} eq 'txt2-b3') {
+                 $in_time_start=1;
+	     }
+             elsif ($attr->{class}=~/g-(.*)/) {
+                 $category=$1;
+	     }
+         }
+     }
+     if ($tagname eq 'a') {
+         $in_title=1;
+         $attr->{href}=~/Full\('(.*)',0/
+	   or die "didn't see 'Full(' in href $attr->{href}";
+         $link=$1;
+     }
+     if (($in_extras) && ($tagname eq 'img')) {
+        SWITCH: for ($attr->{src}) {
+                /(.*)prima/      && do {$premiere=1; last;};
                 /(.*)replica/    && do {$prev_shown=1; last;};
                 /.*stella(.)/    && do {$star_value=$1; last;};
 
@@ -639,31 +654,34 @@ sub end_handler {
 sub prog_parse{
     my ($c, $prog_hash, $dayofmonth, $time) = @_;
 
-    #let's divide content for easier parsing;
+#let's divide content for easier parsing;
 
     my $chop1='cellpadding=0 width=400>';
     my $chop2="class=txt2>";
     my $chop3='<script>if [(]!ie[)]document.write[(]"</table>"[)];</script>';
 
-    $c =~ /$chop1(.*)$chop2(.*?)($chop3{1}).*<table border(.*)<script>if /s;
+    $c =~ /$chop1(.*)$chop2(.*?)($chop3{1}).*<table border(.*)<script>if /s
+      or die "couldn't match content: $c";
 
     $c =$2; my $part2 = $4;
     my $cast=tidy($1); 
-    $cast=~/<br>(.*)<\/td><\/tr>/s;
+    $cast=~/<br>(.*)<\/td><\/tr>/s
+      or die "didn't see '<br>' and stuff in cast: $cast";
     $cast=$1;
 
     $chop1='</b><br>';
     $chop2='</td>';
 
-    $c =~ /<b> (.*) $chop1...(.*?)($chop2{1})/s;
+    $c =~ /<b> (.*) $chop1...(.*?)($chop2{1})/s
+      or die "couldn't match content: $c";
 
     my $description = tidy($2) if ($2 ne "");
     my $category_2 = tidy($1) if ($1 ne "");
 
     $part2 =~ m%$dayofmonth ...</td>.*?$time(</td><td width=438{1})(.*?)(</td>{1})%s;
     $part2 =$2;
-    $part2 =~ />(.*)/s;
-
+    $part2 =~ />(.*)/s
+      or die "didn't see '>' in: $part2";
     my $subtitle=tidy($1) if ($1 ne "");
 
     my @cast = split /<br>/, $cast;
@@ -673,15 +691,15 @@ sub prog_parse{
 		push @{$prog_hash->{credits}->{director}}, tidy($1);
 	    }
 	    elsif (! /Cast/) {
-                if (/^\((.*) (.*)\)$/) {
-                    if ((defined $1) && ($1 ne "")) {
-                        my @countries = split /,/, $1;
-                        foreach $a (@countries) {
-                            push (@{$prog_hash->{country}},
-                                  [tidy($a), $LANG]);
+		if (/^\((.*) (.*)\)$/) {
+		    if ((defined $1) && ($1 ne "")) {
+			my @countries = split /,/, $1;
+			foreach $a (@countries) {
+			    push (@{$prog_hash->{country}},
+				  [tidy($a), $LANG]);
 			}
-                    }
-                    if ((defined $2) && ($2 ne "")) {
+		    }
+		    if ((defined $2) && ($2 ne "")) {
 			$prog_hash->{date}=$2;
 		    }
 		}
@@ -752,9 +770,10 @@ sub tidy($) {
 
 ##########################################################
 # get_icon
-# grab channel icon from html page
+# grab channel icon from html page, or undef if not seen
 sub get_icon {
     my $content=get_nice(shift);
-    $content=~/src="(statiche.*?)"/;
+    $content=~/src="(statiche.*?)"/
+      or return undef;
     return $rturl.$1;
 }
