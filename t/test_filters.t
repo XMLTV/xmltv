@@ -178,8 +178,18 @@ foreach my $pair (@cmds) {
 		}
 		else {
 		    my $twice_out_content = read_file($twice_out);
-		    if ($twice_out_content ne $out_content) {
+		    my $ok;
+		    if (not defined $out_content) {
+			warn "cannot run idempotence test for @cmd\n";
+			$ok = 0;
+		    }
+		    elsif ($twice_out_content ne $out_content) {
 			warn "failure for idempotence of @cmd, see $base.*\n";
+			$ok = 0;
+		    }
+		    else { $ok = 1 }
+
+		    if (not $ok) {
 			print "not ok $test_num\n";
 			delete $to_unlink{$out};
 			delete $to_unlink{$twice_out};
