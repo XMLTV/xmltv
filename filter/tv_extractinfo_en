@@ -208,9 +208,10 @@ my $NAME_RE;
 {
     # One word of a name.  Uppercase, anycase then ending in at least
     # two lowercase.  Alternatively, uppercase then lowercase (eg
-    # 'Wu') or just uppercase and an optional dot (for initials).
+    # 'Lee'), all uppercase ('DJ') or just uppercase and an optional dot (for
+    # initials).
     #
-    my $name_comp_re = "(?:$UC(?:(?:$AC_P+$LC$LC)|(?:$LC+)|\\.?))";
+    my $name_comp_re = "(?:$UC(?:(?:$AC_P+$LC$LC)|(?:$LC+)|(?:$UC+)|\\.?))";
     foreach ('Simon', 'McCoy') {
 	die "cannot match name component $_" unless /^$name_comp_re$/o;
     }
@@ -231,8 +232,11 @@ my $NAME_RE;
 	die "cannot match $_" unless /^$name_re$/o;
     }
 
-    # Special handling for some titles.
-    $NAME_RE = "(?:(?:[Tt]he\\s+Rev(?:\\.|erend)\\s+)?$name_re)";
+    # Special handling for some titles.  But others beginning 'the'
+    # are specifically excluded (to avoid 'the Corornation Street
+    # star' parsing as '$NAME_RE star').
+    #
+    $NAME_RE = "(?<!the\\s)(?:(?:[Tt]he\\s+Rev(?:\\.|erend)\\s+)?$name_re)";
 }
 
 # Regexp to match a list of names: 'Tom, Dick, and Harry'
@@ -365,6 +369,7 @@ exit();
 # other programmes in the same clump.
 #
 sub munge( $ ) {
+#    local $Log::TraceMessages::On = 1;
     t 'munge() ENTRY';
     my @todo = (shift);
     my @done;
@@ -503,29 +508,42 @@ sub special_category( $ ) {
     }
 
     # Now try the last-word-of-desc munging.
-    foreach (@{$p->{desc}}) {
-	if (not defined $_->[1] or $_->[1] =~ /^en/) {
-	    # 'Western'         -> ''
-	    # 'Western series'  -> ''
-	    # 'Classic Western' -> 'Classic Western'
-	    # etc.
-	    #
-	    if ($_->[0] =~ s/(^|\.|\?)\s*
-		(Classic\s+|Award-winning\s+|)
-		(Australian\s+|)
-		([aA]dventure|[aA]nimation|[bB]iopic|[cC]hiller
-		 |[cC]omedy|[dD]ocumentary|[dD]rama|[fF]antasy
-		 |[hH]eadlines|[hH]ighlights|[hH]orror|[mM]agazine
-		 |[mM]elodrama|[mM]usical|[mM]ystery|[oO]mnibus
-		 |[qQ]uiz|[rR]omance|[sS]itcom|[tT]earjerker
-		 |[tT]hriller|[wW]estern)\s*(?:series\s*|)$/length "$2$3" ? "$1 $2$3$4" : $1/xe) {
-		$changed |= add($p, 'category', lc $4);
-	    }
+    my $replacement = sub( $$$$ ) {
+	my ($punct, $adj, $country, $genre) = @_;
+	$changed |= add($p, 'category', lc $genre);
+	if (length $adj or length $country) {
+	    return "$punct $adj$country$genre";
+	} else {
+	    $changed = 1;
+	    return $punct;
 	}
+    };
+    foreach (grep { pair_ok($_) } @{$p->{desc}}) {
+	# 'Western'         -> ''
+	# 'Western series'  -> ''
+	# 'Classic Western' -> 'Classic Western'
+	# etc.
+	#
+	$_->[0] =~ s/(^|\.|\?)\s*
+	  (Classic\s+|Award-winning\s+|)
+	    (Australian\s+|)
+	      ([aA]dventure|[aA]nimation|[bB]iopic|[cC]hiller
+	       |[cC]omedy|[dD]ocumentary|[dD]rama|[fF]antasy
+	       |[hH]eadlines|[hH]ighlights|[hH]orror|[mM]agazine
+	       |[mM]elodrama|[mM]usical|[mM]ystery|[oO]mnibus
+	       |[qQ]uiz|[rR]omance|[sS]itcom|[tT]earjerker
+	       |[tT]hriller|[wW]estern)\s*(?:series\s*|)$/$replacement->($1, $2, $3, $4)/xe;
     }
-    scrub_empty($p->{title}, $p->{desc}) if $changed;
-
-    return $changed ? [ $p ] : undef;
+	
+    if ($changed) {
+	t 'some categories found, programme: ' . d $p;
+	scrub_empty($p->{title}, $p->{desc});
+	t 'after removing empty titles and descs, programme: ' . d $p;
+	return [ $p ];
+    }
+    else {
+	return undef;
+    }
 }
 
 
@@ -1295,19 +1313,25 @@ sub time12to24( $ ) {
 # But that's okay for a special-case handler.
 #
 sub special_credits( $ ) {
+#    local $Log::TraceMessages::On = 1;
     die 'usage: special_credits(programme hashref)' if @_ != 1;
-    my $p = shift;
+    my $prog = shift;
     t 'special_credits() ENTRY';
 
-    my $best_desc = bn($p->{desc});
-    return undef if not $best_desc;
-    for ($best_desc->[0]) {
+    # Caution: we need to make sure $_ is 'live' so updates to it
+    # change the programme, when calling the extractors.
+    #
+    foreach my $pair (grep { pair_ok($_) } @{$prog->{desc}}) {
 	die if not defined;
-	t "testing desc: $_";
+	t "testing desc: $pair->[0]";
+	if (not length $pair->[0]) {
+	    local $Log::TraceMessages::On = 1;
+	    t 'programme with empty desc:' . d $prog;
+	}
 
 	if (s/\b([pP])resenteed\b/$1resented/g) {
 	    t "fixing spelling mistake!";
-	    return [ $p ];
+	    return [ $prog ];
 	}
 	
 	# Regexps to apply to the description (currently only the
@@ -1326,7 +1350,7 @@ sub special_credits( $ ) {
 	   [ sub {
 		 s{(\b[a-z]\w+\s+)(?:(?:guest|virtual|new\s+)?presenters?)\s+($NAMES_RE)}{$1$2}o
 		   && return $2;
-		 s{(^|\.\?)\s*($NAMES_RE)\s+(?:(?:presents?)|(?:rounds?\s+up)|(?:introduces?))\s*(\.|,|\w|\Z)}
+		 s{(^|\.\?)\s*($NAMES_RE)\s+(?:(?:presents?)|(?:rounds?\s+up)|(?:introduces?))\b\s*(\.|,|\w|\Z)}
                   {$1 . uc $3}oe
 		   && return $2;
 		 s{Presenters?\s+($NAMES_RE)}{$1}o
@@ -1335,7 +1359,7 @@ sub special_credits( $ ) {
 		   && return $1;
 		 s{,?\s*[pP]resented by\s+($NAMES_RE)\b\s*(.|,?\s+\w|\Z)}{uc $2}oe
 		   && return $1;
-		 s{^\s*([hH]eadlines?(?:\s+\S+)?),?\s*[wW]ith\s+($NAMES_RE)(?:\.\s*)?}{$1}o
+		 s{^\s*([hH]eadlines?(?:\s+\S+)?),?\s*[wW]ith\s+($NAMES_RE)\b(?:\.\s*)?}{$1}o
 		   && return $2;
 		 s{,?\s*(?:[iI]ntroduced|[cC]haired)\s+by\s+($NAMES_RE)(?:\.\s*)?}{}o
 		   && return $1;
@@ -1347,11 +1371,17 @@ sub special_credits( $ ) {
 
 	   # Might be presenter depending on type of show
  	   [ sub {
-		 return undef if hasp($_[0], 'category',
-			   sub { $_[0] =~ /\b(?:comedy|drama|childrens?)\b/i });
- s{^\s*,?\s*[wW]ith\s+($NAMES_RE)(?:(?:\.\s*)?$)?}{}o                                       && return $1;
- s{^\s*(?:[hH]ost\s+)?($NAME_RE) (?:introduces|conducts) (\w)(?![^.,;:!?]*\bto\b)}{uc $2}oe && return $1;
- s{^\s*(?:[hH]ost\s+)?($NAME_RE)\s+(?:explores|examines)\s*}{}o                             && return $1;
+		 if (hasp($_[0], 'category',
+			  sub { $_[0] =~ /\b(?:comedy|drama|childrens?)\b/i })
+		     and not $prog->{credits}->{presenter}) {
+		     return undef;
+		 }
+		 s{^\s*,?\s*[wW]ith\s+($NAMES_RE)\b(?:(?:\.\s*)?$)?}{}o
+		   && return $1;
+		 s{^\s*(?:[hH]ost\s+)?($NAME_RE) (?:introduces|conducts) (\w)(?![^.,;:!?]*\bto\b)}                    {uc $2}oe
+		   && return $1;
+		 s{^\s*(?:[hH]ost\s+)?($NAME_RE)\s+(?:explores|examines)\s*}{}o
+		   && return $1;
 		 return undef;
 	     }, 'presenter' ],
 
@@ -1359,9 +1389,11 @@ sub special_credits( $ ) {
 	   [ sub {
 		 return undef unless hasp($_[0], 'category',
 					  sub { $_[0] =~ /\b(?:quiz|sports?)\b/i });
-		 s{(^|,|\.|\?)\s*[wW]ith\s*($NAMES_RE)(\.\s*\S)}{$1 ne ',' ? "$1$2" : $2}oe
+		 s{(^|,|\.|\?)\s*[wW]ith\s*($NAMES_RE)\b(?!\s+among)(\.\s*\S)}
+		  {$1 ne ',' ? "$1$2" : $2}oe
 		   && return $2;
-		 s{(^|,|\.|\?)\s*[wW]ith\s*($NAMES_RE)(?:\.\s*$)?}{$1 ne ',' ? $1 : ''}oe
+		 s{(^|,|\.|\?)\s*[wW]ith\s*($NAMES_RE)\b(?!\s+among)(?:\.\s*$)?}
+		  {$1 ne ',' ? $1 : ''}oe
 		   && return $2;
 		 return undef;
 	     }, 'guest' ],
@@ -1375,15 +1407,21 @@ sub special_credits( $ ) {
 		 return undef
 		   unless hasp($_[0], 'category',
 			       sub { $_[0] =~ /\b(?:news|business|economics?|political|factual|talk|childrens?|game show)\b/i });
-		 s{(?:^|,|\.|\?)\s*[wW]ith\s*($NAMES_RE)(?:\.\s*)?}{}o && return $1;
+		 s{(?:^|,|\.|\?)\s*[wW]ith\s*($NAMES_RE)\b(?:\.\s*)?}{}o && return $1;
 		 return undef;
 	     }, 'presenter' ],
 
 	   [ sub {
-		 s{[gG]uest\s+star\s+($NAMES_RE)\s*[,;.]?\s*}{}o           && return $1;
-		 s{^($NAMES_RE) (?:co-)?stars? in\s+(?:this\s+)?}{uc $2}oe && return $1;
-		 s{\s*($NAMES_RE) (?:co-)?stars?\.?\s*$}{}o                && return $1;
-		 s{(?:^|\.|\?)\s*($NAMES_RE)\s+(?:co-)?stars?\s+as\s*$}{}o && return $1;
+		 # Anything with a 'presenter' does not have actors.
+		 return undef if $prog->{credits}->{presenter};
+		 s{(?:[Ww]ith\s+)?[gG]uest\s+star\s+($NAMES_RE)\b\s*[,;.]?\s*}{}o
+		   && return $1;
+		 s{^($NAMES_RE) (?:co-)?stars? in\s+(?:this\s+)?}{uc $2}oe
+		   && return $1;
+		 s{\s*($NAMES_RE) (?:co-)?stars?\.?\s*$}{}o
+		   && return $1;
+		 s{(?:^|\.|\?)\s*($NAMES_RE)\s+(?:co-)?stars?\s+as\s*$}{}o
+		   && return $1;
 		 return undef;
 	     }, 'actor' ],
 
@@ -1391,16 +1429,17 @@ sub special_credits( $ ) {
 		 # A discussion of 'a film starring Robin Williams'
 		 # does not itself feature that actor.
 		 #
+		 return undef if $prog->{credits}->{presenter};
 		 return undef if hasp($_[0], 'category', sub { $_[0] =~ /\barts\b/i });
 		 s{(?:^|,|\.|\?)\s*[wW]ith\s*($NAMES_RE)\b(?:,|\.|;|$)?}{}o
 		   && return $1;
-		 s{,?\s*(?:(?:[Aa]lso|[Aa]nd)\s+)?(?:co-|guest\s+)?starring\s+($NAMES_RE)\s*$}{}o
+		 s{,?\s*(?:(?:[Aa]lso|[Aa]nd)\s+)?(?:[Cc]o-|[Gg]uest-|[Gg]uest\s+)?[Ss]tarring\s+($NAMES_RE)\s*$}{}o
 		   && return $1;
 		 return undef;
 	     }, 'actor' ],
 
 	   [ sub {
-		 s{,?\s*[wW]ith\s+guests\s+($NAMES_RE)(?:\.\s*)?}{}o && return $1;
+		 s{,?\s*[wW]ith\s+guests?\s+($NAMES_RE)\b(?:\.\s*)?}{}o && return $1;
 		 s{(^|.|!|\?)\s*($NAME_RE)\s+guests(?:$|(?:\s+)|(?:.\s*))}{$1}o && return $2;
 		 return undef;
 	     }, 'guest' ],
@@ -1413,44 +1452,60 @@ sub special_credits( $ ) {
 	EXTRACTORS: foreach my $e (@extractors) {
 	    my ($sub, $person) = @$e;
 	    t "running extractor for role $person";
-	    if (defined (my $match = $sub->($p))) {
-		# Found one or more $person called $_.  We add them to
+	    my $old_length = length $pair->[0];
+	    my $match;
+	    for ($pair->[0]) { $match = $sub->($prog) }
+	    if (defined $match) {
+		# Found one or more $person called $match.  We add them to
 		# the list unless they're already in there.  We use a
 		# per-programme cache of this information to avoid
 		# going through the list each time (basically because
 		# hashes are more Perlish).
 		#
 		t "got list of people: $match";
-		t 'programme updated to: ' . d $p;
-		for my $credits ($p->{credits}) {
-		    for my $cache ($credits->{"_seen_$person"}) {
-			for my $people ($credits->{$person}) {
-			    if (not defined $cache) {
-				foreach (@$people) {
-				    $cache->{$_}++ && warn "$person $_ seen twice";
-				}
-			    }
-			    foreach (list_names($match)) {
-				push @$people, $_ unless $cache->{$_}++;
-			    }
+		t 'by shortening desc, programme updated to: ' . d $prog;
+		for my $credits ($prog->{credits}) {
+		    my %seen;
+		    if (lc $person eq 'guest') {
+			# Impossible for someone to be guest as well
+			# as another part, so don't add it if already
+			# listed anywhere.
+			#
+			foreach (keys %$credits) {
+			    $seen{$_}++ foreach @{$credits->{$_}};
 			}
 		    }
+		    else {
+			# Cannot add this person if they are already
+			# given in the same job, or as a guest.
+			#
+			foreach (@{$credits->{$person}}, @{$credits->{guest}}) {
+			    $seen{$_}++ && warn "person $_ seen twice";
+			}
+		    }
+
+		    t 'people already known (or ineligible): ' . d \%seen;
+		    foreach (list_names($match)) {
+			t "maybe adding $_ as a $person";
+			push @{$credits->{$person}}, $_ unless $seen{$_}++;
+		    }
+		    t '$credits->{$person}=' . d $credits->{$person};
 		}
 
-		if ($_ eq '') {
- 		    t 'description whittled down to nothing, remove';
- 		    $p->{desc} = [ grep { $_ ne $best_desc } @{$p->{desc}} ];
- 		    t 'new list of descs: ' . d $p->{desc};
- 		    last EXTRACTORS;
+		if (length $pair->[0] >= $old_length) {
+		    warn "extractor failed to shorten text: now $pair->[0]";
 		}
 
+		t 'by adding people, programme updated to: ' . d $prog;
 		$matched = 1;
 		goto EXTRACTORS; # start again from beginning of loop
 	    }
 	}
 	if ($matched) {
-	    scrub_empty($p->{desc});
-            return [ $p ];
+	    t 'some handlers matched, programme: ' . d $prog;
+	    scrub_empty($prog->{desc});
+	    t 'after removing empty things, programme: ' . d $prog;
+            return [ $prog ];
         }
     }
     return undef;
@@ -1500,6 +1555,8 @@ sub has( $$@ ) {
 sub hasp( $$$ ) {
 #    local $Log::TraceMessages::On = 1;
     my ($p, $attr, $sub) = @_;
+    die "expected programme hash as first argument, not $p"
+      if ref $p ne 'HASH';
     t 'testing whether programme: ' . d $p;
     t "has a value for attribute $attr that makes sub return true";
 
