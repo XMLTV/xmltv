@@ -13,6 +13,8 @@ tv_grab_fi [--config-file FILE] --configure
 tv_grab_fi [--config-file FILE] [--output FILE] [--days N]
            [--offset N] [--quiet]
 
+tv_grab_fi --list-channels
+
 =head1 DESCRIPTION
 
 Output TV listings for several channels available in Finland.
@@ -28,7 +30,7 @@ B<--configure> Prompt for which channels,
 and write the configuration file.
 
 B<--config-file FILE> Set the name of the configuration file, the
-default is B<~/.xmltv/tv_grab_fi.conf>.  This is the file written by
+default is B<~/.xmltv/tv_grab_fi>.  This is the file written by
 B<--configure> and read when grabbing.
 
 B<--output FILE> write to FILE rather than standard output.
@@ -40,6 +42,9 @@ from today.
 
 B<--quiet> suppress the progress messages normally written to standard
 error.
+
+B<--list-channels> write output giving <channel> elements for every
+channel available (ignoring the config file), but no programmes.
 
 =head1 SEE ALSO
 
@@ -79,6 +84,7 @@ $0: get Finnish television listings in XMLTV format
 To configure: $0 --configure [--config-file FILE]
 To grab listings: $0 [--config-file FILE] [--output FILE] [--days N]
         [--offset N] [--quiet] [--fast]
+To list channels: $0 --list-channels
 END
   ;
 
@@ -88,6 +94,13 @@ BEGIN {
     eval { require Term::ProgressBar };
     $have_bar = not $@;
 }
+
+# Attributes of the root element in output.
+my $HEAD = { 'source-info-url'     => 'http://www.katso.fi/',
+	     'source-data-url'     => "http://www.katso.fi/tvopas",
+	     'generator-info-name' => 'XMLTV',
+	     'generator-info-url'  => 'http://membled.com/work/apps/xmltv/',
+	   };
 
 # Whether zero-length programmes should be included in the output.
 my $WRITE_ZERO_LENGTH = 0;
@@ -99,13 +112,18 @@ my $TZ="";
 # default language
 my $LANG="fi";
 
+# Global channel data.
+use vars '@ch_all';
+
+
 ######################################################################
 # get options
 
 # Get options, including undocumented --cache option.
 XMLTV::Memoize::check_argv('get');
 my ($opt_days, $opt_offset, $opt_help, $opt_output,
-    $opt_configure, $opt_config_file, $opt_quiet, $opt_fast);
+    $opt_configure, $opt_config_file, $opt_quiet, $opt_fast,
+    $opt_list_channels);
 $opt_days  = 10; # default
 $opt_offset = 0; # default
 $opt_quiet  = 0; # default
@@ -117,13 +135,18 @@ GetOptions('days=i'        => \$opt_days,
 	   'config-file=s' => \$opt_config_file,
 	   'output=s'      => \$opt_output,
 	   'quiet'         => \$opt_quiet,
-	   'fast'	   => \$opt_fast
+	   'fast'	   => \$opt_fast,
+	   'list-channels' => \$opt_list_channels,
 	  )
   or usage(0);
 die 'number of days must not be negative'
   if (defined $opt_days && $opt_days < 0);
 usage(1) if $opt_help;
 $have_bar = 0 if $opt_quiet;
+if ($opt_configure and $opt_list_channels) {
+    warn 'cannot both configure and list channels, assuming --list-channels only';
+    $opt_configure = 0;
+}
 
 # File that stores which channels to download.
 my $CONFIG_FILE = $opt_config_file;
@@ -150,7 +173,7 @@ if (not defined $CONFIG_FILE) {
 }
 
 # FIXME commonize this configuration stuff within the XMLTV project.
-if ($opt_configure) {
+if ($opt_configure) { 
     if (-e $CONFIG_FILE) {
 	print <<END
 The configuration file $CONFIG_FILE already exists.  There is
@@ -175,18 +198,15 @@ else {
     }
 }
 
+# Whatever we are doing, we need the channels data.
+my %channels = get_channels(); # sets @ch_all
+my @channels;
+
 ######################################################################
 # write configuration
 
 if ($opt_configure) {
     open(CONF, ">$CONFIG_FILE") or die "cannot write to $CONFIG_FILE: $!";
-    # find list of available channels
-    my $bar = new Term::ProgressBar('getting list of channels', 1)
-      if $have_bar;
-    my %channels = get_channels();
-    die "no channels could be found" if (scalar(keys(%channels))==0);
-    update $bar if $have_bar;
-
     my $answer;
     my $answer_all;
 
@@ -195,14 +215,15 @@ if ($opt_configure) {
 	if ($answer_all) {
 	    print($answer eq 'yes' ? 'adding' : 'ignoring',
 		  " new channel $ch_name\n");
-	} else {
+	}
+	else {
 	    $answer=askQuestion("add channel $ch_name?", 'yes',
 				'yes', 'no', 'all', 'none');
-	    if ( $answer eq 'all' ) {
+	    if ($answer eq 'all') {
 		$answer_all=1;
 		$answer='yes';
 	    }
-	    elsif ( $answer eq 'none' ) {
+	    elsif ($answer eq 'none') {
 		$answer_all=1;
 		$answer='no';
 	    }
@@ -210,7 +231,8 @@ if ($opt_configure) {
 	
 	if ($answer eq 'yes') {
 	    print CONF "channel $ch_did $ch_name\n";
-	} else {
+	}
+	else {
 	    print CONF "# channel $ch_did $ch_name\n";
 	}
     }
@@ -220,29 +242,46 @@ if ($opt_configure) {
     exit();
 }
 
-######################################################################
-# read configuration
+# Not configuration, we must be writing something, either full
+# listings or just channels.
+#
+# Options to be used for XMLTV::Writer.
+my %w_args;
+if (defined $opt_output) {
+    my $fh = new IO::File(">$opt_output");
+    die "cannot write to $opt_output: $!" if not defined $fh;
+    $w_args{OUTPUT} = $fh;
+}
+$w_args{encoding} = 'ISO-8859-1';
+my $writer = new XMLTV::Writer(%w_args);
+$writer->start($HEAD);
 
-my (%channels, @channels, $ch_did, $ch_name);
+if ($opt_list_channels) {
+    # Write channels mode.
+    $writer->write_channel($_) foreach @ch_all;
+    $writer->end();
+    exit();
+}
+
+######################################################################
+# We are producing full listings.  Read configuration.
+
 open(CONF, $CONFIG_FILE) or die "cannot read $CONFIG_FILE: $!\n";
 while (<CONF>) {
     s/\#.*//; s/^\s+//; s/\s+$//;
     next if not length;
     if (/^channel:?\s+(\S+)\s+([^\#]+)/) {
-	$ch_did = $1;
-	$ch_name = $2;
+	my $ch_did = $1;
+	my $ch_name = $2;
 	$ch_name =~ s/\s*$//;
 	push @channels, $ch_did;
 	$channels{$ch_did} = $ch_name;
-    }
-    elsif (/^\#/) {
-	# just ignore comments
     }
     else {
 	warn "$CONFIG_FILE:$.: bad line\n";
     }
 }
-close(CONF); # close the configuration file as well
+close(CONF) or warn "could not close $CONFIG_FILE: $!\n";
 
 ######################################################################
 # begin main program
@@ -250,55 +289,36 @@ close(CONF); # close the configuration file as well
 # Assume the listings source uses EET (see BUGS above).
 #Date_Init("TZ=$TZ");
 my $now = DateCalc(ParseDate('now'), "$opt_offset days");
+die "No channels specified, run me with --configure\n"
+  if not keys %channels;
+my @to_get;
 
-if (scalar keys %channels > 0) {
-    my %w_args;
-    if (defined $opt_output) {
-	my $fh = new IO::File(">$opt_output");
-	die "cannot write to $opt_output: $!" if not defined $fh;
-	$w_args{OUTPUT} = $fh;
+# the order in which we fetch the channels matters
+foreach my $ch_did (@channels) {
+    my $ch_name=$channels{$ch_did};
+    my $ch_xid="$ch_did.katso.fi";
+    $writer->write_channel({ id => $ch_xid,
+			     'display-name' => [ [ $ch_name ] ] });
+    my $day=UnixDate($now,'%Q');
+    for (my $i=0;$i<$opt_days;$i++) {
+	push @to_get, [ $day, $ch_xid, $ch_did ];
+	#for each day
+	$day=nextday($day); die if not defined $day;
     }
-    $w_args{encoding} = 'ISO-8859-1';
-    my $w = new XMLTV::Writer(%w_args);
-
-    # TODO: standardize these things between grabbers.
-    $w->start({ 'source-info-url'     => 'http://www.katso.fi/',
-		'source-data-url'     => "http://www.katso.fi/tvopas",
-		'generator-info-name' => 'XMLTV',
-		'generator-info-url'  => 'http://membled.com/work/apps/xmltv/',
-	    });
-
-    my @to_get;
-
-    # the order in which we fetch the channels matters
-    foreach $ch_did (@channels) {
-	$ch_name=$channels{$ch_did};
-	my $ch_xid="$ch_did.katso.fi";
-	$w->write_channel({ id => $ch_xid,
-			    'display-name' => [ [ $ch_name ] ] });
-	my $day=UnixDate($now,'%Q');
-	for (my $i=0;$i<$opt_days;$i++) {
-	    push @to_get, [ $day, $ch_xid, $ch_did ];
-	    #for each day
-	    $day=nextday($day); die if not defined $day;
-	}
-    }
-
-    # This progress bar is for both downloading and parsing.  Maybe
-    # they could be separate, as with tv_grab_uk.
-    #
-    my $bar = new Term::ProgressBar('getting listings', scalar @to_get)
-       if $have_bar;
-    foreach (@to_get) {
-	process_table($w, $_->[0], $_->[1], $_->[2]);
-	# be courteous to the servers
-	sleep(rand(5)) unless $opt_fast;
-	update $bar if $have_bar;
-    }
-    $w->end();
-} else {
-    print "No channels specified, run me with --configure\n";
 }
+
+# This progress bar is for both downloading and parsing.  Maybe
+# they could be separate, as with tv_grab_uk.
+#
+my $bar = new Term::ProgressBar('getting listings', scalar @to_get)
+  if $have_bar;
+foreach (@to_get) {
+    process_table($writer, $_->[0], $_->[1], $_->[2]);
+    # be courteous to the servers
+    sleep(rand(5)) unless $opt_fast;
+    update $bar if $have_bar;
+}
+$writer->end();
 
 ######################################################################
 # subroutine definitions
@@ -489,6 +509,8 @@ sub navigate {
 
 # get channel listing
 sub get_channels {
+    my $bar = new Term::ProgressBar('getting list of channels', 1)
+      if $have_bar;
     my %channels;
     my $url="http://www.katso.fi/tvopas";
     my $local_data=get($url);
@@ -512,10 +534,16 @@ sub get_channels {
 		warn "Illegal channel name";
 		next;
 	    }
-	    my $channel_name=$children[0];
-	    $channels{$channel_id}=$channel_name;
+	    for ($children[0]) {
+		s/^\s+//; s/\s+$//;
+		$channels{$channel_id}=$_;
+		push @ch_all, { 'display-name' => [ [ $_, $LANG ] ],
+				'id' => $channel_id };
+	    }
 	}
     }
+    die "no channels could be found" if not keys %channels;
+    update $bar if $have_bar;
     return %channels;
 }
 
