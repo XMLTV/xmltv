@@ -213,7 +213,6 @@ END
 \$(INST_$uc)/$inst_pos: $src Makefile $dir_exists
 	\@rm -f \$(INST_$uc)/$inst_pos
 	cp $src \$(INST_$uc)/$inst_pos
-	\$(FIXIN) \$(INST_$uc)/$inst_pos
 	-\@\$(CHMOD) \$(PERM_RW) \$(INST_$uc)/$inst_pos
 END
 	      ;
