@@ -985,24 +985,46 @@ sub write_channels {
 	my $id = $_;
 	t "writing channel with id $id";
 	my $names = $channels->{$_};
-	if (not @$names) {
-	    warn "channel $id has no display names, not writing";
-	    next;
-	}
-	$w->startTag('channel', id => $id);
-	foreach (@$names) {
-	    my ($text, $lang) = @$_;
-	    my %attrs;
-	    $attrs{lang} = $lang if defined $lang;
-	    warn "writing undefined channel name for channel $id"
-	      if not defined $text;
-	    $w->dataElement('display-name', $text, %attrs);
-	}
-	$w->endTag('channel');
+	write_channel($w, $id, $names);
     }
     t('write_channels() EXIT');
 }
 
+# write_channel()
+#
+# Write a single channel.  Unlike programmes, channels are not
+# self-contained lumps floating about in a big list: they are indexed
+# in a hash by channel id for easy lookup.  This means that when
+# writing them out, you need to know the id as well as the data it
+# points to.  Accordingly the parameters are:
+#
+# XMLTV::Writer object
+# id of channel
+# channel data (at present, a list of display names)
+#
+# You can call this routine if you want, but most of the time
+# write_channels() is a better interface.
+#
+# FIXME extend this module for icons and stuff.
+# In fact for all recent changes to the DTD.
+#
+sub write_channel {
+    my ($w, $id, $names) = @_;
+    if (not @$names) {
+	warn "channel $id has no display names, not writing";
+	return;
+    }
+    $w->startTag('channel', id => $id);
+    foreach (@$names) {
+	my ($text, $lang) = @$_;
+	my %attrs;
+	$attrs{lang} = $lang if defined $lang;
+	warn "writing undefined channel name for channel $id"
+	  if not defined $text;
+	$w->dataElement('display-name', $text, %attrs);
+    }
+    $w->endTag('channel');
+}
 
 # Private.
 # write_programme()
