@@ -180,6 +180,9 @@ add_test([ $inputs[1], $empty_input, $empty_input, $inputs[2] ]);
 # Another special case we want to run every time.
 add_test([ 'simple.xml', 'x-whatever.xml' ]);
 
+# Another - check that duplicate channels are removed.
+add_test([ 'test.xml', 'test.xml' ]);
+
 if ($full) {
     # Test some pairs of files, but not all possible pairs.
     my $pair_limit = 4; die "too few inputs" if $pair_limit > @inputs;
