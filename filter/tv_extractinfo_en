@@ -384,7 +384,7 @@ sub munge( $ ) {
        \&special_year,
        \&special_tv_movie,
        \&special_teletext_subtitles,
-       
+
        # There are three handlers specific to Ananova / UK listings.  I
        # haven't yet decided what to do with them: should they be in this
        # program and enabled with a special flag, or moved into the
@@ -447,7 +447,8 @@ sub munge( $ ) {
 # special_category()
 #
 # Some descriptions have the last word as the category: 'blah blah
-# blah.  Western'.  Remove this to the <category> element.
+# blah.  Western' (or 'Western series').  Remove this to the <category>
+# element.
 #
 # Also, if a show has title 'News', it's pretty likely to be a news
 # show.
@@ -472,15 +473,21 @@ sub special_category( $ ) {
     # Now try the last-word-of-desc munging.
     foreach (@{$p->{desc}}) {
 	if (not defined $_->[1] or $_->[1] =~ /^en/) {
-	    if ($_->[0] =~ s/(?:^|\.)\s*
+	    # 'Western'         -> ''
+	    # 'Western series'  -> ''
+	    # 'Classic Western' -> 'Classic Western'
+	    # etc.
+	    #
+	    if ($_->[0] =~ s/(^|\.|\?)\s*
+		(Classic\s+|Award-winning\s+|)
+		(Australian\s+|)
 		([aA]dventure|[aA]nimation|[bB]iopic|[cC]hiller
 		 |[cC]omedy|[dD]ocumentary|[dD]rama|[fF]antasy
 		 |[hH]eadlines|[hH]ighlights|[hH]orror|[mM]agazine
 		 |[mM]elodrama|[mM]usical|[mM]ystery|[oO]mnibus
 		 |[qQ]uiz|[rR]omance|[sS]itcom|[tT]earjerker
-		 |[tT]hriller|[wW]estern)\s*$//x) {
-		$changed = 1;
-		add($p, 'category', lc $1);
+		 |[tT]hriller|[wW]estern)\s*(?:series\s*|)$/length "$2$3" ? "$1 $2$3$4" : $1/xe) {
+		$changed |= add($p, 'category', lc $4);
 	    }
 	}
     }
@@ -705,7 +712,15 @@ sub special_multipart( $ ) {
 	    # Add the common text to this programme.  So far it has at
 	    # most one description in language $desc_lang.
 	    #
-	    $_->{desc}->[0]->[0] .= $common;
+	    for ($_->{desc}->[0]->[0]) {
+		if (length) {
+		    $_ .= '. ' if $_ !~ /[.?!]\s*$/;
+		    $_ .= " $common";
+		}
+		else {
+		    $_ = $common;
+		}
+	    }
 	    $_->{desc}->[0]->[1] = $desc_lang;
 	}
 
@@ -783,7 +798,12 @@ sub multipart_split_desc( $$ ) {
 	    unshift @words, $first;
 	    last;
 	}
-	$common .= " $first";
+	if (length $common) {
+	    $common .= " $first";
+	}
+	else {
+	    $common = $first;
+	}
     }
     t 'common text: ' . d $common;
 
@@ -1007,13 +1027,20 @@ sub special_credits( $ ) {
  	  (
 	   # Definitely presenter
 	   [ sub {
-		 s{(\b[a-z]\w+\s+)(?:(?:guest|virtual|new\s+)?presenters?)\s+($NAMES_RE)}{$1$2}o && return $2;
-		 s{\s*($NAMES_RE)\s+presents?\b(\s*(?:\.|,|\w|\Z))}{uc $2}oe                     && return $1;
-		 s{Presenters?\s+($NAMES_RE)}{$1}o                                               && return $1;
-		 s{,?\s*[cC]o-?presenters?\s+($NAMES_RE)}{}o                                     && return $1;
-		 s{,?\s*[pP]resented by\s+($NAMES_RE)\b\s*(.|,?\s+\w|\Z)}{uc $2}oe               && return $1;
-		 s{^\s*([hH]eadlines?(?:\s+\S+)?),?\s*[wW]ith\s+($NAMES_RE)(?:\.\s*)?}{$1}o      && return $2;
-		 s{,?\s*(?:[iI]ntroduced|[cC]haired)\s+by\s+($NAMES_RE)(?:\.\s*)?}{}o            && return $1;
+		 s{(\b[a-z]\w+\s+)(?:(?:guest|virtual|new\s+)?presenters?)\s+($NAMES_RE)}{$1$2}o
+		   && return $2;
+		 s{(^|\.\?)\s*($NAMES_RE)\s+presents?\s*(\.|,|\w|\Z)}{$1 . uc $3}oe
+		   && return $2;
+		 s{Presenters?\s+($NAMES_RE)}{$1}o
+		   && return $1;
+		 s{,?\s*[cC]o-?presenters?\s+($NAMES_RE)}{}o
+		   && return $1;
+		 s{,?\s*[pP]resented by\s+($NAMES_RE)\b\s*(.|,?\s+\w|\Z)}{uc $2}oe
+		   && return $1;
+		 s{^\s*([hH]eadlines?(?:\s+\S+)?),?\s*[wW]ith\s+($NAMES_RE)(?:\.\s*)?}{$1}o
+		   && return $2;
+		 s{,?\s*(?:[iI]ntroduced|[cC]haired)\s+by\s+($NAMES_RE)(?:\.\s*)?}{}o
+		   && return $1;
 		 return undef;
 	     }, 'presenter' ],
 	   # Leave 'virtual presenter', 'aquatic presenter',
@@ -1034,8 +1061,10 @@ sub special_credits( $ ) {
 	   [ sub {
 		 return undef unless hasp($_[0], 'category',
 					  sub { $_[0] =~ /\b(?:quiz|sports?)\b/i });
-		 s{(?:^|,|\.)\s*[wW]ith\s*($NAMES_RE)(\.\s*\S)}{$2}o && return $1;
-		 s{(?:^|,|\.)\s*[wW]ith\s*($NAMES_RE)(?:\.\s*$)?}{}o && return $1;
+		 s{(^|,|\.|\?)\s*[wW]ith\s*($NAMES_RE)(\.\s*\S)}{$1 ne ',' ? "$1$2" : $2}oe
+		   && return $2;
+		 s{(^|,|\.|\?)\s*[wW]ith\s*($NAMES_RE)(?:\.\s*$)?}{$1 ne ',' ? $1 : ''}oe
+		   && return $2;
 		 return undef;
 	     }, 'guest' ],
 
@@ -1043,15 +1072,15 @@ sub special_credits( $ ) {
 	   [ sub {
 		 return undef unless hasp($_[0], 'category',
 			  sub { $_[0] =~ /\b(?:news|business|economics?|political|factual|childrens?)\b/i });
-		 s{(?:^|,|\.)\s*[wW]ith\s*($NAMES_RE)(?:\.\s*)?}{}o && return $1;
+		 s{(?:^|,|\.|\?)\s*[wW]ith\s*($NAMES_RE)(?:\.\s*)?}{}o && return $1;
 		 return undef;
 	     }, 'presenter' ],
 
 	   [ sub {
 		 s{[gG]uest\s+star\s+($NAMES_RE)\s*[,;.]?\s*}{}o           && return $1;
 		 s{^($NAMES_RE) (?:co-)?stars? in\s+(?:this\s+)?}{uc $2}oe && return $1;
-		 s{($NAMES_RE) (?:co-)?stars?\.?\s*$}{}o                   && return $1;
-		 s{(?:^|\.)\s*($NAMES_RE)\s+(?:co-)?stars?\s+as\s*$}{}o    && return $1;
+		 s{\s*($NAMES_RE) (?:co-)?stars?\.?\s*$}{}o                && return $1;
+		 s{(?:^|\.|\?)\s*($NAMES_RE)\s+(?:co-)?stars?\s+as\s*$}{}o && return $1;
 		 return undef;
 	     }, 'actor' ],
 
@@ -1060,8 +1089,10 @@ sub special_credits( $ ) {
 		 # does not itself feature that actor.
 		 #
 		 return undef if hasp($_[0], 'category', sub { $_[0] =~ /\barts\b/i });
-		 s{(?:^|,|\.)\s*[wW]ith\s*($NAMES_RE)\b(?:,|\.|;|$)?}{}o                          && return $1;
-		 s{,?\s*(?:(?:[Aa]lso|[Aa]nd)\s+)?(?:co-|guest\s+)?starring\s+($NAMES_RE)\s*$}{}o && return $1;
+		 s{(?:^|,|\.|\?)\s*[wW]ith\s*($NAMES_RE)\b(?:,|\.|;|$)?}{}o
+		   && return $1;
+		 s{,?\s*(?:(?:[Aa]lso|[Aa]nd)\s+)?(?:co-|guest\s+)?starring\s+($NAMES_RE)\s*$}{}o
+		   && return $1;
 		 return undef;
 	     }, 'actor' ],
 
