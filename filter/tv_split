@@ -73,13 +73,18 @@ usage: $0 [--help] [--output FILE] [FILE...]
 END
 ;
 
-sub new_writer( $ );
+sub new_writer( $$ );
 
 my ($opt_help, $opt_output);
 GetOptions('help' => \$opt_help, 'output=s' => \$opt_output) or usage(0);
 usage(1) if $opt_help;
 usage(1) if not defined $opt_output;
 @ARGV = ('-') if not @ARGV;
+
+# Whether we are splitting by channel - if so, write just one
+# <channel> to each output file.
+#
+my $by_channel = ($opt_output =~ /%channel/);
 
 my ($encoding, $credits, %channels);
 sub encoding_cb( $ ) { $encoding = shift }
@@ -107,16 +112,17 @@ my %todo; # map filename to programmes, in case too many open files
 my $too_many = 0;
 sub programme_cb( $ ) {
     my $p = shift;
+    my $ch = $p->{channel};
 
     my $filename = $opt_output;
     for ($filename) {
-	s/%channel/$p->{channel}/g;
+	s/%channel/$ch/g;
 	$_ = UnixDate($p->{start}, $_)
 	  if tr/%//;
     }
 
     if (not defined $writers{$filename} and not $too_many) {
-	my $w = new_writer($filename);
+	my $w = new_writer($filename, $by_channel ? $ch : undef);
 	if ($w) {
 	    $writers{$filename} = $w;
 	}
@@ -160,9 +166,11 @@ END {
     # todo programmes, if any.
     #
     foreach my $f (keys %todo) {
-	my $w = new_writer($f);
+	my @ps = @{$todo{$f}};
+	die if not @ps;
+	my $w = new_writer($f, $by_channel ? $ps[0]->{channel} : undef);
 	die "cannot write to $f: $!, aborting" if not $w;
-	$w->write_programme($_) foreach @{$todo{$f}};
+	$w->write_programme($_) foreach @ps;
 	$w->end();
     }
 }
@@ -171,13 +179,25 @@ END {
 # Create a new XMLTV::Writer and get it ready to write programmes
 # (using the global variables set above).  Returns undef if failure.
 #
-sub new_writer( $ ) {
-    my $f = shift;
+# Parameters: filename, channel id that will go into this file (or
+#   undef for all channels)
+#
+sub new_writer( $$ ) {
+    my ($f, $ch) = @_;
     my $fh = new IO::File ">$f" or return undef;
     my $w = new XMLTV::Writer(OUTPUT => $fh,
 			      encoding => $encoding)
       or return undef;
     $w->start($credits);
-    $w->write_channels(\%channels);
+    if (defined $ch) {
+	# Write this one <channel> if we have it.  (If it wasn't in
+	# the input, do without.)
+	#
+	for ($channels{$ch}) {
+	    $w->write_channel($_) if defined;
+	}
+    }
+    else { $w->write_channels(\%channels) }
+
     return $w;
 }

@@ -97,25 +97,48 @@ INPUT: foreach my $input (@inputs) {
     foreach my $f (<*.out>) {
 	open(FH, $f) or die "cannot open $f: $!";
 	(my $template = $f) =~ s/[.]out$// or die;
+	my (%seen_channel_elem, %used_channel);
 	while (<FH>) {
-	    next unless /<programme/;
-
-	    /start="(.+?)"/ or die "$f:$.: no start\n";
-	    my $start = $1;
-	    $start =~ /^\d{4}(\d{2})/
-	      or die "$f:$.: don't understand start time $start\n";
-	    my $month = $1;
+	    if (/<channel/) {
+		/id="(.+?)"/ or die "$f:$.: no id\n";
+		$seen_channel_elem{$1} = 1;
+	    }
+	    elsif (/<programme/) {
+		/start="(.+?)"/ or die "$f:$.: no start\n";
+		my $start = $1;
+		$start =~ /^\d{4}(\d{2})/
+		  or die "$f:$.: don't understand start time $start\n";
+		my $month = $1;
 	
-	    /channel="(.+?)"/ or die "$f:$.: no channel\n";
-	    my $channel = $1;
+		/channel="(.+?)"/ or die "$f:$.: no channel\n";
+		my $channel = $1;
+		$used_channel{$channel} = 1;
 
-	    if ("channel$channel-month$month" ne $template) {
-		warn "in $f saw what should be channel$channel-month$month\n";
+		if ("channel$channel-month$month" ne $template) {
+		    warn "in $f saw what should be channel$channel-month$month\n";
+		    print "not ok $n\n";
+		    next INPUT;
+		}
+
+		++$found{$template};
+	    }
+	}
+
+	# We don't check that every channel used has a <channel>
+	# element (it might not have been in the input files) but we
+	# do check that every <channel> written is used for at least
+	# one programme.
+	#
+	# (We shouldn't do this if tv_split has not been asked to
+	# split by channel, but at present all the tests we run do
+	# have %channel.)
+	#
+	foreach (sort keys %seen_channel_elem) {
+	    if (not $used_channel{$_}) {
+		warn "in $f saw <channel> for $_ but it's used for no programmes\n";
 		print "not ok $n\n";
 		next INPUT;
 	    }
-
-	    ++$found{$template};
 	}
     }
 
