@@ -62,4 +62,4 @@ $return = do $exe{$cmd};
 
 die "$cmd:$! $@" unless (defined $return);
 
-return $return;
+exit $return;
