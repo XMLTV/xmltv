@@ -5,6 +5,7 @@
 
 package XMLTV::Memoize;
 use File::Basename;
+use Getopt::Long;
 
 # Use Log::TraceMessages if installed.
 BEGIN {
@@ -45,49 +46,25 @@ BEGIN {
 sub check_argv( @ ) {
 #    local $Log::TraceMessages::On = 1;
     my $yes = 0;
+    my $p = new Getopt::Long::Parser(config => ['passthrough']);
+    die if not $p;
+    my $opt_cache;
+    my $result = $p->getoptions('cache:s' => \$opt_cache);
+    die "failure processing --cache option" if not $result;
+    return undef if not defined $opt_cache;
     my $filename;
-    my @new_argv;
-    while (@ARGV) {
-	local $_ = shift @ARGV;
-	if ($_ eq '--cache') {
-	    t 'found arg --cache';
-	    $yes = 1;
-	    if (defined $ARGV[0]) {
-		t 'next arg: ' . d $ARGV[0];
-		if ($ARGV[0] !~ /^-/) {
-		    $filename = shift @ARGV;
-		    t "set cache filename to $filename";
-		}
-		else {
-		    t "not a filename, it's the next option";
-		}
-	    }
-	    else {
-		t 'no further options, so no filename given';
-	    }
-	    last;
-	}
-	elsif (/^--cache=(.+)/) {
-	    ($yes, $filename) = (1, $1);
-	    last;
-	}
-	else {
-	    push @new_argv, $_;
-	    last if $_ eq '--';
-	}
-    }
-    @ARGV = (@new_argv, @ARGV);
-    t 'do we want to cache? ' . d $yes;
-    return undef if not $yes;
-
-    if (not defined $filename) {
+    if ($opt_cache eq '') {
+	# --cache given, but no filename.  Guess one.
 	my $basename = File::Basename::basename($0);
 	$filename = "$basename.cache";
     }
+    else {
+	$filename = $opt_cache;
+    }
     print STDERR "using cache $filename\n";
+
     require POSIX;
     require Memoize;
-
     require DB_File;
     my @tie_args = ('DB_File', $filename,
 		    POSIX::O_RDWR() | POSIX::O_CREAT(), 0666);
