@@ -149,9 +149,11 @@ sub askManyBooleanQuestions( $@ )
 			    'yes', 'no', ($default ? 'all' : 'none'));
 	if ($r eq 'yes') {
 	    push @r, 1;
-	} elsif ($r eq 'no') {
+	}
+	elsif ($r eq 'no') {
 	    push @r, 0;
-	} elsif ($r eq 'all' or $r eq 'none') {
+	}
+	elsif ($r eq 'all' or $r eq 'none') {
 	    my $bool = ($r eq 'all');
 	    push @r, $bool;
 	    foreach (@_) {
@@ -159,7 +161,8 @@ sub askManyBooleanQuestions( $@ )
 		push @r, $bool;
 	    }
 	    last;
-	} else { die }
+	}
+	else { die }
     }
     return @r;
 }
