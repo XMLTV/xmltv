@@ -1419,7 +1419,6 @@ sub scrapehtml($$$)
 	    }
 
 	    # track when the last program ended down to the second
-	    #$lastProgram->{EndTimeInSeconds}=$dayStartTimeInSeconds+(3600*$prog->{end_hour})+(60*$prog->{end_min});
 	    $lastProgram->{end_hour}=$prog->{end_hour};
 	    $lastProgram->{end_min}=$prog->{end_min};
 
