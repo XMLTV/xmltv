@@ -14,6 +14,10 @@
 #
 #
 # $Log$
+# Revision 1.7  2001/11/12 17:23:17  jveldhuis
+# 'Repeat' in details now comes out as 'previously-shown' attr of program
+# fixed some STDERR status messages
+#
 # Revision 1.6  2001/11/11 22:29:36  jveldhuis
 # messages go to stderr, both status and debugging.
 # error messages or warnings try and include html that caused
@@ -781,7 +785,7 @@ sub scrapehtml($$$)
 			next;
 		    }
 		    elsif ( $i=~/^\(Repeat\)$/io ) {
-			# understand, but ignore
+			$result->{prog_qualifiers}->{PreviouslyShown}++;
 			push(@okay, $i);
 			next;
 		    }
@@ -904,11 +908,11 @@ sub readSchedule($$$$$$$)
 	$content=$res->content();
     }
     if ( $self->{Debug} ) {
-	print STDERR "scraping html for $month/$day/$year on station $station\n";
+	print STDERR "scraping html for $year-$month-$day on station $station\n";
     }
     @{$self->{Programs}}=$self->scrapehtml($content, "$month/$day/$year on station $station");
 
-    print STDERR "One Day Schedule for Station $station_desc has:".
+    print STDERR "Day $year-$month-$day schedule for station $station_desc has:".
 	scalar(@{$self->{Programs}})." programs\n";
 	    
     return(scalar(@{$self->{Programs}}));
