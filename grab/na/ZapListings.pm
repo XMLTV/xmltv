@@ -1042,7 +1042,8 @@ sub scrapehtml($$$)
 		    }
 		    # 1re de 2
 		    # 2e de 7
-		    elsif ( $i=~/^\((\d+)r*e de (\d+)\)$/io ) { # part x of y in french :)
+		    elsif ( $i=~/^\((\d+)re de (\d+)\)$/io || # part x of y in french :)
+			    $i=~/^\((\d+)e de (\d+)\)$/io ) { # part x of y in french :)
 			$prog->{qualifiers}->{PartInfo}="Part $1 of $2";
 		    }
 
