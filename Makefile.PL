@@ -53,7 +53,6 @@ my %pm
 my %prereqs
   = (
      LWP => 0,
-     XML::DOM => 0, # will remove, once tv_grab_uk fixed
      XML::Twig => 0,
      Date::Manip => 5.4,
      XML::Writer => 0,

@@ -517,8 +517,10 @@ sub grab( @ ) {
 	t "downloading page: $_";
 	eval {
 	    my $got = get($_);
-
-	    if (not fix_ananova_xml(\$got)) {
+	    if (not defined $got) {
+		warn "failed to get $_, skipping page\n";
+	    }
+	    elsif (not fix_ananova_xml(\$got)) {
 		warn "$_: bad content, skipping page\n";
 	    }
 	    else {
@@ -720,60 +722,12 @@ sub get_regions( $$ ) {
     # XML, which is similar to XMLTV's channel listings but not quite
     # the same.
     #
-    my $p = new XML::DOM::Parser;
-    my $doc = $p->parse($xml);
-    die "$url is not XML" if not defined $doc;
-
-    # FIXME ignoring attributes of <tv>.
-    my $nodes = $doc->getElementsByTagName('region');
-    my $n = $nodes->getLength();
-    for (my $i = 0; $i < $n; $i++) {
-	my $node = $nodes->item($i);
-
-	# Get the Ananova region id.
-	use vars '%reg_attrs'; local *reg_attrs = XMLTV::dom_attrs($node);
-	delete $reg_attrs{tag}; # old-style id, not used.
-	my $reg_id = delete $reg_attrs{id};
-	if (not defined $reg_id) {
-	    warn "$url: region with no id, skipping";
-	    next;
-	}
-	foreach (keys %reg_attrs) {
-	    warn "$url: unknown attribute $_ in region";
-	}
-
-	# Store the region id and name.
-	my $fc = $node->getFirstChild();
-	$node->removeChild($fc);
-	if ($fc->getNodeTypeName() ne 'TEXT_NODE') {
-	    warn 'first child of region should be region name';
-	    next;
-	}
-	my $reg_name = $fc->getData();
-	for ($reg_name) { s/^\s+//; s/\s+$// }
-	$r{$reg_id} = $reg_name;
-
-	# Inside a <region> element are some <channel> elements.
-	foreach (XMLTV::dom_subelements($node)) {
-	    if ($_->getNodeName() ne 'channel') {
-		warn "$url: something other than channel inside region";
-		next;
-	    }
-	    t '\@XMLTV::Channel_Handlers=' . d \@XMLTV::Channel_Handlers;
-	    t 'calling XMLTV::node_to_channel()';
-	    my $ch_data = XMLTV::node_to_channel($_);
-	    my @chs = XMLTV::Ananova_Channel->find_by_ananova_id($ch_data->{id});
-	    if (not @chs) {
-		warn "$url: channel $ch_data->{id} mentioned in regions but not channels";
-		next;
-	    }
-
-	    # Tell each channel with this Ananova id that it belongs to
-	    # this region.
-	    #
-	    $_->add_region($reg_id) foreach @chs;
-	}
-    }
+    # (Ignore attributes of the <tv> element.)
+    #
+    my $t = new XML::Twig
+      (TwigHandlers =>
+       { '/tv/region' => sub { do_region($url, \%r, @_) } });
+    $t->parse($xml);
 
     # We just told some existing channel objects about their
     # terrestrial regions.  That is the main purpose of this
@@ -781,6 +735,54 @@ sub get_regions( $$ ) {
     # region names.
     #
     return \%r;
+}
+# Helper for get_regions().  First two args are URL and hash to modify,
+# next two are those passed by XML::Twig.
+#
+sub do_region( $$$$ ) {
+    my ($url, $r, $t, $node) = @_;
+    # Get the Ananova region id.
+    use vars '%reg_attrs'; local *reg_attrs = XMLTV::get_attrs($node);
+    delete $reg_attrs{tag};	# old-style id, not used.
+    my $reg_id = delete $reg_attrs{id};
+    if (not defined $reg_id) {
+	warn "$url: region with no id, skipping";
+	next;
+    }
+    foreach (keys %reg_attrs) {
+	warn "$url: unknown attribute $_ in region";
+    }
+
+    # Store the region id and name.
+    my $fc = $node->first_child();
+    my $reg_name = $fc->pcdata();
+    if (not defined $reg_name) {
+	warn 'first child of region should be region name';
+	next;
+    }
+    $fc->delete();
+    $r->{$reg_id} = $reg_name;
+
+    # Inside a <region> element are some <channel> elements.
+    foreach (XMLTV::get_subelements($node)) {
+	if (XMLTV::get_name($_) ne 'channel') {
+	    warn "$url: something other than channel inside region";
+	    next;
+	}
+	t '\@XMLTV::Channel_Handlers=' . d \@XMLTV::Channel_Handlers;
+	t 'calling XMLTV::node_to_channel()';
+	my $ch_data = XMLTV::node_to_channel($_);
+	my @chs = XMLTV::Ananova_Channel->find_by_ananova_id($ch_data->{id});
+	if (not @chs) {
+	    warn "$url: channel $ch_data->{id} mentioned in regions but not channels";
+	    next;
+	}
+		
+	# Tell each channel with this Ananova id that it belongs to
+	# this region.
+	#
+	$_->add_region($reg_id) foreach @chs;
+    }
 }
 
 
@@ -796,6 +798,9 @@ sub read_channels_page( $$ ) {
 #    local $Log::TraceMessages::On = 1;
     my $data;
 
+    if (not defined $xml) {
+	die "failed to get channels page $url\n";
+    }
     fix_ananova_xml(\$xml) or die "$url: bad channels page content";
 
     t 'parsing XML for channels page: ' . d $xml;
