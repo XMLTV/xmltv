@@ -857,7 +857,7 @@ sub getChannelList($$)
     }
 
     if ( !defined($found) ) {
-      main::errorMessage("invalid provider id, not valid of postal/zip code $self->{GeoCode}\n");
+      main::errorMessage("invalid provider id ($providerId), not valid of postal/zip code $self->{GeoCode}\n");
 	return(undef);
     }
 
