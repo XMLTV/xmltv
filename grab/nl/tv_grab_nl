@@ -111,7 +111,6 @@ BEGIN {
 use constant Have_bar => eval { require Term::ProgressBar; 1 };
 
 # Function prototypes.
-sub detail_urls( $$ );
 sub write_details( $$$$$ );
 sub time_tot_str( $ );
 sub time_van_str( $ );
@@ -306,12 +305,20 @@ foreach $ch_did (@channels) {
 }
 
 my %warned_ch_name; # suppress duplicate warnings
+
+my @summary_page_data;
+my $bar = new Term::ProgressBar('downloading summary', scalar @to_get)
+  if Have_bar && not $opt_quiet;
+foreach (@to_get) {
+    my ($url, $day, $ch_xmltv_id, $ch_tvgids_id) = @$_;
+    push @summary_page_data,
+      [ $url, $ch_xmltv_id, [ process_summary_page($url, $day, $day) ] ];
+    update $bar if Have_bar and not $opt_quiet;
+}
+
 if (not $opt_slow) {
-    my $bar = new Term::ProgressBar('downloading listings', scalar @to_get)
-      if Have_bar && not $opt_quiet;
-    foreach (@to_get) {
-	my ($url, $day, $ch_xmltv_id, $ch_tvgids_id) = @$_;
-	die if not defined $day;
+    foreach (@summary_page_data) {
+	my ($url, $ch_xmltv_id, $data) = @$_;
 
 	# Try to do something with the programmes that have no start
 	# time.  Put them into a clump with the preceding valid
@@ -319,7 +326,7 @@ if (not $opt_slow) {
 	#
 	my $clump; # [ start, stop, programmes ].  stop may be undef.
 	my @clumps;
-	foreach (process_summary_page($url, $day, $day)) {
+	foreach (@$data) {
 	    my ($start, $stop, $title, $url) = @$_;
 
 	    # Start and stop are common to a whole clump, but these
@@ -406,30 +413,26 @@ if (not $opt_slow) {
 		$writer->write_programme(\%h);
 	    }
 	}
-
-	update $bar if Have_bar and not $opt_quiet;
     }
 }
 else {
     # Slow mode, get details separately.
     # FIXME should check consistency between details and summary.
     #
-    my $bar = new Term::ProgressBar('first pass', scalar @to_get)
-      if Have_bar && not $opt_quiet;
     my @to_get_detailed;
     my $num_detailed = 0;
-    foreach (@to_get) {
-	my ($url, $date, $ch_xmltv_id, $ch_tvgids_id) = @$_;
-	my @detail_urls = map { $_->[3] } process_summary_page($url, $date, $date);
+    foreach (@summary_page_data) {
+	my ($url, $ch_xmltv_id, $data) = @$_;
+	my @detail_urls = map { $_->[3] } @$data;
 	push @to_get_detailed, [ $ch_xmltv_id, \@detail_urls, $url ];
 	$num_detailed += @detail_urls;
-	update $bar if Have_bar && not $opt_quiet;
     }
     $bar = new Term::ProgressBar('getting details', $num_detailed)
       if Have_bar && not $opt_quiet;
     my @got_detailed;
     foreach (@to_get_detailed) {
-	write_details($writer, $_->[0], $_->[1], $_->[2], $bar);
+	my ($ch_xmltv_id, $detail_urls, $url) = @$_;
+	write_details($writer, $ch_xmltv_id, $detail_urls, $url, $bar);
     }
 }
 
@@ -439,33 +442,6 @@ $writer->end();
 # subroutine definitions
 
 my (%warned_regel, $warned_discarding_parts); # suppress duplicate warnings
-
-sub detail_urls( $$ ) {
-    my ($data, $url) = @_;
-    local $SIG{__WARN__} = sub {
-	warn "$url: $_[0]";
-    };
-    local $SIG{__DIE__} = sub {
-	die "$url: $_[0]";
-    };
-    my $t = new HTML::TreeBuilder;
-    $t->parse($data);
-    my @elems = $t->look_down('_tag' => 'A', 'class' => 'details_programma');
-    if (not @elems) {
-	t "did not see details_programma <A>s in HTML:\n$data\n";
-	die 'did not see any programmes in page';
-    }
-    my @r;
-    foreach (@elems) {
-	for ($_->attr('href')) {
-	    die "<A> element $_ without 'href' attribute" if not defined;
-	    s!^/+!!;
-	    push @r, "http://www.tvgids.nl/$_";
-	}
-    }
-    $t->delete(); undef $t;
-    return @r;
-}
 
 # arguments:
 #    XMLTV::Writer object to write to
@@ -542,6 +518,7 @@ sub write_details( $$$$$ ) {
 	    foreach ($regel, $text) {
 		s/^\s+//; s/\s+$//;
 	    }
+
 	    if ($regel eq '') {
 		# Continuation of the previous one, hopefully.
 		$regel = $last;
@@ -551,6 +528,7 @@ sub write_details( $$$$$ ) {
 		$regel =~ s/:$//;
 		$last = $regel;
 	    }
+
 	    if ($regel eq 'Tijdstip') {
 		warn "seen 'Tijdstip' twice\n" if $seen_tijdstip++;
 		if (length($text)<=16) {
@@ -597,7 +575,8 @@ sub write_details( $$$$$ ) {
 	    }
 	    elsif ($regel eq 'Genre') {
 		warn "seen 'Genre' twice\n" if defined $genre;
-		$genre = $text;
+		# Empty text for this happens often, just skip it.
+		$genre = $text if $text ne '';
 	    }
 	    elsif ($regel eq 'Zender') {
 		# I think this means 'broadcaster' but the information
