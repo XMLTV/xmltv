@@ -75,7 +75,7 @@ sub summarize($)
     my $self=shift;
 
     if ( defined($self->{Cell}) ) {
-	#main::errorMessage("warning: cell in row never closed, shouldn't happen\n");
+	#warn("warning: cell in row never closed, shouldn't happen\n");
 	return("");
 	#push(@{$self->{Row}}, @{$self->{Cell}->{things}});
 	#delete($self->{Cell});
@@ -103,7 +103,7 @@ sub getSRC($$)
     my @arr=@{$self->{Row}};
     my $thing=$arr[$index-1];
 
-    #main::errorMessage("item $index : ".XMLTV::ZapListings::dumpMe($thing)."\n");
+    #warn("item $index : ".XMLTV::ZapListings::dumpMe($thing)."\n");
     if ( $thing->{starttag}=~m/img/io ) {
 	return($thing->{attr}->{src}) if ( defined($thing->{attr}->{src}) );
 	return($thing->{attr}->{SRC}) if ( defined($thing->{attr}->{SRC}) );
@@ -118,7 +118,7 @@ sub getHREF($$)
     my @arr=@{$self->{Row}};
     my $thing=$arr[$index-1];
 
-    #main::errorMessage("item $index : ".XMLTV::ZapListings::dumpMe($thing)."\n");
+    #warn("item $index : ".XMLTV::ZapListings::dumpMe($thing)."\n");
     if ( $thing->{starttag}=~m/a/io) {
 	return($thing->{attr}->{href}) if ( defined($thing->{attr}->{href}) );
 	return($thing->{attr}->{HREF}) if ( defined($thing->{attr}->{HREF}) );
@@ -182,7 +182,7 @@ sub new
     $code=$self->{ZipCode} if ( defined($self->{ZipCode}) );
 
     if ( !defined($code) ) {
-      main::errorMessage("ZapListings::new requires PostalCode or ZipCode defined\n");
+      warn("ZapListings::new requires PostalCode or ZipCode defined\n");
 	exit(1);
     }
     $self->{GeoCode}=$code;
@@ -550,7 +550,7 @@ sub Form2Request($$)
 
     for my $input (@{$form->{inputs}}) {
 	if ( !defined($input->{type}) ) {
-	  main::errorMessage("zap2it form 'input' missing type");
+	  warn("zap2it form 'input' missing type");
 	    
 	    return(undef);
 	}
@@ -574,7 +574,7 @@ sub Form2Request($$)
 		    $input->{value}=$self->{formSettings}->{$input->{name}};
 		}
 		else {
-		  main::errorMessage("zap2it form has input '$input->{name}' we don't have a value for");
+		  warn("zap2it form has input '$input->{name}' we don't have a value for");
 		    
 		    return(undef);
 		}
@@ -617,7 +617,7 @@ sub Form2Request($$)
 			}
 		    }
 		    if (! $default) {
-		  main::errorMessage("zap2it form has select '$name' we don't have a value for");
+		  warn("zap2it form has select '$name' we don't have a value for");
 		    
 		    return(undef);
 		}
@@ -757,6 +757,7 @@ sub getZipCodeForm($$$)
     $self->{formSettings}->{zipcode}=$geocode;
     $self->{formSettings}->{urlbase}=$urlbase;
     $self->{formSettings}->{listingssite}="tvl";
+    $self->{formSettings}->{category}="0";       # all categories
 
     # this is such a HACK, forcing the method change to "get"... but it
     # fixes things...so we go with the flow
@@ -773,10 +774,10 @@ sub initGeoCodeAndGetProvidersList($$)
     my $res=&doRequest($self->{ua}, $req, $self->{Debug});
 
     if ( !$res->is_success ) {
-        main::errorMessage("request failed with code: ".$res->code().":".HTTP::Status::status_message($res->code())."\n");
-	main::errorMessage("if problem persists, examine browser settings and\n");
-	main::errorMessage("try setting 'http_proxy' environment variable\n");
-	main::errorMessage("otherwise post problem to xmltv-users\@lists.sf.net for assistance\n");
+        warn("request failed with code: ".$res->code().":".HTTP::Status::status_message($res->code())."\n");
+	warn("if problem persists, examine browser settings and\n");
+	warn("try setting 'http_proxy' environment variable\n");
+	warn("otherwise post problem to xmltv-users\@lists.sf.net for assistance\n");
 	return(-1);
     }
 
@@ -797,7 +798,7 @@ sub initGeoCodeAndGetProvidersList($$)
     }
 
     if ( !defined($self->{ZipCodeForm}) ) {
-      main::errorMessage("zap2it top level web page doesn't have a zipcode form\n");
+      warn("zap2it top level web page doesn't have a zipcode form\n");
 	return(-1);
     }
 
@@ -816,9 +817,9 @@ sub initGeoCodeAndGetProvidersList($$)
     }
 
     if ( !$res->is_success ) {
-	main::errorMessage("zap2it failed to give us a page: ".$res->code().":".
+	warn("zap2it failed to give us a page: ".$res->code().":".
 			 HTTP::Status::status_message($res->code())."\n");
-	main::errorMessage("looks like we located the right form, check postal/zip code on zap2it.com web site (maybe they're down)\n");
+	warn("looks like we located the right form, check postal/zip code on zap2it.com web site (maybe they're down)\n");
 	return(-1);
     }
 
@@ -840,13 +841,13 @@ sub initGeoCodeAndGetProvidersList($$)
     }
 
     if ( !defined($self->{ProviderForm}) ) {
-      main::errorMessage("zap2it failed to give us a form to choose a Provider\n");
-      main::errorMessage("check with zap2it site postal/zip code $geocode is valid\n");
+      warn("zap2it failed to give us a form to choose a Provider\n");
+      warn("check with zap2it site postal/zip code $geocode is valid\n");
 	return(-1);
     }
 
     if ( $content=~m/(We do not have information for the zip code[^\.]+)/i ) {
-	main::errorMessage("zap2it says:\"$1\"\ninvalid postal/zip code\n");
+	warn("zap2it says:\"$1\"\ninvalid postal/zip code\n");
 	return(-1);
     }
 
@@ -861,9 +862,9 @@ sub initGeoCodeAndGetProvidersList($$)
         }
     }
     if ( !defined($self->{ProviderList}) ) {
-	main::errorMessage("zap2it gave us a page with no service provider options\n");
-	main::errorMessage("check postal/zip code or www site (maybe they're down)\n");
-	main::errorMessage("(LWP::UserAgent version is ".$self->{ua}->_agent().")\n");
+	warn("zap2it gave us a page with no service provider options\n");
+	warn("check postal/zip code or www site (maybe they're down)\n");
+	warn("(LWP::UserAgent version is ".$self->{ua}->_agent().")\n");
 	return(-1);
     }
 
@@ -892,7 +893,7 @@ sub getChannelList($$)
     }
 
     if ( !defined($found) ) {
-      main::errorMessage("invalid provider id ($providerId), not valid of postal/zip code $self->{GeoCode}\n");
+      warn("invalid provider id ($providerId), not valid of postal/zip code $self->{GeoCode}\n");
 	return(undef);
     }
 
@@ -923,9 +924,9 @@ sub getChannelList($$)
 
 warn "zap2it gave us a server error, but let's go for it anyway\n" if $res->code eq '500' and !$got500error++ ;
     if ( !($res->is_success || $res->code eq '500') ) {
-	main::errorMessage("zap2it failed to give us a page: ".$res->code().":".
+	warn("zap2it failed to give us a page: ".$res->code().":".
 			 HTTP::Status::status_message($res->code())."\n");
-	main::errorMessage("check postal/zip code or www site (maybe they're down)\n");
+	warn("check postal/zip code or www site (maybe they're down)\n");
 	return(undef);
     }
 
@@ -943,7 +944,7 @@ warn "zap2it gave us a server error, but let's go for it anyway\n" if $res->code
     }
 
     if ( !defined($self->{GridForm}) ) {
-      main::errorMessage("zap2it doesn't have a grid form\n");
+      warn("zap2it doesn't have a grid form\n");
 	return(undef);
     }
 
@@ -968,9 +969,9 @@ warn "zap2it gave us a server error, but let's go for it anyway\n" if $res->code
 
     warn "zap2it gave us a server error, but let's go for it anyway\n" if $res->code eq '500 and !$got500error++';
     if ( !($res->is_success || $res->code eq '500') ) {
-	main::errorMessage("zap2it failed to give us a page: ".$res->code().":".
+	warn("zap2it failed to give us a page: ".$res->code().":".
 			 HTTP::Status::status_message($res->code())."\n");
-	main::errorMessage("check postal/zip code or www site (maybe they're down)\n");
+	warn("check postal/zip code or www site (maybe they're down)\n");
 	return(undef);
     }
 
@@ -998,7 +999,7 @@ warn "zap2it gave us a server error, but let's go for it anyway\n" if $res->code
     }
 
     if ( !defined($self->{ChannelByTextForm}) ) {
-      main::errorMessage("zap2it failed to give us a form to choose a Text Listings\n");
+      warn("zap2it failed to give us a form to choose a Text Listings\n");
 	return(undef);
     }
 
@@ -1022,7 +1023,7 @@ warn "zap2it gave us a server error, but let's go for it anyway\n" if $res->code
 
 	my $result=new XMLTV::ZapListings::ScrapeRow()->parse($row);
 	if ( !$result ) {
-	    main::errorMessage("ignoing html table row that failed to parse:'$row'");
+	    warn("ignoing html table row that failed to parse:'$row'");
 	    next;
 	}
 
@@ -1039,7 +1040,7 @@ warn "zap2it gave us a server error, but let's go for it anyway\n" if $res->code
 	    # img for icon
 	    my $ref=$result->getSRC(2);
 	    if ( !defined($ref) ) {
-		main::errorMessage("row decode on item 2 failed on '$desc'\n");
+		warn("row decode on item 2 failed on '$desc'\n");
 		dumpPage($content);
 		return(undef);
 	    }
@@ -1057,12 +1058,12 @@ warn "zap2it gave us a server error, but let's go for it anyway\n" if $res->code
 		$offset=5;
 	    }
 	    else {
-	      main::errorMessage("coding error finding <a> in $desc\n");
+	      warn("coding error finding <a> in $desc\n");
 		return(undef);
 	    }
 	    $ref=$result->getHREF($offset);
 	    if ( !defined($ref) ) {
-		main::errorMessage("row decode on item $offset failed on '$desc'\n");
+		warn("row decode on item $offset failed on '$desc'\n");
 		dumpPage($content);
 		return(undef);
 	    }
@@ -1071,7 +1072,7 @@ warn "zap2it gave us a server error, but let's go for it anyway\n" if $res->code
 		$nchannel->{stationid}=$1;
 	    }
 	    else {
-		main::errorMessage("row decode on item 6 href failed on '$desc'\n");
+		warn("row decode on item 6 href failed on '$desc'\n");
 		dumpPage($content);
 		return(undef);
 	    }
@@ -1090,12 +1091,12 @@ warn "zap2it gave us a server error, but let's go for it anyway\n" if $res->code
 		$offset=3;
 	    }
 	    else {
-	      main::errorMessage("coding error finding <a> in $desc\n");
+	      warn("coding error finding <a> in $desc\n");
 		return(undef);
 	    }
 	    my $ref=$result->getHREF($offset);
 	    if ( !defined($ref) ) {
-		main::errorMessage("row decode on item $offset failed on '$desc'\n");
+		warn("row decode on item $offset failed on '$desc'\n");
 		dumpPage($content);
 		return(undef);
 	    }
@@ -1103,7 +1104,7 @@ warn "zap2it gave us a server error, but let's go for it anyway\n" if $res->code
 		$nchannel->{stationid}=$1;
 	    }
 	    else {
-		main::errorMessage("row decode on item $offset href failed on '$desc'\n");
+		warn("row decode on item $offset href failed on '$desc'\n");
 		dumpPage($content);
 		return(undef);
 	    }
@@ -1118,7 +1119,7 @@ warn "zap2it gave us a server error, but let's go for it anyway\n" if $res->code
     }
 
     if ( ! @channels ) {
-	main::errorMessage("zap2it gave us a page with no channels\n");
+	warn("zap2it gave us a page with no channels\n");
 	dumpPage($content);
 	return(undef);
     }
@@ -1149,7 +1150,7 @@ sub dumpPage($)
     my $filename = "ZapListings.dump.$dumpPage_counter";
     local *OUT;
     if (open (OUT, ">$filename")) {
-	main::errorMessage("dumping HTML page to $filename\n");
+	warn("dumping HTML page to $filename\n");
 	print OUT $content
 	  or warn "cannot dump HTML page to $filename: $!";
 	close OUT or warn "cannot close $filename: $!";
@@ -1182,10 +1183,10 @@ sub setValue($$$$)
 
     if ( $self->{Debug} ) {
 	if ( defined($hash->{$key}) ) {
-	    main::errorMessage("replaced value '$key' from '$hash->{$key}' to '$value'\n");
+	    warn("replaced value '$key' from '$hash->{$key}' to '$value'\n");
 	}
 	else {
-	    main::errorMessage("set value '$key' to '$value'\n");
+	    warn("set value '$key' to '$value'\n");
 	}
     }
     $hash->{$key}=$value;
@@ -1357,7 +1358,7 @@ sub scrapehtml($$$)
 	# run it through our row scaper that separates out the html
 	my $result=new XMLTV::ZapListings::ScrapeRow()->parse($row);
 	if ( !$result ) {
-	    main::errorMessage("ignoing html table row that failed to parse:'$row'");
+	    warn("ignoing html table row that failed to parse:'$row'");
 	    next;
 	}
 
@@ -1468,9 +1469,9 @@ sub scrapehtml($$$)
 		}
 	    }
 	    else {
-	      main::errorMessage("FAILED to find/estimate endtime\n");
-	      main::errorMessage("\tsource: $htmlsource\n");
-	      main::errorMessage("\thtml:'$desc'\n");
+	      warn("FAILED to find/estimate endtime\n");
+	      warn("\tsource: $htmlsource\n");
+	      warn("\thtml:'$desc'\n");
 	    }
 
 	    if ( $desc=~s;<b><a><text>\s*(.*?)\s*</text></a></b>;;io ) {
@@ -1884,7 +1885,7 @@ sub scrapehtml($$$)
 	    if ( @leftExtras ) {
 		if ( scalar(@leftExtras) != 1 ) {
 		    for (@leftExtras) {
-			main::errorMessage("scraper failed with left over details: $_\n");
+			warn("scraper failed with left over details: $_\n");
 		    }
 		}
 		else {
@@ -1895,16 +1896,16 @@ sub scrapehtml($$$)
 
 	    #for my $key (keys (%$prog)) {
 		#if ( defined($prog->{$key}) ) {
-		#    main::errorMessage("KEY $key: $prog->{$key}\n");
+		#    warn("KEY $key: $prog->{$key}\n");
 		#}
 	    #}
 
 	    if ( $desc ne "<td><font></font>" &&
 		 $desc ne "<td><font></font><font></td>" ) {
-		main::errorMessage("scraper failed with left overs: $desc\n");
+		warn("scraper failed with left overs: $desc\n");
 	    }
 	    #$desc=~s/<text>(.*?)<\/text>/<text>/og;
-	    #main::errorMessage("\t$desc\n");
+	    #warn("\t$desc\n");
 
 
 	    # final massage.
@@ -2072,9 +2073,9 @@ sub readSchedule($$$$$)
 
 	warn "zap2it gave us a server error, but let's go for it anyway\n" if $res->code eq '500' and !$got500error++;
     if ( !($res->is_success || $res->code eq '500') ) {
-	    main::errorMessage("zap2it failed to give us a page: ".$res->code().":".
+	    warn("zap2it failed to give us a page: ".$res->code().":".
 			     HTTP::Status::status_message($res->code())."\n");
-	    main::errorMessage("check postal/zip code or www site (maybe they're down)\n");
+	    warn("check postal/zip code or www site (maybe they're down)\n");
 	    return(-1);
 	}
 	$content=$res->content();
@@ -2084,7 +2085,7 @@ sub readSchedule($$$$$)
 	   $err=~s/\s+/ /og;
 	   $err=~s/^\s+//og;
 	   $err=~s/\s+$//og;
-	   main::errorMessage("ERROR: $err\n");
+	   warn("ERROR: $err\n");
 	   return(-1);
         }
 	if ( -d "urldata" ) {
