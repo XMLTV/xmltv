@@ -62,8 +62,6 @@ sub new
 
     $self->{cachedLookups}->{tv_series}->{_cacheSize_}=0;
 
-    $self->{look_cmd}="look";
-
     bless($self, $type);
 
     $self->{categories}={'movie'          =>'Movie',
@@ -233,10 +231,11 @@ sub debug($$)
     }
 }
 
+use Search::Dict;
+
 # moviedbIndex file has the format:
 # title:lineno
-# where title is url encoded so that different implementations of 'look' work
-# (some early bsd versions failed if any entries contained space or tabs)
+# where key is a url encoded title followed by the year of production and a colon
 sub getMovieMatches($$$)
 {
     my $self=shift;
@@ -258,15 +257,16 @@ sub getMovieMatches($$$)
     $match=lc($match);
     $match=~s/([^a-zA-Z0-9_.-])/uc sprintf("%%%02x",ord($1))/oeg;
     
-    # escape for shell :)
-    $match=~s/([\$\"])/\\$1/og;
-
-    $self->debug("cmd: \"$self->{look_cmd} \"$match\" $self->{moviedbIndex} |\"");
-    if ( !open(FD, "$self->{look_cmd} \"$match\" $self->{moviedbIndex} |") ) {
+    $self->debug("looking for \"$match\" in $self->{moviedbIndex}");
+    if ( !open(FD, "< $self->{moviedbIndex}") ) {
 	return(undef);
     }
+    
+    Search::Dict::look(*FD, $match, 0, 0);
     my $results;
     while (<FD>) {
+	last if ( !m/^$match/ );
+
 	chop();
 	my @arr=split('\t', $_);
 	if ( scalar(@arr) != 5 ) {
@@ -343,14 +343,13 @@ sub getMovieIdDetails($$)
     my $self=shift;
     my $id=shift;
 
-    $id=~s/([\$\"])/\\$1/og; #"
-
-    #print "look $id: $self->{moviedbData}\n";
-    if ( !open(FD, "$self->{look_cmd} '$id:' $self->{moviedbData} |") ) {
+    if ( !open(FD, "< $self->{moviedbData}") ) {
 	return(undef);
     }
     my $results;
+    Search::Dict::look(*FD, "$id:", 0, 0);
     while (<FD>) {
+	last if ( !m/^$id:/ );
 	chop();
 	if ( s/^$id:// ) {
 	    my ($directors, $actors)=split('\t', $_);
