@@ -102,7 +102,12 @@ sub parse_eur_date($$) {
     t "year of date is $year";
     die "cannot convert Date::Manip object $dp to year"
       if not defined $year;
+
+    # Start and end dates of DST in local winter time.
     my ($start_dst, $end_dst) = @{dst_dates($year)};
+    foreach ($start_dst, $end_dst) {
+	$_ = Date_ConvTZ($_, 'UTC', $winter_tz);
+    }
 
     # The clocks shift backwards and forwards by one hour.
     my $clock_shift = "1 hour";
