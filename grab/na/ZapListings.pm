@@ -71,7 +71,7 @@ sub getProviders($$$)
     $code=$postalcode if ( defined($postalcode) );
     $code=$zipcode if ( defined($zipcode) );
 
-    my $req=GET("http://tvlistings2.zap2it.com/register.asp?id=form1&name=form1&zipcode=$code");
+    my $req=GET("http://tvlistings.zap2it.com/register.asp?id=form1&name=form1&zipcode=$code");
 
     # actually attempt twice since first time in, we get a cookie that
     # works for the second request
@@ -157,7 +157,7 @@ sub getChannelList($$$$)
 	return(undef);
     }
 
-    my $req=POST('http://tvlistings2.zap2it.com/edit_provider_list.asp?id=form1&name=form1',
+    my $req=POST('http://tvlistings.zap2it.com/edit_provider_list.asp?id=form1&name=form1',
 		 [FormName=>"edit_provider_list.asp",
 		  zipCode => "$code", 
 		  provider => "$provider", 
@@ -169,7 +169,7 @@ sub getChannelList($$$$)
 	$res=&doRequest($ua, $req, $debug);
     }
 
-    $req=GET('http://tvlistings2.zap2it.com/listings_redirect.asp?spp=0');
+    $req=GET('http://tvlistings.zap2it.com/listings_redirect.asp?spp=0');
     $res=&doRequest($ua, $req, $debug);
 
     # looks like some requests require two identical calls since
@@ -386,6 +386,7 @@ sub new
     my $self = $class->SUPER::new(@_, env_proxy => 1,
 				  timeout => 180);
     bless ($self, $class);
+    #$self->agent('Mozilla/5.0');
     return $self;
 }
 
@@ -549,7 +550,7 @@ sub new
 
     my $ua=XMLTV::ZapListings::RedirPostsUA->new('cookie_jar'=>$self->{cookieJar});
 
-    my $req=POST('http://tvlistings2.zap2it.com/edit_provider_list.asp?id=form1&name=form1',
+    my $req=POST('http://tvlistings.zap2it.com/edit_provider_list.asp?id=form1&name=form1',
 		 [FormName=>"edit_provider_list.asp",
 		  zipCode => "$self->{ZipCode}", 
 		  provider => "$self->{ProviderID}",
@@ -1327,7 +1328,7 @@ sub readSchedule($$$$$)
 	    return(-1);
 	}
 
-	my $req=POST('http://tvlistings2.zap2it.com/listings_redirect.asp',
+	my $req=POST('http://tvlistings.zap2it.com/listings_redirect.asp',
 		     [ displayType => "Text",
 		       duration => "1",
 		       startDay => "$month/$day/$year",
