@@ -15,6 +15,23 @@
 # Robert Eden rmeden@yahoo.com
 #
 
+    
+#
+# check time zone
+#
+unless (exists $ENV{TZ})
+{
+    my $now    =  time();
+    my $lhour  = 20; #(localtime($now))[2];
+    my $ghour  = 02; # (   gmtime($now))[2];
+    my $tz     = ($lhour - $ghour);
+       $tz    -= 24 if $tz >  12;
+       $tz    += 24 if $tz < -12;
+       $tz     = sprintf("%+03d00",$tz);
+       $ENV{TZ}= $tz;
+} #timezone
+print STDERR "Timezone is $ENV{TZ}\n";
+
 #
 # build file list
 #
@@ -27,7 +44,7 @@ foreach $exe (split(/ /,$files))
 #   print "Storing $_=$exe\n";
     $exe{$_}=$exe;
 }
-    
+
 #
 # validate command 
 #
