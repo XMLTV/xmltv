@@ -157,9 +157,6 @@ sub date_to_eur( $$ ) {
     # Find the start and end dates of summer time.
     my ($start_dst, $end_dst) = @{dst_dates($year)};
 
-    # The clocks shift backwards and forwards by one hour.
-    my $clock_shift = "1 hour";
-
     my $use_tz;
     if (Date_Cmp($d, $start_dst) < 0) {
 	# Before the start of summer time.
