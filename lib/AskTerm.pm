@@ -99,7 +99,15 @@ sub ask_question( $$@ )
 
     # Check no duplicates (required for later processing, maybe).
     my %seen;
-    foreach (@options) { die "duplicate option $_" if $seen{$_}++ }
+    my @options_new;
+    foreach (@options) {
+	if ($seen{$_}++) {
+	    carp "removing duplicate option $_";
+	    next;
+	}
+	push @options_new, $_;
+    }
+    @options = @options_new;
 
     my $options_size = length("@options");
     t "size of options: $options_size";
