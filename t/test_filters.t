@@ -385,14 +385,8 @@ sub run( $$$$ ) {
     }
 
     # Run the command.
-    if (system(@cmd)) {
-	my ($status, $sig, $core) = ($? >> 8, $? & 127, $? & 128);
-	if ($sig) {
-	    die "@cmd killed by signal $sig, aborting";
-	}
-	warn "@cmd failed: $status, $sig, $core\n";
-	return 0;
-    }
+    my $r = system(@cmd);
+
     # Restore old stderr.
     if (not close(STDERR)) {
 	print OLDERR "cannot close $err: $!\n";
@@ -401,6 +395,16 @@ sub run( $$$$ ) {
     if (not open(STDERR, ">&OLDERR")) {
 	print OLDERR "cannot dup stderr back again: $!\n";
 	exit(1);
+    }
+
+    # Check command return status.
+    if ($r) {
+	my ($status, $sig, $core) = ($? >> 8, $? & 127, $? & 128);
+	if ($sig) {
+	    die "@cmd killed by signal $sig, aborting";
+	}
+	warn "@cmd failed: $status, $sig, $core\n";
+	return 0;
     }
 
     return 1;
