@@ -313,7 +313,29 @@ foreach my $pair (@cmds) {
 		delete $to_unlink{$out}; delete $to_unlink{$err};
 	    }
 	    else {
-		print "ok $test_num\n";
+		# The output was correct: if there's also an 'expected
+		# error' file check that.  Otherwise we do not check
+		# what was printed on stderr.
+		#
+		my $expected_err = "$base.expected_err";
+		if (-e $expected_err) {
+		    my $err_content = read_file($err);
+		    my $expected_content = read_file($expected_err);
+
+		    if ($err_content ne $expected_content) {
+			warn "failure for stderr of @cmd @in, see $base.*\n";
+			print "not ok $test_num\n";
+			$okay = 0;
+			delete $to_unlink{$out}; delete $to_unlink{$err};
+		    }
+		    else {
+			print "ok $test_num\n";
+		    }
+		}
+		else {
+		    # Don't check stderr.
+		    print "ok $test_num\n";
+		}
 	    }
 	}
 	else { die }
