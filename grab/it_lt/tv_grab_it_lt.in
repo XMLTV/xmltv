@@ -1,0 +1,960 @@
+#!/usr/bin/perl
+
+#TODO:
+#foto programma
+#2 descs?
+
+=pod
+
+=head1 NAME
+
+tv_grab_it_lt - Grab TV listings for Italy.
+
+=head1 SYNOPSIS
+
+tv_grab_it_lt --help
+
+tv_grab_it_lt [--config-file FILE] --configure
+
+tv_grab_it_lt [--config-file FILE] [--output FILE]
+              [--days N] [--offset N] [--quiet]
+              [--slow] [--password-file FILE]
+
+=head1 DESCRIPTION
+
+Output TV listings for several channels available in Italy.
+The data comes from www.latele.it.
+The grabber relies on parsing HTML so it might stop working at any time.
+
+First run B<tv_grab_it_lt --configure> to choose which channels you want
+to download. Then running B<tv_grab_it_lt> with no arguments will output
+listings in XML format to standard output.
+
+B<--configure> Prompt for which channels,
+and write the configuration file.
+
+B<--config-file FILE> Set the name of the configuration file, the
+default is B<~/.xmltv/tv_grab_it_lt.conf>.  This is the file written
+by B<--configure> and read when grabbing.
+
+B<--output FILE> write to FILE rather than standard output.
+
+B<--days N> grab N days.  The default is 7.
+
+B<--offset N> start N days in the future.  The default is to start
+from today.
+
+B<--quiet> suppress the progress messages normally written to standard
+error.
+
+B<--slow> downloads more details (descriptions, actors...). This means
+downloading a new file for each programme, so itE<39>s off by default to
+save time.
+
+B<--password-file> name of a text file containing the password needed to
+log in. We use an external password file to hide it to people using ps.
+
+=head1 NOTE
+
+In order to grab listings for more than one day, the site requires a
+free registration. You can register on www.latele.it.
+You can specify your username by running B<tv_grab_it_lt --configure>.
+If you try to grab more days, and no password is specified (using the
+--password-file option), you will be prompted for your password.
+
+=head1 SEE ALSO
+
+L<xmltv(5)>.
+
+=head1 AUTHOR
+
+Davide Chiarini, pinwiz@inwind.it.
+
+=head1 BUGS
+
+The data source does not include full channels information and the
+channels are identified by short names rather than the RFC2838 form
+recommended by the XMLTV DTD.
+
+=cut
+
+######################################################################
+# initializations
+use warnings;
+use strict;
+use XMLTV::Version '$Id$ ';
+
+use HTML::Entities;
+use HTML::Parser;
+use URI::Escape;
+use Getopt::Long;
+use Date::Manip;
+use Memoize;
+use XMLTV;
+use XMLTV::Memoize;
+use XMLTV::Ask;
+use XMLTV::Config_file;
+use XMLTV::DST;
+use XMLTV::Get_nice;
+# Todo: perhaps we should internationalize messages and docs?
+use XMLTV::Usage <<END
+$0: get Italian television listings in XMLTV format
+To configure: $0 --configure [--config-file FILE]
+To grab listings: $0 [--config-file FILE] [--output FILE] [--days N]
+        [--offset N] [--quiet] [--slow] [--password-file FILE]
+END
+  ;
+
+# Use Log::TraceMessages if installed.
+BEGIN {
+    eval { require Log::TraceMessages };
+    if ($@) {
+    *t = sub {};
+    *d = sub { '' };
+    }
+    else {
+    *t = \&Log::TraceMessages::t;
+    *d = \&Log::TraceMessages::d;
+    Log::TraceMessages::check_argv();
+    }
+}
+
+#max days on the server
+my $MAX_DAYS=7;
+# default language
+my $LANG="it";
+# base url for info
+my $domain = 'latele.it';
+my $base="http://www.latele.it/canali.asp";
+my $rturl="http://www.latele.it/";
+
+my $username;
+my $password;
+
+######################################################################
+# Use Term::ProgressBar if installed.
+use constant Have_bar => eval { require Term::ProgressBar; 1 };
+
+######################################################################
+# Cookies are required only if we log in
+use constant Can_cookies => eval { require HTTP::Cookies; 1 };
+
+######################################################################
+# get options
+# Get options, including undocumented --cache option.
+
+my $func_name = 'XMLTV::Get_nice::get_nice_aux';
+XMLTV::Memoize::check_argv($func_name) # cache on disk
+  or memoize($func_name)               # cache in memory
+  or die "cannot memoize $func_name: $!";
+
+my ($opt_days,
+    $opt_offset,
+    $opt_help,
+    $opt_output,
+    $opt_slow,
+    $opt_configure,
+    $opt_config_file,
+    $opt_quiet,
+    $opt_share,
+    $opt_password_file,
+   );
+
+# server only holds 7 days, so if there is an offset days must be
+# opt_days-offset or less.
+# but if no name or password are given we'll get only one day
+$opt_offset = 0;   # default
+$opt_quiet  = 0;   # default
+$opt_slow   = 0;   # default
+GetOptions('days=i'       => \$opt_days,
+       'offset=i'         => \$opt_offset,
+       'help'             => \$opt_help,
+       'configure'        => \$opt_configure,
+       'config-file=s'    => \$opt_config_file,
+       'output=s'         => \$opt_output,
+       'quiet'            => \$opt_quiet,
+       'slow'             => \$opt_slow,
+       'share=s'          => \$opt_share,       # undocumented
+       'password-file=s'  => \$opt_password_file,
+      )
+  or usage(0);
+die 'number of days must not be negative'
+  if (defined $opt_days && $opt_days < 0);
+usage(1) if $opt_help;
+
+# share/ directory for storing channel mapping files.  This next line
+# is altered by processing through tv_grab_it_lt.PL.  But we can use
+# the current directory instead of share/tv_grab_it for development.
+#
+# The 'source' file tv_grab_it_lt.in has $SHARE_DIR undef, which means
+# use the current directory.  In any case the directory can be
+# overridden with the --share option (useful for testing).
+#
+my $SHARE_DIR = undef;
+$SHARE_DIR = $opt_share if defined $opt_share;
+my $OUR_SHARE_DIR = (defined $SHARE_DIR) ? "$SHARE_DIR/tv_grab_it_lt" : '.';
+(my $CHANNEL_NAMES_FILE = "$OUR_SHARE_DIR/channel_ids") =~ tr!/!/!s;
+
+# Tables to convert between Latele.it and XMLTV ids of channels.
+my (%xmltv_chanid, %seen);
+my $line_num = 0;
+foreach (XMLTV::Config_file::read_lines($CHANNEL_NAMES_FILE, 1)) {
+    ++ $line_num;
+    next unless defined;
+    my $where = "$CHANNEL_NAMES_FILE:$line_num";
+    my @fields = split /:/;
+    die "$where: wrong number of fields"
+      if @fields != 2;
+
+    my ($lt_id, $xmltv_id) = @fields;
+    warn "$where: lt id $lt_id seen already\n"
+      if defined $xmltv_chanid{$lt_id};
+    $xmltv_chanid{$lt_id} = $xmltv_id;
+    warn "$where: XMLTV id $xmltv_id seen already\n"
+      if $seen{$xmltv_id}++;
+}
+#we also need the opposite
+my %lt_chanid = reverse %xmltv_chanid;
+
+# File that stores which channels to download.
+my $config_file
+  = XMLTV::Config_file::filename($opt_config_file, 'tv_grab_it_lt', $opt_quiet);
+
+if ($opt_configure) {
+    XMLTV::Config_file::check_no_overwrite($config_file);
+}
+
+$line_num = 0;
+
+my %channels=get_channels_list();
+
+######################################################################
+# write configuration
+if ($opt_configure) {
+    open(CONF, ">$config_file") or die "cannot write to $config_file: $!";
+    # find list of available channels
+#    my $bar = new Term::ProgressBar('getting list of channels', 1)
+#      if Have_bar && not $opt_quiet;
+
+#    die "no channels could be found" if (scalar(keys(%channels))==0);
+#    update $bar if Have_bar && not $opt_quiet;
+
+    say "To get more listings than today, you will need a login on the site.\n";
+    my $username_wanted = askBooleanQuestion('Do you have a login?', 0);
+    if ($username_wanted) {
+    $username=ask("Username:");
+    print CONF "username: $username\n";
+    }
+
+    # Ask about each channel.
+    my @chs = sort keys %channels;
+    my @names = map { $channels{$_} } @chs;
+    my @qs = map { "add channel $_?" } @names;
+    my @want = askManyBooleanQuestions(1, @qs);
+    foreach (@chs) {
+    my $w = shift @want;
+    warn("cannot read input, stopping channel questions"), last
+      if not defined $w;
+    # No need to print to user - XMLTV::Ask is verbose enough.
+
+    # Print a config line, but comment it out if channel not wanted.
+    print CONF '#' if not $w;
+    my $name = shift @names;
+    die if $name =~ tr/\r\n//;
+        print CONF "channel ".xmltv_chanid($_)." # $_ $name\n";
+    }
+
+    close CONF or warn "cannot close $config_file: $!";
+    say("Finished configuration.");
+
+    exit();
+}
+
+######################################################################
+# read configuration
+my (@channels, $ch_did, $ch_name);
+$line_num = 0;
+foreach (XMLTV::Config_file::read_lines($config_file)) {
+    ++ $line_num;
+    next if not defined;
+    if (/^channel:?\s*(.*\S+)\s*$/) {
+    push @channels, lt_chanid($1);
+    }
+    elsif (/^username:?\s+(\S+)/){
+        $username=$1;
+    }
+    else {
+    warn "$config_file:$line_num: bad line\n";
+    }
+}
+
+######################################################################
+# if we have a password file then read it
+# we use this instead of giving pass on commandline
+# to avoid it beeing seen using ps
+if (defined $opt_password_file) {
+    open(PASS, "<$opt_password_file") or die "cannot open $opt_password_file: $!";
+    my @lines = grep /\S/, <PASS>;
+    close PASS or die "cannot close $opt_password_file: $!";
+    die "expected exactly one nonblank line in $opt_password_file\n"
+      if @lines != 1;
+    for ($password) {
+    $_ = $lines[0];
+    s/^\s+//; s/\s+$//;
+    }
+}
+
+######################################################################
+# begin main program
+my %w_args;
+if (defined $opt_output) {
+    my $fh = new IO::File(">$opt_output");
+    die "cannot write to $opt_output: $!" if not defined $fh;
+    $w_args{OUTPUT} = $fh;
+}
+$w_args{encoding} = 'ISO-8859-1';
+my $w = new XMLTV::Writer(%w_args);
+
+$w->start({ 'source-info-url'     => "http://$domain/",
+        'source-data-url'     => "$base",
+        'generator-info-name' => 'XMLTV',
+        'generator-info-url'  => 'http://membled.com/work/apps/xmltv/',
+        });
+
+#make a list of the urls to grab, based on date and channel name
+my @to_get;
+my $url;
+
+#for today only we don't need to login.
+for ($opt_days) {
+    if (not defined) {
+    if (defined $username) {
+        $_ = $MAX_DAYS;
+    }
+    else {
+        warn "Getting only one day of listings since username not set\n"
+          unless $opt_offset; # if set, will fail with error later
+        $_ = 1;
+    }
+    }
+}
+
+unless (($opt_offset==0) && ($opt_days<=1)) {
+    die "Login required to grab more than today, use --configure\n"
+      if not defined $username;
+    login($username, $password)
+      or die "could not log in as $username\n";
+}
+
+my $days2get;
+if (($opt_days+$opt_offset) > $MAX_DAYS) {
+    $days2get=$MAX_DAYS-$opt_offset;
+    warn "The server only has info for $MAX_DAYS days from today.\n";
+    if ($opt_offset > $MAX_DAYS) {
+    warn "Day offset too big.\n";
+    }
+    else {
+    warn "You'll get listings for only ".($MAX_DAYS-$opt_offset)." days.\n";
+    }
+}
+else {
+    $days2get=$opt_days;
+}
+t "will get $days2get days from $opt_offset onwards";
+
+my $bar2 = new Term::ProgressBar('getting icons', scalar @channels)
+  if Have_bar && not $opt_quiet;
+foreach my $ch_id (@channels) {
+    my $ch_xid=xmltv_chanid($ch_id);
+
+    foreach my $day ($opt_offset .. $days2get + $opt_offset - 1) {
+    $url=$base
+        ."?Insert_Date=".uri_escape(url_date($day))
+        ."&Insert_Date_name=".url_channel(url_date2($day))
+        ."&IDChannel=".$ch_id
+        ."&IDChannel_name=".url_channel($channels{$ch_id})
+        ."&imageField.x=32"
+        ."&imageField.y=14";
+
+    push @to_get, [$url, $ch_xid, $day];
+    t "will get $ch_xid for day $day";
+    }
+
+    #we have to grab one page per channel just to get the icon, but it doesn't
+    #matter since we're memoizing anyway
+    $w->write_channel({
+               id => $ch_xid,
+               'display-name' => [ [ $channels{$ch_id} ] ],
+               icon => [{src => get_icon($url)}]
+              });
+    update $bar2 if Have_bar && not $opt_quiet;
+}
+
+my $bar = new Term::ProgressBar('getting listings', scalar @to_get)
+  if Have_bar && not $opt_quiet;
+
+foreach (@to_get) {
+    my $canale= $_->[1];
+    $url   = $_->[0];
+    my $data  = $_->[2];
+
+    #following line is useful for debugging
+    #warn "now doing $canale date $data\n";
+    my $content =  get_nice($url);
+    my @dati;
+    @dati = parse_page($content, $canale, $data) if page_check($content);
+    if (not @dati) {
+        warn "\nNo listings found for channel $canale, day $data\n";
+        }
+    $w->write_programme($_) foreach @dati;
+   update $bar if Have_bar && not $opt_quiet;
+}
+$w->end;
+
+######################################################################
+# subroutines
+
+####################################################
+# page_check
+# check if something went wrong
+sub page_check {
+my $content2check = shift;
+ if ($content2check=~/ASP 500 Error|Nessun programma trovato/) {
+     return 0;
+     }
+     else {
+    return 1;
+    }
+}
+
+####################################################
+# xmltv_chanid
+# to handle channels that are not yet in the channel_ids file
+sub xmltv_chanid {
+    my $channel_id = shift;
+
+    if (defined $xmltv_chanid{$channel_id}) {
+        return $xmltv_chanid{$channel_id};
+        }
+    else {
+        warn "***Channel $channel_id is not in channel_ids, should be updated.\n";
+        $channel_id=~ s/\W//gs;
+        return lc($channel_id).".$domain";
+    }
+}
+
+####################################################
+# lt_chanid
+# to handle channels that are not yet in the channel_ids file
+sub lt_chanid {
+    my $channel_id = shift;
+
+    if (defined $lt_chanid{$channel_id}) {
+        return $lt_chanid{$channel_id};
+        }
+    else {
+        #we should have already received a warning in xmltv_chanid()
+        #warn "***Channel $channel_id is not in channel_ids, should be updated.\n";
+        $channel_id=~ /(.*?).$domain/;
+        return lc($1);
+    }
+}
+
+####################################################
+# xmltv_date
+# this returns a date formatted like 20021229121300 CET
+# first argument is time (like '14:20')
+# second is date offset from today
+# site strangely shows programes from 6am to 5:59am next day so we have to fix dates too
+sub xmltv_date {
+    my $time = shift;
+    my $time_offset = shift;
+
+    $time =~/(.*):(.*)/ or die "bad time $time";
+    my $hour=$1; my $min=$2;
+    if ($hour<10) {
+    $hour='0'.$hour;
+    }
+
+    my $decdate=$hour.$min;
+    if ($decdate<600) {
+        $time_offset++;
+    }
+    my $data=&DateCalc("today","+ ".$time_offset." days");
+    die 'date calculation failed' if not defined $data;
+    return utc_offset(UnixDate($data, '%Y%m%d').$hour.$min.'00', '+0100');
+}
+
+####################################################
+# url_channel
+#tiny url encoding for channel names, where spaces become '+' and +'s become '%2B
+sub url_channel {
+    my $channel = shift;
+    $channel=~ s/\+/%2B/gs;
+    $channel=~ s/ /\+/gs;
+    return $channel;
+}
+
+####################################################
+# url_date
+# argument is offset from today
+# formats today+offset's date like DD/MM/YYYY
+sub url_date {
+    my $time_offset = shift;
+    my $data=&DateCalc("today","+ ".$time_offset." days");
+    die 'date calculation failed' if not defined $data;
+
+    return UnixDate($data, '%d/%m/%Y');
+}
+
+####################################################
+# url_date2
+# argument is offset from today
+# formats today+offset's date like DOW DD MMM(in italian)
+sub url_date2 {
+    my $time_offset = shift;
+    my $data=&DateCalc("today","+ ".$time_offset." days");
+    die 'date calculation failed' if not defined $data;
+
+    my $str=UnixDate($data, '%a %d %b');
+    #traduciamo in italiano
+    $str=~s/Jan/Gen/;
+    $str=~s/May/Mag/;
+    $str=~s/Jun/Giu/;
+    $str=~s/Jul/Lug/;
+    $str=~s/Aug/Ago/;
+    $str=~s/Sep/Set/;
+    $str=~s/Oct/Ott/;
+    $str=~s/Dec/Dic/;
+
+    $str=~s/Sun/Domenica/;
+    $str=~s/Mon/Luned\%EC/;
+    $str=~s/Tue/Marted\%EC/;
+    $str=~s/Wed/Mercoled\%EC/;
+    $str=~s/Thu/Gioved\%EC/;
+    $str=~s/Fri/Venerd\%EC/;
+    $str=~s/Sat/Sabato/;
+
+    return $str;
+}
+
+####################################################
+# get_channels_list
+# returns hash of channel details.
+sub get_channels_list {
+    my $bar = new Term::ProgressBar('getting list of channels', 1)
+      if Have_bar && not $opt_quiet;
+    my $content = get_nice("$base");
+    die "cannot download $base\n" if not defined $content;
+    my %chan_hash;
+
+    my $chop_start='onchange="this.form.IDChannel_name.value=this.options[this.selectedIndex].text;">';
+    my $chop_end="</select>";
+    #takes out everything we don't want
+    $content =~ /\Q$chop_start\E..(.*?)(\Q$chop_end\E)/s;
+    $content = $1;
+
+    my @channels = split /\n/, $content;
+
+    #we want just the names
+    foreach $a (@channels) {
+        next if ($a=~/^\s/);    #skip empty lines
+        $a =~ /\"(.*)\">([^<]*)</s;
+        $chan_hash{$1}=$2;
+        }
+
+    update $bar
+      if Have_bar && not $opt_quiet;
+    return %chan_hash;
+}
+
+####################################################
+# this is the main parsing subroutine
+# vars needed for parsing
+my ($in_time_start, $in_title, $in_extras, $in_prog, $in_cat, $premiere, $prev_shown, $star_value,
+    $title, $chan, $link, $time_start, $category, $category2, $txt, $dd, $orig_lang, $sottotitoli,
+    $sott2, $stereo, $surr, $ing, $fra, $widescreen);
+my @programmes;
+my %programme;
+
+####################################################
+# parse page
+# takes 3 arguments: $content of the page, $channelid that were parsing and $dateoffset from today
+# returns an array of programme datas (see perldoc XMLTV)
+sub parse_page {
+my $content = shift;
+   $chan    = shift;
+   $dd = shift;
+   @programmes = (); #just to make sure
+   $in_time_start = 0;
+   $in_title = 0;
+   $in_prog = 0;
+   $in_cat = 0;
+   $in_extras = 0;
+   $sottotitoli = 0;
+   $sott2 = 0;
+   $premiere = 0;
+   $stereo = 0;
+   $surr = 0;
+   $ing = 0;
+   $fra = 0;
+   $widescreen = 0 ;
+   $prev_shown = 0;
+   $orig_lang = 0;
+
+my $chop_start='<td width="501"></td>';
+my $chop_end='</table></td>';
+#questo mi toglie tutto quello che non ' la tabella
+$content =~ /\Q$chop_start\E(.*?)\Q$chop_end\E/s;
+$content =$1;
+
+ my $p = HTML::Parser->new(api_version => 3);
+    $p->handler( start => \&start_handler, "tagname, attr");
+    $p->handler(text => \&text_handler, "dtext");
+    $p->handler( end => \&end_handler, "tagname");
+    $p->unbroken_text(1);
+    $p->parse($content);
+
+  return @programmes;
+}
+
+sub start_handler {
+    my ($tagname,$attr) = @_;
+     if ($tagname eq 'tr') {
+         $in_prog=1;
+     }
+     if ($tagname eq 'td') {
+         if (defined $attr->{class}) {
+             if ($attr->{class} eq 'stnero') {
+                 $in_time_start=1;
+             }
+    }
+    }
+     if ($tagname eq 'a') {
+         $in_title=1;
+    if ($attr->{href}=~/\Qjavascript:scheda('\E(.*)\Q')\E/) {
+         $link=$1;
+     }
+    }
+    if (($in_title==1) && ($tagname eq 'em')){
+        $in_title=0;
+        $in_cat=1;
+        }
+    my ($live, $delayed);
+    if (($in_extras) && ($tagname eq 'img')) {
+    my %attrs = ('Prima Visione'                    => \$premiere,
+             Replica                            => \$prev_shown,
+             Sottotitoli                        => \$sottotitoli,
+             'Lingua originale con sottotitoli' => \$sott2,
+             'In inglese'                       => \$ing,
+             'in inglese'                       => \$ing,
+             'In francese'                      => \$fra,
+             Stereo                             => \$stereo,
+             'Dolby Surround'                   => \$surr,
+             '16:9'                             => \$widescreen,
+             Diretta                            => \$live,
+             Differita                          => \$delayed,
+             'Doppio audio'                     => undef,     # not yet in xmltv
+             Criptato                           => undef,     # not shown on sat. ch.
+             'Versione integrale'               => undef,     # uncut version?
+             Radiocronaca                       => undef,
+             Sintesi                            => undef,
+             'Nuova Serie'                      => undef,
+             Inedito                            => undef,
+            );
+    for ($attr->{alt}) {
+        foreach my $s (keys %attrs) {
+        if (s/\b$s\b//) {
+            my $vr = $attrs{$s};
+            $$vr = 1 if $vr;
+        }
+        }
+        s/^\s+//; s/\s+$//;
+        #i know there are others, but they are uncommon and cannot add them till i see them!
+        warn "unhandled attribute $_ in $chan, day $dd, time $time_start\n"
+          if length;
+            }
+         }
+    warn "saw programme both live and delayed\n"
+      if $live and $delayed;
+    $category2 = 'live' if $live;
+    $category2 = 'delayed' if $delayed;
+} #start_handler
+
+sub text_handler {
+   ($txt) = @_;
+   if ($in_time_start==1) {
+       $time_start = $txt;
+       $in_time_start=0;
+       }
+   elsif ($in_title==1) {
+       $title=$txt;
+       $title =~ s/\($//m;
+       $title =~ s/^\s+//m;
+       $title =~ s/\s+$//m;
+   }
+  elsif ($in_cat==1) {
+       $category=$txt;
+       }
+} #text handler
+
+sub end_handler {
+    my ($tagnome, $attr) = @_;
+    if ($tagnome eq 'em') {
+        $in_cat=0;
+        }
+    if ($tagnome eq 'a'){
+        $in_extras=1;
+        }
+    #we're done with the programme, collect data
+    if (($tagnome eq 'tr') && ($in_prog==1)){
+    # Three mandatory fields: title, start, channel.
+    if (not defined $title) {
+        warn 'no title found, skipping programme';
+            goto FAILED;
+    }
+        $programme{title}=[[tidy($title), $LANG] ];
+    if (not defined $time_start) {
+        warn "no start time for title $title, skipping programme";
+        goto FAILED;
+    }
+        $programme{start}=xmltv_date($time_start, $dd);
+    if (not defined $chan) {
+        warn "no channel for programme $title at $time_start, skipping programme";
+        goto FAILED;
+    }
+        $programme{channel}="$chan";
+
+    $programme{category}=[[tidy($category), $LANG ]]
+      if defined $category;
+    $programme{_link}="$rturl$link"
+      if defined $link;
+
+    push (@{$programme{category}}, [tidy($category2), $LANG ])
+      if defined $category2;
+
+    $programme{audio} = {stereo => "stereo" } if $stereo;
+    $programme{audio} = {stereo => "surround" } if $surr;
+    $programme{premiere}=[] if $premiere;
+    #we don't know when it was previously shown
+    $programme{'previously-shown'}->{channel}="$chan" if $prev_shown;
+    $programme{subtitles}=[ {type=> 'teletext'}] if $sottotitoli;
+    $programme{'orig-language'}=['Inglese', $LANG] if $ing;
+    $programme{'orig-language'}=['Francese', $LANG] if $fra;
+    $programme{video} = { aspect => '16:9' } if $widescreen;
+    if ($sott2) {
+        $programme{subtitles}=[ {type=> 'onscreen'}];
+        # Workaround because 'unknown orig-language' is not
+        # officially part of the file format.
+        $programme{'orig-language'}=['unknown'];
+    }
+
+    #following line is useful for debugging
+    #warn "now parsing $title on $chan, day $dd, time $time_start\n";# link $rturl$link\n";
+        if ($opt_slow) {
+            my $content2 =  get_nice($programme{_link});
+            prog_parse($content2, \%programme);
+        }
+        #put info in array
+        push @programmes, {%programme};
+
+      FAILED:
+        #reset vars for next channel;
+        $in_extras = 0; $in_title = 0; $in_time_start = 0;
+        $premiere = 0;  $prev_shown = 0; $orig_lang = 0; $in_prog = 0;
+        $sottotitoli = 0; $sott2 = 0; $stereo = 0; $surr = 0; $ing=0; $fra=0;
+        $widescreen=0;
+        ($star_value, $title, $link, $category2, $time_start, $category)
+          = (); # set to undef
+        %programme = ();
+    }
+} #end_handler;
+
+
+##########################################################
+# prog_parse
+# it parses subpages to get more info about the programmes
+# (descriptions, actors, directors, more categories, year, country)
+# first argument is content of the page
+# second is the hash to wich we add info
+sub prog_parse{
+    my ($c, $prog_hash) = @_;
+    $c=tidy($c);
+
+    if($c =~/<td class=\"stnero\">(.*?)<\/td>/) {
+        my $description = tidy($1) if ($1 ne "");
+        $prog_hash->{desc}=[[$description, $LANG] ] if defined $description;
+    }
+
+    #if there are two descs we throw away the first;
+    if($c =~/<td class=\"stnero\"><strong>(.*?)<\/td>/) {
+        my $linea=$1;
+        if ($linea=~/(.*)<\/strong>.*<span class=\"titoli\">(.*)<br>.*<\/span>(.*)/){
+            $prog_hash->{'sub-title'}=[[$2, $LANG] ];
+            my $desc=$3;$desc=~s/^\s+//; $desc=~s/\s+$//;
+            $prog_hash->{desc}=[[tidy($desc), $LANG] ] if ($desc ne "");
+        }
+        else {
+        warn "Can't handle !!$1!!\n";}
+    }
+
+
+    if ($c=~/<td width=\"348\" valign=\"top\" class=\"stnero\"><span class=\"titoli\">(.*?)<\/td>/){
+        my $tabella = $1 if ($1 ne "");
+        $tabella=~s/<br>//g;
+        my @temp=(split /<strong>/, $tabella);
+        foreach my $linea (@temp) {
+            if ($linea=~/(.*)<\/strong>(.*)/) {
+                my ($cat, $val) = ($1, $2);
+                $val=~s/^\s+//; $val=~s/\s+$//;
+                for ($cat){
+                    /Contenuti:/ && do {
+                        #most channels self-rate programmes
+                        $prog_hash->{rating}=[[$val]];
+                        last;
+                        };
+                    /Di:/ && do {
+                        my @directors = split /, /, $val;
+                        foreach $a (@directors) {
+                            push @{$prog_hash->{credits}->{director}}, $a;
+                            }
+                        last;
+                        };
+
+                    /Con:/ && do {
+                        my @cast = split /,/, $val;
+                        foreach (@cast) {
+                            s/^\s+//; s/\s+$//;
+                            (push @{$prog_hash->{credits}->{actor}}, $_);
+                            }
+                        last;
+                        };
+
+                    /Condotto da:|A cura di:/ && do {
+                        my @cast = split /,/, $val;
+                        foreach (@cast) {
+                            s/^\s+//; s/\s+$//;
+                            (push @{$prog_hash->{credits}->{presenter}}, $_);
+                            }
+                        last;
+                        };
+
+                    /Voto: / && do {
+                        $val=~/<img src=\"img\/(.)stelle.gif\"/;
+                        $prog_hash->{'star-rating'}=[$1];
+                        last;
+                        };
+
+                    warn "Don't know what |$cat|$val| is\n";
+                }
+            }
+            else {  #first line
+                for ($linea){
+                    /\/span.* (.*?) \((.*)\)/ && do {
+                        my $val=$2;
+                        for ($val) {
+                            /[.]$/ && do {
+                                $val=~/(.*?)[,] (\d*?)[,] (.*) min[.]/;
+                                my $ctr = $1;
+                                my @countries = split /, /, $ctr;
+                                foreach $a (@countries) {
+                                    push (@{$prog_hash->{country}}, [$a, $LANG]);
+                                    }
+                                $prog_hash->{date}=$2;
+                                $prog_hash->{'length'}=$3*60;
+                                last;
+                            };
+
+                            /[,]{1}/ && do {
+                                my @countries = split /, /, $val;
+                                foreach $a (@countries) {
+                                    push (@{$prog_hash->{country}}, [$a, $LANG]);
+                                    }
+                                last;
+                            };
+
+                            push (@{$prog_hash->{country}}, [$val, $LANG]);
+                        }
+                        push (@{$prog_hash->{category}} , [$1, $LANG ]);
+                        last;
+                        };
+
+                    /.* - (.*?) -/ && do {
+                        my $val=$1;
+                        $val=~s/\s+$//;
+                        push (@{$prog_hash->{category}} , [$val, $LANG ]);
+                        last;
+                        };
+                    /<\/span/ && do {
+                        #we can ignore this
+                        last;
+                        };
+
+                    warn "Can't handle ||$linea||\n";
+                }
+            }
+        }
+    }
+}
+
+##########################################################
+# tidy
+# decodes entities and removes some illegal chars
+sub tidy($) {
+    for (my $tmp=shift) {
+    s/[\000-\037]//g;   # remove control characters
+    s/[\222]/\'/g;      # messed up char
+    s/[\224]/\"/g;      # end quote
+    s/[\205]/\.\.\./g;  # ... must be something messed up in my regexps?
+    s/[\223]/\"/g;      #start quote
+    s/[\221]/\'/g;
+
+    if (s/[\200-\237]//g) {
+        warn "removing illegal char: |\\".ord($&)."|\n";
+          warn "while parsing $title on $chan, day $dd, time $time_start\n";
+        }
+
+    return decode_entities($_);
+    }
+}
+
+##########################################################
+# get_icon
+# grab channel icon from html page
+sub get_icon {
+    my $content=get_nice(shift);
+    $content=~/<td background="(loghi.*?)"/;
+    return $rturl.$1;
+}
+
+##########################################################
+# login
+sub login {
+    my ($nome, $pass) = @_;
+    die if not defined $nome;
+
+    if (!Can_cookies) {
+        warn "HTTP::Cookies required in order to log in.\n";
+        return 0;
+    }
+
+    #activates cookies
+    $XMLTV::Get_nice::ua->cookie_jar(HTTP::Cookies->new);
+
+    until (defined $pass) {
+        warn "No password given.\n";
+        $pass=ask_password("Password for $nome:");
+    }
+
+    my $loginres =
+        LWP::Simple::get('http://www.latele.it/dologin.asp?Username='.$nome.
+        '&Password='.$pass.'&image.x=49&image.y=5');
+    if ($loginres=~/per effettuare nuovamente il login/){   #login failed
+        warn "Login failed\n";
+        return 0;
+        }
+    else {
+        warn "Logged in OK as $nome\n";
+        return 1;
+        }
+}
