@@ -100,7 +100,7 @@ sub parse_uk_date($) {
 # 
 sub date_to_uk($) {
     die 'usage: date_to_uk(date in Date::Manip format)' if @_ != 1;
-    my $d = shift; die if not defined $d;
+    my $d = shift; die if (not defined $d) or ($d !~ /\S/);
 
     my $year = UnixDate($d, '%Y');
     if ((not defined $year) or ($year !~ tr/0-9//)) {

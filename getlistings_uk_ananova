@@ -209,6 +209,7 @@ foreach my $channel (sort keys %CHANNELS) {
 		push @progs_done, $prog;
 	    }
 
+#	    t('writing programme: ' . d($_));
 	    write_programme($writer, $_) foreach @progs_done;
 	}
     }
@@ -290,7 +291,7 @@ sub programmes_from_html($) {
 
     # Convert the 12 hour times into proper date-times.
     my $day = get_date_from_page($html);
-    if (not defined $day) {
+    if (not defined $day or $day !~ /\S/) {
 	# Ananova sometimes does this - listings for a particular day
 	# and channel are not given.  (Well, carlton/day1/ch5,
 	# anyway.)  Are they just trying to annoy me?
@@ -336,7 +337,7 @@ sub date_programmes($$) {
 
 	my $prog_date = parse_uk_date("$base_day $t");
 	die "bad base day + time '$t'"
-	  if not defined $prog_date or $prog_date eq '';
+	  if (not defined $prog_date) or ($prog_date !~ /\S/);
 
 	if (defined $prev_date
 	    and (Date_Cmp($prev_date, $prog_date) > 0))
@@ -349,7 +350,7 @@ sub date_programmes($$) {
 	    die "error from DateCalc(): $err" if defined $err;
 	    $prog_date = parse_uk_date("$base_day $t");
 	    die "bad base day + time '$t'"
-	      if not defined $prog_date or $prog_date eq '';
+	      if (not defined $prog_date) or ($prog_date !~ /\S/);
 	}
     
 	delete $_->{'time'};
@@ -682,10 +683,12 @@ sub get_date_from_page($) {
 sub write_programme($$) {
     die 'usage: write_programme(XML::Writer, programme)' if @_ != 2;
     my ($w, $p) = @_;
+#    t('write_programme(' . d($w) . ', ' . d($p) . ') ENTRY');
     
     my ($channel, $start, $title, $sub_title, $desc, $credits, $category)
       = @$p{qw(channel start title sub_title desc credits category)};
-    die if not defined $start or not defined $channel;
+    die if (not defined $start) or ($start !~ /\S/);
+    die if (not defined $channel) or ($channel !~ /\S/);
     
     # The dates are converted to the appropriate timezone for output.
     die if defined $p->{end}; # end times are added by sort_listings now
@@ -769,27 +772,42 @@ sub special_4learning($) {
     die if not defined $day;
 #    t("day is $day");
 
+    # Can't use istime() in this case - it's too liberal.
+    sub is_4learning_time($) {
+	die 'usage: is_4learning_time(suspected time string)'
+	  if @_ != 1;
+	local $_ = shift;
+	/^\d\d?\.\d\d$/;
+    }
+
     while (@words) {
 	my $time = shift @words;
-	if (istime($time)) {
+	if (is_4learning_time($time)) {
 	    if ($time =~ /^\d\.\d\d$/) {
 		$time = "0$time"; # 4-digit, 24-hour
 	    }
 	    $time =~ tr/./:/;
 #	    t("time of bit is $time");
+
+	    my (@title_words, @desc_words);
 	    my $start = Date_SetTime($day, $time);
-	    die if not defined $start;
+	    if (not defined $start or $start !~ /\S/) {
+		warn "skipping bogus 4learning time string $time";
+		# Add it to the desc, so it doesn't get lost
+		push @desc_words, $time;
+		next;
+	    }
+		
 #	    t("complete time and date is $start");
 	    
 	    my $curr_prog;
 	    $curr_prog->{start} = $start;
 	    $curr_prog->{channel} = $p->{channel};
-	    my (@title_words, @desc_words);
 	    my $done_title = 0;
 	    while (@words) {
 		my $word = shift @words;
 
-		if (istime($word)) {
+		if (is_4learning_time($word)) {
 		    # Finished this bit of 4learning.
 		    unshift @words, $word;
 		    last;
@@ -838,6 +856,10 @@ sub special_4learning($) {
 	}
 	else {
 	    warn "expected time in 4learning description, got $time";
+	    # Add it to the previous programme, so it doesn't get lost
+	    if (@r) {
+		$r[$#r]->{desc} .= " $time";
+	    }
 	}
     }
 
