@@ -1391,7 +1391,7 @@ sub readMoviesOrGenres($$$$)
     }
     my $fh = openMaybeGunzip($file) || return(-2);
     while(<$fh>) {
-	if ( m/^$header/o ) {
+	if ( m/^$header/ ) {
 	    if ( !($_=<$fh>) || !m/^===========/o ) {
 		$self->error("missing ======= after $header at line $.");
 		return(-1);
