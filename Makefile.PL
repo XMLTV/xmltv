@@ -52,10 +52,10 @@ my %pm
 # Modules required to install.
 my %prereqs
   = (
-     LWP => 0,
-     XML::Twig => 0,
-     Date::Manip => 5.4,
-     XML::Writer => 0,
+     'LWP' => 0,
+     'XML::Twig' => 0,
+     'Date::Manip' => 5.4,
+     'XML::Writer' => 0,
     );
 
 # 'Recommended but not required'.  It isn't currently handled to have
@@ -63,12 +63,12 @@ my %prereqs
 #
 my %recommended
   = (
-     Lingua::EN::Numbers::Ordinate => 0,
-     Lingua::Preferred => 0,
-     Memoize => 0,
-     Term::ProgressBar => 0,
-     Compress::Zlib => 0,
-     Unicode::String => 0,
+     'Lingua::EN::Numbers::Ordinate' => 0,
+     'Lingua::Preferred' => 0,
+     'Memoize' => 0,
+     'Term::ProgressBar' => 0,
+     'Compress::Zlib' => 0,
+     'Unicode::String' => 0,
     );
 
 # And Log::TraceMessages is 'suggested' but we don't warn about that.
@@ -91,9 +91,9 @@ unexpected extra episodes or schedule changes.',
 		    choose/tv_check/tv_check_doc.html
 		    choose/tv_check/tv_check_doc.jpg
 		   ) ],
-       prereqs => { Tk => 0,
-		    Tk::TableMatrix => 0,
-		    XML::Simple => 0,
+       prereqs => { 'Tk' => 0,
+		    'Tk::TableMatrix' => 0,
+		    'XML::Simple' => 0,
 		  } },
 
      { name => 'tv_pick_cgi',
@@ -110,7 +110,7 @@ are present.",
        exes => [],
        pm => {},
        docs => [],
-       prereqs => { CGI => 0, CGI::Carp => 0 } },
+       prereqs => { 'CGI' => 0, 'CGI::Carp' => 0 } },
 
      { name => 'tv_grab_na',
        blurb => "Tv_grab_na is the listings grabber for North America.",
@@ -118,7 +118,7 @@ are present.",
        pm => { 'grab/na/ZapListings.pm' =>
 	       '$(INST_LIBDIR)/XMLTV/ZapListings.pm' },
        docs => [],
-       prereqs => { HTML::Parser => 0 } },
+       prereqs => { 'HTML::Parser' => 0 } },
     );
 
 foreach my $info (@opt_components) {
