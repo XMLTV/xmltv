@@ -1813,7 +1813,7 @@ sub dbinfoSave($)
 {
     my $self=shift;
     open(INFO, "> $self->{moviedbInfo}") || return(1);
-    for (keys %{$self->{dbinfo}}) {
+    for (sort keys %{$self->{dbinfo}}) {
 	print INFO "".$_.":".$self->{dbinfo}->{$_}."\n";
     }
     close(INFO);
@@ -1828,7 +1828,7 @@ sub invokeStage($$)
     my $startTime=time();
     if ( $stage == 1 ) {
 	$self->status("parsing Movies list for stage $stage..");
-	my $countEstimate=370000;
+	my $countEstimate=385000;
 	my $num=$self->readMoviesOrGenres("Movies", $countEstimate, "$self->{imdbListFiles}->{movies}");
 	if ( $num < 0 ) {
 	    if ( $num == -2 ) {
@@ -1879,7 +1879,7 @@ sub invokeStage($$)
     elsif ( $stage == 2 ) {
 	$self->status("parsing Directors list for stage $stage..");
 
-	my $countEstimate=75500;
+	my $countEstimate=81000;
 	my $num=$self->readCastOrDirectors("Directors", $countEstimate, "$self->{imdbListFiles}->{directors}");
 	if ( $num < 0 ) {
 	    if ( $num == -2 ) {
@@ -1946,7 +1946,7 @@ sub invokeStage($$)
 	$self->status("parsing Actors list for stage $stage..");
 
 	#print "re-reading movies into memory for reverse lookup..\n";
-	my $countEstimate=460000;
+	my $countEstimate=490000;
 	my $num=$self->readCastOrDirectors("Actors", $countEstimate, "$self->{imdbListFiles}->{actors}");
 	if ( $num < 0 ) {
 	    if ( $num == -2 ) {
@@ -1997,7 +1997,7 @@ sub invokeStage($$)
     elsif ( $stage == 4 ) {
 	$self->status("parsing Actresses list for stage $stage..");
 
-	my $countEstimate=280000;
+	my $countEstimate=295000;
 	my $num=$self->readCastOrDirectors("Actresses", $countEstimate, "$self->{imdbListFiles}->{actresses}");
 	if ( $num < 0 ) {
 	    if ( $num == -2 ) {
@@ -2047,7 +2047,7 @@ sub invokeStage($$)
     }
     elsif ( $stage == 5 ) {
 	$self->status("parsing Genres list for stage $stage..");
-	my $countEstimate=250000;
+	my $countEstimate=255000;
 	my $num=$self->readMoviesOrGenres("Genres", $countEstimate, "$self->{imdbListFiles}->{genres}");
 	if ( $num < 0 ) {
 	    if ( $num == -2 ) {
@@ -2097,7 +2097,7 @@ sub invokeStage($$)
     }
     elsif ( $stage == 6 ) {
 	$self->status("parsing Ratings list for stage $stage..");
-	my $countEstimate=76000;
+	my $countEstimate=80000;
 	my $num=$self->readRatings($countEstimate, "$self->{imdbListFiles}->{ratings}");
 	if ( $num < 0 ) {
 	    if ( $num == -2 ) {
