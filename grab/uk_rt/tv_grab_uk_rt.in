@@ -78,7 +78,7 @@ but that involves even more page fetches so it is disabled at present.
 use strict;
 use IO::Socket;
 use LWP::Simple;
-use Date::Manip;
+use Date::Manip; Date_Init('TZ=UTC');
 use Getopt::Long;
 use XMLTV;
 use XMLTV::Memoize;
@@ -108,6 +108,7 @@ sub get_url( $ );
 sub get_programmes( $$$$$ );
 sub get_programme_details( $$$$$ );
 sub do_cast( $$ );
+sub rt_date( $$$ );
 sub get_channels();
 sub get_categories();
 sub get_available_dates();
@@ -615,6 +616,14 @@ sub get_programme_details( $$$$$ ) {
 	$sub_title = shift @bits;
     }
 
+    # The title might give us a hint about the timezone, or we might
+    # have to guess.
+    #
+    my $tz;
+    if ($title =~ s/^\((UTC|GMT|BST)\)\s*//) {
+	$tz = $1;
+    }
+
     $p{title} = [ [ $title, $LANG ] ];
 
     my ($channel_name, $date, $times, $cert, $sub_title_1, $desc,
@@ -665,28 +674,39 @@ sub get_programme_details( $$$$$ ) {
 	warn "channel name '$channel_name' for programme doesn't match $dn";
     }
 
-    my ($start, $stop);
+    my ($start, $start_tz);
+    my ($stop, $stop_tz);
     if ($times =~ /^(.*) to (.*)$/) {
-	$start = parse_uk_date("$date $1");
-	(warn("cannot parse date $date with start time $1"), return undef)
-	  if not defined $start;
-	$stop = parse_uk_date("$date $2");
-	(warn("cannot parse date $date with stop time $2"), return undef)
-	  if not defined $stop;
+	my $pair;
+	t "start time $1, calling rt_date()";
+	if (not defined ($pair = rt_date($date, $1, $tz))) {
+	    warn "cannot parse date $date with start time $1";
+	    return undef;
+	}
+	($start, $start_tz) = @$pair;
+	t "got date $start with tz $start_tz";
+
+	t "stop time $2, calling rt_date()";
+	if (not defined ($pair = rt_date($date, $2, $tz))) {
+	    warn "cannot parse date $date with start time $1";
+	    return undef;
+	}
+	($stop, $stop_tz) = @$pair;
+	t "got date $stop with tz $stop_tz";
     }
     else {
 	warn "bad Time value $times";
 	return undef;
     }
-    # Some programmes have thir stop time on the next day
+    # Some programmes have thir stop time on the next day.  (This test
+    # may break when the timezones change.)
+    #
     if (Date_Cmp($start, $stop) > 0) {
 	$stop = DateCalc($stop, '+ 1 day');
 	die if not defined $stop;
     }
-
-    # %Z for consistency with Ananova
-    $p{start} = UnixDate($start, '%q %Z');
-    $p{stop} = UnixDate($stop, '%q %Z');
+    $p{start} = UnixDate($start, "%q $start_tz");
+    $p{stop} = UnixDate($stop, "%q $stop_tz");
 
     if (defined $cert) {
 	warn "already seen certificate" if defined $p{rating};
@@ -1014,6 +1034,44 @@ sub do_link( $$ ) {
     }
     t 'finished doing link, remaining bits: ' . d \@bits;
     # And what if there was more than one related site?
+}
+
+# Parse a date from the RT site.  This involves guessing the timezone,
+# unless we already know it.
+#
+# Parameters:
+#   base day (string)
+#   time (hh:mm)
+#   timezone, or undef
+#
+# Returns ref to list of:
+#   Date::Manip object
+#   timezone of date (string)
+#
+# or returns undef if date parsing failed.
+#
+sub rt_date( $$$ ) {
+    my ($date, $time, $tz) = @_;
+    t 'rt_date() ENTRY';
+    t '$date=' . d $date;
+    t '$time=' . d $time;
+    t '$tz=' . d $tz;
+
+    my $parsed;
+    if (not defined $tz) {
+	t "time $time, must guess tz";
+	$parsed = parse_uk_date("$date $time");
+	t 'parse_uk_date() returned: ' . d $parsed;
+    }
+    else {
+	t "time $time, known timezone $tz";
+	$parsed = ParseDate("$date $time $tz");
+	t 'ParseDate() returned: ' . d $parsed;
+    }
+    return undef if not defined $parsed;
+    my $r = date_to_uk($parsed);
+    t 'returning result of date_to_uk(), ' . d $r;
+    return $r;
 }
 
 # Function which will locate all the available channels and return a hash
