@@ -92,6 +92,28 @@ BEGIN {
     $have_bar = not $@;
 }
 
+# If 5.6, then Tie::RefHash::Nestable is available.  Otherwise roll
+# our own.
+#
+package Tie::RefHash::MyNestable;
+use vars '@ISA';
+@ISA = qw(Tie::RefHash);
+sub STORE {
+    my($s, $k, $v) = @_;
+    if (ref($v) eq 'HASH' and not tied %$v) {
+	my @elems = %$v;
+	tie %$v, ref($s), @elems;
+    }
+    $s->SUPER::STORE($k, $v);
+}
+package main;
+BEGIN {
+    if (not @Tie::RefHash::Nestable::ISA) {
+	# Apparently this is the way to copy the whole namespace.
+	*Tie::RefHash::Nestable:: = *Tie::RefHash::MyNestable::;
+    }
+}
+
 use XMLTV;
 # We modify the XMLTV module's tables to add a <distribution> element
 # to <channel>s.  We assume each channel has exactly one distribution
@@ -105,7 +127,6 @@ my @new_channel_handlers
 
 use XMLTV::TZ qw(gettz);
 use XMLTV::UK_TZ;
-use XMLTV::Ananova_Channel;
 use XMLTV::Memoize;
 use XMLTV::Ask;
 use XMLTV::Usage <<END
@@ -127,6 +148,12 @@ sub get_pages( $$ );
 sub configure();
 sub grab( @ );
 sub fix_ananova_xml( $ );
+
+# Global channel data.
+use vars '@ch_all';
+use vars '%ch_by_a'; # index by Ananova id, to 'set' of objects
+tie %ch_by_a, 'Tie::RefHash::Nestable';
+use vars '%ch_by_x'; # index by XMLTV id
 
 # Check options.  First do the undocumented --cache option (to cache
 # get(), which retrieves web pages), then the normal ones.
@@ -277,8 +304,8 @@ my %region_display = reverse %$regions;
 t 'regions: ' . d $regions;
 foreach my $r (keys %$regions) {
     t "region $r:";
-    foreach (grep { $_->is_region($r) } @XMLTV::Ananova_Channel::all) {
-	t "...contains channel " . $_->stringify();
+    foreach (grep { $_->{regions}->{$r} } @ch_all) {
+	t "...contains channel $_->{xmltv_id}";
     }
 }
 
@@ -377,8 +404,8 @@ END
 	}
     }
 
-    my @radio_chs = grep { my $t = $_->get_type(); defined $t and $t eq 'radio' }
-      @XMLTV::Ananova_Channel::all;
+    my @radio_chs = grep { my $t = $_->{type}; defined $t and $t eq 'radio' }
+      @ch_all;
 
     if (@radio_chs == 0) {
 	print "Hmm, there don't seem to be any radio channels available.\n";
@@ -407,17 +434,17 @@ END
 	$in =~ s/^\s+//; $in =~ s/\s+$//;
 	last if $in eq '.';
 	my @poss;
-	foreach (@XMLTV::Ananova_Channel::all) {
-	    push @poss, $_ if $_->get_a_display_name() =~ /\Q$in\E/i;
+	foreach (@ch_all) {
+	    push @poss, $_ if $_->{main_display_name} =~ /\Q$in\E/i;
 	}
 	if (@poss == 0) {
 	    print "No channel matching that.\n";
 	}
 	elsif (@poss == 1) {
 	    my $ch = $poss[0];
-	    my $dn = $ch->get_a_display_name();
+	    my $dn = $ch->{main_display_name};
 	    if (askBooleanQuestion("Add channel $dn?", 1)) {
-		my $xmltv_id = $ch->get_xmltv_id();
+		my $xmltv_id = $ch->{xmltv_id};
 		unless ($chose_ch{$xmltv_id}++) {
 		    print CONF "channel $xmltv_id\t# $dn\n";
 		}
@@ -426,7 +453,7 @@ END
 	elsif (1 <= @poss and @poss < 25) {
 	    my %dn_to_ch;
 	    foreach (@poss) {
-		my $dn = $_->get_a_display_name();
+		my $dn = $_->{main_display_name};
 		warn "more than one channel called $dn"
 		  if exists $dn_to_ch{$dn};
 		$dn_to_ch{$dn} = $_;
@@ -434,11 +461,11 @@ END
 	    my $none_option = 'None of the above are what I wanted';
 	    die 'silly channel name' if exists $dn_to_ch{$none_option};
 	    my $r = askQuestion('Which channel to add?',
-				$poss[0]->get_a_display_name(),
+				$poss[0]->{main_display_name},
 				(sort keys %dn_to_ch), $none_option);
 	    next if $r eq $none_option;
 	    my $ch = $dn_to_ch{$r}; die if not defined $ch;
-	    my $xmltv_id = $ch->get_xmltv_id();
+	    my $xmltv_id = $ch->{xmltv_id};
 	    unless ($chose_ch{$xmltv_id}++) {
 		print CONF "channel $xmltv_id\n";
 	    }
@@ -486,7 +513,7 @@ sub grab( @ ) {
     my %wanted; tie %wanted, 'Tie::RefHash';
     open(CONF, $CONFIG_FILE)
       or die "cannot read $CONFIG_FILE: $!\n";
-    my @all_chs = @XMLTV::Ananova_Channel::all;
+    my @all_chs = @ch_all;
     while (<CONF>) {
 	s/\#.*//; s/^\s+//; s/\s+$//;
 	next if not length;
@@ -499,9 +526,8 @@ sub grab( @ ) {
 	elsif (/^type\s+(radio|satellite)$/) {
 	    my $type = $1;
 	    foreach (@all_chs) {
-		my $got_type = $_->get_type();
+		my $got_type = $_->{type};
 		if (not defined $got_type) {
-#		    warn 'channel with no type, not getting: ' . $_->stringify();
 		    next;
 		}
 		$wanted{$_} = 1 if $got_type eq $type;
@@ -521,8 +547,8 @@ sub grab( @ ) {
 
 	    t "want region $region, marking channels";
 	    foreach (@all_chs) {
-		if ($_->is_region($region)) {
-		    t 'marking channel ' . $_->stringify();
+		if ($_->{regions}->{$region}) {
+		    t "marking channel $_->{xmltv_id}";
 		    $wanted{$_} = 1;
 		}
 	    }
@@ -531,7 +557,7 @@ sub grab( @ ) {
 	# only by --configure.  So far.
 	elsif (/^channel\s+(.+)/) {
 	    my $xmltv_id = $1;
-	    my $ch = XMLTV::Ananova_Channel->find_by_xmltv_id($xmltv_id);
+	    my $ch = $ch_by_x{$xmltv_id};
 	    if (not defined $ch) {
 		warn "$CONFIG_FILE:$.: no channel with XMLTV id $xmltv_id, skipping\n";
 		next;
@@ -552,23 +578,23 @@ sub grab( @ ) {
     }
     t '\%in_some_pkg=' . d \%in_some_pkg;
     CH: foreach (@all_chs) {
-	my $xid = $_->get_xmltv_id();
+	my $xid = $_->{xmltv_id};
 	next if $in_some_pkg{$xid};
 
 	# It's not in any channel package, but is it in a region?
 	foreach my $rid (keys %$regions) {
-	    next CH if $_->is_region($rid);
+	    next CH if $_->{regions}->{$rid};
 	}
 
 	# For now, we won't warn about radio channels.  FIXME we
 	# should eventually handle these like TV ones, but maybe
 	# shoving localradio off into their own bit.
 	#
-	my $type = $_->get_type();
+	my $type = $_->{type};
 	next if defined $type and $type eq 'radio';
 
-	my $aid = $_->get_first_ananova_id();
-	my $dn = $_->get_a_display_name();
+	my $aid = $_->{first_ananova_id};
+	my $dn = $_->{main_display_name};
 	warn "no channel package or region includes $dn ($xid, $aid)\n";
     }
 
@@ -582,7 +608,7 @@ sub grab( @ ) {
     my @to_get;
     if (keys %wanted) {
 	my @chs = sort { $a <=> $b }
-	  map { $_->get_first_ananova_id() }
+	  map { $_->{first_ananova_id} }
 	    keys %wanted;
 	die if not @chs;
 	unless ($opt_quiet) {
@@ -665,11 +691,14 @@ sub grab( @ ) {
 	my $ch = $r->[2];
 	foreach (sort keys %$ch) {
 	    die if not defined;
-	    my $xid = XMLTV::Ananova_Channel->ananova_id_to_xmltv_id($_);
-	    if (not defined $xid) {
-		# Shouldn't happen as we read the allchannels page before.
-		warn "in channels, cannot convert Ananova id $_->{channel} to XMLTV id";
-		next;
+
+	    my @xids = map { $_->{xmltv_id} }
+	      keys %{$ch_by_a{$_}};
+	    die if not @xids;
+	    my $xid = $xids[0];
+	    foreach my $other_xid (@xids[1 .. $#xids]) {
+		die "different XMLTV ids for Ananova id $_"
+		  if $other_xid ne $xid;
 	    }
 	    next if $written_xid{$xid}++;
 
@@ -677,7 +706,7 @@ sub grab( @ ) {
 	    $towrite->{id} = $xid;
 
 	    # Add extra display names.
-	    my $ch_obj = XMLTV::Ananova_Channel->find_by_xmltv_id($xid);
+	    my $ch_obj = $ch_by_x{$xid};
 	    if (not defined $ch_obj) {
 		# Shouldn't happen.
 		warn "no object for XMLTV id $_";
@@ -687,20 +716,14 @@ sub grab( @ ) {
 		# with the list from the object.  Urgh, this is horrible.
 		#
 		my @new = ();
-		foreach ($ch_obj->get_display_names()) {
-		    if (not defined) {
-			warn "got undef display name from get_display_names()";
-		    }
-		    elsif (not tr/0-9//c) {
-			# Only numbers, this name is language independent.
-			push @new, [ $_ ];
-		    }
-		    else {
-			# Assume the channel_ids file is in English.
-			push @new, [ $_, 'en' ];
-		    }
+		my @dns = $ch_obj->{main_display_name};
+		if (defined $ch_obj->{extra_display_names}) {
+		    push @dns, @{$ch_obj->{extra_display_names}};
 		}
-		$towrite->{'display-name'} = \@new;
+		@dns = grep { defined } @dns;
+		# Assume English, unless all digits.
+		$towrite->{'display-name'}
+		  = [ map { tr/0-9//c ? [ $_, 'en' ] : [ $_ ] } @dns ];
 	    }
 
 	    $w->write_channel($towrite);
@@ -709,13 +732,15 @@ sub grab( @ ) {
 	# Convert channel ids in programmes.
 	my $prog_list = $r->[3];
 	foreach (@$prog_list) {
-	    my $xid = XMLTV::Ananova_Channel->ananova_id_to_xmltv_id($_->{channel});
-	    if (not defined $xid) {
-		warn "in programme, cannot convert Ananova id $_->{channel} to XMLTV id";
+	    my @xids = map { $_->{xmltv_id} }
+	      keys %{$ch_by_a{$_->{channel}}};
+	    die if not @xids;
+	    my $xid = $xids[0];
+	    foreach (@xids[1 .. $#xids]) {
+		die "different XMLTV ids for Ananova id $_->{channel}"
+		  if $_ ne $xid;
 	    }
-	    else {
-		$_->{channel} = $xid;
-	    }
+	    $_->{channel} = $xid;
 	}
 
 	# Get rid of Ananova's bizarre system for follow-on
@@ -748,47 +773,7 @@ sub grab( @ ) {
 	update $bar if $have_bar;
     }
 
-    $w->end();
-}
-
-
-# Add extra display names to channels, based on the display names
-# stored in Ananova_Channel objects.
-#
-# Parameter: reference to list of channels, with proper XMLTV ids.
-#
-# Modifies the data passed in.
-#
-sub add_display_names( $ ) {
-    my $ch = shift;
-  CH: foreach (keys %$ch) {
-	my $ch_obj = XMLTV::Ananova_Channel->find_by_xmltv_id($_);
-	if (not defined $ch_obj) {
-	    # Shouldn't happen.
-	    warn "no object for XMLTV id $_";
-	}
-	else {
-	    # Discard the existing display name data and replace it
-	    # with the list from the object.  Urgh, this is horrible.
-	    #
-	    my @new = ();
-	    foreach ($ch_obj->get_display_names()) {
-		if (not defined) {
-		    warn "got undef display name from get_display_names()";
-		    next CH; # leave this one alone
-		}
-		if (not tr/0-9//c) {
-		    # Only numbers, this name is language independent.
-		    push @new, [ $_ ];
-		}
-		else {
-		    # Assume the channel_ids file is in English.
-		    push @new, [ $_, 'en' ];
-		}
-	    }
-	    $ch->{$_}->{'display-name'} = \@new;
-	}
-    }
+    $w->end() if defined $w;
 }
 
 
@@ -890,7 +875,7 @@ sub do_region( $$$$ ) {
 	}
 	t 'calling XMLTV::node_to_channel()';
 	my $ch_data = XMLTV::node_to_channel($_);
-	my @chs = XMLTV::Ananova_Channel->find_by_ananova_id($ch_data->{id});
+	my @chs = keys %{$ch_by_a{$ch_data->{id}}};
 	if (not @chs) {
 	    warn "$url: channel $ch_data->{id} mentioned in regions but not channels";
 	    next;
@@ -899,7 +884,7 @@ sub do_region( $$$$ ) {
 	# Tell each channel with this Ananova id that it belongs to
 	# this region.
 	#
-	$_->add_region($reg_id) foreach @chs;
+	++ $_->{regions}->{$reg_id} foreach @chs;
     }
 }
 
@@ -973,12 +958,18 @@ sub read_channels_page( $$ ) {
 	die if ref $type;
 	die if $id ne $aid;
 	t "got line with type $type, aid $aid, dn $display";
-	my @chs = XMLTV::Ananova_Channel->find_by_ananova_id($aid);
+	my @chs = keys %{$ch_by_a{$aid}};
 	t 'maybe looked up by aid: ' . d \@chs;
 	if (not @chs) {
 	    t 'not found, create new channel object';
-	    my $ch = new XMLTV::Ananova_Channel();
-	    $ch->add_ananova_id($aid);
+	    my $ch = {};
+	    push @ch_all, $ch;
+	    ++ $ch->{ananova_ids}->{$aid};
+	    $ch->{first_ananova_id} = $aid;
+	    ++ $ch_by_a{$aid}->{$ch};
+	    if ($aid =~ /_(\d+)$/) {
+		++ $ch->{regions}->{$1};
+	    }
 	    @chs = ($ch);
 	}
 	
@@ -989,12 +980,15 @@ sub read_channels_page( $$ ) {
 	    # (Scottish viewers)'.  Only the first of the two should
 	    # have a chance to set the display name.
 	    #
-	    my $first_aid = $ch->get_first_ananova_id();
+	    my $first_aid = $ch->{first_ananova_id};
 	    t "first Ananova id: $first_aid";
 	    if ($first_aid eq $aid) {
 		t 'this Ananova channel is the first for this channel';
-		$ch->set_main_display_name($display);
-		t "set display name to $display";
+		for ($ch->{variant}) {
+		    $display .= " ($_)" if defined;
+		}
+		$ch->{main_display_name} = $display;
+		t "set main display name to $display";
 	    }
 	    # Additional display names are added from the channel_ids file
 	    # but *not* from Ananova's extra names.
@@ -1007,35 +1001,32 @@ sub read_channels_page( $$ ) {
 	    # only happen if it's specified in the channel_ids file -
 	    # which also defines the XMLTV ids.
 	    #
-	    if (not defined $ch->get_xmltv_id()) {
+	    if (not defined $ch->{xmltv_id}) {
 #		warn "no XMLTV id in channel_ids file for Ananova id $aid\n";
-		$ch->set_xmltv_id("$aid.tv-listings.ananova.com");
+		my $id = "$aid.tv-listings.ananova.com";
+		die if defined $ch->{xmltv_id};
+		$ch->{xmltv_id} = $id;
+		die "channel $id already exists"
+		  if defined $ch_by_x{$id};
+		$ch_by_x{$id} = $ch;
 	    }
 
-	    if ($type eq 'terrestrial') {
-		$ch->set_type('terrestrial');
-	    }
-	    elsif ($type eq 'digital') {
-		# FIXME losing distinction between ITV Digital and Sky
-		$ch->set_type('satellite');
-	    }
-	    elsif ($type eq 'satellite') {
-		$ch->set_type('satellite');
-	    }
-	    elsif ($type eq 'localradio') {
-		# FIXME losing distinction between local and national radio
-		$ch->set_type('radio');
-	    }
-	    elsif ($type eq 'radio') {
-		$ch->set_type('radio');
-	    }
-	    elsif ($type eq 'unknown') {
-		$ch->set_type('duff');
-	    }
-	    else {
+	    my %map = (terrestrial => 'terrestrial',
+		       # FIXME losing distinction between ITV Digital and Sky
+		       digital => 'satellite',
+		       satellite => 'satellite',
+		       # FIXME losing distinction between local and national radio
+		       localradio => 'radio',
+		       radio => 'radio',
+		       unknown => 'duff',
+		      );
+
+	    my $t = $map{$type};
+	    if (not defined $t) {
 		warn "$url: unknown <distribution>: $type";
-		$ch->set_type('duff');
+		$t = 'duff';
 	    }
+	    $ch->{type} = $t;
 	}
     }
 }
@@ -1176,19 +1167,38 @@ sub init_channels() {
 	}
 
 	t "initializing channel with id $xmltv_id";
-	my $ch = new XMLTV::Ananova_Channel();
-	$ch->set_xmltv_id($xmltv_id);
+	my $ch = {};
+	push @ch_all, $ch;
+	$ch->{xmltv_id} = $xmltv_id;
+	die "channel $xmltv_id already exists"
+	  if defined $ch_by_x{$xmltv_id};
+	$ch_by_x{$xmltv_id} = $ch;
+
+	t 'setting Ananova ids: ' . d \@aids;
+	++ $ch->{ananova_ids}->{$_} foreach @aids;
+	$ch->{first_ananova_id} = $aids[0];
+	++ $ch_by_a{$_}->{$ch} foreach @aids;
 	foreach (@aids) {
-	    t "adding Ananova id $_";
-	    $ch->add_ananova_id($_);
+	    /_(\d+)$/ && ++ $ch->{regions}->{$1};
 	}
+
 	if (defined $variant) {
 	    t "setting variant $variant";
-	    $ch->set_variant($variant);
+	    die if defined $ch->{ananova_ids} and keys %{$ch->{ananova_ids}} > 1;
+	    $ch->{variant} = $variant;
 	}
 	t 'maybe adding extra display name: ' . d $extra_dn;
-	$ch->add_extra_display_names($extra_dn)
-	  if defined $extra_dn;
+	if (defined $extra_dn) {
+	    my $found = 0;
+	    foreach (@{$ch->{extra_display_names}}) {
+		if ($_ eq $extra_dn) {
+		    $found = 1;
+		    last;
+		}
+	    }
+	    # FIXME also check doesn't match main display name
+	    push @{$ch->{extra_display_names}}, $extra_dn unless $found;
+	}
     }
     close FH or warn "cannot close $CHANNEL_NAMES_FILE: $!";
 }
@@ -1213,7 +1223,7 @@ sub get_channel_pkgs() {
 	    push @{$pkgs{$pkg_name}}, $_;
 
 	    # Check the XMLTV id is actually known.
-	    my $ch = XMLTV::Ananova_Channel->find_by_xmltv_id($_);
+	    my $ch = $ch_by_x{$_};
 	    if (not defined $ch) {
 		warn "channel id $_ mentioned in package $pkg_name, but not known";
 	    }

@@ -60,7 +60,6 @@ my %pm
      'lib/Ask.pm'                 => '$(INST_LIBDIR)/XMLTV/Ask.pm',
      'lib/UK_TZ.pm'           => '$(INST_LIBDIR)/XMLTV/UK_TZ.pm',
      'grab/Memoize.pm'            => '$(INST_LIBDIR)/XMLTV/Memoize.pm',
-     'grab/uk/Ananova_Channel.pm' => '$(INST_LIBDIR)/XMLTV/Ananova_Channel.pm',
     );
 
 # Modules required to install.
