@@ -39,29 +39,29 @@ sub AUTOLOAD {
         use vars qw($AUTOLOAD);
         (my $method_name = $AUTOLOAD) =~ s/.*::(.*?)/$1/;
         (my $real_class_path = $real_class.".pm") =~ s/::/\//g;
-        
+
         require $real_class_path;
         import $real_class_path;
-        
-        $real_class->$method_name(@_);       
+
+        $real_class->$method_name(@_);
 }
 
 
 # Must be called before we use this module if we want to use a gui.
 sub init( $ ) {
         my $opt_gui = shift;
-        
-        # Ask the XMLTV::GUI module for the graphics type we will use  
+
+        # Ask the XMLTV::GUI module for the graphics type we will use
         my $gui_type = XMLTV::GUI::get_gui_type($opt_gui);
-        
-        if ($gui_type =~ /^term/) {        
+
+        if ($gui_type =~ /^term/) {
                 $real_class = 'XMLTV::Ask::Term';
         } elsif ($gui_type eq 'tk') {
                 $real_class = 'XMLTV::Ask::Tk';
         } else {
                 die "Unknown gui type: '$gui_type'.";
         }
-        
+
         # Initialise the ProgressBar module
         XMLTV::ProgressBar::init($opt_gui);
 }
