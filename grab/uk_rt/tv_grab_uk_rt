@@ -1,4 +1,4 @@
-#!/usr/bin/perl
+#!/usr/bin/perl -w
 
 use IO::Socket;
 use strict;
@@ -8,6 +8,20 @@ use XMLTV;
 use Date::Manip;
 use Getopt::Long;
 
+# Use Log::TraceMessages if installed.
+BEGIN {
+    eval { require Log::TraceMessages };
+    if ($@) {
+	*t = sub {};
+	*d = sub { '' };
+    }
+    else {
+	*t = \&Log::TraceMessages::t;
+	*d = \&Log::TraceMessages::d;
+	Log::TraceMessages::check_argv();
+    }
+}
+
 # GLOBAL CONSTANTS
 my $TIME_INTERVAL = 120;
 my $MAX_RETRYS = 3;
@@ -15,13 +29,63 @@ my $LANG = "en";
 my $host="www.radiotimes.beeb.com";
 my $domain = $host; $domain =~ s/^www\.//;
 
+# Whether to fetch categories (makes everything slower)
+my $GET_CATEGORIES = 0;
+
+my %ch_to_output =
+  (
+   '39' => 'animalplanet.discoveryeurope.com', # Animal Planet (Digital)
+   '92' => 'south-east.bbc1.bbc.co.uk', # BBC1 South East
+   '105' => 'south-east.bbc2.bbc.co.uk', # BBC2 South East
+   '45' => 'choice.bbc.co.uk',	# BBC Choice
+   '47' => 'knowledge.bbc.co.uk', # BBC Knowledge
+   '48' => 'news-24.bbc.co.uk', # BBC News 24
+   '49' => 'parliament.bbc.co.uk', # BBC Parliament
+   '123' => 'british.eurosport.com', # British Eurosport
+   '26' => 'carlton.com',	# Carlton
+   '127' => 'cinema.carlton.com', # Carlton Cinema
+   '132' => 'channel4.com',	# Channel 4
+   '134' => 'channel5.co.uk',	# Channel 5
+   '147' => 'discoveryeurope.com', # Discovery (Digital)
+   '158' => 'e4.channel4.com',	# E4
+   '160' => 'filmfour.channel4.com', # Film on Four
+   '177' => 'plus.granadatv.co.uk', # Granada Plus
+   '182' => 'thehistorychannel.co.uk', # History Channel (Digital)
+   '185' => 'itv2.itv.co.uk',	# ITV2
+   '213' => 'nationalgeographic.co.uk', # National Geographic (Digital)
+   '224' => 'paramountcomedy.com', # Paramount Comedy
+   '225' => 'performancetv.co.uk', # Performance
+   '248' => 'sky-one.sky.com',	# Sky One
+   '252' => '2.moviemax.sky.com', # Sky Moviemax 2
+   '253' => '3.moviemax.sky.com', # Sky Moviemax 3
+   '254' => '4.moviemax.sky.com', # Sky Moviemax 4
+   '255' => '5.moviemax.sky.com', # Sky Moviemax 5
+   '251' => 'moviemax.sky.com', # Sky Moviemax
+   '249' => 'cinema.sky.com',	# Sky Cinema (Digital)
+   '248' => 'ondigital.sky-one.sky.com', # Sky One (Ondigital)
+   '258' => '2.premier.sky.com', # Sky Premier 2
+   '259' => '3.premier.sky.com', # Sky Premier 3
+   '260' => '4.premier.sky.com', # Sky Premier 4
+   '257' => 'ondigital.premier.sky.com', # Sky Premier - Ondigital
+   '261' => 'widescreen.premier.sky.com', # Sky Premier - Widescreen
+   '264' => '2.sports.sky.com', # Sky Sports 2
+   '265' => '3.sports.sky.com', # Sky Sports 3
+   '250' => '2.cinema.sky.com', # Sky Cinema 2
+   '262' => '1.sports.sky.com', # Sky Sports 1 (ITV Digital)
+   '119' => 'biography-channel.biography.com', # Biography Channel
+   '40' => 'artsworld.com',	# Artsworld
+   '283' => 'studio.com',	# Studio
+   '271' => 'tcm.turner.com',	# TCM (Digital)
+   '292' => 'uk-drama.flextech.telewest.co.uk', # UK Drama
+   '288' => 'uk-gold.flextech.telewest.co.uk', # UK Gold
+   '290' => 'uk-horizons.flextech.telewest.co.uk', # UK Horizons
+   '272' => 'wcw.tcm.turner.com ' # TCM/WCW
+  );
+
 # get the channel options. Channels can be entered as a commar separated list
 #     eg 92,105
 # if no channels are specifed then listings for terestrial channels will be fetched
 # if 'ALL' is specified then all available channels will be fetched
-
-# this just specifies the channel ids which should be used
-my %chan_to_output = get_channels_to_output();
 
 # default channels are BBC1, BBC2, Carlton, Channel 4, Channel 5
 my @DEFAULT_CHANS = (92,105,26,132,134);
@@ -38,20 +102,20 @@ my @dates_to_get = ();
 GetOptions ("dates:s" => \@dates_specified, "channels:s" => \@channels_specified);
 @channels_specified = split(/,/,join(',',@channels_specified));
 foreach (@channels_specified) {
-        if (m/ALL/) {
-                # Get all available channels
-                foreach (keys %channels) {
-                        push (@channels_to_get, $_);
-                }
-        }
-	if (m/^[0-9]*$/) {
-		push (@channels_to_get, $_);
+    if (m/ALL/) {
+	# Get all available channels
+	foreach (keys %channels) {
+	    push (@channels_to_get, $_);
 	}
+    }
+    if (m/^[0-9]*$/) {
+	push (@channels_to_get, $_);
+    }
 }
 #push (@channels_to_get, @channels_specified);
 
 unless (@channels_specified) {
-        push (@channels_to_get, @DEFAULT_CHANS);
+    push (@channels_to_get, @DEFAULT_CHANS);
 }
 
 my $channels_to_get_string = "";
@@ -96,7 +160,6 @@ unless (@dates_specified) {
 }
 
 # set up the XML writer
-my $writer;
 my $writer = new XMLTV::Writer(encoding => 'ISO-8859-1');
 $writer->start({ 'source-info-url'     =>
           'http://http://www.radiotimes.co.uk/',
@@ -148,12 +211,12 @@ foreach my $date (@dates_to_get) {
 		# FIX ME we also need to check if there are more than 100 results and
 		# search over less channels
 		if (@new_programmes) {
-# FIXME grab categories optionally
-#			print STDERR "Finding the categories for $channels_to_get_string at $time_str:";
-#			%prog_to_cat =
-#			get_progs_in_cat($channels_to_get_string,$date,$time_str); 
-			%prog_to_cat = ();
-#			print STDERR "\n";
+		    if ($GET_CATEGORIES) {
+			print STDERR "Finding the categories for $channels_to_get_string at $time_str:";
+			%prog_to_cat =
+			get_progs_in_cat($channels_to_get_string,$date,$time_str); 
+			print STDERR "\n";
+		    }
 		}
 
 		#foreach my $chan (@channels_to_get) {
@@ -167,9 +230,16 @@ foreach my $date (@dates_to_get) {
 		foreach my $new_prog (@new_programmes) {
 			my $channelId = $new_prog->{chanID};
 			my $programmeId = $new_prog->{progID};
-			my $cat_ID = $prog_to_cat{"$channelId$programmeId"};
-			my $cat = $categories{$cat_ID};
-        		if ($cat) {push @{$new_prog->{category}}, [ lc $cat ];}
+			if ($GET_CATEGORIES) {
+			    my $cat_ID = $prog_to_cat{"$channelId$programmeId"};
+			    my $cat = $categories{$cat_ID};
+			    if (defined $cat) {
+				push @{$new_prog->{category}}, [ lc $cat ];
+			    }
+			    else {
+				warn "unknown category id $cat\n";
+			    }
+			}
 
 		}
 
@@ -269,12 +339,14 @@ sub get_programme_details {
 	my $programmeId = shift;
 
 	my %p;
-	$p{channel} = $chan_to_output{$channelId};
+	$p{channel} = chan_to_output($channelId);
 	$p{chanID} = $channelId;
 	$p{progID} = $programmeId;
-	my $cat_ID = $prog_to_cat{"$channelId$programmeId"};
-	#my $cat = $categories{$cat_ID};
-        #push @{$p{category}}, [ lc $cat ];
+	if ($GET_CATEGORIES) {
+	    my $cat_ID = $prog_to_cat{"$channelId$programmeId"};
+	    my $cat = $categories{$cat_ID};
+	    push @{$p{category}}, [ lc $cat ];
+	}
 
 	my $url = "http://$host/ListingsServlet?event=10&";
         $url .= "channelId=$channelId&";
@@ -337,27 +409,31 @@ sub get_programme_details {
 	my ($options,$subtitles,$widescreen,$repeat,$black_and_white,
 	    $certificate,$episode,$review,$director,$filmed_in,$cast);
 
-	if ($prog_details =~ m/(.*?)\|/) {$options = $1;}
-	if ($options eq "Review") {$options ='';}
-	if ($options eq "Episode") {$options ='';} 
-	if ($options eq "Certificate:") {$options ='';}
-
-	if ($options =~m/Subtitled/) {
+	if ($prog_details =~ m/(.*?)\|/) {
+	    $options = $1;
+	    if ($options eq "Review") {$options ='';}
+	    if ($options eq "Episode") {$options ='';} 
+	    if ($options eq "Certificate:") {$options ='';}
+	    
+	    if ($options =~m/Subtitled/) {
 		$subtitles = "yes";
 		$p{subtitles} = [ { type => 'teletext' } ];
-	}
-	if ($options =~m/Widescreen/) {
+	    }
+	    if ($options =~m/Widescreen/) {
 		$widescreen = "yes";
 		$p{widescreen} = "yes";
-	}
-	if ($options =~m/Repeat/) {
+	    }
+	    if ($options =~m/Repeat/) {
 		$repeat = "yes";
 		$p{'previously-shown'} = {}
-	}
-	if ($options =~m/Black and White/) {
+	    }
+	    if ($options =~m/Black and White/) {
 		$black_and_white = "yes";
 		$p{video}{present} = 1;
 	    	$p{video}{colour} = 0;
+	    }
+
+	    $prog_details =~ s/$options\|//;
 	}
 	
 	if ($prog_details =~ m/Certificate:\|\[(.*?)\]\|/) {
@@ -378,7 +454,6 @@ sub get_programme_details {
 	}
 
 	#chop of all the stuff we have parsed
-	if($options) {$prog_details =~ s/$options\|//;}
 	$prog_details =~ s/.*Certificate:\|(.*?)\|//;
 	$prog_details =~ s/.*Episode\|(.*?)\|//;
         $prog_details =~ s/.*Review\|(.*?)\|//;
@@ -417,18 +492,18 @@ sub get_programme_details {
 			$cast =~ s/\|\s/\|/g;
 			$cast =~ s/$/,actor/;
 		}
-	}
 
-	my @cast_list = split /\|/, $cast;
-	foreach (@cast_list) {
-		m/^([^,]*),([^,]*)$/;
-		my $name = $1;
-		my $role = $2;
-	
-		# FIXME The XMLTV doesnt seem to allow anything but actor or 
-		# director so we must just ignore role for now
-		push @{$p{credits}{actor}}, $name;
-	}
+		my @cast_list = split /\|/, $cast;
+		foreach (@cast_list) {
+		    m/^([^,]*),([^,]*)$/;
+		    my $name = $1;
+		    my $role = $2;
+		    
+		    # FIXME The XMLTV doesnt seem to allow anything but actor or 
+		    # director so we must just ignore role for now
+		    push @{$p{credits}{actor}}, $name;
+		}
+	    }
 
 	#print STDERR "Title: $title\n";
 	#print STDERR "Sub Title: $sub_title\n";
@@ -469,7 +544,10 @@ sub get_channels {
 		my $channelDesc = $1;
 		# print  STDERR "Found Channel: ChannelId: $channelId"; 
 		# print  STDERR " ChannelDes: $channelDesc\n";
-		my $chanID_to_output = $chan_to_output{$channelId};
+		my $chanID_to_output = chan_to_output($channelId);
+		die if not defined $chanID_to_output;
+		die if not defined $domain;
+		die if not defined $channelId;
 		$c{$chanID_to_output}
 		  = { 'display-name' => [ [ $channelDesc, $LANG ] ],
 		      'id' => "$channelId.$domain" };
@@ -562,56 +640,11 @@ sub get_progs_in_cat {
 	return %cats;
 }
 
-sub get_channels_to_output() {
-    my %ch_to_output =
-      (
-       '39' => 'animalplanet.discoveryeurope.com', # Animal Planet (Digital)
-       '92' => 'south-east.bbc1.bbc.co.uk', # BBC1 South East
-       '105' => 'south-east.bbc2.bbc.co.uk', # BBC2 South East
-       '45' => 'choice.bbc.co.uk', # BBC Choice
-       '47' => 'knowledge.bbc.co.uk', # BBC Knowledge
-       '48' => 'news-24.bbc.co.uk', # BBC News 24
-       '49' => 'parliament.bbc.co.uk', # BBC Parliament
-       '123' => 'british.eurosport.com', # British Eurosport
-       '26' => 'carlton.com', # Carlton
-       '127' => 'cinema.carlton.com', # Carlton Cinema
-       '132' => 'channel4.com', # Channel 4
-       '134' => 'channel5.co.uk', # Channel 5
-       '147' => 'discoveryeurope.com', # Discovery (Digital)
-       '158' => 'e4.channel4.com', # E4
-       '160' => 'filmfour.channel4.com', # Film on Four
-       '177' => 'plus.granadatv.co.uk', # Granada Plus
-       '182' => 'thehistorychannel.co.uk', # History Channel (Digital)
-       '185' => 'itv2.itv.co.uk', # ITV2
-       '213' => 'nationalgeographic.co.uk', # National Geographic (Digital)
-       '224' => 'paramountcomedy.com', # Paramount Comedy
-       '225' => 'performancetv.co.uk', # Performance
-       '248' => 'sky-one.sky.com', # Sky One
-       '252' => '2.moviemax.sky.com', # Sky Moviemax 2
-       '253' => '3.moviemax.sky.com', # Sky Moviemax 3
-       '254' => '4.moviemax.sky.com', # Sky Moviemax 4
-       '255' => '5.moviemax.sky.com', # Sky Moviemax 5
-       '251' => 'moviemax.sky.com', # Sky Moviemax
-       '249' => 'cinema.sky.com', # Sky Cinema (Digital)
-       '248' => 'ondigital.sky-one.sky.com', # Sky One (Ondigital)
-       '258' => '2.premier.sky.com', # Sky Premier 2
-       '259' => '3.premier.sky.com', # Sky Premier 3
-       '260' => '4.premier.sky.com', # Sky Premier 4
-       '257' => 'ondigital.premier.sky.com', # Sky Premier - Ondigital
-       '261' => 'widescreen.premier.sky.com', # Sky Premier - Widescreen
-       '264' => '2.sports.sky.com', # Sky Sports 2
-       '265' => '3.sports.sky.com', # Sky Sports 3
-       '250' => '2.cinema.sky.com', # Sky Cinema 2
-       '262' => '1.sports.sky.com', # Sky Sports 1 (ITV Digital)
-       '119' => 'biography-channel.biography.com', # Biography Channel
-       '40' => 'artsworld.com', # Artsworld
-       '283' => 'studio.com', # Studio
-       '271' => 'tcm.turner.com', # TCM (Digital)
-       '292' => 'uk-drama.flextech.telewest.co.uk', # UK Drama
-       '288' => 'uk-gold.flextech.telewest.co.uk', # UK Gold
-       '290' => 'uk-horizons.flextech.telewest.co.uk', # UK Horizons
-       '272' => 'wcw.tcm.turner.com ' # TCM/WCW
-	);
-	return %ch_to_output;
+sub chan_to_output() {
+    my $n = shift;
+    if (not defined $ch_to_output{$n}) {
+	$ch_to_output{$n} = "$n.radiotimes.beeb.com";
+    }
+    return $ch_to_output{$n};
 }
 
