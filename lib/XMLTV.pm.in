@@ -147,6 +147,9 @@ just warns and continues for most small errors).
 The first element of the listref returned will always be 'UTF-8',
 since XML parsing in Perl always returns results in UTF-8 encoding.
 
+Attributes and elements in the XML file whose names begin with 'x-'
+are skipped silently.  You can use these to include information which
+is not currently handled by the XMLTV format, or by this module.
 =cut
 sub parse( $ ) {
     my $str = shift;
@@ -228,6 +231,16 @@ extra arguments are passed on to XML::WriterE<39>s constructor, for example
 The encoding used for the output is given by the first element of the
 data.
 
+Normally, there will be a warning for any Perl data which is not
+understood and cannot be written as XMLTV, such as strange keys in
+hashes.  But as an exception, any hash key beginning with an
+underscore will be skipped over silently.  You can store 'internal use
+only' data this way.
+
+If a programme hash contains a key beginning with 'debug', this key
+and its value will be written out as a comment inside the <programme>
+element.  This lets you include small debugging messages in the XML
+output.
 =cut
 sub write_data( $;@ ) {
     my $data = shift;
@@ -243,7 +256,8 @@ sub write_data( $;@ ) {
 #
 # dom_attrs()
 #
-# Given a DOM node, return a hashref of its attributes.
+# Given a DOM node, return a hashref of its attributes.  Skips over
+# the 'x-whatever' attributes.
 #
 sub dom_attrs( $ ) {
     my $node = shift;
@@ -255,7 +269,7 @@ sub dom_attrs( $ ) {
 	die if not defined $node;
 	my $name = $node->getName();
 	warn "seen attribute $name twice" if exists $r{$name};
-	$r{$name} = $node->getValue();
+	$r{$name} = $node->getValue() unless $name =~ /^x-/;
     }
     return \%r;
 }
@@ -293,6 +307,7 @@ sub dom_text( $ ) {
 #
 # Return a list of all subelements of an XML::DOM node.  Whitespace is
 # ignored; anything else that isn't a subelement is warned about.
+# Skips over elements with name 'x-whatever'.
 #
 sub dom_subelements( $ ) {
     local $Log::TraceMessages::On = 0;
@@ -302,8 +317,9 @@ sub dom_subelements( $ ) {
 	my $type = $_->getNodeTypeName();
 	t "\$type=$type";
 	if ($type eq 'ELEMENT_NODE') {
-	    t 'element node, okay';
-	    push @r, $_;
+	    t 'element node';
+	    my $name = $_->getNodeName();
+	    push @r, $_ unless $name =~ /^x-/;
 	}
 	elsif ($type eq 'TEXT_NODE') {
 	    # We allow whitespace between elements.
@@ -1490,16 +1506,23 @@ sub write_programme {
     t "beginning 'programme' element";
     $self->startTag('programme', order_attrs(%attrs));
 
-    # Source (probably a URL or filename) is only for debugging and
-    # not actually part of the file format.
-    #
-    if (defined(my $val = delete $p{source})) {
-	$self->comment("source: $val");
-    }
-
     call_handlers_write($self, \@XMLTV::Programme_Handlers, \%p);
     foreach (keys %p) {
-	warn "unknown key '$_' in programme hash" unless /^_/;
+	if (/^_/) {
+	    # Don't write.
+	}
+	elsif (/^debug/) {
+	    my $val = delete $p{$_};
+	    if (defined $val) {
+		$self->comment("$_: $val");
+	    }
+	    else {
+		$self->comment($_);
+	    }
+	}
+	else {
+	    warn "unknown key '$_' in programme hash";
+	}
     }
     t "ending 'programme' element";
     $self->endTag('programme');
