@@ -12,8 +12,10 @@ tv_grab_na_dd --help
 
 tv_grab_na_dd [--config-file FILE] --configure
 
-tv_grab_na_dd [--config-file FILE] [--output FILE] [--days N]
-              [--offset N] [--quiet] [--lineup "LINEUP"] [--old-chan-id] [--low-mem]
+tv_grab_na_dd [--config-file FILE] [--password-file FILE]
+              [--output FILE] [--days N]
+              [--offset N] [--quiet] [--lineup "LINEUP"]
+              [--old-chan-id] [--low-mem]
               [--dd-data FILE] [--reprocess]
 
 =head1 DESCRIPTION
@@ -40,6 +42,9 @@ B<--configure> Prompt for username and write the configuration file.
 B<--config-file FILE> Set the name of the configuration file, the
 default is B<~/.xmltv/tv_grab_na_dd.conf>.  This is the file written by
 B<--configure> and read when grabbing.
+
+B<--password-file FILE> Read the DataDirect password from FILE.  If
+this option is not given, the grabber prompts for a password.
 
 B<--output FILE> write to FILE rather than standard output.
 
@@ -133,7 +138,8 @@ my $dd_stop;            # dd stop time
 
 my $opt_help;           # ask for help
 my $opt_configure;      # configure mode
-my $opt_config_file ;   # config_file_name
+my $opt_config_file;    # config_file_name
+my $opt_password_file;  # file containing password
 my $opt_output;         # output name
 my $opt_days       =10; # days to fetch
 my $opt_offset     =0;  # day to start
@@ -152,18 +158,19 @@ foreach (@ARGV) {
 }
 GetOptions(
 	       'help'          => \$opt_help,
-    	   'configure'     => \$opt_configure,
-    	   'config-file=s' => \$opt_config_file,
-    	   'output=s'      => \$opt_output,
-           'days=i'        => \$opt_days,
-    	   'offset=i'      => \$opt_offset,
-    	   'quiet'         => \$opt_quiet,
-    	   'lineup=s'      => \$opt_lineup,
-           'old-chan-id'   => \$opt_old_chan_id,
-           'low-mem'       => \$opt_low_mem,
-           'dd-data=s'     => \$opt_dd_data,
-           'reprocess'     => \$opt_reprocess,
-           'debug'         => \$DEBUG,
+    	   'configure'       => \$opt_configure,
+    	   'config-file=s'   => \$opt_config_file,
+           'password-file=s' => \$opt_password_file,
+    	   'output=s'        => \$opt_output,
+           'days=i'          => \$opt_days,
+    	   'offset=i'        => \$opt_offset,
+    	   'quiet'           => \$opt_quiet,
+    	   'lineup=s'        => \$opt_lineup,
+           'old-chan-id'     => \$opt_old_chan_id,
+           'low-mem'         => \$opt_low_mem,
+           'dd-data=s'       => \$opt_dd_data,
+           'reprocess'       => \$opt_reprocess,
+           'debug'           => \$DEBUG,
 	  )
   or usage(0);
 
@@ -208,25 +215,39 @@ Specify certificate code: TGYM-ZKOC-BUTV
 #
 foreach (XMLTV::Config_file::read_lines($config_file))
 {
-    chomp;
-    s/\#.+//;
-    next unless length($_);
+    # read_lines() takes care of comments and stuff.
+    next if not defined;
     $dd_user=$1 if /^username\: (.+)/;
     $dd_pass=$1 if /^password\: (.+)/;
 }
 die "did not see username in $config_file\n" if not defined $dd_user;
 
 if (defined $dd_pass) {
-    # Backwards compatibility - but it is really a bad idea to store
-    # the password in a configuration file, especially since we make
-    # no effort to stop it being world-readable.
-    #
-    warn "using password from $config_file\n";
+    die "remove password from $config_file\n" if defined $opt_password_file;
+    warn "using password from $config_file, please use --password-file instead\n";
 }
-elsif ($opt_reprocess) {
-    # Not going to download anything, no need for password.
+
+# --password-file option replaces storing password in config file.
+if (defined $opt_password_file) {
+    my @stat = stat $opt_password_file;
+    die "cannot stat $opt_password_file: $!\n" if not @stat;
+    my $mode = $stat[2];
+    unless ($^O =~ /^win/i) {
+	warn "warning: $opt_password_file is world-readable, please chmod it\n"
+	  if $mode & 004;
+    }
+    open FH, $opt_password_file
+      or die "cannot open $opt_password_file: $!";
+    { local $/; $dd_pass = <FH> };
+    for ($dd_pass) {
+	s/^\s+//; s/\s+$//;
+	die "no password found in $opt_password_file\n" if not length;
+	# But it might have embedded whitespace.
+    }
+    close FH or warn "cannot close $opt_password_file: $!\n";
 }
-else {
+
+if (not $opt_reprocess and not defined $dd_pass) {
     # Prompt for password.  TODO move this into XMLTV::Ask; add
     # --password-file command line option.
     #
