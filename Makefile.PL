@@ -220,6 +220,7 @@ my @opt_components
        to_clean => [ 'grab/uk_rt/tv_grab_uk_rt' ],
        deps => [ 'grab/uk_rt/tv_grab_uk_rt' => [ 'grab/uk_rt/tv_grab_uk_rt.in' ] ],
        grab_need_share => [ 'uk_rt' ],
+       prereqs => { 'HTML::Entities' => 1.27 } ,
      },
 
      { name => 'tv_grab_it',
