@@ -376,6 +376,7 @@ foreach (@summary_page_data) {
     foreach (@$data) {
 	my ($start, $stop, $title, $url) = @$_;
 	die if ref $url;
+	local $SIG{__WARN__} = sub { warn "$url: $_[0]" };
 	for ($detail_url_to_summary_url{$url}) {
 	    warn "more than one programme with same details page $url"
 	      if defined;
@@ -412,10 +413,51 @@ foreach (@summary_page_data) {
 	    t 'programme has start time, make new clump';
 	    if ($clump) {
 		die if not defined $clump->[0];
-		push @clumps, $clump;
+		my $cmp = Date_Cmp($clump->[0], $start);
+		if ($cmp == 0) {
+		    # Oddity in the web pages: this programme has the
+		    # same start time as a previous one.  (Until I
+		    # found this case, the clumping was only for cases
+		    # where a programme lacked a start time, I think.)
+		    # Anyway handle this by making it join the
+		    # existing clump.
+		    #
+		    t 'same start time as existing clump, join it';
+
+		    if (defined $stop) {
+			# Compare stop time of the current clump with
+			# this programme and extend the clump if
+			# necessary.
+			#
+			my $cmp = Date_Cmp($clump->[1], $stop);
+			if ($cmp < 0) {
+			    # Okay, later stop time, extend clump.
+			    $clump->[1] = $stop;
+			}
+			elsif ($cmp == 0) {
+			    # Okay.
+			}
+			elsif ($cmp > 0) {
+			    warn "programme (from $start to $stop) has same start as one before it, but earlier stop, ignoring stop time\n";
+			}
+			else { die }
+		    }
+
+		    push @{$clump->[2]}, $details;
+		}
+		else {
+		    # (Don't bother checking that $cmp < 0, it should
+		    # be, but often programmes appear out of order...)
+		    #
+		    push @clumps, $clump;
+		    $clump = [ $start, $stop, [ $details ] ];
+		    t 'started a new clump for new start time, now: ' . d $clump;
+		}
 	    }
-	    $clump = [ $start, $stop, [ $details ] ];
-	    t 'started a new clump, now: ' . d $clump;
+	    else {
+		t 'no existing clump, starting one for this programme';
+		$clump = [ $start, $stop, [ $details ] ];
+	    }
 	    die if not defined $clump->[0];
 	}
     }
@@ -607,7 +649,13 @@ sub process_details_page( $$$ ) {
     # from it and them delete it.
     #
     my $t = new HTML::TreeBuilder();
-    $t->parse(tidy(get_nice($url)));
+    eval {
+	$t->parse(tidy(get_nice($url)));
+    };
+    if ($@) {
+	warn "error getting/parsing $url: $@";
+	return;
+    }
     my @elems = $t->look_down(class => 'detailDeel');
     if (not @elems) {
 	warn "did not see any 'detailDeel' elements, skipping page";
