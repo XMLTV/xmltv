@@ -57,13 +57,10 @@ The data source does not include full channels information and the
 channels are identified by short names rather than the RFC2838 form
 recommended by the XMLTV DTD.
 
-I havenE<39>t even considered what happends whith DST issues.
-
 =cut
 
 use strict;
 use Getopt::Long;
-use Date::Manip;
 use LWP::Simple;
 use HTML::TableExtract; # parse html nicer than regular expressions.
 use Date::Manip;
@@ -72,7 +69,9 @@ use IO::File;
 use XMLTV;
 use XMLTV::Memoize;
 use XMLTV::Ask;
+use XMLTV::Europe_TZ qw(parse_eur_date date_to_eur);
 use XMLTV::Config_file;
+
 # Todo: perhaps we should internationalize messages and docs?
 use XMLTV::Usage <<END
 $0: get Swedish or Norwegian television listings in XMLTV format
@@ -173,8 +172,7 @@ if ($opt_configure and $opt_list_channels) {
     $opt_configure = 0;
 }
 
-# Assume the listings source uses CET (see BUGS above).
-Date_Init('TZ=CET');
+Date_Init('TZ=UTC');
 my $now = dc(pd('now'), "$opt_offset days");
 
 # File that stores which channels to download.
@@ -405,7 +403,8 @@ sub process_table( $$$$ ) {
     t "getting URL: $url";
     my $data=get($url);
     if (not defined $data) {
-	die "could not fetch $url, aborting\n";
+	warn "could not fetch $url, skipping this channel\n";
+	return;
     }
     t 'got data: ' . d $data;
     local $SIG{__WARN__} = sub {
@@ -463,25 +462,21 @@ sub process_table( $$$$ ) {
 	if ($first=~m/(\d\d:\d\d)/) {
 	    if (defined $program{title} && not defined $program{stop}) {
 		#We have a record without endtime. use next starttime as endtime
-		$program{stop} = pd("$today $1 CET");
+		$program{stop} = pd("$today $1");
 		my $cmp = Date_Cmp($program{start}, $program{stop});
 		if ($cmp > 0) {
 		    $today = nextday($today);
-		    $program{stop} = pd("$today $1 CET");
+		    $program{stop} = pd("$today $1");
 		}
 
 		if ($WRITE_ZERO_LENGTH or $cmp) {
-		    foreach (@program{'start', 'stop'}) {
-			# Convert to plain strings for writing.
-			$_ = UnixDate($_, '%q %z');
-		    }
 		    $w->write_programme(\%program);
 		}
 		%program = (channel => $ch_xmltv_id);
 	    }
 
-	    $program{start} = pd("$today $1 CET");
-
+	    $program{start} = pd("$today $1");
+	    
 	    if (defined $third) {
 		my %classes = (charteventname => sub {
 				   push @{$program{title}}, [ $_ ];
@@ -509,18 +504,14 @@ sub process_table( $$$$ ) {
 		}
 
 		if ($third=~m/<\/span>\s*\((\d\d:\d\d)\)\s*</s) {
-		    $program{stop}=pd("$today $1 CET");
+		    $program{stop}=pd("$today $1");
 		    my $cmp = Date_Cmp($program{start}, $program{stop});
 		    if ($cmp > 0) {
 			$today = nextday($today);
-			$program{stop} = pd("$today $1 CET");
+			$program{stop} = pd("$today $1");
 		    }
 
 		    if ($WRITE_ZERO_LENGTH or $cmp) {
-			foreach (@program{'start', 'stop'}) {
-			    # Convert to plain strings for writing.
-			    $_ = UnixDate($_, '%q %z');
-			}
 			$w->write_programme(\%program);
 		    }
 		    %program = (channel => $ch_xmltv_id);
@@ -608,7 +599,7 @@ sub tidy($) {
 # Bump a YYYYMMDD date by one.
 sub nextday( $ ) {
     my $d = shift; $d =~ /^\d{8}$/ or die;
-    my $p = pd($d);
+    my $p = ParseDate($d);
     my $n = dc($p, '+ 1 day');
     return UnixDate($n, '%Q');
 }
@@ -626,8 +617,9 @@ sub dc( $$ ) {
 sub pd( $ ) {
     for ($_[0]) {
 	return undef if not defined;
-	my $r = ParseDate($_);
-	die "bad date $_" if not defined $r or not length $r;
-	return $r;
+	my $d = date_to_eur(parse_eur_date($_[0],'CET'), 'CET');
+	die "bad date $_" if not defined $d->[0] or not length $d->[0];
+	$d->[0] =~ s/://go;
+	return $d->[0] . " " . $d->[1] ;
     }
 }
