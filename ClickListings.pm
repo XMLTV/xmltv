@@ -36,6 +36,11 @@ package ClickListings::ParseTable;
 #	  and then later notices these are on the unidentified
 #	  qualifiers lists (because later, they were ruled-out as
 #	  being properly identified)
+#
+# 2001-10-20  Jerry Veldhuis, jerry@matilda.com
+#	- hacked to grab from tvguide.ca instead of clicktv.com
+#	- program details etc are almost non-existant
+#	- who knows how well this worked :)
 
 #
 # This package is the core scraper for schedules
@@ -94,7 +99,9 @@ package ClickListings::ParseTable;
 use strict;
 use HTML::Entities qw(decode_entities);
 
-use vars qw(@ISA $infield $inrecord $intable $nextTableIsIt);
+use vars qw(@ISA $infield $inrecord $intable $nextTableIsIt $VersionID);
+
+$VersionID="ClickListings V0.2";
 
 @ISA = qw(HTML::Parser);
 
@@ -107,6 +114,8 @@ my $verify=0;
 sub reset($)
 {
     my $self=shift;
+    $self->{version}=$VersionID;
+
     delete($self->{Table});
     delete($self->{Row});
     delete($self->{Field});
@@ -136,20 +145,21 @@ sub start()
     # funny way of identifying the right table in the html, but this is
     # one of the only consistant ways.
     # - look for end of submit form and skip one table
-    if ( $tag eq "input" ) {
-	if ( $attr->{type} eq "submit" && $attr->{value}=~m/update grid/oi ) {
+    if ( $tag=~/^input$/io ) {
+	if ( $attr->{type}=~/^submit$/io && 
+	     $attr->{value}=~m/update grid/io ) {
 	    # not next one, but the following... nice variable name :)
 	    $nextTableIsIt=2;
 	}
     }
-    elsif ($tag eq 'table') {
+    elsif ( $tag=~/^table$/io ) {
 	$nextTableIsIt--;
 	if ( $nextTableIsIt == 0 ) {
 	    $self->{Table} = ();
 	    $intable++;
 	}
     }
-    elsif ( $tag eq 'tr' ) {
+    elsif ( $tag=~/^tr$/i ) {
 	if ( $intable ) {
 	    $self->{Row} = ();
 	    $inrecord++ ;
@@ -157,7 +167,7 @@ sub start()
     }
     else {
 	if ( $intable && $inrecord ) {
-	    if ( $tag eq 'td' || $tag eq 'th' ) {
+	    if ( $tag=~/^t[dh]$/io ) {
 		$infield++;
 	    }
 	    if ( $infield ) {
@@ -228,6 +238,10 @@ sub evaluateDetails
 	# check for (1997) being the year declaration
 	elsif ( $info=~s/^(\d+)$/$1/o ) {
 	    $result->{prog_year}=$info;
+	    next;
+	}
+	elsif ( $info=~m/^\s*\.\s*$/o ) {
+	    # ignore left over from sentence endings
 	    next;
 	}
 	# check for duration (ie '(6 hr) or (2 hr 30 min)')
@@ -524,7 +538,7 @@ sub evaluateDetails
 	    }
 	}
 
-	if (  defined(@unmatched) && scalar(@unmatched) ) {
+	if ( @unmatched ) {
 	    # if nothing inside the () matched any of the above,
 	    if ( $matches == 0 ) {
 		my $found=0;
@@ -585,6 +599,8 @@ sub endField($)
 {
     my ($self) = @_;
     my $result;
+    my $mycolumn=(defined($self->{Row}))?scalar(@{$self->{Row}}):0;
+    my $myrow=(defined($self->{Table}))?scalar(@{$self->{Table}}):0;
     
     #print STDERR "push field: \n";
 
@@ -603,15 +619,33 @@ sub endField($)
 	}
     }
 
+    #first colum is always for channels
+    if ( 0 && $mycolumn == 0 ) {
+	if ( $thgs[0]->{starttag}=~/^td$/io &&
+	     $thgs[1]->{starttag}=~/^font$/io &&
+	     defined($thgs[2]->{text}) &&
+	     $thgs[3]->{starttag}=~/^font$/io &&
+	     $thgs[4]->{text} eq '(' &&
+	     $thgs[5]->{starttag}=~/^a$/io &&
+	     defined($thgs[6]->{text}) ) {
+	}
+    }
+
     if ( $verify ) {
 	my $str="";
 
 	foreach my $e (@thgs) {
 	    my $understood=0;
 	    if ( defined($e->{starttag}) ) {
-		if ( $e->{starttag} eq "img" ) {
+		if ( $e->{starttag}=~/^img$/io ) {
 		    $understood++;
-		    if ( $e->{attr}->{src}=~m/_prev/oi ) {
+		    if ( $e->{attr}->{src}=~m;^../images/tvguide/arrow-left.gif;io ) {
+			# ignore
+		    }
+		    elsif ( $e->{attr}->{src}=~m;^../images/tvguide/arrow-right.gif;io ) {
+			# ignore
+		    }
+		    elsif ( $e->{attr}->{src}=~m/_prev/oi ) {
 			$str.="<cont-prev>";
 		    }
 		    elsif ( $e->{attr}->{src}=~m/_next/oi ) {
@@ -638,7 +672,10 @@ sub endField($)
 	    }
 	    if ( defined($e->{text}) ) {
 		$understood++;
-		if ( $e->{text}=~m/^\s+$/o ) {
+		if ( $e->{text}=~m/^\s*\(\*+\)$/o ) {
+		    $str.="<star rating>";
+		}
+		elsif ( $e->{text}=~m/^\s+$/o ) {
 		    $str.="space";
 		} 
 		else {
@@ -656,14 +693,22 @@ sub endField($)
 
     for (my $e=0 ; $e<scalar(@thgs) ; $e++) {
 	my $thg0=$thgs[$e];
-	if ( defined($thg0->{starttag}) && $thg0->{starttag} eq 'img' ) {
+	if ( defined($thg0->{starttag}) && $thg0->{starttag}=~/^img$/io ) {
 	    if ( defined($thg0->{attr}->{src}) ) {
-		if ( $thg0->{attr}->{src}=~m/_prev/oi ) {
+		if ( $thg0->{attr}->{src}=~m;^../images/tvguide/arrow-left.gif;io) {
+		    # ignore
+		    next;
+		}
+		elsif ( $thg0->{attr}->{src}=~m;^../images/tvguide/arrow-right.gif;io ) {
+		    # ignore
+		    next;
+		}
+		elsif ( $thg0->{attr}->{src}=~m/_prev/oi ) {
 		    #print STDERR "entry was cont from prior listing\n";
 		    $result->{contFromPreviousListing}=1;
 
-		    if ( $thgs[$e-1]->{starttag} eq 'a' &&
-			 $thgs[$e+1]->{endtag} eq 'a' ) {
+		    if ( $thgs[$e-1]->{starttag}=~/^a$/io &&
+			 $thgs[$e+1]->{endtag}=~/^a$/io ) {
 			
 			# next entry should be line contains time it ends
 			if ( $thgs[$e+2]->{text}=~s/^[0-9]+:[0-9]+[ap]m\s+//oi ) {
@@ -684,8 +729,8 @@ sub endField($)
 		    #print STDERR "entry was cont to next listing\n";
 		    $result->{contToNextListing}=1;
 		    
-		    if ( $thgs[$e-1]->{starttag} eq 'a' &&
-			 $thgs[$e+1]->{endtag} eq 'a' ) {
+		    if ( $thgs[$e-1]->{starttag}=~/^a$/io &&
+			 $thgs[$e+1]->{endtag}=~/^a$/io ) {
 			splice(@thgs,$e-1,3);
 			$e=( $e <= 2 )?0:$e-2;
 			next;
@@ -704,6 +749,10 @@ sub endField($)
 		    }
 		    next;
 		}
+		else {
+		    print STDERR "warning: img link defined with unknown image link ".$thg0->{attr}->{src}."\n";
+		    next;
+		}
 		print STDERR "img link defined with unknown image link ".$thg0->{attr}->{src}."\n";
 		exit(1);
 	    }
@@ -711,10 +760,33 @@ sub endField($)
 	    print STDERR dumpMe($thg0)."\n";
 	    exit(1);
 	}
+
+	# catch star ratings given as '(***)'
+	# and <font> (***)</font> means text is the description
+	if ( scalar(@thgs)>$e+2 &&
+	     defined($thg0->{starttag}) && $thg0->{starttag}=~/^font$/io &&
+	     defined($thgs[$e+1]->{text}) && $thgs[$e+1]->{text}=~m/^\s*\(\*+\)$/o &&
+	     defined($thgs[$e+2]->{endtag}) && $thgs[$e+2]->{endtag}=~/^font$/io ) {
+	    $thgs[$e+1]->{text}=~m/^\s*\((\*+)\)$/o;
+	    $result->{prog_stars_rating}=sprintf("%.1f", length($1));
+	    splice(@thgs,$e,3);
+	    $e--;
+	    # start again
+	    next;
+	}
+
+	if ( defined($thg0->{text}) && $thg0->{text}=~m/^\s*\((\*+)\)$/o ) {
+	    $result->{prog_stars_rating}=sprintf("%.1f", length($1));
+	    splice(@thgs,$e,1);
+	    
+	    # start again
+	    $e--;
+	    next;
+	}
 	
 	# nuke <b> and </b>
-	if ( (defined($thg0->{starttag}) && $thg0->{starttag} eq 'b') ||
-	     (defined($thg0->{endtag}) && $thg0->{endtag} eq 'b')) {
+	if ( (defined($thg0->{starttag}) && $thg0->{starttag}=~/^b$/io) ||
+	     (defined($thg0->{endtag}) && $thg0->{endtag}=~/^b$/io)) {
 	    splice(@thgs,$e,1);
 	    
 	    # start again
@@ -725,14 +797,14 @@ sub endField($)
 	# grab space<i>text</i>space and remove surrounding space
 	if ( scalar(@thgs)>$e+4 &&
 	     defined($thg0->{text}) && $thg0->{text}=~m/^\s+$/o &&
-	     defined($thgs[$e+1]->{starttag}) && $thgs[$e+1]->{starttag} eq 'i' &&
+	     defined($thgs[$e+1]->{starttag}) && $thgs[$e+1]->{starttag}=~/^i$/io &&
 	     defined($thgs[$e+2]->{text}) &&
-	     defined($thgs[$e+3]->{endtag}) && $thgs[$e+3]->{endtag} eq 'i' &&
+	     defined($thgs[$e+3]->{endtag}) && $thgs[$e+3]->{endtag}=~/^i$/io &&
 	     defined($thgs[$e+4]->{text}) && $thgs[$e+4]->{text}=~m/^\s+$/o ) {
-	    #$result->{prog_subtitle}=$thgs[$e+1]->{text};
+	    $result->{prog_subtitle}=$thgs[$e+2]->{text};
 	    # remove space entries
-	    splice(@thgs,$e,1);
-	    splice(@thgs,$e+3,1);
+	    splice(@thgs,$e,5);
+	    #splice(@thgs,$e+3,1);
 	    
 	    # start again
 	    $e--;
@@ -741,9 +813,9 @@ sub endField($)
 
 	# grab <i>text</i> as being the subtitle
 	if ( scalar(@thgs)>$e+2 &&
-	     defined($thg0->{starttag}) && $thg0->{starttag} eq 'i' &&
+	     defined($thg0->{starttag}) && $thg0->{starttag}=~/^i$/io &&
 	     defined($thgs[$e+1]->{text}) &&
-	     defined($thgs[$e+2]->{endtag}) && $thgs[$e+2]->{endtag} eq 'i' ) {
+	     defined($thgs[$e+2]->{endtag}) && $thgs[$e+2]->{endtag}=~/^i$/io) {
 	    $result->{prog_subtitle}=massageText($thgs[$e+1]->{text});
 	    splice(@thgs,$e,3);
 	    
@@ -751,33 +823,62 @@ sub endField($)
 	    $e--;
 	    next;
 	}
+	# and <font>text</font> in column 1 of tables means affiliate station
+	# (also <font>(<a>text</a>)</font>)
+	# here, so we put it in the description
+	if ( $mycolumn==1 ) {
+	    if ( scalar(@thgs)>$e+2 &&
+		 defined($thg0->{starttag}) && $thg0->{starttag}=~/^font$/io &&
+		 defined($thgs[$e+1]->{text}) &&
+		 defined($thgs[$e+2]->{endtag}) && $thgs[$e+2]->{endtag}=~/^font$/io ) {
+		$result->{prog_desc}=massageText($thgs[$e+1]->{text});
+		splice(@thgs,$e,3);
+		$e--;
+		# start again
+		next;
+	    }
+	    if ( scalar(@thgs)>$e+6 &&
+		 defined($thg0->{starttag}) && $thg0->{starttag}=~/^font$/io &&
+		 defined($thgs[$e+1]->{text}) && $thgs[$e+1]->{text} eq "(" &&
+		 defined($thgs[$e+2]->{starttag}) && $thgs[$e+2]->{starttag}=~/^a$/io &&
+		 defined($thgs[$e+3]->{text}) && 
+		 defined($thgs[$e+4]->{endtag}) && $thgs[$e+4]->{endtag}=~/^a$/io &&
+		 defined($thgs[$e+5]->{text}) && $thgs[$e+5]->{text} eq ")" &&
+		 defined($thgs[$e+6]->{endtag}) && $thgs[$e+6]->{endtag}=~/^font$/io ) {
+		$result->{prog_desc}=massageText($thgs[$e+3]->{text});
+		splice(@thgs,$e,7);
+		$e--;
+		# start again
+		next;
+	    }
+	}
 
 	# grab <font><br> means no description was given
 	# and <font>textspace<br> means text is the description
 	# and <font>text<br> means text is the description
 	# also check </font> combination
-	if ( (defined($thg0->{starttag}) && $thg0->{starttag} eq 'font') ||
-	     (defined($thg0->{endtag}) && $thg0->{endtag} eq 'font') ) {
-	    if ( defined($thgs[$e+1]->{starttag}) && $thgs[$e+1]->{starttag} eq 'br') {
+	if ( (defined($thg0->{starttag}) && $thg0->{starttag}=~/^font$/io) ||
+	     (defined($thg0->{endtag}) && $thg0->{endtag}=~/^font$/io) ) {
+	    if ( 0 && defined($thgs[$e+1]->{starttag}) && $thgs[$e+1]->{starttag}=~/^br$/io) {
 		$result->{prog_desc}="";
 		splice(@thgs,$e+1,1);
 		# start again
 		$e--;
 		next;
 	    }
-	    elsif ( scalar(@thgs)>$e+3 && 
+	    elsif ( scalar(@thgs)>$e+2 && 
 		    defined($thgs[$e+1]->{text}) &&
-		    defined($thgs[$e+2]->{starttag}) && $thgs[$e+2]->{starttag} eq 'br') {
+		    defined($thgs[$e+2]->{starttag}) && $thgs[$e+2]->{starttag}=~/^br$/io) {
 		$result->{prog_desc}=massageText($thgs[$e+1]->{text});
 		splice(@thgs,$e+1,2);
 		# start again
 		$e--;
 		next;
 	    }
-	    elsif ( scalar(@thgs)>$e+4 && 
+	    elsif ( scalar(@thgs)>$e+2 && 
 		    defined($thgs[$e+1]->{text}) &&
 		    defined($thgs[$e+2]->{text}) &&
-		    defined($thgs[$e+3]->{starttag}) && $thgs[$e+3]->{starttag} eq 'br') {
+		    defined($thgs[$e+3]->{starttag}) && $thgs[$e+3]->{starttag}=~/^br$/io) {
 		$result->{prog_desc}=massageText($thgs[$e+1]->{text}.$thgs[$e+2]->{text});
 		splice(@thgs,$e+1,3);
 		# start again
@@ -805,7 +906,10 @@ sub endField($)
 	    }
 	    if ( defined($e->{text}) ) {
 		$understood++;
-		if ( $e->{text}=~m/^\s+$/o ) {
+		if ( $e->{text}=~m/^\s*\(\*+\)$/o ) {
+		    $str.="<star rating>";
+		}
+		elsif ( $e->{text}=~m/^\s+$/o ) {
 		    $str.="space";
 		} 
 		else {
@@ -836,7 +940,7 @@ sub endField($)
 
 	    #print STDERR "tag is a ". $tag ."\n";
 
-	    if ( $tag eq "td" || $tag eq "th" ) {
+	    if ( $tag=~/^t[dh]$/io ) {
 		if ( !defined($result->{fieldtag}) ) {
 		    $result->{fieldtag}=$tag;
 		}
@@ -847,27 +951,24 @@ sub endField($)
 		    $result->{colspan}=1;
 		}
 	    }
-	    elsif ( $tag eq "a" ) {
+	    elsif ( $tag=~/^a$/io ) {
 		die "link missing href attr" if ( !defined($entry->{attr}->{href}) );
 		$result->{prog_href}=$entry->{attr}->{href};
 	    }
-	    elsif ( $tag eq "i" ) {
+	    elsif ( $tag=~/^[ib\!]$/io ) {
 		# ignore
 	    }
-	    elsif ( $tag eq "font" ) {
+	    elsif ( $tag=~/^font$/io ) {
 		$startEndTagCount++;
 	    }
-	    elsif ( $tag eq 'br') {
+	    elsif ( $tag=~/^br$/io) {
 		# ignore
 	    }
-	    elsif ( $tag eq 'img') {
+	    elsif ( $tag=~/^nobr$/io) {
 		# ignore
 	    }
-	    elsif ( $tag eq 'b') {
+	    elsif ( $tag=~/^img$/io) {
 		# ignore
-	    }
-	    elsif ( $tag eq "!" ) {
-		# ignore comments
 	    }
 	    else {
 		print STDERR "ignoring start tag: $tag\n";
@@ -876,26 +977,23 @@ sub endField($)
 	elsif ( defined($entry->{endtag}) ) {
 	    $startEndTagCount++;
 	    my $tag=$entry->{endtag};
-	    if ($tag eq 'a') {
+	    if ($tag=~/^a$/io) {
 		#if ( !length($result->{prog_title}) ) {
 		#   die "program missing a name";
 		#}
 		$startEndTagCount++;
 	    }
-	    elsif ( $tag eq 'font' ) {
+	    elsif ( $tag=~/^font$/io ) {
 		$startEndTagCount++;
 	    }
-	    elsif ( $tag eq 'td') {
+	    elsif ( $tag=~/^t[dh]$/io) {
 		# ignore
 	    }
-	    elsif ( $tag eq 'i' ) {
+	    elsif ( $tag=~/^[ib\!]$/io ) {
 		# ignore
 	    }
-	    elsif ( $tag eq 'b') {
+	    elsif ( $tag=~/^nobr$/io) {
 		# ignore
-	    }
-	    elsif ( $tag eq '!' ) {
-		# ignore comments
 	    }
 	    else {
 		print STDERR "ignoring end tag: $tag\n";
@@ -925,9 +1023,9 @@ sub endField($)
 	if ( !defined($result->{prog_title}) ) {
 	    $result->{prog_title}=$text;
 	}
-	elsif ( !defined($result->{prog_subtitle}) ) {
-	    $result->{prog_subtitle}=$text;
-	}
+	#elsif ( !defined($result->{prog_subtitle}) ) {
+	#    $result->{prog_subtitle}=$text;
+	#}
 	elsif ( !defined($result->{prog_desc}) ) {
 	    $result->{prog_desc}=$text;
 	}
@@ -937,6 +1035,34 @@ sub endField($)
 	else {
 	    print STDERR "don't have a place for extra text section '$text'\n";
 	}
+    }
+    if ( defined($result->{prog_desc}) ) {
+	my $desc=$result->{prog_desc};
+	#print STDERR "checking $desc\n";
+	if ( $desc=~m/\s*(\(\d\d\d\d\))[\s\.]*(.*)$/o ) {
+	    if ( defined($extraDetails) ) {
+		$extraDetails.=" ";
+	    }
+	    $extraDetails.="($1) $2";
+	    $desc=~s/\s*\(\d\d\d\d\).*$//o;
+	}
+	while ($desc=~m/(\([^\)]+)\)[\s\.]*$/o ) {
+	    my $detail=$1;
+	    #print STDERR "found=$detail desc=$desc\n";
+	    if ( defined($extraDetails) ) {
+		$extraDetails.=" ";
+	    }
+	    $extraDetails.="$detail";
+	    $desc=~s/\s*\([^\)]+\)[\s\.]*$//o;
+	}
+	if ( $desc=~m/\s*(\(\d\d\d\d\))[\s\.]*(.*)$/o ) {
+	    if ( defined($extraDetails) ) {
+		$extraDetails.=" ";
+	    }
+	    $extraDetails.="($1) $2";
+	    $desc=~s/\s*\(\d\d\d\d\).*$//o;
+	}
+	$result->{prog_desc}=$desc;
     }
 
     if ( defined($extraDetails) ) {
@@ -966,8 +1092,7 @@ sub endField($)
     }
 
     if ( $debug ) {
-	my $column=(defined($self->{Row}))?scalar(@{$self->{Row}}):0;
-	print STDERR "READ FIELD (col $column):".dumpMe($result)."\n";
+	print STDERR "READ FIELD (row $myrow, col $mycolumn):".dumpMe($result)."\n";
     }
 
     push(@{$self->{Row}}, $result);
@@ -980,12 +1105,12 @@ sub end()
 {
     my ($self,$tag) = @_;
 
-    if ( $tag eq 'table' ) {
+    if ( $tag=~/^table$/io ) {
 	if ( $intable ) {
 	    $intable--;
 	}
     }
-    elsif ($tag eq 'td' || $tag eq 'th') {
+    elsif ( $tag=~/^t[dh]$/io ) {
 	if ( $infield ) {
 	    $infield--;
 	    my $thing;
@@ -996,7 +1121,7 @@ sub end()
 	    $self->endField($tag);
 	}
     }
-    elsif ($tag eq 'tr') {
+    elsif ( $tag=~/^tr$/io ) {
 	if ( $inrecord ) {
 	    $inrecord--;
 	    push @{$self->{Table}},\@{$self->{Row}};
@@ -1066,7 +1191,8 @@ sub getListingURL($$$$$)
     my $self=shift;
     my ($hour, $day, $month, $year)=@_;
 
-    return("$self->{URLBase}?$self->{ServiceID}&gDate=${month}A${day}A${year}&gHour=$hour");
+    return("$self->{URLBase}?$self->{ServiceID}&startDay=${month}/${day}/${year}&startTime=$hour");
+    #return("$self->{URLBase}?$self->{ServiceID}&gDate=${month}A${day}A${year}&gHour=$hour");
 }
 
 sub getDetailURL($$)
@@ -1147,12 +1273,28 @@ sub isTimeRow
     for (my $col=1 ; $col < scalar(@row)-1 ; $col++ ) {
 	my $field=$row[$col];
 	
-	if ( $field->{fieldtag} ne 'th' ||
-	     ( defined($field->{prog_title}) && !($field->{prog_title}=~m/^[0-9]+:[03]0 [ap]\.m\.$/o)) ) {
+	if ( !($field->{fieldtag}=~/^th$/io) ) {
 	    return(0);
+	}
+	if ( defined($field->{prog_title}) ) {
+	    if ( !($field->{prog_title}=~m/^[0-9]+:[03]0 [ap]\.m\.$/o) &&
+		 !($field->{prog_title}=~m/^[0-9]+:[03]0[AP]M$/o) ) {
+		return(0);
+	    }
 	}
     }
     return(1);
+}
+
+sub isAdvertisement
+{
+    my @row=@{$_[0]};
+
+    my $field=$row[1];
+    if ( defined($field->{starttag}) && $field->{starttag}=~/^iframe$/io ) {
+	return(1);
+    }
+    return(0);
 }
 
 # internal check 
@@ -1160,7 +1302,7 @@ sub isTimeRow
 sub verifyProgramMatches($$)
 {
     my ($prog, $savedprog)=@_;
-    die "unimplemented\n";
+    #die "unimplemented\n";
 }
 
 use Date::Manip;
@@ -1204,6 +1346,7 @@ sub readSchedule
 
 	    my $url=$self->getListingURL($hour, $day, $month, $year);
 	    printf STDERR "retrieving hour $hour of %4d-%02d-%02d...\n", $year, $month, $day;
+	    printf STDERR "url=$url\n" if ($debug);
 	    
 	    my $tbl = new ClickListings::ParseTable();
 	    $tbl->reset();
@@ -1276,21 +1419,40 @@ sub readSchedule
 		elsif ($url=~m/tvguidelive\.clicktv\.com/o ) {
 		    $dataFormat="tvguidelive";
 		}
+		elsif ($url=~m/tvlistings\.tvguidelive\.com/o ) {
+		    $dataFormat="tvguidelive";
+		}
 		else {
 		    die "unknown data format from url:$url";
 		}
 
-		if ( !($urldata=~m/Next (\d+)&nbsp;hours=&gt\;<\/a>/o) ) {
+		# hack - at tvguidelive, the channel number appears in the first column,
+		# so here we copy it into the second
+		if ( $dataFormat eq "tvguidelive" ) {
+		    $urldata=~s;<b>(\d+)</b></font></td><td class='Station'><font size='(\d+)' >;<b>$1</b></font></td><td class='Station'><font size='$2' >$1 ;og;
+		}
+
+		# look for
+		# <a href='gridlisting.asp?UID={5E9C238D-F399-4DA4-BEB1-52D3C7BA5776}&\
+		#  StartDay=10/3/2001&StartTime=12&gChRef=&Page=0&CO=8200&ShowType='><img src='../images/tvguide/arrow-left.gif' border='0'></a>
+		if ( !($urldata=~m/<a href=\'gridlisting.asp\?UID=[^&]+&StartDay=[^&]+&StartTime=([0-9]+)[^>]+><img src='..\/images\/tvguide\/arrow-right.gif'/i) ) {
 		    print STDERR "error: unable to determine number of hours in each listing\n";
 		    print STDERR "urldata:\n$urldata\n";
 		    return(0);
 		}
 		else {
-		    $hours_per_listing=$1;
+		    my $next=$1;
+		    print STDERR "next=$next, hour=$hour\n" if ( $debug );
+		    if ( $hour > $next ) {
+			$hours_per_listing=$next+24-$hour;
+		    }
+		    else {
+			$hours_per_listing=$next-$hour;
+		    }
 		    print STDERR "user selected $hours_per_listing hours in each listing\n" if ( $debug );
 		}
 
-		if ( !($urldata=~m/<b>Lineup:<\/b>[^\|]+\| \d+\/\d+\/\d+ \d+:\d+\s[AP]M\s([A-Z]+) \|/o) ) {
+		if ( !($urldata=~m/<b>Lineup:<\/b>[^\|]+\|\s+([A-Z]+)&nbsp;/o) ) {
 		    print STDERR "error: time zone information missing from url source\n";
 		    print STDERR "urldata:\n$urldata\n";
 		    return(0);
@@ -1325,13 +1487,14 @@ sub readSchedule
 	    push(@noSubHeadersTable, $arr[0]);
 
 	    for (my $i=1 ; $i<scalar(@arr) ; $i++) {
-		if ( $i != 0 ) {
-		    if ( isTimeRow(\@{$arr[$i]}) ) {
-			print STDERR "row $i is time\n" if ($debug);
-		    }
-		    else {
-			push(@noSubHeadersTable, $arr[$i]);
-		    }
+		if ( isTimeRow(\@{$arr[$i]}) ) {
+		    print STDERR "row $i is time\n" if ($debug);
+		}
+		elsif ( isAdvertisement(\@{$arr[$i]}) ) {
+		    print STDERR "row $i is ad\n" if ($debug);
+		}
+		else {
+		    push(@noSubHeadersTable, $arr[$i]);
 		}
 	    }
 	
@@ -1348,7 +1511,7 @@ sub readSchedule
 		    # check constraints on first column of time row
 		    my $field=$row[0];
 		    
-		    if ( $field->{colspan} != 2 || $field->{fieldtag} ne 'td' || defined($field->{prog_title})) {
+		    if ( $field->{colspan} != 2 || !($field->{fieldtag}=~/^td$/io) || defined($field->{prog_title})) {
 			print STDERR "ROW: ".dumpMe(\@{$noSubHeadersTable[$nrow]})."\n";
 			print STDERR "FIELD: ".dumpMe($field)."\n";
 			die "column 0 failed on row $nrow";
@@ -1360,7 +1523,7 @@ sub readSchedule
 		    # check constraints on first column of non-time rows
 		    my $field=$row[0];
 		    
-		    if ( $field->{colspan} != 1 || $field->{fieldtag} ne 'td' || defined($field->{prog_title}) ) {
+		    if ( $field->{colspan} != 1 || !($field->{fieldtag}=~/^td$/io) || ($dataFormat eq "clicktv" && defined($field->{prog_title})) ) {
 			print STDERR "ROW: ".dumpMe(\@{$noSubHeadersTable[$nrow]})."\n";
 			print STDERR "FIELD: ".dumpMe($field)."\n";
 			die "column 0 failed on row $nrow";
@@ -1375,9 +1538,9 @@ sub readSchedule
 		    @row=@{$noSubHeadersTable[$nrow]};
 		    my $field=$row[scalar(@{$noSubHeadersTable[$nrow]})-1];
 		    
-		    if ( $nrow == 0 ) {
+		    if ( $dataFormat eq "clicktv" && $nrow == 0 ) {
 			# check constraints on last column of time row
-			if ( $field->{colspan} != 2 || $field->{fieldtag} ne 'td' ) {
+			if ( $field->{colspan} != 2 || !($field->{fieldtag}=~/^td$/io) ) {
 			    print STDERR "ROW: ".dumpMe(\@{$noSubHeadersTable[$nrow]})."\n";
 			    print STDERR "FIELD: ".dumpMe($field)."\n";
 			    die "column ".(scalar(@{$noSubHeadersTable[$nrow]})-1)." failed on row $nrow";
@@ -1387,7 +1550,7 @@ sub readSchedule
 		    }
 		    else {
 			# check constraints on last column of non-time rows
-			if ( $field->{colspan} != 1 || $field->{fieldtag} ne 'td' ) {
+			if ( $field->{colspan} != 1 || !($field->{fieldtag}=~/^td$/io) ) {
 			    print STDERR "ROW: ".dumpMe(\@{$noSubHeadersTable[$nrow]})."\n";
 			    print STDERR "FIELD: ".dumpMe($field)."\n";
 			    die "column ".(scalar(@{$noSubHeadersTable[$nrow]})-1)." failed on row $nrow";
@@ -1404,7 +1567,7 @@ sub readSchedule
 		    my $col1=$row[0];
 		    my $col2=$row[scalar(@{$noSubHeadersTable[$nrow]})-1];
 		    
-		    if ( $col1->{colspan}!=1 || $col1->{fieldtag} ne 'td' || 
+		    if ( $col1->{colspan}!=1 || !($col1->{fieldtag}=~/^td$/io) || 
 			 (defined($col1->{prog_title}) != defined($col2->{prog_title}) || 
 			  (defined($col1->{prog_title}) && $col1->{prog_title} ne $col2->{prog_title})) ) {
 			print STDERR "ROW: ".dumpMe(\@{$noSubHeadersTable[$nrow]})."\n";
@@ -1438,10 +1601,10 @@ sub readSchedule
 		
 		# get starting hour from first cell
 		my $curhour;
-		if ( $field->{prog_title}=~m/^(\d+):(\d+)\s*([ap])\.m\.$/og ) {
+		if ( $field->{prog_title}=~m/^(\d+):(\d+)\s*([ap])\.?m\.?$/iog ) {
 		    my ($hour, $min, $am)=($1, $2, $3);
-		    if ( $am eq 'a' ) { $hour=0 if ( $hour == 12 ); }
-		    elsif ( $am eq 'p' ) { $hour+=12 if ( $hour!=12 );}
+		    if ( $am=~/^a$/io ) { $hour=0 if ( $hour == 12 ); }
+		    elsif ( $am=~/^p$/io ) { $hour+=12 if ( $hour!=12 );}
 		    else { die "internal error how did we get '$am' ?"; }
 		
 		    if ( $min != 0 ) {
@@ -1466,22 +1629,22 @@ sub readSchedule
 		    }
 
 		    if ( $hourOfDay == 0  ) {
-			$want1="12:00 a.m.";
-			$want2="12:30 a.m.";
+			$want1="12:00AM";
+			$want2="12:30AM";
 		    }
 		    elsif ( $hourOfDay < 12 ) {
-			$want1=sprintf("%d:00 a.m.", $hourOfDay);
-			$want2=sprintf("%d:30 a.m.", $hourOfDay);
+			$want1=sprintf("%d:00AM", $hourOfDay);
+			$want2=sprintf("%d:30AM", $hourOfDay);
 		    }
 		    elsif ( $hourOfDay == 12 ) {
-			$want1=sprintf("%d:00 p.m.", $hourOfDay);
-			$want2=sprintf("%d:30 p.m.", $hourOfDay);
+			$want1=sprintf("%d:00PM", $hourOfDay);
+			$want2=sprintf("%d:30PM", $hourOfDay);
 		    }
 		    else {
-			$want1=sprintf("%d:00 p.m.", $hourOfDay-12);
-			$want2=sprintf("%d:30 p.m.", $hourOfDay-12);
+			$want1=sprintf("%d:00PM", $hourOfDay-12);
+			$want2=sprintf("%d:30PM", $hourOfDay-12);
 		    }
-		
+
 		    #print STDERR "column $col in time row says $timerow[$col]->{prog_title}, expect $want1\n";
 		    #print STDERR "  and says $timerow[$col+1]->{prog_title}, expect $want2\n";
 		
@@ -1597,9 +1760,8 @@ sub readSchedule
 	# slap this table onto the start of the existing one
 	# - append each row onto the end of the existing table (or init a new one)
 	#
-	my $removeChannelColumn=defined(@WholeTable);
 	for (my $i=0 ; $i< scalar(@DayTable) ; $i++) {
-	    if ( $removeChannelColumn) {
+	    if ( @WholeTable ) {
 		my @row=@{$DayTable[$i]};
 		#print STDERR "Ignoring Channel row: ".dumpMe(\%{$row[0]})."\n";
 		splice(@{$DayTable[$i]}, 0, 1);
@@ -1641,6 +1803,20 @@ sub readSchedule
 	my $ch=$row[0];
 	my $channel;
 	
+	if ( $dataFormat eq "tvguidelive" ) {
+	    # in tvguidelive, () appear outside of url like '(<a href='http://www.ctv.ca' target=_blank>CTV</a>)'
+	    if ( defined($ch->{prog_desc}) && $ch->{prog_desc} eq ")" && 
+		 defined($ch->{prog_subtitle}) ) {
+		$ch->{prog_subtitle}.=")";
+		delete($ch->{prog_desc});
+	    }
+	}
+	# remove () around things
+	foreach my $key (keys %{$ch}) {
+	    $ch->{$key}=~s/^\(//g;
+	    $ch->{$key}=~s/\)$//g;
+	}
+	
 	die "channel info spanned more than one column" if ( $ch->{colspan} != 1);
 	    
 	$channel->{url}=$ch->{prog_href} if ( defined($ch->{prog_href}) );
@@ -1670,24 +1846,40 @@ sub readSchedule
 		    next;
 		}
 	    }
-	    if ( !defined($channel->{affiliate}) ) {
-		$channel->{affiliate}=$possible;
-	    }
-	    elsif ( !defined($channel->{localStation}) ) {
-		$channel->{localStation}=$possible;
+	    if ( $dataFormat eq "clicktv" ) {
+		if ( !defined($channel->{affiliate}) ) {
+		    $channel->{affiliate}=$possible;
+		}
+		elsif ( !defined($channel->{localStation}) ) {
+		    $channel->{localStation}=$possible;
+		}
+		else {
+		    print STDERR "problems with row:$nrow:".dumpMe(\%{$row[0]})."\n";
+		    die "don't know where to place $possible";
+		}
 	    }
 	    else {
-		die "don't know where to place $possible";
+		if ( !defined($channel->{localStation}) ) {
+		    $channel->{localStation}=$possible;
+		}
+		elsif ( !defined($channel->{affiliate}) ) {
+		    $channel->{affiliate}=$possible;
+		}
+		else {
+		    print STDERR "problems with row:$nrow:".dumpMe(\%{$row[0]})."\n";
+		    die "don't know where to place $possible";
+		}
 	    }
 	}
-	
+
 	# verify and warn that the if IND appeared, it wasn't assigned to the localstation.
-	if ( defined($channel->{localStation}) && $channel->{localStation} eq 'IND' ) {
+	if ( defined($channel->{localStation}) && $channel->{localStation}=~/^IND$/io ) {
 	    print STDERR "warning: channel $channel->{number} has call lets IND, parse may have failed";
 	}
+	if ( $debug ) { print STDERR "loaded channel:".dumpMe(\%{$channel})."\n";}
 	
 	push(@Channels, $channel);
-	#if ( $debug > 1 ) { print STDERR "loaded channel:".dumpMe($self)."\n";}
+	if ( $debug > 1 ) { print STDERR "loaded channel:".dumpMe($self)."\n";}
 
 	# remove channel row
 	splice(@{$WholeTable[$nrow]}, 0,1);
@@ -1775,8 +1967,11 @@ sub readSchedule
 
 	    $cell->{prog_duration}=$cell->{colspan}*30;
 	    if ( defined($cell->{prog_href}) ) {
-		if ( $cell->{prog_href}=~m/prog_ref=([0-9]+)/o ) {
-		    $cell->{pref}=$1;
+		if ( $cell->{prog_href}=~m/PDetail\(([0-9]+),([0-9]+)/o ) {
+		    $cell->{pref}="$1-$2";
+		}
+		else {
+		    die "unable to get pref from $cell->{prog_href}";
 		}
 		delete($cell->{prog_href});
 	    }
@@ -1945,15 +2140,15 @@ sub getAndParseDetails($$)
 	    my @details;
 	    
 	    #print STDERR "parsing $desc..\n";
-	    while ( $desc=~m/\(([^\)]+)\)$/og ) {
+	    while ( $desc=~m/\s*\(([^\)]+)\)[\s\.]*$/o ) {
 		my $detail=$1;
 		#print STDERR "parsing got $detail\n";
 		
 		# strip off what we found and any white space
-		$desc=~s/\s*\([^\)]+\)$//og;
+		$desc=~s/\s*\([^\)]+\)[\s\.]*$//o;
 		push(@details, $detail);
 	    }
-	    if ( defined(@details) ) {
+	    if ( @details ) {
 		$nprog->{details}=\@details;
 	    }
 	    if ( length($desc) ) {
