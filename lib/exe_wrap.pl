@@ -23,8 +23,8 @@ use File::Basename;
 unless (exists $ENV{TZ})
 {
     my $now    =  time();
-    my $lhour  = 20; #(localtime($now))[2];
-    my $ghour  = 02; # (   gmtime($now))[2];
+    my $lhour  = (localtime($now))[2];
+    my $ghour  = (   gmtime($now))[2];
     my $tz     = ($lhour - $ghour);
        $tz    -= 24 if $tz >  12;
        $tz    += 24 if $tz < -12;
