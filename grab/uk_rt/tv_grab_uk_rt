@@ -238,8 +238,7 @@ sub grab( @ ) {
     t 'available dates: ' . d \@available_dates;
     die 'apparently, there are no days of listings on the site'
       if not @available_dates;
-    warn "FIXME yesterday!\n";
-    my $today = ParseDate('yesterday midnight');
+    my $today = ParseDate('today midnight');
 
     my $is_available = sub( $ ) {
 	my $d = shift;
@@ -362,13 +361,11 @@ sub grab( @ ) {
 # warned whenever a page fails to download.  Could add it back later.
 #
 sub get_url( $ ) {
-    my $url = shift;
-    for (my $data = get($url)) {
-	die "cannot get $url\n" if not defined;
-	tr/\222\222\226/''-/;
-	# There could be other illegal chars but I haven't seen them.
-	return $_;
-    }
+    local $_ = get(shift);
+    return undef if not defined;
+    tr/\222\222\226/''-/;
+    # There could be other illegal chars but I haven't seen them.
+    return $_;
 }
 
 
@@ -380,6 +377,8 @@ sub get_url( $ ) {
 #   Date::Manip object giving date and time
 #   prog_to_cat hash (see elsewhere for details)
 #   categories hash
+#
+# Returns: list of programmes
 #
 # I think this relies on the page returning exactly $TIME_INTERVAL
 # worth of listings.
@@ -401,6 +400,14 @@ sub get_programmes( $$$$ ) {
     $url .= 'searchTime=' . UnixDate($time, '%R') . '&';
     $url .= 'channels=' . xmltv_to_rt($channel_xid);
     my $data = get_url($url);
+    if (not defined $data) {
+	warn "could not get $url\n";
+	my $from_time = UnixDate($time, '%Q');
+	my $to_time = UnixDate(DateCalc($time, "+ $TIME_INTERVAL seconds"), '%Q');
+	warn "not fetching any programmes for channel $channel_xid "
+	  . "between $from_time and $to_time\n";
+	return ();
+    }
     $data =~ tr/\n//d;
 
     my @results = ($data =~ /<!-- start of a result -->.*?<!-- end of a result -->/ig);
@@ -417,7 +424,7 @@ sub get_programmes( $$$$ ) {
 	    my $progs = get_programme_details($channel_xid, $programmeId,
 					      $prog_to_cat, $categories);
 	    if (not $progs) {
-		warn "could not get programme $programmeId on channel $channel_xid";
+		warn "could not get programme $programmeId on channel $channel_xid\n";
 	    }
 	    elsif (not @$progs) {
 		warn "strange, $programmeId on channel $channel_xid seems to be empty";
@@ -475,21 +482,16 @@ sub get_programme_details( $$$$ ) {
     $url .= "programmeId=$programmeId&";
     $url .= 'jspLocation=/jsp/prog_details.jsp';
     my $prog_details_string = get_url($url);
+    if (not defined $prog_details_string) {
+	warn "cannot get $url\n";
+	return undef;
+    }
+
     $prog_details_string  =~ tr/\r//d;
 #    t 'whole page: ' . d $prog_details_string;
     $prog_details_string  =~ m{</script>\s*(<table .*?)<!-- end main table -->}s
       or die "cannot main table in HTML $_";
     my $prog_details = $1;
-#    local $Log$
-#    local Revision 1.9  2002/10/03 16:55:08  epaepa
-#    local Dealt with the remaining bits of data that were thrown away; now
-#    local almost everything on the site is included in the XMLTV output.  There
-#    local are three things which cannot be written out because the DTD doesn't
-#    local have provision for them: the names of parts played by each actor, the
-#    local link text and description for each URL, and a signed-for-the-deaf
-#    local flag.  These are now warned about just once per run, I hope to add
-#    local them to the DTD when we overhaul it.
-#    localprog_details =~ /emmerdale/i;
 
     for ($prog_details) {
 	my $C = '<!-- -->'; # used to stop strings running together
@@ -947,6 +949,9 @@ sub do_link( $$ ) {
 # with channelId as the key and a chanel description
 sub get_channels() {
     my $data = get_url("$BASE_URL/");
+    if (not defined $data) {
+	die "could not get channels page $BASE_URL/, aborting\n";
+    }
     $data =~ tr/\n\r/\n/ds;
     t 'got channels page: ' . d $data;
     $data =~ s/\n//g;
@@ -989,7 +994,12 @@ sub get_channels() {
 # Function which will locate all the available categories and return a hash
 # with categoryId as the key and a category description
 sub get_categories() {
-    my $data = get_url("$BASE_URL/jsp/listings_search.jsp");
+    my $url = "$BASE_URL/jsp/listings_search.jsp";
+    my $data = get_url($url);
+    if (not defined $data) {
+	warn "could not get categories page $url, not grabbing category data\n";
+	return ();
+    }
     $data =~ s/\n//g;
     $data =~ /<select name="genres"[^>]*?>(.*?)<\/select>/
       or die "cannot find category in HTML $data";
@@ -1026,7 +1036,12 @@ sub get_categories() {
 #
 sub get_available_dates() {
     my @r;
-    my $data = get_url("$BASE_URL/jsp/listings_search.jsp");
+    my $url = "$BASE_URL/jsp/listings_search.jsp";
+    my $data = get_url($url);
+    if (not defined $data) {
+	die "could not get $url, so cannot find available dates, aborting\n";
+    }
+
     $data =~ s/\n//g;
     $data =~ /<select name="searchDate"[^>]*?>(.*?)<\/select>/
       or die "cannot find searchDate string in HTML $data";
@@ -1092,6 +1107,10 @@ sub get_progs_in_cat( $$$ ) {
 	$url .= 'searchTime=' . UnixDate($time, '%R');
 	#print STDERR "$url\n";
 	my $data = get_url($url);
+	if (not defined $data) {
+	    warn "could not get $url, so cannot get data on category $category\n";
+	    next;
+	}
 	$data =~ s/\n//g;
 
 	my @results = ($data =~ /<!-- start of a result -->.*?<!-- end of a result -->/ig);
