@@ -1,4 +1,4 @@
-#!/usr/bin/perl -w
+#!/usr/bin/perl
 #
 # $Id$
 #
@@ -88,6 +88,7 @@ my @SHOW_DATA    = (); # pointer to raw by SHOW_TABLE row
 my %SHOW_DATA    = (); # data for SHOW_TABLE
 my %SHOW_WIDTH   = (); # column widths for SHOW_TABLE
 my %SHOW_TIME;
+my %OLD_SHOW;          # {old_title}=[show entryies]
 
 my $MYREPLAY_UNIT = "";  # parameters for MYREPLAY fetch
 my $MYREPLAY_USER = "";
@@ -266,11 +267,11 @@ foreach (split(/\n/,$html))
 {
 	s/\s+/ /g;
 	next unless length($_)>5;
+        next if /was scheduled to record/;
+        next if /Nothing else is scheduled to record/;
 
 	if (my @a= / This show.+current episode.s. of (.+) occurring every \((.+)\) on Channel (\d+)\((.+)\).+ (\d+):(\d+)(\w)..-.+\. (.+) at /)
     {
-      next if /was scheduled to record/;
-  	  next if /Nothing else is scheduled to record/;
 
       $a[4]  = "0"             if ($a[4]==12 and $a[6] eq 'A');  # midnight -> 00;
 
@@ -282,7 +283,7 @@ foreach (split(/\n/,$html))
       next unless $guar || $MYREPLAY_NONG;
       $title =~ s/’/'/g;  # illegal character in Replay Feed
 
-#     print STDERR "\nMyReplay looking for ",join("|",$title,$chan,$hhmm,$days),"\n";
+#print STDERR "\nMyReplay looking for ",join("|",$title,$chan,$hhmm,$days),"\n";
 
 #
 # Check Channel
@@ -312,6 +313,8 @@ foreach (split(/\n/,$html))
         my $next = $ep->{next};
         my $prev = $ep->{prev};
 
+	next if $ep->{device} eq $device; # already recording?
+
         gen_episode_dates($ep)   unless $ep->{day};
         gen_episode_dates($next) if $next && !$next->{day};
         gen_episode_dates($prev) if $prev && !$prev->{day};
@@ -320,8 +323,11 @@ foreach (split(/\n/,$html))
 #     timeslot is a hit if start time is greater than previous show's
 #                      and start time and less than next show's start time.
 #
+	my $day  = $ep->{day};
+
         next if $chan ne $ep->{channel};
-        next if $days !~ /$ep->{day}/;
+        next if $days !~ /$day/;	# episode on of myreplay's days?
+	next if $found =~ /:$day/;      # already got this day?
 
       next if (   $prev
                && $prev->{mmdd} eq $ep->{mmdd}
@@ -331,9 +337,9 @@ foreach (split(/\n/,$html))
                && $next->{mmdd} eq $ep->{mmdd}
                && $next->{hhmm} lt $hhmm);
 
-      add_myreplaytv_show($title,$chan,$hhmm,$ep->{day});
+      add_myreplaytv_show($title,$chan,$hhmm,$day);
       $ep->{device} = $device;
-      $found     .= $ep->{day};
+      $found       .= ":$day";
 
       } #epiosde scan
 
@@ -342,7 +348,7 @@ foreach (split(/\n/,$html))
 #
       unless ($found)
       {
-          print STDERR "        MyReplayTV no matches for ",join("|",$title,$chan,$hhmm,$days),"\n";
+          print STDERR "        Can't guess day, using title scan. no matches for ",join("|",$title,$chan,$hhmm,$days),"\n";
 
           add_myreplaytv_show($title,$chan,$hhmm,"");
       }
@@ -734,11 +740,11 @@ for my $start (sort keys %SHOW_TIME)
 #
         if (!defined $ep)
         {
-           printf "${R_ON}%-60s **** NO GUIDE DATA ****${OFF}\n",sh_summary($show).opt_summary($show);
+           printf "${R_ON}%-60s **** NO GUIDE DATA ****${OFF}\n",sh_summary($show);
         }
         elsif ( get_text($ep->{title}) ne $show->{title} )
         {
-           printf "${R_ON}%-50s **** wrong show in slot ****\n",sh_summary($show).opt_summary($show);
+           printf "${R_ON}%-50s **** wrong show in slot ****\n",sh_summary($show);
            print " "x10,ep_summary($ep),"${OFF}\n";
         }
         else # ( guess we got what we wanted )
@@ -764,7 +770,7 @@ for my $start (sort keys %SHOW_TIME)
     }
     else
     {
-       print sh_summary($show).opt_summary($show)."\n";
+       print sh_summary($show)."\n";
     }
 
 #
@@ -967,19 +973,17 @@ sub ep_summary
 sub sh_summary
 {
     my $show = shift;
-    if ($show-> {day})
-    {
-          return join(" ",$show->{day},
-                          $show->{mmdd},
-                          "$show->{hhmm}/$show->{len}",
-                          get_text($CHAN{ $show->{channel}}->{'display-name'}),
-                          $show->{title},
-                     );
-    }
-    else
-    {
-          return "$show->{title} (title-scan only)";
-    }
+    my $val="";
+    $val =      $show->{title}." (title-scan)" unless  $show->{day};
+    $val =      $show->{day}        if $show->{day};
+    $val .= " ".$show->{mmdd}       if $show->{mmdd};
+    $val .= " ".$show->{hhmm}       if $show->{hhmm};
+    $val .= "/".$show->{len}        if $show->{len};
+    $val .= " ".get_text($CHAN{ $show->{channel}}->{'display-name'});
+    $val .= " ".$show->{title}      if $show->{day};
+    $val .= " [".$show->{device}."]" if $show->{device};
+    $val .= " ".opt_summary($show);
+    return $val;
 } #sh_summary
 
 #
@@ -1299,6 +1303,7 @@ sub load_shows
 #
         if (defined $MYREPLAY_UNIT and $show->{device} eq "MyReplayTV$MYREPLAY_UNIT")
         {
+	    push @{$OLD_SHOW{$show->{title}}},$show; # quick hack to stop previous options
             $show->{title}='';
         }
 
@@ -1538,21 +1543,42 @@ sub validate_col_value
 
 sub add_myreplaytv_show
 {
-#    print STDERR "                   adding myreplaytv: @_\n";
-    my $row = $#SHOWS+1;
+#   print STDERR "                   adding myreplaytv: @_\n";
+    my $show;
     my $title = shift || '';
     my $chan  = shift || '';
     my $start = shift || '';
     my $day   = shift || '';
-    foreach (0..$#COL)
+    for my $old (@{$OLD_SHOW{$title}})   # capture settings from pre-existing show
     {
-        my $val='';
-        $val="MyReplayTV$MYREPLAY_UNIT" if $COL[$_] eq 'device';
-        $val=$title                     if $COL[$_] eq 'title';
-        $val=$chan                      if $COL[$_] eq 'channel';
-        $val=$start                     if $COL[$_] eq 'hhmm';
-        $val=$day                       if $COL[$_] eq 'day';
-        $val=1                          if $COL[$_] eq 'chanonly';
-        $SHOWS[$row]{$COL[$_]}=$val;
+        next if $old->{title} ne "";     # already used?
+
+        if (   (    $old->{channel} eq $chan     #use old show if chan/time match
+                 && $old->{hhmm}    eq $start)
+            || (    not exists $old->{day}       #use old show if old and new are title only
+                 && $old->{day}     eq ''    ))
+            {
+	        print STDERR "          Never mind. I'll use the old day value\n" if !$day && $old->{day};
+
+#		print STDERR "Found old $title\n";
+            	$show=$old;
+		last;
+            }
+            
+    } # old show check
+
+    unless ($show)				# build a new show entry
+    {
+#       print STDERR "Make new $title\n";
+	$show->{$_}=''        foreach (0..$#COL); # initialize to blanks
+	$show->{device} ="MyReplayTV$MYREPLAY_UNIT"; # set initial values
+	$show->{chanonly}=1;
+        $show->{day}    = $day;
+    	push @SHOWS,$show;
     }
+
+    $show->{title}  = $title;
+    $show->{channel}= $chan;
+    $show->{hhmm}   = $start;
+
 } #add_myreplaytv_show
