@@ -6,11 +6,11 @@ tv_grab_nl - Grab TV listings for Holland.
 
 =head1 SYNOPSIS
 
-tv_grab_fi --help
+tv_grab_nl --help
 
-tv_grab_fi [--config-file FILE] --configure
+tv_grab_nl [--config-file FILE] --configure
 
-tv_grab_fi [--config-file FILE] [--output FILE] [--days N]
+tv_grab_nl [--config-file FILE] [--output FILE] [--days N]
            [--offset N] [--quiet] [--slow]
 
 =head1 DESCRIPTION
@@ -72,6 +72,7 @@ channels the site has.
 use strict;
 use XMLTV::Version '$Id$ ';
 use Getopt::Long;
+use Data::Dumper;
 use HTML::TreeBuilder;
 use HTML::Entities; # parse entities
 use IO::File;
@@ -111,12 +112,12 @@ BEGIN {
 use constant Have_bar => eval { require Term::ProgressBar; 1 };
 
 # Function prototypes.
-sub write_details( $$$$$ );
 sub time_tot_str( $ );
 sub time_van_str( $ );
 sub get_channels();
 sub process_summary_page( $$$ );
 sub parse_dutch_date( $ );
+sub process_details_page( $$$ );
 
 # Whether zero-length programmes should be included in the output.
 my $WRITE_ZERO_LENGTH = 0;
@@ -279,7 +280,10 @@ foreach (@config_lines) {
 # begin main program
 
 # $opt_offset is taken into account later, we don't need to lie about
-# $now.
+# $now.  This does make it impossible to use --offset together with
+# --cache to reuse an old cache file from a few days ago - to do that
+# you need to change $now below.  But --cache is undocumented so I
+# don't consider this a problem.
 #
 my $now = ParseDate('now');
 die if not defined $now;
@@ -300,6 +304,7 @@ foreach $ch_did (@channels) {
 	  . "?station=$ch_did&interval=$i";
 	my $day = UnixDate(DateCalc($now, "+ $i days"), '%Y-%m-%d');
 	die if not defined $day;
+	die if ref $url;
 	push @to_get, [ $url, $day, $ch_xid, $ch_did ];
     }
 }
@@ -311,131 +316,225 @@ my $bar = new Term::ProgressBar('downloading summary', scalar @to_get)
   if Have_bar && not $opt_quiet;
 foreach (@to_get) {
     my ($url, $day, $ch_xmltv_id, $ch_tvgids_id) = @$_;
+    die if ref $url;
     push @summary_page_data,
       [ $url, $ch_xmltv_id, [ process_summary_page($url, $day, $day) ] ];
     update $bar if Have_bar and not $opt_quiet;
 }
 
-if (not $opt_slow) {
-    foreach (@summary_page_data) {
-	my ($url, $ch_xmltv_id, $data) = @$_;
-
-	# Try to do something with the programmes that have no start
-	# time.  Put them into a clump with the preceding valid
-	# programme.
+my @summary_programmes;
+my %detail_url_to_summary_url;
+foreach (@summary_page_data) {
+    my ($summary_url, $ch_xmltv_id, $data) = @$_;
+    
+    # Try to do something with the programmes that have no start
+    # time.  Put them into a clump with the preceding valid
+    # programme.
+    #
+    my $clump;			# [ start, stop, programmes ].  stop may be undef.
+    my @clumps;
+    foreach (@$data) {
+	my ($start, $stop, $title, $url) = @$_;
+	die if ref $url;
+	for ($detail_url_to_summary_url{$url}) {
+	    warn "more than one programme with same details page $url"
+	      if defined;
+	    $_ = $summary_url;
+	}
+	
+	# Start and stop are common to a whole clump, but these
+	# two are given individually for each programme.
 	#
-	my $clump; # [ start, stop, programmes ].  stop may be undef.
-	my @clumps;
-	foreach (@$data) {
-	    my ($start, $stop, $title, $url) = @$_;
+	my $details = [ $title, $url ];
+	
+	if (not defined $start) {
+	    if (not $clump) {
+		warn "programme '$title' at beginning of page has no start time, dropping\n";
+		next;
+	    }
+	    t 'found programme with no start time';
+	    
+	    if (defined $clump->[1]) {
+		t 'make it start at stop of last clump';
+		die if not defined $clump->[0];
+		push @clumps, $clump;
+		$clump = [ $clump->[1], $stop, [ $details ] ];
+		die if not defined $clump->[0];
+	    }
+	    else {
+		t 'current clump has no stop, add to clump';
+		push @{$clump->[2]}, $details;
+		t 'maybe set stop of current clump';
+		$clump->[1] = $stop;
+	    }
+	}
+	else {
+	    t 'programme has start time, make new clump';
+	    if ($clump) {
+		die if not defined $clump->[0];
+		push @clumps, $clump;
+	    }
+	    $clump = [ $start, $stop, [ $details ] ];
+	    t 'started a new clump, now: ' . d $clump;
+	    die if not defined $clump->[0];
+	}
+    }
+    if ($clump) {
+	die if not defined $clump->[0];
+	push @clumps, $clump;
+    }
+    t '\@clumps=' . d \@clumps;
+    
+    # Now add the clumpidx attributes.
+    foreach (@clumps) {
+	my ($start, $stop, $l) = @$_;
+	die if not defined $start;
+	my $num_in_clump = @$l;
+	if ($num_in_clump == 1) {
+	    # Common case, no clumpidx needed.
+	}
+	elsif ($num_in_clump > 1) {
+	    foreach my $i (0 .. $num_in_clump - 1) {
+		# Add clumpidx as last thing in list.
+		push @{$l->[$i]}, "$i/$num_in_clump";
+	    }
+	}
+	else { die }
+    }
+    t 'after adding clumpidxes, \@clumps=' . d \@clumps;
+    
+    # Finally turn the data into programmes.
+    foreach (@clumps) {
+	my ($start, $stop, $l) = @$_;
+	die if not defined $start;
+	foreach (@$l) {
+	    my ($title, $url, $clumpidx) = @$_;
+	    my %h = (channel => $ch_xmltv_id,
+		     title => [ [ $title, $LANG ] ],
+		    );
+	    for (date_to_eur($start, $TZ)) {
+		$h{start} = UnixDate($_->[0], '%q') . " $_->[1]";
+	    }
+	    if (defined $stop) {
+		for (date_to_eur($stop, $TZ)) {
+		    $h{stop} = UnixDate($_->[0], '%q') . " $_->[1]";
+		}
+	    }
+	    
+	    if (defined $url) {
+		die if ref $url;
+		$h{url} = [ $url ];
+	    }
+	    $h{clumpidx} = $clumpidx if defined $clumpidx;
+	    push @summary_programmes, \%h;
+	}
+    }
+}
 
-	    # Start and stop are common to a whole clump, but these
-	    # two are given individually for each programme.
+my @to_write;
+if ($opt_slow) {
+    $bar = new Term::ProgressBar('getting details', scalar @summary_programmes)
+      if Have_bar && not $opt_quiet;
+    foreach my $s (@summary_programmes) {
+	my $urls = delete $s->{url};
+	if (not defined $urls) {
+	    push @to_write, $s;
+	    update $bar if $bar;
+	    next;
+	}
+	die if not @$urls;
+	warn "strange, more than one URL for programme, picking first"
+	  if @$urls > 1;
+	my $url = $urls->[0];
+	die if not defined $url;
+	$url = "$url"; die if ref $url;
+	my $summary_url = $detail_url_to_summary_url{$url};
+	die if not defined $summary_url;
+	die if ref $summary_url;
+	my $ch_xmltv_id = $s->{channel};
+	die if not defined $ch_xmltv_id;
+	die if ref $ch_xmltv_id;
+	my $detailed
+	  = process_details_page($ch_xmltv_id, $url, $summary_url);
+	if (not $detailed) {
+	    warn "skipped details page $url\n";
+
+	    # We still have the summary though, we can use that at least.
+	    push @to_write, $s;
+	    update $bar;
+	    next;
+	}
+	if ($detailed eq 'END') {
+	    # Apparently this means nothing more for this day.  But
+	    # we're not processing according to days so there is no
+	    # easy way to skip the right number of following
+	    # programmes.  In any case, we want the programme output
+	    # to be the same as in fast mode, so we more or less
+	    # ignore this indication from process_details_page().
 	    #
-	    my $details = [ $title, $url ];
+	    push @to_write, $s;
+	    update $bar;
+	    next;
+	}
 
-	    if (not defined $start) {
-		if (not $clump) {
-		    warn "programme '$title' at beginning of page has no start time, dropping\n";
-		    next;
-		}
-		t 'found programme with no start time';
+	# Could check 'van' and 'tot' times against those in the
+	# original page.
+	#
+	delete $detailed->{van}; delete $detailed->{tot};
 
-		if (defined $clump->[1]) {
-		    t 'make it start at stop of last clump';
-		    die if not defined $clump->[0];
-		    push @clumps, $clump;
-		    $clump = [ $clump->[1], $stop, [ $details ] ];
-		    die if not defined $clump->[0];
+	# Pluck any values from $s that are also in $detailed, and
+	# check they match.
+	#
+	foreach (sort keys %$detailed) {
+	    my $old = delete $s->{$_};
+	    next if not defined $old;
+	    my $new = $detailed->{$_};
+
+	    if ($_ eq 'title') {
+		# We know how to merge this.  TODO write general
+		# XMLTV::Merge. 
+		#
+		my %already;
+		foreach my $a (@$new) {
+		    my $d = Dumper($a);
+		    $already{$d}++ && warn "duplicate $_: $d";
 		}
-		else {
-		    t 'current clump has no stop, add to clump';
-		    push @{$clump->[2]}, $details;
-		    t 'maybe set stop of current clump';
-		    $clump->[1] = $stop;
+		foreach my $o (@$old) {
+		    my $d = Dumper($o);
+		    push @$new, $o unless $already{$d};
 		}
 	    }
 	    else {
-		t 'programme has start time, make new clump';
-		if ($clump) {
-		    die if not defined $clump->[0];
-		    push @clumps, $clump;
+		# Compare the two data structures.  For this to work
+		# correctly it requires Data::Dumper 2.12 or later, as
+		# shipped with perl 5.8.0.  Older versions don't
+		# support $Sortkeys.  But we don't have any version
+		# check here - in the worst case all that results from
+		# using an older Data::Dumper is a few spurious
+		# warning messages.
+		#
+		my $old_dump = Dumper($old);
+		my $new_dump = Dumper($new);
+		if ($old_dump ne $new_dump) {
+		    warn "mismatch between summary page and details page $url for $_: $old_dump vs $new_dump\n";
 		}
-		$clump = [ $start, $stop, [ $details ] ];
-		t 'started a new clump, now: ' . d $clump;
-		die if not defined $clump->[0];
 	    }
 	}
-	if ($clump) {
-	    die if not defined $clump->[0];
-	    push @clumps, $clump;
-	}
-	t '\@clumps=' . d \@clumps;
 
-	# Now add the clumpidx attributes.
-	foreach (@clumps) {
-	    my ($start, $stop, $l) = @$_;
-	    die if not defined $start;
-	    my $num_in_clump = @$l;
-	    if ($num_in_clump == 1) {
-		# Common case, no clumpidx needed.
-	    }
-	    elsif ($num_in_clump > 1) {
-		foreach my $i (0 .. $num_in_clump - 1) {
-		    # Add clumpidx as last thing in list.
-		    push @{$l->[$i]}, "$i/$num_in_clump";
-		}
-	    }
-	    else { die }
-	}
-	t 'after adding clumpidxes, \@clumps=' . d \@clumps;
+	# Deal with any remaining keys in summary but not in
+	# detailed.  This should include start and stop.
+	#
+	%$detailed = (%$detailed, %$s);
 
-	# Finally write programmes.
-	foreach (@clumps) {
-	    my ($start, $stop, $l) = @$_;
-	    die if not defined $start;
-	    foreach (@$l) {
-		my ($title, $url, $clumpidx) = @$_;
-		my %h = (channel => $ch_xmltv_id,
-			 title => [ [ $title, $LANG ] ],
-			);
-		for (date_to_eur($start, $TZ)) {
-		    $h{start} = UnixDate($_->[0], '%q') . " $_->[1]";
-		}
-		if (defined $stop) {
-		    for (date_to_eur($stop, $TZ)) {
-			$h{stop} = UnixDate($_->[0], '%q') . " $_->[1]";
-		    }
-		}
-		
-		$h{url} = [ $url ] if defined $url;
-		$h{clumpidx} = $clumpidx if defined $clumpidx;
-		$writer->write_programme(\%h);
-	    }
-	}
+	push @to_write, $detailed;
+	update $bar if $bar;
     }
 }
 else {
-    # Slow mode, get details separately.
-    # FIXME should check consistency between details and summary.
-    #
-    my @to_get_detailed;
-    my $num_detailed = 0;
-    foreach (@summary_page_data) {
-	my ($url, $ch_xmltv_id, $data) = @$_;
-	my @detail_urls = map { $_->[3] } @$data;
-	push @to_get_detailed, [ $ch_xmltv_id, \@detail_urls, $url ];
-	$num_detailed += @detail_urls;
-    }
-    $bar = new Term::ProgressBar('getting details', $num_detailed)
-      if Have_bar && not $opt_quiet;
-    my @got_detailed;
-    foreach (@to_get_detailed) {
-	my ($ch_xmltv_id, $detail_urls, $url) = @$_;
-	write_details($writer, $ch_xmltv_id, $detail_urls, $url, $bar);
-    }
+    @to_write = @summary_programmes;
 }
 
+$writer->write_programme($_) foreach @to_write;
 $writer->end();
 
 ######################################################################
@@ -443,99 +542,10 @@ $writer->end();
 
 my (%warned_regel, $warned_discarding_parts); # suppress duplicate warnings
 
-# arguments:
-#    XMLTV::Writer object to write to
-#    xmltv id of channel
-#    ref to list of URLs for programme detail pages
-#    URL this list was found from (for debugging)
-#    progress bar object to update (or undef)
-#
-# The list of URLs should correspond to a single page for one channel
-# (at the moment).
-#
-sub write_details( $$$$$ ) {
-#    local $Log::TraceMessages::On = 1;
-    t 'write_details() ENTRY';
-    my ($writer, $ch_xmltv_id, $urls, $master_url, $bar) = @_;
-    t '$ch_xmltv_id=' . d $ch_xmltv_id;
-    t '$urls=' . d $urls;
-    my $next_day = 0;
-    my $skip_remaining = 0;
-    foreach my $url (@$urls) {
-	t 'getting details for URL: ' . d $url;
-	my $prog = process_details_page($writer, $ch_xmltv_id, $url, $master_url);
-	if (not $prog) {
-	    warn "skipped details page $url\n";
-	    update $bar;
-	    next;
-	}
-	if ($prog eq 'END') {
-	    t 'nothing more to write for this day';
-	    $skip_remaining = 1;
-	}
-	if ($skip_remaining) {
-	    # Would just 'return' but need to deal with the bar.
-	    update $bar;
-	    next;
-	}
-
-	t 'got programme hash: ' . d $prog;
-
-	my $van_unparsed = delete $prog->{van};
-	die if not defined $van_unparsed;
-	my $van = parse_eur_date($van_unparsed, $TZ);
-	die "could not parse date $van_unparsed"
-	  if not defined $van or not length $van;
-
-	my $tot_unparsed = delete $prog->{tot};
-	die if not defined $tot_unparsed;
-	my $tot = parse_eur_date($tot_unparsed, $TZ);
-	die "could not parse date $tot_unparsed"
-	  if not defined $tot or not length $tot;
-
-	t "adjusting for \$next_day if necessary (currently $next_day)";
-	$van = DateCalc($van, '+ 1 day') if $next_day;
-	$tot = DateCalc($tot, '+ 1 day') if $next_day;
-	if (Date_Cmp($van, $tot) > 0) {
-	    t "programme in $master_url seems to run from $van to $tot, must straddle midnight";
-	    if ($next_day++) {
-		warn "seeming to span more than one midnight, skipping rest of page";
-		t 'write_details() RETURNING';
-		return;
-	    }
-	    $tot = DateCalc($tot, '+ 1 day');
-	}
-	t "after adjustment, \$van=$van, \$tot=$tot, \$next_day=$next_day";
-
-	my ($van_base, $van_tz) = @{date_to_eur($van, $TZ)};
-	my ($tot_base, $tot_tz) = @{date_to_eur($tot, $TZ)};
-	$prog->{start} = UnixDate($van_base, '%q') . " $van_tz";
-	$prog->{stop} = UnixDate($tot_base, '%q') . " $tot_tz";
-
-	# Sometimes it happens that the start time of this programme
-	# is before the start time of the previously seen programme.
-	#
-	# Now this could mean that we have crossed midnight, if for
-	# example the last programme was 2300--2330 and this one is
-	# 0000--0030.  But that would require a gap in the listings,
-	# and doesn't seem to happen in practice.  Instead, these
-	# going-backwards seem to randomly occur in the middle of the
-	# day giving overlapping programmes.
-	#
-	# Rather than warning about this, we just include it
-	# faithfully in the XML output and let someone else worry
-	# about the problem when reading the file.
-	#
-	
-	local $Log::TraceMessages::On = 0;
-	$writer->write_programme($prog);
-	update $bar if $bar;
-    }
-    t 'write_details() RETURNING';
-}
 # Returns a programme hashref, or undef, or the magic 'END'.
-sub process_details_page( $$$$ ) {
-    my ($writer, $ch_xmltv_id, $url, $master_url) = @_;
+sub process_details_page( $$$ ) {
+    foreach (@_) { die if ref }
+    my ($ch_xmltv_id, $url, $master_url) = @_;
     local $SIG{__WARN__} = sub {
 	warn "$url (from $master_url): $_[0]";
     };
@@ -613,7 +623,7 @@ sub process_details_page( $$$$ ) {
 	    warn "seen 'Tijdstip' twice\n" if $seen_tijdstip++;
 	    if (length($text)<=16) {
 		t "'onvolledig' is true, nothing more to write";
-		t 'write_details() RETURNING';
+		t 'process_details_page() RETURNING';
 		return 'END';
 	    }
 	    else {
@@ -711,6 +721,12 @@ sub process_details_page( $$$$ ) {
 		else {
 		    $episode_num = $text - 1;
 		}
+	    }
+	    elsif ($text =~ /^(?:\d+-)+\d$/) {
+		# This means multiple episodes.  This ought to be
+		# handled by turning the programme into a clump.
+		#
+		warn "programme covers multiple episodes ($text), not handled";
 	    }
 	    else {
 		warn "bad episode number $text";
@@ -957,9 +973,9 @@ sub get_channels() {
 #
 sub process_summary_page( $$$ ) {
     my ($url, $day, $official_day) = @_;
-    die if not defined $url;
-    die if not defined $day;
-    die if not defined $official_day;
+    die if not defined $url; die if ref $url;
+    die if not defined $day; die if ref $day;
+    die if not defined $official_day; die if ref $official_day;
     local $SIG{__WARN__} = sub {
 	warn "$url: $_[0]";
     };
@@ -1089,7 +1105,8 @@ sub process_summary_page( $$$ ) {
 	# FIXME should check channel name (among other things).
 	#
 	my $title_url = URI->new_abs($title_href, $url);
-	push @todo, [ $start_hhmm, $stop_hhmm, $title, $title_url ];
+	# We prefer to handle URLs as strings.
+	push @todo, [ $start_hhmm, $stop_hhmm, $title, "$title_url" ];
     }
 
     # Now we need to make some sense of the times.  When stop time
@@ -1218,7 +1235,8 @@ sub process_summary_page( $$$ ) {
 	if ($type eq 'lijst_zender' and $text eq 'Volgende') {
 	    # Next page for this day.
 	    my $next_url = URI->new_abs($href, $url);
-	    push @r, process_summary_page($next_url, $day, $official_day)
+	    # Turn URL back into a string.
+	    push @r, process_summary_page("$next_url", $day, $official_day)
 	}
 	elsif ($type eq 'lijst_zender' and $text eq 'Vorige') {
 	    # Previous page for this day, assume already fetched.
