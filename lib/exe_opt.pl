@@ -14,7 +14,7 @@
 #
 print '-nologo
 -force
--trim="Convert::EBCDIC;DB_File;Encode;HASH;HTML::FromText;Text::Iconv;Unicode::Map8;v5"
+-trim="Convert::EBCDIC;DB_File;Encode;HASH;HTML::FromText;Text::Iconv;Unicode::Map8;v5;URI/urn::isbn.pm;URI/urn::oid.pm"
 -info CompanyName="XMLTV Project http://membled.com/work/apps/xmltv/"
 -info FileDescription="EXE bundle of XMLTV tools to manage TV Listings"
 -info InternalName=xmltv.exe
