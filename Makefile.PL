@@ -27,7 +27,7 @@ use vars '%extra_constants';
 # because it is accessed by some code we add to MakeMaker.
 #
 use vars '@docs';
-@docs = qw(doc/COPYING doc/QuickStart README);
+@docs = qw(doc/COPYING doc/QuickStart doc/README.win32 README);
 
 # Executables to be installed.
 my @exes
@@ -385,11 +385,13 @@ windows_dist ::
 	done
 	rm -rfv $(INSTALLBIN) $(PREFIX)/lib/ $(INSTALLMAN1DIR) $(INSTALLMAN3DIR)
 	rmdir $(PREFIX)/man
+	cp -avi xmltv.dtd $(PREFIX)
 	# The following command will not be necessary when the source
 	# tree was checked out on a DOSish system.
 	#
 	find $(PREFIX) -type f | xargs unix2dos
 	mv -vi $(PREFIX)/doc/README* $(PREFIX)
+	mv -vf $(PREFIX)/README.win32 $(PREFIX)/README
 	@echo
 	@echo Part of a Windows distribution tree has been made in $(PREFIX)/.
 	@echo Now copy in the executables!
