@@ -174,6 +174,7 @@ tv_grep is not always idempotent.
 use strict;
 use XMLTV;
 use XMLTV::Clumps qw(clump_relation fix_clumps);
+use XMLTV::Grep qw(get_matcher);
 use Data::Dumper;
 use Date::Manip; Date_Init('TZ=UTC');
 
@@ -201,147 +202,6 @@ sub whole_programme_regexp( $ );
 my $ignore_case = 0; # global flag
 
 my %key_type = %{XMLTV::list_programme_keys()};
-
-# Given the name of a key (found in programme hashes), return a pair
-# of 
-# 
-#   extra argument type needed to filter on this key:
-#     undef: no extra argument required
-#     'regexp': extra argument should be regexp
-#     'empty': extra argument must be the empty string, and is ignored
-#
-#   subroutine which may take an argument (depending on whether
-#   argument type is 'regexp'), and matches a programme hash in $_.
-#
-sub get_matcher( $ ) {
-    my $key = shift;
-    t "get_matcher() for key $key";
-    my ($handler, $mult) = @{$key_type{$key}};
-    t '$handler=' . d $handler;
-    t '$mult=' . d $mult;
-    if ($handler eq 'presence') {
-	t 'presence handler';
-	die "bad multiplicity $mult for 'presence'"
-	  if $mult ne '?';
-	return [ undef, sub { exists $_->{$key} } ];
-    }
-    elsif ($handler eq 'scalar') {
-	t 'scalar handler';
-	if ($mult eq '?') {
-	    return [ 'regexp', sub {
-			 my $regexp = shift;
-			 return 0 if not exists $_->{$key};
-			 if ($ignore_case) {
-			     return $_->{$key} =~ /$regexp/i;
-			 }
-			 else {
-			     return $_->{$key} =~ /$regexp/;
-			 }
-		     } ];
-	}
-	elsif ($mult eq '1') {
-	    return [ 'regexp', sub {
-			 my $regexp = shift;
-			 die if not exists $_->{$key};
-			 if ($ignore_case) {
-			     return $_->{$key} =~ /$regexp/i;
-			 }
-			 else {
-			     return $_->{$key} =~ /$regexp/;
-			 }
-		     } ];
-	}
-	elsif ($mult eq '*') {
-	    return [ 'regexp', sub {
-			 my $regexp = shift;
-			 return 0 if not exists $_->{$key};
-			 foreach (@{$_->{$key}}) {
-			     return 1 if ($ignore_case ? /$regexp/i : /$regexp/);
-			 }
-			 return 0;
-		     } ];
-	}
-	elsif ($mult eq '+') {
-	    return [ 'regexp', sub {
-			 my $regexp = shift;
-			 die if not @{$_->{$key}};
-			 foreach (@{$_->{$key}}) {
-			     return 1 if ($ignore_case ? /$regexp/i : /$regexp/);
-			 }
-			 return 0;
-		     } ];
-	}
-	else { die }
-    }
-    elsif ($handler =~ m!^with-lang(?:/[a-z]*)?$!) {
-	t 'with-lang type of handler';
-	if ($mult eq '?') {
-	    return [ 'regexp', sub {
-			 my $regexp = shift;
-			 return 0 if not exists $_->{$key};
-			 return 1 if $regexp eq '';
-			 for ($_->{$key}->[0]) {
-			     return 0 if not defined;
-			     if ($ignore_case) {
-				 return /$regexp/i;
-			     }
-			     else {
-				 return /$regexp/;
-			     }
-			 }
-		     } ];
-	}
-	elsif ($mult eq '1') {
-	    return [ 'regexp', sub {
-			 my $regexp = shift;
-			 die if not exists $_->{$key};
-			 return 1 if $regexp eq '';
-			 for ($_->{$key}->[0]) {
-			     return 0 if not defined;
-			     if ($ignore_case) {
-				 return /$regexp/i;
-			     }
-			     else {
-				 return /$regexp/;
-			     }
-			 }
-		     } ];
-	}
-	elsif ($mult eq '*') {
-	    return [ 'regexp', sub {
-			 my $regexp = shift;
-			 return 0 if not exists $_->{$key};
-			 foreach (map { $_->[0] } @{$_->{$key}}) {
-			     return 1 if $regexp eq '';
-			     next if not defined;
-			     return 1 if ($ignore_case ? /$regexp/i : /$regexp/);
-			 }
-			 return 0;
-		     } ];
-	}
-	elsif ($mult eq '+') {
-	    return [ 'regexp', sub {
-			 my $regexp = shift;
-			 die if not @{$_->{$key}};
-			 foreach (map { $_->[0] } @{$_->{$key}}) {
-			     return 1 if $regexp eq '';
-			     next if not defined;
-			     return 1 if ($ignore_case ? /$regexp/i : /$regexp/);
-			 }
-			 return 0;
-		     } ];
-	} 
-	else { die }
-    }
-    else {
-	# Cannot query on this except for presence.  But empty string
-	# argument for future expansion.
-	#
-	t 'unknown handler';
-	return [ 'empty', sub { exists $_->{$key} } ];
-    }
-}
-  
 
 # Tests to apply.  We store them as a disjunction of conjunctions, for
 # example (a && b && c) || (d && e) || (f && g).
@@ -514,7 +374,7 @@ while (@ARGV) {
 	    $lo =~ /^--(.+)/ or die "matched long option $lo, no --";
 	    my $key = $1;
 	    t "getting matcher for key $key";
-	    my ($arg_type, $matcher) = @{get_matcher($key)};
+	    my ($arg_type, $matcher) = @{get_matcher($key, $ignore_case)};
 	    t 'expects extra argument: ' . d $arg_type;
 	    my $s;
 	    if (not defined $arg_type) {
@@ -686,7 +546,8 @@ END
 
     # FIXME commonize this with pod generation.
     foreach (sort keys %key_type) {
-	my $arg_type = get_matcher($_)->[0];
+	# (Assume ignore-case flag does not affect argument syntax.)
+	my $arg_type = get_matcher($_, 0)->[0];
 	if (not defined $arg_type) {
 	    $msg .= "    --$_\n";
 	}
