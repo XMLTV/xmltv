@@ -546,7 +546,10 @@ sub Form2Request($$)
     my $self=shift;
     my $form=shift;
 
-    return(undef) if ( !defined($form->{attrs}) );
+    if ( !defined($form->{attrs}) ) {
+	warn "no 'attrs' key in form passed in";
+	return undef;
+    }
 
     my $button;
     my @pairs;
@@ -560,7 +563,6 @@ sub Form2Request($$)
     for my $input (@{$form->{inputs}}) {
 	if ( !defined($input->{type}) ) {
 	    warn("zap2it form 'input' missing type");
-	    
 	    return(undef);
 	}
 	if ( $input->{type} eq "submit" ||
@@ -584,7 +586,6 @@ sub Form2Request($$)
 		}
 		else {
 		    warn("zap2it form has input '$input->{name}' we don't have a value for");
-		    
 		    return(undef);
 		}
 	    }
@@ -648,7 +649,12 @@ sub Form2Request($$)
 	    }
 	}
 	$url.=$args;
-	return(GET(URI->new_abs($url, $self->{formSettings}->{urlbase})));
+	my $uri = URI->new_abs($url, $self->{formSettings}->{urlbase});
+	die "could not make URI from $url and $self->{formSettings}->{urlbase}"
+	     if not $uri;
+	my $got = GET($uri);
+	warn "could not get $uri" if not defined $got;
+	return $got;
     }
     elsif ( $form->{attrs}->{method} eq "post" ) {
 	my $uri = URI->new('http:');
@@ -666,6 +672,7 @@ sub Form2Request($$)
 	return($req)
     }
     else {
+	warn "bad method in form passed in: $form->{attrs}->{method}";
 	return(undef);
     }
 }
