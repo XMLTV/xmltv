@@ -63,7 +63,7 @@ GetOptions(nodeps         => \$opt_nodeps,
 	  );
 
 our $VERSION;
-$VERSION = '0.5.36';
+$VERSION = '0.5.37';
 
 # Fragment of Makefile text to give the directory where files should
 # be installed.  The extra '.' in the middle of the path is to avoid
