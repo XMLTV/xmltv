@@ -1830,7 +1830,7 @@ sub invokeStage($$)
     my $startTime=time();
     if ( $stage == 1 ) {
 	$self->status("parsing Movies list for stage $stage..");
-	my $countEstimate=398000;
+	my $countEstimate=420000;
 	my $num=$self->readMoviesOrGenres("Movies", $countEstimate, "$self->{imdbListFiles}->{movies}");
 	if ( $num < 0 ) {
 	    if ( $num == -2 ) {
@@ -1881,7 +1881,7 @@ sub invokeStage($$)
     elsif ( $stage == 2 ) {
 	$self->status("parsing Directors list for stage $stage..");
 
-	my $countEstimate=85000;
+	my $countEstimate=95000;
 	my $num=$self->readCastOrDirectors("Directors", $countEstimate, "$self->{imdbListFiles}->{directors}");
 	if ( $num < 0 ) {
 	    if ( $num == -2 ) {
@@ -1948,7 +1948,7 @@ sub invokeStage($$)
 	$self->status("parsing Actors list for stage $stage..");
 
 	#print "re-reading movies into memory for reverse lookup..\n";
-	my $countEstimate=508000;
+	my $countEstimate=550000;
 	my $num=$self->readCastOrDirectors("Actors", $countEstimate, "$self->{imdbListFiles}->{actors}");
 	if ( $num < 0 ) {
 	    if ( $num == -2 ) {
@@ -1999,7 +1999,7 @@ sub invokeStage($$)
     elsif ( $stage == 4 ) {
 	$self->status("parsing Actresses list for stage $stage..");
 
-	my $countEstimate=308000;
+	my $countEstimate=340000;
 	my $num=$self->readCastOrDirectors("Actresses", $countEstimate, "$self->{imdbListFiles}->{actresses}");
 	if ( $num < 0 ) {
 	    if ( $num == -2 ) {
@@ -2507,7 +2507,8 @@ sub invokeStage($$)
 		    $year="0000";
 		}
 		else {
-		    die "unable to decode year from title key \"$title\", report to xmltv-devel\@lists.sf.net";
+		    warn "unable to decode year from title key \"$title\", report to xmltv-devel\@lists.sf.net";
+		    $year="0000";
 		}
 		$title=~s/(.*),\s*(The|A|Une|Les|L\'|Le|La|El|Das)$/$2 $1/og;
 		
