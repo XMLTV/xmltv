@@ -66,6 +66,7 @@ use Date::Manip;
 use Tie::RefHash;
 use Term::ProgressBar;
 use IO::File;
+use Tie::RefHash;
 
 use XMLTV;
 use XMLTV::TZ qw(gettz);
@@ -89,8 +90,7 @@ sub date_programmes( $$ );
 sub add_clumpidx( $ );
 sub get_channel_pkgs();
 sub init_channels();
-sub write_channels( $$$$$ );
-sub wanted_by_region( $ );
+sub write_channels( $$ );
 sub get_pages( $$ );
 sub configure();
 sub grab( @ );
@@ -195,16 +195,17 @@ else {
 }
 
 # Download the three index pages now.
-my $index_pages = get_pages('getting list of channels', [ qw(regions channels dir) ]);
+my $index_pages = get_pages('getting list of channels', [ qw(regions allchannels dir) ]);
 
 # Set up the global channels and regions data.  This is needed for
 # both configuration and grabbing.
 #
 my $regions = get_regions($index_pages->{regions}->{content},
 			  $index_pages->{regions}->{url});
+XMLTV::Ananova_Channel->know_regions(values %$regions);
 my %region_display = reverse %$regions;
 init_channels();
-read_channels_page($index_pages->{channels}->{content});
+read_channels_page($index_pages->{allchannels}->{content});
 
 # Predefined channel packages for ease of configuration.
 my %channel_pkgs = get_channel_pkgs();
@@ -374,7 +375,8 @@ sub grab( @ ) {
 	       });
 
     # Find which listing files are available.
-    my @files = files();
+    my @files = get_dir($index_pages->{dir}->{content},
+			$index_pages->{dir}->{url});
 
     # Now read the config file to find which files to download.  The
     # user can choose channels by type (radio or satellite), region,
@@ -396,7 +398,17 @@ sub grab( @ ) {
 	    $wanted_type{$1} = 1;
 	}
 	elsif (/^region\s+(.+)/) {
-	    $wanted_region{$1} = 1;
+	    my $region = $1;
+
+	    # For backward compatibility turn old-style Ananova
+	    # regions like 'ne_11' into just numbers like '11'.
+	    #
+	    if ($region =~ /^[a-z]+_(\d+)$/) {
+		$region = $1;
+	    }
+	    die "$CONFIG_FILE:$.:bad region specification $region"
+	      if $region =~ tr/0-9//c;
+	    $wanted_region{$region} = 1;
 	}
 	# No way to ask for channel packages directly, they are used
 	# only by --configure.  So far.
@@ -409,57 +421,81 @@ sub grab( @ ) {
     # Filter out the files we want to download - those with the correct
     # channel type, region or channel id.
     #
-    my @new_files;
     t 'deciding which files to download';
     my %used_xmltv_id;
-    foreach (@files) {
-	#    local $Log::TraceMessages::On = 1;
-	t 'looking at file: ' . d $_;
-	if (defined $opt_days and $opt_days < $_->[0]) {
+    my $wanted_file = sub( $ ) {
+#	local $Log::TraceMessages::On = 1;
+	t 'looking at file: ' . d $_[0];
+	my ($filename, $day, $aid) = @{$_[0]};
+	if (defined $opt_days and $opt_days < $day) {
 	    t 'outside the --days range';
-	    next;
+	    return 0;
 	}
 
 	if ($want_all) {
 	    t 'want all files, so want this one';
-	    push @new_files, $_;
-	    next;
+	    return 1;
 	}
 
-	my $tor = $_->[1];
-	t "type or region: $tor";
-	if ($wanted_type{$tor} or $wanted_region{$tor}) {
-	    t 'want this type or region';
-	    push @new_files, $_;
-	    next;
-	}
-
-	my $ch = XMLTV::Ananova_Channel->find_by_ananova_id($_->[2]);
+	my $ch = XMLTV::Ananova_Channel->find_by_ananova_id($aid);
 	t 'looked up by Ananova id: ' . d $ch;
-	if (defined $ch) {
-	    my $xmltv_id = $ch->get_xmltv_id();
-	    t 'channel has XMLTV id: ' . d $xmltv_id;
-	    if (defined $xmltv_id) {
-		if ($wanted_xmltv_id{$xmltv_id}) {
-		    t 'this id is wanted';
+	if (not defined $ch) {
+	    warn "cannot lookup $aid";
+	    return 0;
+	}
 
-		    # But the same id may be available as two different
-		    # files.  We want only the first Ananova set of pages
-		    # for this channel.
-		    #
-		    if ($ch->get_first_ananova_id() eq $_->[2]) {
-			t 'is first Ananova id, adding';
-			push @new_files, $_;
-			$used_xmltv_id{$xmltv_id}++;
-			next;
-		    } else {
-			t 'a secondary Ananova page for this channel, not adding';
-		    }
-		}
+	# The same channels may be available as two different
+	# files.  We want only the first Ananova set of pages
+	# for this channel.
+	#
+	if ($ch->get_first_ananova_id() eq $aid) {
+	    t 'is first Ananova id, continuing';
+	} else {
+	    t 'a secondary Ananova page for this channel, skipping';
+	    return 0;
+	}
+
+	my $type = $ch->get_type();
+	if (defined $type) {
+	    if ($wanted_type{$type}) {
+		t "wanted by type $type";
+		return 1;
 	    }
 	}
-    }
-    @files = @new_files;
+	else {
+	    warn 'channel ' . $ch->stringify() . ' has no type';
+	    return 0;
+	}
+
+	foreach my $wr (keys %wanted_region) {
+	    if ($ch->is_region($wr)) {
+		t "belongs to wanted region $wr";
+		return 1;
+	    }
+	}
+
+	my $xmltv_id = $ch->get_xmltv_id();
+	t 'channel has XMLTV id: ' . d $xmltv_id;
+	if (defined $xmltv_id) {
+	    if ($wanted_xmltv_id{$xmltv_id}) {
+		t 'this id is wanted';
+		$used_xmltv_id{$xmltv_id}++;
+		return 1;
+	    }
+	}
+	else {
+	    warn 'channel has no XMLTV id: ' . $ch->stringify();
+	    return 0;
+	}
+
+	t 'nothing matched';
+	return 0;
+    };
+
+    @files = grep { $wanted_file->($_) } @files;
+    foreach (@files) { die if not ref }
+#    local $Log::TraceMessages::On = 1;
+    t 'files to download: ' . d \@files;
     t 'checking that every wanted XMLTV id was found';
     foreach (sort keys %wanted_xmltv_id) {
 	next if $used_xmltv_id{$_};
@@ -475,14 +511,16 @@ sub grab( @ ) {
     #
     # We download all the files at once, then process them one by one.
     #
-    my $got = get_pages('downloading listings', [ map { $_->[3] } @files ]);
+    my $got = get_pages('downloading listings', [ map { $_->[0] } @files ]);
     my $bar = new Term::ProgressBar('parsing', scalar @files);
     my $first_day;
+    my %chans_todo; tie %chans_todo, 'Tie::RefHash';
     my $wrote_channels = 0;
     my @progs_todo;
-    foreach (sort { $a->[0] <=> $b->[0] } @files) {
-	my ($day, $type, $ananova_id, $filename) = @$_;
-	t "getting file for day $day, type $type, Ananova id $ananova_id, filename $filename";
+    foreach (sort { $a->[1] <=> $b->[1] } @files) { # FIXME use
+                                                    # hashrefs not lists
+	my ($filename, $day, $ananova_id) = @$_;
+	t "getting file for day $day, Ananova id $ananova_id, filename $filename";
 	die if defined $opt_days and $day > $opt_days;
 	$first_day = $day if not defined $first_day;
 
@@ -509,6 +547,13 @@ sub grab( @ ) {
 	    date_programmes($progs, $day_date);
 	    add_clumpidx($progs);
 	    push @progs_todo, @$progs;
+
+	    # Add the channel to the list of channels to output.  Well
+	    # actually it's a hash because in the case of grabbing ALL
+	    # files on Ananova we may grab the same channel twice (but
+	    # it should be written as a <channel> element only once).
+	    #
+	    ++$chans_todo{$ch};
 	}
 	else {
 	    my $chd = $ch->get_a_display_name();
@@ -518,10 +563,14 @@ sub grab( @ ) {
 	# Check to see if we have to write channels data first.
 	if (not $wrote_channels) {
 	    if ($day != $first_day) {
-		# Must have done a whole day's listings, channels are ready to
-		# write.
+		# Must have done a whole day's listings, channels are
+		# ready to write.  We write only those channels for
+		# which there were programmes during the first day -
+		# this is good enough and avoids writing out channels
+		# which were listed in dir but didn't really have any
+		# programmes.
 		#
-		write_channels($writer, $want_all, \%wanted_type, \%wanted_xmltv_id, \%wanted_region);
+		write_channels($writer, [ keys %chans_todo ]);
 		$wrote_channels = 1;
 	    }
 	}
@@ -539,80 +588,13 @@ sub grab( @ ) {
     # is written.
     #
     if (not $wrote_channels) {
-	write_channels($writer, $want_all, \%wanted_type, \%wanted_xmltv_id, \%wanted_region);
+	write_channels($writer, [ keys %chans_todo ]);
 	$writer->write_programme($_) foreach @progs_todo;
 	$wrote_channels = 1; @progs_todo = ();
     }
 
     # Finish.
     $writer->end();
-}
-
-
-# files()
-#
-# Return a list of the 'files' available on Ananova, where each gives
-# one day's listings for a particular channel.
-#
-# Returns: a list of [ day, type, channel, filename ], where
-# type is one of 'radio', 'satellite', or a region code.
-#
-sub files() {
-    my @files;
-    my %seen_ch;
-    foreach (get_dir($index_pages->{dir}->{content},
-		     $index_pages->{dir}->{url})) {
-	#    local $Log::TraceMessages::On = 1;
-	my ($orig, $day, $ananova_id, $region) = @$_;
-	t 'got line from dir: orig=' . d($orig) . ', day=' . d($day) . ', ananova_id=' . d($ananova_id) . ', region=' . d($region);
-	my $ch = XMLTV::Ananova_Channel->find_by_ananova_id($ananova_id);
-	t 'found channel by Ananova id: ' . d $ch;
-	if (not defined $ch) {
-	    t 'creating a new channel and adding id';
-	    $ch = new XMLTV::Ananova_Channel();
-	    $ch->add_ananova_id($ananova_id);
-	}
-	$seen_ch{$ch}++;	# no dup check, since multiple days
-
-	# If channel not seen before, assume terrestrial.
-	my $type = $ch->get_type();
-	$type = 'terrestrial' if not defined $type;
-	my $has_region = (defined $region);
-
-	if ($type eq 'terrestrial') {
-	    if ($has_region) {
-		$ch->add_region($region);
-		push @files, [ $day, $region, $ananova_id, $orig ];
-	    } else {
-		# Probably an old file which is still lying around in dir.
-		# We don't bother with these.
-		#
-		$type = 'duff';
-	    }
-	} elsif ($type eq 'satellite' or $type eq 'radio') {
-	    if ($has_region) {
-		warn 'channel ' . $ch->stringify() . " was seen as $type but also region $region";
-	    } else {
-		push @files, [ $day, $type, $ananova_id, $orig ];
-	    }
-	} elsif ($type eq 'duff') {
-	    # Ignore.
-	} else {
-	    die "bad type $type";
-	}
-	$ch->set_type($type);
-    }
-    t 'files: ' . d \@files;
-
-    # Check that there are no redundant entries in the channel data.
-    foreach (XMLTV::Ananova_Channel->all()) {
-	unless ($seen_ch{$_}) {
-	    warn "channels data mentions channel $_, but not used\n";
-	    $_->set_type('duff');
-	}
-    }
-
-    return @files;
 }
 
 
@@ -632,7 +614,8 @@ sub get_copyright( $ ) {
 
 
 # Return a reference to an ordered hash mapping region display name to
-# Ananova internal region name.
+# Ananova internal region number.  The old Ananova region names like
+# 'ea_0' are ignored, now we just look at the number 0.
 #
 # Parameters:
 #   contents of Ananova 'regions' page
@@ -646,7 +629,7 @@ sub get_regions( $$ ) {
 	s/^\s+//; s/\s+$//;
 	s/\#.*//;
 	next if $_ eq '';
-	if (/^region\.((?:[a-z]+_)?\d+)=(.+)$/) {
+	if (/^region\.(?:[a-z]+_)?(\d+)=(.+)$/) {
 	    $r{$2} = $1;
 	}
 	else {
@@ -663,10 +646,7 @@ sub get_regions( $$ ) {
 # Get the list of Ananova 'filenames' and parse each filename into a
 # tuple of:
 #
-# [ original filename, day number, channel id, region ]
-#
-# Region may be undef, and channel id will also contain the region
-# details (so that bbc1_2 and bbc1ea_0 are distinct channels).
+# [ original filename, day number, Ananova channel id ]
 #
 # Returns a list of these tuples (er, listrefs).
 #
@@ -692,37 +672,7 @@ sub get_dir( $$ ) {
 	my $day = $1;
 	my $channel = $_;
 
-	my $region;
-	foreach my $r (values %$regions) {
-	    if ($r =~ /\D/ && s/$r$//) {
-		# Ends with the region code itself.  This isn't
-		# applicable if the region code is just a number.
-		#
-		$region = $r;
-		last;
-	    }
-	    
-	    $r =~ /(\d+)$/ or die "bad region code $r";
-#	    t "just the number of region: $1";
-	    if (/_$1$/) {
-		# Ends with _ and just the number of the region.
-		$region = $r;
-		last;
-	    }
-	}
-
-	if (not defined $region) {
-	    if (/^(?:[a-z]+_)?[a-z0-9]+$/) {
-		# No region at all, okay.
-	    }
-	    else {
-		unless ($warned_unknown_region{$_}++) {
-		    warn "can't find region for channel id $_\n";
-		}
-	    }
-	}
-
-	push @r, [ $orig, $day, $channel, $region ];
+	push @r, [ $orig, $day, $channel ];
     }
     return @r;
 }
@@ -734,7 +684,7 @@ sub get_dir( $$ ) {
 # Parameter: content of channels page
 #
 sub read_channels_page( $ ) {
-    my $data = shift;
+    my $data = shift; die if not defined $data;
     local $Log::TraceMessages::On = 0;
 
     my (%type, %display);
@@ -745,39 +695,32 @@ sub read_channels_page( $ ) {
 	s/\#.*//;
 	next if $_ eq '';
 	
-	if (/^(radio|satellite)\.([a-z0-9_]+)=(.+)$/) {
-	    t 'matched';
-	    my ($type, $ananova_id, $display) = ($1, $2, $3);
-	    t "type=$type, ch=$ananova_id, display=$display";
-
-	    my $ch = XMLTV::Ananova_Channel->find_by_ananova_id($ananova_id);
-	    $ch = new XMLTV::Ananova_Channel() if not defined $ch;
-	    $ch->set_type($type);
-	    $ch->add_ananova_id($ananova_id);
-
-	    # Only set the display name based on the first (ie,
-	    # best) Ananova id for this channel.  Otherwise we'd
-	    # have a conflict between say 'Border' and 'Border
-	    # (Scottish viewers)'.  Only the first of the two should
-	    # have a chance to set the display name.
-	    #
-	    if ($ch->get_first_ananova_id() eq $ananova_id) {
-		$ch->set_main_display_name($display, 0);
-	    }
-
-	    if ($seen_display{lc $display}++) {
-		# Kludge around fact that we _know_ Nickelodeon
-		# is wrong: I've reported it but they haven't fixed it
-		# yet.
-		#
-		unless ($display eq 'Nickelodeon') {
-		    warn "channel display name $display seen twice";
-		}
-	    }
-	}
-	else {
+	if (not /^([^=]+)=(.+)/) {
 	    warn "bad line in channels listing: $_\n";
+	    next;
 	}
+	my ($ananova_id, $display) = ($1, $2);
+	t "ch=$ananova_id, display=$display";
+	my $ch = XMLTV::Ananova_Channel->find_by_ananova_id($ananova_id);
+	$ch = new XMLTV::Ananova_Channel() if not defined $ch;
+	$ch->add_ananova_id($ananova_id);
+
+	# Only set the display name based on the first (ie,
+	# best) Ananova id for this channel.  Otherwise we'd
+	# have a conflict between say 'Border' and 'Border
+	# (Scottish viewers)'.  Only the first of the two should
+	# have a chance to set the display name.
+	#
+	if ($ch->get_first_ananova_id() eq $ananova_id) {
+	    $ch->set_main_display_name($display);
+	}
+	# Additional display names are added from the channel_ids file
+	# but *not* from Ananova's extra names.
+	#
+	# No warning for duplicate display names, that often happens.
+	#
+
+	$ch->guess_type() if not defined $ch->get_type();
     }
 }
 
@@ -830,23 +773,10 @@ sub read_file( $$$$$ ) {
 	return undef;
     }
 
-    # Set the definitive channel name, if not already set.  The
-    # channel name can change if the same channel is listed in two
-    # places, for example 'Sky Sports 2' and 'Sky Sports 2 (ITV
-    # Digital)'.  We could end up grabbing both pages and mapping them
-    # to the same channel.  The first name found wins.
+    # No need to check the display name, we assume it will be the same
+    # as in the show=allchannels list.  Ah, bliss.
     #
-    # In practice I expect that soon we'll make sure to grab only one
-    # of the two pages: getting both is really just for debugging.
-    #
-
-    # Check the channel name is as expected (if we know what the
-    # display name should be for this channel).
-    #
-    my $got_ch_display = shift @lines;
-    if (not $ch->has_definitive_display_name()) {
-	$ch->set_main_display_name($got_ch_display, 1);
-    }
+    shift @lines;
 
     my $copyright = pop @lines;
     if ($copyright !~ /^\(c\) Copyright/) {
@@ -1144,11 +1074,11 @@ sub read_file( $$$$$ ) {
 	# ignore it.
 	#
 
-	# There is one main description and four additional
+	# There is one main description and up to four additional
 	# descriptions with increasing levels of detail.  We
 	# sanity-check that they have more or less increasing length.
 	#
-	my @descs = @fields[17..20];
+	my @descs = @fields[17..$#fields];
 	foreach my $i (0 .. $#descs) {
 	    next if not defined $descs[$i] or not length $descs[$i];
 	    foreach my $j ($i+1 .. $#descs) {
@@ -1185,7 +1115,7 @@ sub read_file( $$$$$ ) {
 	    push @{$p{desc}}, [ $_, $LANG ];
 	}
 
-	# Channel.  By now we know the definitive display name of the
+	# Channel.  By now we know the display name of the
 	# channel, so we can call get_xmltv_id().
 	#
 	$p{channel} = $ch->get_xmltv_id();
@@ -1457,79 +1387,18 @@ END
     t 'add_clumpidx() EXIT';
 }
 
-# Write channels which are used.  We can't write channels which we
-# didn't use, because we never downloaded any files for them and so
-# never found out what the definitive display name was.  Fortunately,
-# writing out channels that weren't used is pointless anyway :-).
+# Write channels as XMLTV.
 #
 # Parameters:
 #     XMLTV::Writer to use
-#     whether all channels are wanted
-#     ref to hash mapping channel type to wanted
-#     ref to hash mapping xmltv id to wanted
-#     ref to hash mapping region to wanted
-# FIXME should pass this 'channel wanted' info better
+#     ref to list of Ananova_Channel objects.
 #
-sub write_channels( $$$$$ ) {
+sub write_channels( $$ ) {
 #    local $Log::TraceMessages::On = 1;
     my $writer = shift;
-    my $want_all = shift;
-    use vars '%wanted_type'; local *wanted_type = shift;
-    use vars '%wanted_xmltv_id'; local *wanted_xmltv_id = shift;
-    use vars '%wanted_region'; local *wanted_region = shift;
-    my @wanted;
-    foreach (XMLTV::Ananova_Channel->all()) {
-	t 'is this channel wanted? : ' . d $_;
-	my $type = $_->get_type();
-	die "channel $_ has unknown type" if not defined $type;
-	if ($want_all
-	    or $wanted_type{$type}
-	    or $type eq 'terrestrial' and wanted_by_region($_)) {
-	    t 'all, or by type, or by region: yes';
-	    push @wanted, $_;
-	    next;
-	}
-	
-	my $xmltv_id = $_->get_xmltv_id();
-	if (defined $xmltv_id and $wanted_xmltv_id{$xmltv_id}) {
-	    t 'by XMLTV id, yes';
-	    push @wanted, $_;
-	    next;
-	}
-	t 'no';
-    }
-
-    my @new_wanted;
-    foreach (@wanted) {
-	# The XMLTV id and display name should be available by now.
-	# If not, something went wrong downloading that channel and it
-	# shouldn't be output.
-	#
-	my $has_xmltv_id = (defined $_->get_xmltv_id());
-	my $has_dn = (defined $_->get_main_display_name());
-
-	if (not $has_xmltv_id) {
-	    warn 'cannot find or make XMLTV id for channel ' . $_->stringify() . ', not writing';
-	    next;
-	}
-
-	if (not $has_dn) {
-	    warn 'channel ' . $_->stringify() . ' has no display name, not writing';
-	    next;
-	}
-
-	push @new_wanted, $_;
-    }
-    foreach (sort { $a->get_xmltv_id() cmp $b->get_xmltv_id() } @new_wanted) {
+    foreach (sort { $a->get_xmltv_id() cmp $b->get_xmltv_id() } @{shift()}) {
 	$_->write($writer, $LANG);
     }
-}
-sub wanted_by_region($) {
-    my $ch = shift;
-    foreach (keys %wanted_region) {
-	return 1 if $ch->is_region($_);
-    }
-    return 0;
 }
 
 
@@ -1558,6 +1427,7 @@ sub wanted_by_region($) {
 # versions of a channel are indeed identical.
 #
 sub init_channels() {
+#    local $Log::TraceMessages::On = 1;
     # See the distributed version of this file for info about the
     # format.
     #
@@ -1570,9 +1440,9 @@ sub init_channels() {
 	next unless length;
 	my @fields = split /:/;
 	die "$channel_names_file:$.: wrong number of fields"
-	  if @fields < 2 or @fields > 3;
+	  if @fields < 3 or @fields > 4;
 
-	my ($xmltv_id, $ananova_ids, $extra_dn) = @fields;
+	my ($xmltv_id, $ananova_ids, $type, $extra_dn) = @fields;
 	my @aids = split /,/, $ananova_ids;
 	die "$channel_names_file:$.: no Ananova ids"
 	  if not @aids;
@@ -1584,6 +1454,8 @@ sub init_channels() {
 	    t "adding Ananova id $_";
 	    $ch->add_ananova_id($_);
 	}
+	t 'setting type: ' . d $type;
+	$ch->set_type($type);
 	t 'maybe adding extra display name: ' . d $extra_dn;
 	$ch->add_extra_display_names($extra_dn)
 	  if defined $extra_dn;
@@ -1637,8 +1509,10 @@ sub get_channel_pkgs() {
 # Dies if a page cannot be downloaded.
 #
 sub get_pages( $$ ) {
+#    local $Log::TraceMessages::On = 1;
     my ($text, $pages) = @_;
     my @pages = @$pages;
+    foreach (@pages) { die if not defined }
     my %r;
     my $num_pages = scalar @pages;
     t "initializing progress bar with $num_pages items";
@@ -1673,6 +1547,13 @@ sub get_pages( $$ ) {
 	    # comment in the middle of it, ignore that line.
 	    #
 	    $is_comment = 0 if /^\#\s+OK,/;
+
+	    # Another: if a file doesn't exist this is given in a
+	    # comment!
+	    #
+	    if ($is_comment and /^\#\s+\S+ does not exist/) {
+		$is_comment = 0;
+	    }
 
 	    if (not $is_comment and not $in_comment) {
 		# Another ordinary line on the current page.
