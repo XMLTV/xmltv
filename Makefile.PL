@@ -274,6 +274,7 @@ WriteMakefile
    'EXE_FILES'     => \@exes,
    'PL_FILES'      => { 'filter/tv_grep.PL'     => 'filter/tv_grep',
 			'grab/uk/tv_grab_uk.PL' => 'grab/uk/tv_grab_uk',
+			'grab/uk_rt/tv_grab_uk_rt.PL' => 'grab/uk_rt/tv_grab_uk_rt',
 			'lib/XMLTV.pm.PL'       => 'lib/XMLTV.pm',
 		      },
    'PM'            => \%pm,
@@ -403,7 +404,9 @@ sub MY::installbin {
     foreach (@::docs) {
 	$doc_files{$_} = File::Basename::basename($_);
     }
-    my %share_files = ('grab/uk/channel_ids' => 'tv_grab_uk/channel_ids');
+    my %share_files = ('grab/uk/channel_ids' => 'tv_grab_uk/channel_ids',
+		       'grab/uk_rt/channel_ids' => 'tv_grab_uk_rt/channel_ids',
+		      );
     foreach (<grab/uk/channel_pkgs/*>) {
 	next if -d;
 	die if defined $share_files{$_};
@@ -484,6 +487,7 @@ sub MY::clean {
     $inherited =~ s/\s+$//;
     $inherited .= "\n\t-rm -f filter/tv_grep\n";
     $inherited .= "\n\t-rm -f grab/uk/tv_grab_uk\n";
+    $inherited .= "\n\t-rm -f grab/uk_rt/tv_grab_uk_rt\n";
     $inherited .= "\n\t-rm -f lib/XMLTV.pm\n";
     return $inherited;
 }
@@ -494,19 +498,27 @@ sub MY::processPL {
 
     # Creating tv_grep depends on tv_grep.in and XMLTV.pm (as well as
     # tv_grep.PL).  Creating tv_grab_uk depends on tv_grab_uk.in.
-    # Creating XMLTV.pm depends on XMLTV.pm.in.
+    # Creating tv_grab_uk_rt depends on tv_grab_uk_rt.in.  Creating
+    # XMLTV.pm depends on XMLTV.pm.in.
     #
     $inherited =~ s!^(\s*filter/tv_grep\s+::\s.+)!$1 filter/tv_grep.in pm_to_blib!m
       or die "no filter/tv_grep in: $inherited";
     $inherited =~ s!^(\s*grab/uk/tv_grab_uk\s+::\s.+)!$1 grab/uk/tv_grab_uk.in!m
       or die "no grab/uk/tv_grab_uk in: $inherited";
+    $inherited =~ s!^(\s*grab/uk_rt/tv_grab_uk_rt\s+::\s.+)!$1 grab/uk_rt/tv_grab_uk_rt.in!m
+      or die "no grab/uk_rt/tv_grab_uk_rt in: $inherited";
     $inherited =~ s!^(\s*lib/XMLTV\.pm\s+::\s.+)!$1 lib/XMLTV.pm.in!m
       or die "no lib/XMLTV.pm in: $inherited";
 
-    # And tv_grab_uk.in needs the share/ directory passed as an extra argument.
+    # And two of the .in generators need the share/ directory passed
+    # as an extra argument.
+    #
     $inherited =~ s{(grab/uk/tv_grab_uk.PL grab/uk/tv_grab_uk)\s*$}
       {$1 $::extra_constants{INSTALLSHARE}}m
 	or die "no call to tv_grab_uk.PL in: $inherited";
+    $inherited =~ s{(grab/uk_rt/tv_grab_uk_rt.PL grab/uk_rt/tv_grab_uk_rt)\s*$}
+      {$1 $::extra_constants{INSTALLSHARE}}m
+	or die "no call to tv_grab_uk_rt.PL in: $inherited";
 
     return $inherited;
 }
