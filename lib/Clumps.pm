@@ -338,7 +338,7 @@ sub fix_clumps( $$$ ) {
 		    die unless Date_Cmp($old_stop, $stop_new) >= 0;
 		    die unless Date_Cmp($old_stop, $start_new) >= 0;
 		}
-		set_stop_time($old, $start_new_unp);
+		$old->{stop} = $start_new_unp;
 		t "set stop time to $old->{stop}";
 
 		push @new_all, $old;
