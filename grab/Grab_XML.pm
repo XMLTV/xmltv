@@ -311,7 +311,7 @@ sub go( $ ) {
 	push @listingses, XMLTV::parse($xml);
 	update $bar if not $opt_quiet;
     }
-    $bar->finish();
+    $bar->finish() if not $opt_quiet;
     my %w_args = ();
     if (defined $opt_output) {
 	my $fh = new IO::File ">$opt_output";
