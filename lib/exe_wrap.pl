@@ -65,6 +65,7 @@ if ($cmd eq 'tv_grab_uk' or $cmd eq 'tv_grab_uk_rt')
     {
         my $dir = dirname(PerlApp::exe()); # get full program path
         $dir =~ s!\\!/!g;      # use / not \   
+        die "EXE path contains spaces.  This is known to cause problems.\nPlease move xmltv.exe to a different directory\n" if $dir =~ / /;
         $dir .= "/share/xmltv";
     	unless (-d $dir )
     	    {
