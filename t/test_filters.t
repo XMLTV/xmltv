@@ -48,7 +48,9 @@ GetOptions('tests-dir=s' => \$tests_dir, 'cmds-dir=s' => \$cmds_dir,
 	   'verbose' => \$verbose)
   or usage(0);
 my @tests = <$tests_dir/*.xml>;
-die "no test cases (*.xml) found in $tests_dir"
+my @tests_gz = <$tests_dir/*.xml.gz>; s/\.gz$// foreach @tests_gz;
+@tests = (@tests, @tests_gz);
+die "no test cases (*.xml, *.xml.gz) found in $tests_dir"
   if not @tests;
 foreach (@tests) {
     s!^\Q$tests_dir\E/!!o or die;
@@ -74,6 +76,17 @@ foreach my $cmd (@cmds) {
 	my $expected = "$base.expected";
 	my $out      = "$base.out";
 	my $err      = "$base.err";
+
+	# Gunzip automatically before testing, gzip back again afterwards.
+	my (@to_gunzip, @to_gzip);
+	foreach ($in, $expected) {
+	    my $gz = "$_.gz";
+	    if (not -e and -e $gz) {
+		push @to_gunzip, $gz;
+		push @to_gzip, $_;
+	    }
+	}
+	system 'gzip', '-d', @to_gunzip if @to_gunzip;
 
 	my @cmd = (@$cmd, $in, '--output', $out);
 	$cmd[0] = "$cmds_dir/$cmd[0]";
@@ -128,7 +141,6 @@ foreach my $cmd (@cmds) {
 		    print "not ok $test_num\n";
 		}
 		else {
-
 		    print "ok $test_num\n";
 		    unlink $out or warn "cannot unlink $out: $!";
 		    unlink $err or warn "cannot unlink $err: $!";
@@ -148,6 +160,8 @@ foreach my $cmd (@cmds) {
 	      or die "cannot rename $out to $expected: $!";
 	    unlink $err or warn "cannot unlink $err: $!";
 	}
+
+	system 'gzip', @to_gzip if @to_gzip;
     }
 }
 die if $test_num != $num_tests;
