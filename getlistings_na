@@ -1,5 +1,7 @@
 #!/usr/bin/perl -w
 #
+# $Id$
+#
 # This script scrapes www.zap2it.com tv listings, producing
 # xmltv.dtd and channels.dtd compliant output. Zap2it supports
 # both Canadian and US listings.
@@ -24,8 +26,17 @@
 #  - some error messages come to stdout instead of stderr
 #  - scraping error should include failed html (especially when they
 #    successfuly scrape half of it then start missing.)
+#  - channels should be dealt with in sorted order by channel #
+#    not stationid order.
 #
 # $Log$
+# Revision 1.8  2001/11/11 22:26:30  jveldhuis
+# now only writes channels file when approprate so only writes is
+# out every day if you've specified a filename that contains imbedded
+# date information, same as with programs filenames.
+#
+# prints summary statistics about how much and how fast the grabber was
+#
 # Revision 1.7  2001/11/11 16:44:19  epaepa
 # Whoops, just realized that the last changelog message would itself get
 # keyword-expanded, causing no end of confusion.  I had to perform some
@@ -620,27 +631,12 @@ if ( $opt_days < 0 || $opt_days > 14 ) {
 
 STDOUT->autoflush(1);
 
-# initalize global XML::Writer if we're writting programs to stdout
-# or if all programs are to being output'd to a single file.
-# The later allows us to use --programs tv.xml with more than one
-# days listings.
-my $Pwriter_g;
-
-# Poutput_g is only used if we are writting all Programs to the same file.
-my $Poutput_g;
-
 my @FilesWeOpened_g;
 
 my $failed=grab();
 
-if ( defined($Pwriter_g) ) {
-    $Pwriter_g->endTag('tv');
-    $Pwriter_g->end();
-    $Poutput_g->close() if ( defined($Poutput_g) );
-}
-
 if ( $failed != 0 ) {
-    #print STDERR "cleaning up..\n";
+    print STDERR "cleaning up after failure..\n";
     if ( @FilesWeOpened_g ) {
 	for my $file (@FilesWeOpened_g) {
 	    if ( -f $file ) {
@@ -653,7 +649,7 @@ if ( $failed != 0 ) {
 }
 exit(0);
 
-sub writeXMLHeader($)
+sub writeProgramXMLHeader($)
 {
     my $writer=shift;
 
@@ -668,8 +664,40 @@ sub writeXMLHeader($)
 		      'generator-info-url'  =>'http://www.sourceforge.net/projects/xmltv');
 }
 
+sub writeProgramXMLFooter($)
+{
+    my $writer=shift;
+    $writer->endTag('tv');
+}
+
+sub writeChannelXMLHeader($)
+{
+    my $writer=shift;
+
+    $writer->xmlDecl("ISO-8859-1", "1.0");
+    $writer->doctype('channels', undef, 'channels.dtd');
+}
+
+sub writeChannelXMLFooter($)
+{
+    my $writer=shift;
+    $writer->endTag('channels');
+}
+
 sub grab
 {
+    my $startTime=time();
+    # initalize global XML::Writer if we're writting programs to stdout
+    # or if all programs are to being output'd to a single file.
+    # The later allows us to use --programs tv.xml with more than one
+    # days listings.
+    my $Pwriter_g;
+    my $Cwriter_g;
+
+    # Poutput_g is only used if we are writting all Programs to the same file.
+    my $Poutput_g;
+    my $Coutput_g;
+
     my $config=new myConfig();
     
     my $configfile=$ConfigFile_g;
@@ -692,10 +720,28 @@ sub grab
 	return(1);
     }
     
+    my $stats;
+
+    $stats->{num_channels}=0;
+    $stats->{num_programs}=0;
+    $stats->{num_days}=0;
+
+    if ( !length($opt_channels) ) {
+    }
+    elsif ( &Date::Manip::UnixDate("now","$opt_channels") eq $opt_channels ) {
+	print STDERR "writing Channels to $opt_channels\n";
+	$Coutput_g = new IO::File("> $opt_channels") || die "$opt_channels: $!";
+	push(@FilesWeOpened_g, $opt_channels);
+	$Cwriter_g = new XML::Writer(OUTPUT=>$Coutput_g,
+				     DATA_MODE => 1, DATA_INDENT => 2 );
+	writeChannelXMLHeader($Cwriter_g);
+	$stats->{num_channels}=writeOutChannels($config, $Cwriter_g);
+    }
+
     if ( !length($opt_programs) ) {
 	print STDERR "writing Programs to stdout\n";
 	$Pwriter_g = new XML::Writer(DATA_MODE => 1, DATA_INDENT => 2 );
-	writeXMLHeader($Pwriter_g);
+	writeProgramXMLHeader($Pwriter_g);
     }
     elsif ( &Date::Manip::UnixDate("now","$opt_programs") eq $opt_programs ) {
 	print STDERR "writing Programs to $opt_programs\n";
@@ -703,27 +749,46 @@ sub grab
 	push(@FilesWeOpened_g, $opt_programs);
 	$Pwriter_g = new XML::Writer(OUTPUT=>$Poutput_g,
 				     DATA_MODE => 1, DATA_INDENT => 2 );
-	writeXMLHeader($Pwriter_g);
+	writeProgramXMLHeader($Pwriter_g);
     }
 
     my $failedCount=0;
-
     my ($y,$m,$d,$h,$mn,$s)=&Date::Manip::Date_Split(&Date::Manip::ParseDateString("now"));
     my $startNDay=&Date::Manip::Date_DayOfYear($m,$d,$y);
+    my $tz=&Date::Manip::Date_TimeZone();
 
     #
     # So that the output a day at a time, this allows for separate files per day
     #
-    my $tz=&Date::Manip::Date_TimeZone();
     my $year=$y;
     for (my $nday=0; $nday<$opt_days ; $nday++) {
-	my $writer;
-	my $output;
+	my $Pwriter;
+	my $Poutput;
+
+	$stats->{num_days}++;;
 
 	my $dateStr=createDateString(0, $startNDay+$nday, $year, 0, $tz);
 
+	if ( !defined($Cwriter_g) ) {
+	    my $filename=&Date::Manip::UnixDate($dateStr, "$opt_programs");
+	    if ( $opt_programs eq $filename ) {
+		die "This case should have been caught before here";
+	    }
+	    
+	    print STDERR "writing Channels to $filename\n";
+	    my $Coutput = new IO::File("> $filename") || die "$filename: $!";
+	    push(@FilesWeOpened_g, $filename);
+	    my $Cwriter = new XML::Writer(OUTPUT=>$Coutput,
+				       DATA_MODE => 1, DATA_INDENT => 2 );
+	    writeChannelXMLHeader($Cwriter);
+	    $stats->{num_channels}=writeOutChannels($config, $Cwriter);
+	    writeChannelXMLFooter($Cwriter);
+	    $Cwriter->end();
+	    $Coutput->close() if ( defined($Coutput) );
+	}
+	
 	if ( defined($Pwriter_g) ) {
-	    $writer=$Pwriter_g;
+	    $Pwriter=$Pwriter_g;
 	}
 	else {
 	    my $filename=&Date::Manip::UnixDate($dateStr, "$opt_programs");
@@ -732,11 +797,11 @@ sub grab
 	    }
 	    
 	    print STDERR "writing Programs to $filename\n";
-	    $output = new IO::File("> $filename") || die "$filename: $!";
+	    $Poutput = new IO::File("> $filename") || die "$filename: $!";
 	    push(@FilesWeOpened_g, $filename);
-	    $writer = new XML::Writer(OUTPUT=>$output, DATA_MODE => 1, DATA_INDENT => 2 );
+	    $Pwriter = new XML::Writer(OUTPUT=>$Poutput, DATA_MODE => 1, DATA_INDENT => 2 );
 	    
-	    writeXMLHeader($writer);
+	    writeXMLProgramHeader($Pwriter);
 	}
 	
 	my $lg=new ZapListings::Scraper('PostalCode'=> $config->{option_postalcode},
@@ -750,7 +815,10 @@ sub grab
 	    
 	    my ($year,$month,$day,$hr,$min,$sec)=Date::Manip::Date_NthDayOfYear($y, $startNDay+$nday);
 	    
-	    if ( $lg->readSchedule($station, $opt_startHour, $opt_endHour, $day, $month, $year) == 0 ) {
+	    if ( $lg->readSchedule($station, 
+				   $config->{channels}->{$station}->{description},
+				   $opt_startHour, $opt_endHour, $day, $month, $year) == -1 ) {
+		print STDERR "readSchedule failed for $day/$month/$year for station $station\n";
 		$failedCount++;
 	    }
 	    else {
@@ -758,20 +826,40 @@ sub grab
 		#Date::Manip::Date_SetConfigVariable('TZ', $lg->{TimeZone});
 		#Date::Manip::Date_Init();
 		
-		writeOutPrograms($lg, $startNDay+$nday, $year, $tz, $writer, $station);
+		$stats->{num_programs}+=writeOutPrograms($lg, $startNDay+$nday, $year, $tz, $Pwriter, $station);
 	    }
 	}
 	
-	if ( defined($Pwriter_g) && $writer != $Pwriter_g ) {
-	    $writer->endTag('tv');
-	    $writer->end();
-	    $output->close();
+	if ( defined($Pwriter_g) && $Pwriter != $Pwriter_g ) {
+	    writeProgramXMLFooter($Pwriter);
+	    $Pwriter->end();
+	    $Poutput->close();
 	}
-	
-	# update and write out channels after every day in case
-	# user wanted different files for different days
-	writeOutChannels($config, $dateStr, $opt_channels);
     }
+
+    if ( defined($Cwriter_g) ) {
+	writeChannelXMLFooter($Cwriter_g);
+	$Cwriter_g->end();
+	$Coutput_g->close() if ( defined($Coutput_g) );
+    }
+
+    if ( defined($Pwriter_g) ) {
+	writeProgramXMLFooter($Pwriter_g);
+	$Pwriter_g->end();
+	$Poutput_g->close() if ( defined($Poutput_g) );
+    }
+
+    my $endTime=time();
+    printf(STDERR "Grabbed %d programs on %d channels over %d day(s) in %d seconds\n",
+	   $stats->{num_programs},
+	   $stats->{num_channels},
+	   $stats->{num_days},
+	   $endTime-$startTime);
+
+    printf(STDERR "  not too bad, that's %.2f programs/sec and %.2f seconds/www page\n",
+	   $stats->{num_programs}/($endTime-$startTime),
+	   ($endTime-$startTime)/($stats->{num_days}*$stats->{num_channels}));
+	    
     return($failedCount);
 }
 
@@ -813,11 +901,6 @@ sub writeOutPrograms($$$$$$)
     my $IncludePartialPrograms=0;
 
     my @programs=$lg->getPrograms();
-
-    for (my $p=0 ; $p<scalar(@programs) ; $p++) {
-	my $prog=$programs[$p];
-
-    }
 
     for my $prog (@programs) {
 
@@ -961,26 +1044,13 @@ sub writeOutPrograms($$$$$$)
 	}
 	$writer->endTag('programme');
     }
+    return(scalar(@programs));
 }
 
 # write the channels in xml format
-sub writeOutChannels($$$)
+sub writeOutChannels($$)
 {
-    my ($config, $dateStr, $filenamefmt)=@_;
-
-    my $filename=&Date::Manip::UnixDate($dateStr, $filenamefmt);
-
-    if ( $filename eq "" ) {
-	return;
-    }
-
-    print STDERR "writing Channels to $filename\n";
-    my $output = new IO::File("> $filename") || die "$filename: $!";
-    push(@FilesWeOpened_g, $filename);
-
-    my $writer = new XML::Writer(OUTPUT=>$output, DATA_MODE => 1, DATA_INDENT => 2 );
-    $writer->xmlDecl("ISO-8859-1", "1.0");
-    $writer->doctype('channels', undef, 'channels.dtd');
+    my ($config, $writer)=@_;
 
     if ( 1 ) {
 	$writer->startTag('channels');
@@ -1009,9 +1079,8 @@ sub writeOutChannels($$$)
 	#$writer->dataElement('url', $channel->{url}) if ( defined($channel->{url}) );
 	$writer->endTag('channel');
     }
-    $writer->endTag('channels');
-    $writer->end();
-    $output->close();
+
+    return(scalar(keys %{$config->{channels}}));;
 }
 
 1;
