@@ -1,12 +1,12 @@
 package XMLTV::Grab_XML;
 use strict;
 use Getopt::Long;
-use LWP::Simple qw();
 use Date::Manip;
 use XMLTV;
 use XMLTV::Usage;
 use XMLTV::Memoize;
 use XMLTV::TZ qw(parse_local_date);
+use XMLTV::Get_nice qw();
 
 # Use Log::TraceMessages if installed.
 BEGIN {
@@ -136,8 +136,9 @@ END
 =item XMLTV::Grab_XML->get()
 
 Given a URL, fetch the content at that URL.  The default
-implementation calls LWP::Simple::get() but you might want to override
-it if you need to do wacky things with http requests, like cookies.
+implementation calls XMLTV::Get_nice::get_nice() but you might want to
+override it if you need to do wacky things with http requests, like
+cookies.
 
 Note that while this method fetches a page, C<xml_from_data()> does
 any further processing of the result to turn it into XML.
@@ -146,7 +147,7 @@ any further processing of the result to turn it into XML.
 sub get( $$ ) {
     my $pkg = shift;
     my $url = shift;
-    return LWP::Simple::get($url);
+    return XMLTV::Get_nice::get_nice($url);
 }
 
 =item XMLTV::Grab_XML->go()
@@ -271,7 +272,7 @@ if it has its own way of fetching web pages.
 =cut
 sub cachables( $ ) {
     my $pkg = shift;
-    return ('LWP::Simple::get');
+    return ('XMLTV::Get_nice::get_nice_aux');
 }
 
 =pod

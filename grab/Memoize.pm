@@ -21,11 +21,12 @@ BEGIN {
 }
 
 # Add an undocumented option to cache things in a DB_File database.
-# You need to decide which subroutines should be cached: LWP::Simple's
-# get() is the most obvious candidate.  Call like this:
+# You need to decide which subroutines should be cached: see
+# XMLTV::Get_nice for how to memoize web page fetches.  Call like
+# this:
 #
-# if (check_argv('get', 'whatever')) {
-#     # The subs get() and whatever() are now memoized.
+# if (check_argv('fred', 'jim')) {
+#     # The subs fred() and jim() are now memoized.
 # }
 #
 # If the user passed a --cache option to your program, this will be
