@@ -78,7 +78,7 @@ print out the resulting structure.
 
 =cut
 
-use XML::DOM;
+use XML::Twig;
 use XML::Writer;
 use Date::Manip;
 use Carp;
@@ -167,6 +167,20 @@ sub read_data( $ ) { # FIXME remove altogether
     &parsefile;
 }
 
+# Private.  Return a new, empty, Perl data structure and an XML::Twig
+# ready to go.
+#
+sub new_doc() {
+    my @data = ('UTF-8', undef, {}, []);
+    my $t = new XML::Twig(StartTagHandlers =>
+			 { '/tv' => sub { tv_handler(\@data, @_) } },
+			 TwigHandlers =>
+			 { '/tv/channel'   => sub { do_channel(\@data, @_) },
+			   '/tv/programme' => sub { do_programme(\@data, @_) },
+			 });
+    return (\@data, $t);
+}
+
 =pod
 
 =item parse(document)
@@ -186,78 +200,53 @@ is not currently handled by the XMLTV format, or by this module.
 =cut
 sub parse( $ ) {
     my $str = shift;
-    my $p = new XML::DOM::Parser;
-
-    # Expat doesn't handle really basic failures that easily; so we
-    # sanity-check first.  We don't do this with parsefile() because
-    # that would mean opening the file twice.
-    #
+    # Sanity-check before cranking up the XML machinery.
     if ($str !~ /<tv/) {
 	croak "no <tv> element found";
     }
-
-    my $doc = $p->parse($str);
-    die "string passed in is not XML" if not defined $doc;
-    return parse_doc($doc);
+    my ($data, $t) = new_doc();
+    $t->parse($str);
+    return $data;
 }
 
 =pod
 
 =item parsefile(filename)
 
-Like C<parse()> but takes a filename or URL instead of a whole
-document.  Supports the same URLs as B<XML::DOM::Parser>.
+Like C<parse()> but takes a filename instead of a whole document.
+(Note that compared to earlier releases, the ability to read from a
+URL has been lost, unless XML::Parser decides to support it.)
 
 =cut
 sub parsefile( $ ) {
     my $filename = shift;
-    my $p = new XML::DOM::Parser;
-    my $doc = $p->parsefile($filename);
-    die "$filename is not XML" if not defined $doc;
-    return parse_doc($doc);
+    my ($data, $t) = new_doc();
+    $t->parsefile($filename);
+    return $data;
 }
 
-# Private.  Convert a DOM tree to XMLTV data structures.
-sub parse_doc( $ ) {
-    my $doc = shift;
-    # We assume that the XMLTV document is valid, but some errors are
-    # caught anyway.  Running the file through this is a good
-    # thing to do *in addition to* validating with nsgmls.
-    #
-
-    # Encoding.
-    my $encoding = 'UTF-8';
-
-    # Get the source info - attributes of <tv>.
-    my $nodes = $doc->getElementsByTagName('tv');
-    die "document should have exactly one 'tv' element"
-      if $nodes->getLength() != 1;
-    my $tv = $nodes->item(0);
-    my $credits = get_attrs($tv);
-
-    # Channels.
-    $nodes = $doc->getElementsByTagName('channel');
-    my $n = $nodes->getLength();
-    my %channels;
-    for (my $i = 0; $i < $n; $i++) {
-	my $node = $nodes->item($i);
-	my $channel = node_to_channel($node);
-	my $id = $channel->{id};
-	warn "channel with id $id seen twice"
-	  if defined $channels{$id};
-	$channels{$id} = $channel;
-    }
-
-    # Finally the programmes themselves.
-    my @programmes;
-    $nodes = $doc->getElementsByTagName('programme');
-    $n = $nodes->getLength();
-    for (my $i = 0; $i < $n; $i++) {
-	my $node = $nodes->item($i);
-	push @programmes, node_to_programme($node);
-    }
-
-    return [ $encoding, $credits, \%channels, \@programmes ];
+# Private.  Three handlers indirectly called by XML::Twig.  First arg
+# is the XMLTV data structure, remaining args those passed by
+# XML::Twig to its handlers.
+#
+sub tv_handler( $$$ ) {
+    my ($d, $t, $node) = @_;
+    t 'tv_handler() ENTRY';
+    $d->[1] = get_attrs($node);
+    t 'got attrs: ' . d $d->[1];
+}
+sub do_channel( $$$ ) {
+    my ($d, $t, $node) = @_;
+    use vars '%channels'; local *channels = $d->[2];
+    my $channel = node_to_channel($node);
+    my $id = $channel->{id};
+    warn "channel with id $id seen twice"
+      if defined $channels{$id};
+    $channels{$id} = $channel;
+}
+sub do_programme( $$$ ) {
+    my ($d, $t, $node) = @_;
+    push @{$d->[3]}, node_to_programme($node);
 }
 
 =pod
@@ -304,15 +293,9 @@ sub write_data( $;@ ) {
 #
 sub get_attrs( $ ) {
     my $node = shift;
-    my $attrs = $node->getAttributes();
-    my $num_attrs = $attrs->getLength();
-    my %r;
-    for (my $i = 0; $i < $num_attrs; $i++) {
-	my $node = $attrs->item($i);
-	die if not defined $node;
-	my $name = get_name($node);
-	warn "seen attribute $name twice" if exists $r{$name};
-	$r{$name} = $node->getValue() unless $name =~ /^x-/;
+    my %r = %{$node->atts()};
+    foreach (keys %r) {
+	delete $r{$_} if /^x-/;
     }
     return \%r;
 }
@@ -322,26 +305,40 @@ sub get_attrs( $ ) {
 #
 # get_text()
 #
-# Given a node containing only text, return that text (with
-# whitespace either side stripped).
+# Given a node containing only text, return that text (with whitespace
+# either side stripped).  If the node has no children (as in
+# <foo></foo> or <foo />), this is considered to be the empty string.
 #
 sub get_text( $ ) {
     my $node = shift;
-    my $child = $node->getFirstChild();
-    if (not defined $child) {
-	# Decided that it's okay to call get_text() on an empty
-	# element; it should return the empty string.
-	#
+    my @children = get_subelements($node);
+    if (@children == 0) {
 	return '';
     }
-    if ($child->getNodeTypeName() ne 'TEXT_NODE') {
-	warn 'first child of text node has wrong type';
+    elsif (@children == 1) {
+	my $v = $children[0]->pcdata();
+	if (not defined $v) {
+	    my $name = get_name($node);
+	    warn "node $name expected to contain text has other stuff\n";
+	}
+ 	if ($XML::Twig::VERSION < 3.01) {
+ 	    # Need to remove entities manually.
+ 	    for ($v) {
+ 		s/&gt;/>/g;
+ 		s/&lt;/</g;
+ 		s/&apos;/\'/g;
+ 		s/&quot;/\"/g;
+ 		s/&amp;/&/g;   # needs to be last
+ 	    }
+ 	}
+	return $v;
+    }
+    elsif (@children > 1) {
+	my $name = get_name($node);
+	warn "node $name expected to contain text has more than one child\n";
 	return undef;
     }
-    my $text = $child->getData();
-    die if ref $text;
-    $text =~ s/^\s+//; $text =~ s/\s+$//;
-    return $text;
+    else { die }
 }
 
 
@@ -354,37 +351,7 @@ sub get_text( $ ) {
 # Skips over elements with name 'x-whatever'.
 #
 sub get_subelements( $ ) {
-    local $Log::TraceMessages::On = 0;
-    my $node = shift;
-    my @r;
-    foreach ($node->getChildNodes()) {
-	my $type = $_->getNodeTypeName();
-	t "\$type=$type";
-	if ($type eq 'ELEMENT_NODE') {
-	    t 'element node';
-	    my $name = get_name($_);
-	    push @r, $_ unless $name =~ /^x-/;
-	}
-	elsif ($type eq 'TEXT_NODE') {
-	    # We allow whitespace between elements.
-	    t 'text node, check is whitespace and skip';
-	    my $content = $_->getData();
-	    if ($content !~ /^\s*$/) {
-		warn "ignoring text '$content' where element expected";
-	    }
-	    next;
-	}
-	elsif ($type eq 'COMMENT_NODE') {
-	    # Ignore.
-	    next;
-	}
-	else {
-	    t 'unknown node type, warn and skip';
- 	    warn "ignoring node of type $type where element expected";
-	    next;
-	}
-    }
-    return @r;
+    grep { (my $tmp = get_name($_)) !~ /^x-/ } $_[0]->children();
 }
 
 # Private.
@@ -393,7 +360,7 @@ sub get_subelements( $ ) {
 #
 # Return the element name of a node.
 #
-sub get_name( $ ) { $_[0]->getNodeName() }
+sub get_name( $ ) { $_[0]->gi() }
 	
 # Private.
 #
@@ -403,11 +370,10 @@ sub get_name( $ ) { $_[0]->getNodeName() }
 #
 sub dump_node( $ ) {
     my $n = shift;
-    my $r = '';
-    $r .= 'type: ' . $n->getNodeTypeName() . "\n";
-    $r .= 'name: ' . get_name($n) . "\n";
-    for (trunc($n->getNodeValue())) {
-	$r .= "value: $_\n" if defined;
+    # Doesn't seem to be easy way to get 'type' of node.
+    my $r = 'name: ' . get_name($n) . "\n";
+    for (trunc($n->text())) {
+	$r .= "value: $_\n" if defined and length;
     }
     return $r;
 }

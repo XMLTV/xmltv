@@ -12,6 +12,8 @@ use vars '%extra_constants';
      INSTALLPLAINDOC => "\$(PREFIX)/share/doc/xmltv-$::VERSION",
      INST_SHARE      => 'blib/share',
      INSTALLSHARE    => '$(PREFIX)/share/xmltv',
+     # This next line shouldn't be needed, it works around a bug.
+     INSTALLMAN1DIR  => '$(PREFIX)/man/man1',
     );
 
 # The following lists of dependencies and files to be installed may
@@ -51,7 +53,8 @@ my %pm
 my %prereqs
   = (
      LWP => 0,
-     XML::DOM => 0,
+     XML::DOM => 0, # will remove, once tv_grab_uk fixed
+     XML::Twig => 0,
      Date::Manip => 5.4,
      XML::Writer => 0,
     );
