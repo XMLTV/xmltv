@@ -16,6 +16,9 @@
 #
 
 use File::Basename;
+use Carp;
+
+$Carp::MaxEvalLen=40; # limit confess output
 
 #
 # get/check time zone
