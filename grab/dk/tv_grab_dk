@@ -58,6 +58,7 @@ L<xmltv(5)>.
 Jesper Skov (jskov@zoftcorp.dk). Originally based on tv_grab_nl by
 Guido Diepen and Ed Avis (ed@membled.com) and tv_grab_fi by Matti
 Airas.
+Additions by Jesper Toft (jesper@bzimage.dk)
 
 =head1 BUGS
 
@@ -66,8 +67,6 @@ Things in the programme descriptions to handle:
 Vaert: Mikael Kamber.
 
 Genudsendelse fra mandag. - convert to <previously-shown>?
-
-Dansk dokumentar. - convert to <country> and <category>, sometimes <date>
 
 =cut
 
@@ -128,12 +127,38 @@ my $LANG = 'da';
 # Winter time in Denmark - summer time is one hour ahead of this.
 my $TZ = '+0100';
 
+# tv2.dk userid. This is the login.tv2.dk user "xmltv".
+my $userid;
+
 sub process_summary_page( $$$ );
-sub process_listings_page( $$$$ );
+sub process_listings_page( $$$$$ );
 
 ######################################################################
 # get options
 
+# Known categories.
+my %categories = (	'Film'		=> 'movie',
+			'Serier'	=> 'series',
+			'Sport'		=> 'sport',
+			'Nyheder'	=> 'news',
+			'Alment'	=> 'misc',
+			'Musik'		=> 'music',
+			'Dokumentar'	=> 'documentary',
+			'Børn'		=> 'kids',
+			'Underholdning'	=> 'entertainment',
+			'Erotik'	=> 'adult');
+
+my %movietypes = (	'action'	=> 'action',
+			'drama'		=> 'drama',
+			'erotisk'	=> 'erotic',
+			'eventyr'	=> 'adventure',
+			'gyser'		=> 'horror',
+			'komedie'	=> 'comedy',
+			'krimi'		=> 'crime',
+			'thriller'	=> 'thriller',
+			'romantisk'	=> 'romance',
+			'western'	=> 'western'
+);
 # Get options
 XMLTV::Memoize::check_argv('XMLTV::Get_nice::get_nice_aux');
 my ($opt_days, $opt_offset, $opt_help, $opt_output,
@@ -176,6 +201,20 @@ if ($mode eq 'configure') {
     my %channels = get_channels();
     die 'no channels could be found' if (scalar(keys(%channels)) == 0);
     update $bar if Have_bar && not $opt_quiet;
+    
+    # Ask about tv2.dk id.
+    my $res = ask( "\nTo be able to get some extra features from tv2.dk, the site needs a userid.
+Create an account on login.tv2.dk and find your cookie file.
+cat <cookie file> | grep tv2login | sed 's/^.*id%3D\\([0-9]*\\)%.*\$/\\1/g'
+Currently the extra features ars the category tag, which require you
+to go to http://tv.tv2.dk/indstillinger/ and move all icons under
+'Programoversigt' to the list of shown icons.
+
+Enter either your tv2.dk loginid or a blank line :");
+    
+    if ( $res =~ /[0-9]{1,}/ ) {
+       print CONF "userid $res\n"
+    }
 
     # Ask about each channel.
     my @chs = sort keys %channels;
@@ -194,7 +233,7 @@ if ($mode eq 'configure') {
         print CONF "channel $_ $name\n";
 	# TODO don't store display-name in config file.
     }
-
+    
     close CONF or warn "cannot close $config_file: $!";
     say("Finished configuration.");
 
@@ -262,12 +301,13 @@ foreach (@config_lines) {
 	$ch_name =~ s/\s*$//;
 	push @channels, $ch_did;
 	$channels{$ch_did} = $ch_name;
+    } elsif (/^userid ([0-9]*)/) {
+        $userid = $1;
     }
     else {
 	warn "$config_file:$.: bad line\n";
     }
 }
-
 
 ######################################################################
 # begin main program
@@ -290,13 +330,18 @@ foreach $ch_did (@channels) {
 	# Request day when constructing URL since it is represented as
 	# an integere offset from today. Still pass in the computed
 	# date - may need it sometime...
-	my $url = 'http://tv.tv2.dk/tv/listning.php'
-	  . "?KanalID=$ch_did&sektion&Periode=0&Dato=$i";
 	my $day = UnixDate(DateCalc($today, "+ $i days"), '%Y-%m-%d');
 	t "turned offset $i (from $today) into date $day";
-	push @to_get, [ $url, $day, $ch_xid, $ch_did ];
+	push @to_get, [ $i, $day, $ch_xid, $ch_did ];
     }
 }
+
+# Initialize cookie_jar
+use LWP::Simple qw($ua);
+use HTTP::Cookies;
+my $cookies = HTTP::Cookies->new;
+
+$ua->cookie_jar($cookies);
 
 my %warned_ch_name; # suppress duplicate warnings
 
@@ -305,9 +350,9 @@ my $bar = new Term::ProgressBar('fetching data', scalar @to_get)
 my @to_get_detailed;
 my $num_detailed = 0;
 foreach (@to_get) {
-    my ($url, $date, $ch_xmltv_id, $ch_tvgids_id) = @$_;
+    my ($tv2date, $date, $ch_xmltv_id, $ch_tvgids_id) = @$_;
     t "going to get $ch_xmltv_id for $date";
-    process_listings_page($writer, $ch_xmltv_id, $url, $date);
+    process_listings_page($writer, $ch_xmltv_id, $tv2date, $ch_tvgids_id , $date);
     update $bar if Have_bar && not $opt_quiet;
 }
 $writer->end();
@@ -321,20 +366,31 @@ $writer->end();
 #   URL to fetch
 #   Date::Manip object giving day for programmes in page (at least
 #     until they cross midnight)
-#
+
 my ($warned_discarding_parts, $commented_episode_num);
-sub process_listings_page ( $$$$ ){
+sub process_listings_page ( $$$$$ ){
 #    local $Log::TraceMessages::On = 1;
-    my ($writer, $ch_xmltv_id, $url, $day_obj) = @_;
+    my ($writer, $ch_xmltv_id, $tv2date, $tv2chan, $day_obj) = @_;
     my $next_day = 0;
     my $day = UnixDate($day_obj, '%Q');
     t "getting channel $ch_xmltv_id, date $day";
+
+    # Setting cookies
+    $cookies->set_cookie(0,'cookTV2[intPingUserID]',$userid,'/','.tv2.dk',80,1,0,9999999,0);
+    $cookies->set_cookie(0,'cookTV2[KanalID]',$tv2chan,'/','.tv2.dk',80,1,0,9999999,0);
+    $cookies->set_cookie(0,'cookTV2[Dato]',$tv2date,'/','.tv2.dk',80,1,0,9999999,0);
+    $cookies->set_cookie(0,'cookTV2[Periode]','0','/','.tv2.dk',80,1,0,9999999,0);
+    $cookies->set_cookie(0,'cookTV2[Kategori]','0','/','.tv2.dk',80,1,0,9999999,0);
+    # For some reason this line only works, if you have a valid userid.
+    $cookies->set_cookie(0,'cookTV2[strKategoriIkoner]','5%2C1%2C55%2C38%2C50%2C61%2C13%2C59%2C40%2C2%2C51%2C46%2C63%2C26%2C48%2C53%2C28%2C31%2C3%2C57%2C42%2C44','/','.tv2.dk',80,1,0,9999999,0);
 
     # We make an HTML::TreeBuilder object, get the information
     # from it and them delete it.
     #
     my $t = new HTML::TreeBuilder();
-    $t->parse(tidy(get_nice($url)));
+    $t->parse(tidy(get_nice("http://tv.tv2.dk/tv/listning.php")));
+
+    $cookies->clear;
 
     my @elems = $t->look_down(class => 'udsendelse');
     if (not @elems) {
@@ -473,6 +529,14 @@ sub process_listings_page ( $$$$ ){
 		$previously_shown = {};
 	    } elsif (/\(S\)/) {
 		$stereo = {};
+	    } else {
+		my @imgs = $s->look_down( "_tag" ,"img");
+		foreach my $i (@imgs) {
+		    my $new_cat = $categories{$i->attr("alt")};
+		    if ( defined $new_cat ) {
+			$genre = $new_cat;
+		    }
+		}
 	    }
 	}
 
@@ -523,7 +587,19 @@ END
 	    $prog{'episode-num'} = [ [ $episode_num - 1, "all_seasons" ] ];
 	}
 	$prog{date} = $date if defined $date;
-#	$prog{category} = [ [ $genre, $LANG ] ] if defined $genre;
+	if ( defined $genre ) {
+	    my @cats = ([$genre]);
+	    
+	    if ( $genre eq "movie" || $genre eq "series" ) {
+                foreach(keys(%movietypes)) {
+                    if($desc[0] =~ /$_/ ) {
+			@cats = ( [ $movietypes{$_} ], @cats );
+		    }
+		}
+# For movies, the type of movie is listed in the first line of the text.
+	    }
+	    $prog{'category'} = [ @cats ];
+	}
 	$prog{'previously-shown'} = $previously_shown if $previously_shown;
 	
 	my %c;
@@ -557,15 +633,14 @@ sub get_channels {
     $t->parse(tidy(get_nice($url)));
 
     # The channels and their IDs are defined in javascript arrays
-    my @elements = $t->look_down("_tag" => "script",
-				 "language" => "JavaScript1.2");
-    if (scalar(@elements) == 1 || !ref($elements[0])) {
-	my @children = $elements[0]->content_list();
+    my @elements = $t->look_down("_tag" => "script");
+    foreach my $i (@elements) {
+	my @children = $i->content_list();
+	
 	if (scalar(@children) != 1 || ref($children[0])) {
-	    warn "Illegal channel name";
-	    last;
+	    next;
 	}
-
+	
 	my @lines = split(/\n/, $children[0]);
 
 	while (defined($_ = shift @lines)) {
