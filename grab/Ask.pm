@@ -4,8 +4,13 @@ package XMLTV::Ask;
 use strict;
 use base 'Exporter';
 use vars '@EXPORT';
-@EXPORT = qw(ask askMyQuestion askQuestion
-	     askQuestionWithoutValidation askBooleanQuestion);
+use Log::TraceMessages qw(t d);
+use Carp qw(croak);
+@EXPORT = qw(ask askQuestion askBooleanQuestion);
+
+sub ask( $ );
+sub askQuestion( $$@ );
+sub askBooleanQuestion( $$ );
 
 sub ask( $ )
 {
@@ -20,28 +25,24 @@ sub ask( $ )
 # Parameters:
 #   question text
 #   default choice
-#   whether to validate the user's choice
 #   Remaining arguments are the choices available.
 #
-sub askMyQuestion( $$$@ )
+sub askQuestion( $$@ )
 {
-    my $question=shift(@_);
-    my $default=shift(@_);
-    my $validate=shift(@_);
-    my @options=@_;
+    my $question=shift(@_); die if not defined $question;
+    my $default=shift(@_); die if not defined $default;
+    my @options=@_; die if not @options;
+    t "asking question $question, default $default";
+    croak "default $default not in options"
+      if not grep { $_ eq $default } @options;
 
     my $options_size = length("@options");
-    if ($options_size < 10 or not $validate) {
+    t "size of options: $options_size";
+    my $all_digits = not ((my $tmp = join('', @options)) =~ tr/0-9//c);
+    t "all digits? $all_digits";
+    if ($options_size < 20 or $all_digits) {
 	# Simple style, one line question.
-	my $str;
-	if ((my $tmp = join('', @options)) =~ tr/0-9//c) {
-	    $str="$question [".join(',',@options)." (default=$default)] ";
-	}
-	else {
-	    # Just numbers, don't need to list them all.
-	    $str="$question (default=$default) ";
-	}
-	
+	my $str = "$question [".join(',',@options)." (default=$default)] ";
 	while ( 1 ) {
 	    my $res=ask($str);
 	    if ( !defined($res) || $res eq "" ) {
@@ -52,16 +53,12 @@ sub askMyQuestion( $$$@ )
 		    return($val);
 		}
 	    }
-	    if ( !$validate ) {
-		return($res);
-	    }
 	    print STDERR "invalid response, please choose one of ".join(',', @options)."\n";
 	    print STDERR "\n";
 	}
     }
     else {
 	# Long list of options, present as numbered multiple choice.
-	die if not $validate;
 	print "$question\n";
 	my $optnum = 0;
 	my (%num_to_choice, %choice_to_num);
@@ -73,37 +70,20 @@ sub askMyQuestion( $$$@ )
 	}
 	$optnum--;
 	my $r=undef;
-	if ( $validate ) {
-	    while (!defined($r) ) {
-		$r = askQuestion('Select one:', $choice_to_num{$default}, 0 .. $optnum);
-		if ( defined($r) && defined($num_to_choice{$r}) ) {
-		    return $num_to_choice{$r};
-		}
-		print STDERR "invalid response, please choose one of ".0 .. $optnum."\n";
-		print STDERR "\n";
-		$r=undef;
+	my $default_num = $choice_to_num{$default};
+	die if not defined $default_num;
+	while (!defined($r) ) {
+	    $r = askQuestion('Select one:',
+			     $default_num, 0 .. $optnum);
+	    if ( defined($r) && defined($num_to_choice{$r}) ) {
+		return $num_to_choice{$r};
 	    }
-	}
-	else {
-	    $r = askQuestion('Select one:', $choice_to_num{$default}, 0 .. $optnum);
-	    return $num_to_choice{$r};
+	    print STDERR "invalid response, please choose one of "
+	      .0 .. $optnum."\n";
+	    print STDERR "\n";
+	    $r=undef;
 	}
     }
-}
-
-# Ask question with validation.
-sub askQuestion( $$@ )
-{
-    my $question=shift(@_);
-    my $default=shift(@_);
-    return(askMyQuestion($question, $default, 1, @_));
-}
-
-sub askQuestionWithoutValidation( $$@ )
-{
-    my $question=shift(@_);
-    my $default=shift(@_);
-    return(askMyQuestion($question, $default, 0, @_));
 }
 
 # Ask a yes/no question.
@@ -113,7 +93,8 @@ sub askQuestionWithoutValidation( $$@ )
 #
 # Returns true or false.
 #
-sub askBooleanQuestion( $$ ) {
+sub askBooleanQuestion( $$ )
+{
     my ($text, $default) = @_;
     my $r = askQuestion($text, ($default ? 'yes' : 'no'), 'yes', 'no');
     if ($r eq 'yes') {
