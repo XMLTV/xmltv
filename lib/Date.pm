@@ -1,4 +1,16 @@
 # $Id$
+=pod
+
+=head1 NAME
+
+XMLTV::Date - date parsing routines for the xmltv package
+
+=head1 SEE ALSO
+
+L<Date::Manip>
+
+=cut
+
 package XMLTV::Date;
 use warnings;
 use strict;
