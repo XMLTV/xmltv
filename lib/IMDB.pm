@@ -277,7 +277,7 @@ sub getStatsLines($$$$)
 	   sprintf("  resulting in a %.2f%% hit percentage\n", $calcHitPercentage).
 	   sprintf("  parsed %.2f programs/sec and checked %.2f programs/sec\n",
 		   $calcProgramsPerSecondParsed, $calcProgramsPerSecondChecked).
-	   sprintf("Checked %d of the %d tv series, hot %.2f%% hit percentage for matches\n",
+	   sprintf("Checked %d of the %d tv series, got %.2f%% hit percentage\n",
 		   $self->{stats}->{program}->{success}, $tvshow_count,
 		   $tvshow_calcHitPercentage));
 }
