@@ -54,6 +54,7 @@ my @cmds
      # files given.  But see BUGS section of manual page.
      [ [ 'tv_grep', '--channel-name', 'd'                        ], 1 ],
      [ [ 'tv_grep', '--channel', 'xyz', '--or', '--channel', 'b' ], 1 ],
+     [ [ 'tv_grep', '--previously-shown', ''                     ], 1 ],
      [ [ 'tv_sort'                                               ], 1 ],
      [ [ 'tv_to_latex'                                           ], 0 ],
     );

@@ -42,7 +42,8 @@ while (<$in_fh>) {
  		print $out_fh "B<--$_ REGEXP>\n\n";
  	    }
 	    else {
- 		# Cannot query on this.
+		# Can query, but only if you ignore the content.
+		print $out_fh "B<--$_ ''>\n\n";
  	    }
  	}
     }
