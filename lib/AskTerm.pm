@@ -85,6 +85,12 @@ sub askQuestion( $$@ )
     croak "default $default not in options"
       if not grep { $_ eq $default } @options;
 
+    # If there is only one option, don't bother asking.
+    if (@options == 1) {
+	say("$question - assuming $default");
+	return $default;
+    }
+
     # Check no duplicates (required for later processing, maybe).
     my %seen;
     foreach (@options) { die "duplicate option $_" if $seen{$_}++ }
