@@ -681,12 +681,14 @@ sub scrapehtml($$$)
 			  Italianate
 			  Iranian
 			  Japanese
+			  Khmer
 			  Korean
 			  Mandarin
 			  Mi'kmaq
 			  Mohawk
 			  Musgamaw
 			  Oji
+			  Ojibwa
 			  Panjabi
 			  Polish
 			  Portuguese
