@@ -67,7 +67,6 @@ use Tie::RefHash;
 use Term::ProgressBar;
 use IO::File;
 use Tie::RefHash;
-use Sort::Versions;
 use Data::Dumper;
 
 use XMLTV;
@@ -101,6 +100,7 @@ sub init_channels();
 sub get_pages( $$ );
 sub configure();
 sub grab( @ );
+sub fix_ananova_xml( $ );
 
 # Check options.  First do the undocumented --cache option (to cache
 # get(), which retrieves web pages), then the normal ones.
@@ -471,7 +471,7 @@ sub grab( @ ) {
     #
     my @to_get;
     if (keys %wanted) {
-	my @chs = sort { versioncmp($a, $b) }
+	my @chs = sort { $a <=> $b }
 	  map { $_->get_first_ananova_id() }
 	    keys %wanted;
 	die if not @chs;
@@ -496,26 +496,19 @@ sub grab( @ ) {
 	eval {
 	    my $got = get($_);
 
-	    # FIXME work around bad characters
-	    $got =~ s/\s&\s/ &amp; /g;
-
-	    # (Spurious backslash in regexp to keep Emacs happy.)
-	    if ($got =~ s!<(\w+) lang="\w+"(?:\s+x-\w+="[^\"]*")*></\1>!!) {
-#		warn "got page $_ containing empty $1\n";
+	    if (not fix_ananova_xml(\$got)) {
+		warn "$_: bad content, skipping page\n";
 	    }
-
-	    if ($got =~ /^\s*Can\'t connect to db$/) {
-		die "\nWeb site giving 'Can't connect to db' error.  Please try again later.\n";
+	    else {
+		t "parsing content of $_";
+		my $data;
+		{
+		    local $Log::TraceMessages::On = 0;
+		    eval { $data = XMLTV::parse($got) };
+		    die "$_: $@" if $@;
+		}
+		push @listingses, $data;
 	    }
-
-	    t "parsing content of $_";
-	    my $data;
-	    {
-		local $Log::TraceMessages::On = 0;
-		eval { $data = XMLTV::parse($got) };
-		die "$_: $@" if $@;
-	    }
-	    push @listingses, $data;
 	};
 	die "$_: $@" if $@;
 	update $bar;
@@ -781,8 +774,7 @@ sub read_channels_page( $$ ) {
 #    local $Log::TraceMessages::On = 1;
     my $data;
 
-    # FIXME work around bad characters
-    $xml =~ s/\s&\s/ &amp; /g;
+    fix_ananova_xml(\$xml) or die "$url: bad channels page content";
 
     t 'parsing XML for channels page: ' . d $xml;
     {
@@ -1289,3 +1281,35 @@ sub fix_zero_length( $ ) {
 }
 
 
+# fix_ananova_xml()
+#
+# The XML returned by _xmltv.php is not quite well-formed or valid or
+# semantically sensible; fix what we can and check for some common errors.
+# Modifies the string passed in and returns true iff it should now be
+# a parsable XMLTV document.
+#
+sub fix_ananova_xml( $ ) {
+    for (${ $_[0] }) {
+	# Work around bad characters.
+	s/\s&\s/ &amp; /g;
+
+	# Empty <category> (and possibly other) elements.
+	# (Spurious backslash in regexp to keep Emacs happy.)
+	if (s!<(\w+) lang="\w+"(?:\s+x-\w+="[^\"]*")*></\1>!!) {
+#           warn "got page $_ containing empty $1\n";
+	}
+	
+	if (/^\s*Can\'t connect to db$/) {
+	    # This is so serious we abort the whole program.
+	    die "\nWeb site giving 'Can't connect to db' error.  Please try again later.\n";
+	}
+	
+	if (not /<tv/) {
+	    warn "no <tv> element found in XML\n";
+	    return 0;
+	}
+
+	# Seems okay...
+	return 1;
+    }
+}
