@@ -652,7 +652,7 @@ windows_dist ::
 	perl -MExtUtils::Command -e rm_r $location/share/doc
 	perl -MExtUtils::Command -e mkpath $location/doc/man
 	# Generate plain text documentation from pod.
-	perl -e "chdir 'blib/script' or die; foreach (<*>) { system 'pod2text', \$$_, qq'$location/doc/man/\$$_.txt' }"
+	perl -e "chdir 'blib/script' or die; foreach (<*>) { system qq'pod2text <\$$_ >$location/doc/man/\$$_.txt' }"
 	# Remove 'real' manual pages, not needed on Windows.
 	perl -MExtUtils::Command -e rm_rf $location/man $location/share/man
 	# My MakeMaker creates this dud directory.
