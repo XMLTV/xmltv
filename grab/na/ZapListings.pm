@@ -559,7 +559,7 @@ sub Form2Request($$)
 
     for my $input (@{$form->{inputs}}) {
 	if ( !defined($input->{type}) ) {
-	  warn("zap2it form 'input' missing type");
+	    warn("zap2it form 'input' missing type");
 	    
 	    return(undef);
 	}
@@ -583,7 +583,7 @@ sub Form2Request($$)
 		    $input->{value}=$self->{formSettings}->{$input->{name}};
 		}
 		else {
-		  warn("zap2it form has input '$input->{name}' we don't have a value for");
+		    warn("zap2it form has input '$input->{name}' we don't have a value for");
 		    
 		    return(undef);
 		}
@@ -591,11 +591,11 @@ sub Form2Request($$)
 	}
 	if ( $input->{type} eq "image" ) {
 	    if ( defined $input->{name} ) {
-	    push(@pairs, $input->{name}.".x");
-	    push(@pairs, "1");
-	    push(@pairs, $input->{name}.".y");
-	    push(@pairs, "1");
-	}
+		push(@pairs, $input->{name}.".x");
+		push(@pairs, "1");
+		push(@pairs, $input->{name}.".y");
+		push(@pairs, "1");
+	    }
 	}
 	else {
 	    push(@pairs, $input->{name});
@@ -612,7 +612,7 @@ sub Form2Request($$)
 		}
 		else {
 		    my $default = 0;
-		  opt:
+	       opt:
 		    for my $option (@{$select->{options}}) {
 			if ( defined $option->{selected} ) {
 			    $default = 1;
@@ -626,13 +626,13 @@ sub Form2Request($$)
 			}
 		    }
 		    if (! $default) {
-		  warn("zap2it form has select '$name' we don't have a value for");
+			warn("zap2it form has select '$name' we don't have a value for");
 		    
-		    return(undef);
+			return(undef);
+		    }
 		}
 	    }
 	}
-    }
     }
 
     if ( $form->{attrs}->{method} eq "get" ) {
@@ -642,7 +642,8 @@ sub Form2Request($$)
 	while (scalar(@pairs)) {
 	    if ($args eq "") {
 		$args.="?".pop(@pairs)."=".pop(@pairs);
-	    } else {
+	    }
+	    else {
 		$args.="&".pop(@pairs)."=".pop(@pairs);
 	    }
 	}
