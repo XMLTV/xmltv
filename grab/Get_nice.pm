@@ -10,6 +10,8 @@
 package XMLTV::Get_nice;
 use base 'Exporter';
 use vars '@EXPORT'; @EXPORT = qw(get_nice);
+use LWP::Simple;
+
 sub get_nice( $ ) {
     # This is to ensure scalar context, to work around weirdnesses
     # with Memoize (I just can't figure out how SCALAR_CACHE and
