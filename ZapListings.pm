@@ -672,6 +672,7 @@ sub scrapehtml($$$)
 			  Romanian
 			  Russian
 			  Spanish
+			  Swedish
 			  Tagalog
 			  Tamil
 			  Ukrainian
