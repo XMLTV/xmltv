@@ -347,8 +347,19 @@ sub ConfigureUsage($)
     print $fp "   --config <file>\n";
     print $fp "     write results of configure to <file> instead of \$HOME/$ConfigFileName_g\n";
     print $fp "\n";
+    print $fp "  The following options are used to invoke --configure in a non-interactive mode\n";
+    print $fp "   --auto_fail_on_provider_changes <boolean>\n";
+    print $fp "     true/false - exit 1 if provider has changed\n";
+    print $fp "\n";
+    print $fp "   --auto_new_channels <boolean>\n";
+    print $fp "     ignore/add - ignore or automatically add new channels in schedule listing\n";
+    print $fp "\n";
+    print $fp "   --auto_missing_channels <boolean>\n";
+    print $fp "     ignore/remove - ignore or remove channels no longer in schedule listing\n";
+    print $fp "\n";
     print $fp "If any neccessary options are given, interactive mode is enabled\n";
-    print $fp "Result of running configure is a xml formated configuration file\n";
+    print $fp "(ie no postal/zip code in config file and not on command line)\n";
+    print $fp "Result of running configure is a configuration file\n";
     print $fp "\$HOME/$ConfigFileName_g (use --config to override location).\n";
 }
 
@@ -472,11 +483,12 @@ sub askQuestionWithoutValidation
 }
 
 if ( $configure ) {
-    use vars qw/$opt_configure $opt_help $opt_postalcode $opt_zipcode $opt_provider $opt_config $opt_debug/;
+    use vars qw/$opt_configure $opt_help $opt_postalcode $opt_zipcode $opt_provider $opt_config $opt_debug $opt_auto_fail_on_provider_changes $opt_auto_new_channels $opt_auto_missing_channels/;
 
     $opt_debug=0;
+    $opt_auto_fail_on_provider_changes="false";
 
-    if ( ! GetOptions('configure', 'help', 'postalcode=s', 'zipcode=s', 'provider=s', 'config=s', 'debug') ) {
+    if ( ! GetOptions('configure', 'help', 'postalcode=s', 'zipcode=s', 'provider=s', 'config=s', 'debug', 'auto_fail_on_provider_changes=s', 'auto_new_channels=s', 'auto_missing_channels=s') ) {
 	ConfigureUsage(0);
 	exit(1);
     }
@@ -484,6 +496,34 @@ if ( $configure ) {
     if ( defined($opt_help) ) {
 	ConfigureUsage(1);
 	exit(0);
+    }
+
+    $opt_auto_fail_on_provider_changes=($opt_auto_fail_on_provider_changes=~m;^t;i);
+
+    if ( defined($opt_auto_new_channels) ) {
+	if ( $opt_auto_new_channels=~m;^ignore;i ) {
+	    $opt_auto_new_channels="ignore";
+	}
+	elsif ( $opt_auto_new_channels=~m;^add;i ) {
+	    $opt_auto_new_channels="add";
+	}
+	else {
+	    print STDERR "$0: invalid argument to --auto_new_channels, must be 'ignore' or 'add'\n";
+	    ConfigureUsage(1);
+	}
+    }
+
+    if ( defined($opt_auto_missing_channels) ) {
+	if ( $opt_auto_missing_channels=~m;^ignore;i ) {
+	    $opt_auto_missing_channels="ignore";
+	}
+	elsif ( $opt_auto_missing_channels=~m;^remove;i ) {
+	    $opt_auto_missing_channels="remove";
+	}
+	else {
+	    print STDERR "$0: invalid argument to --auto_missing_channels, must be 'ignore' or 'remove'\n";
+	    ConfigureUsage(1);
+	}
     }
 
     my $config=new myConfig();
@@ -585,6 +625,11 @@ if ( $configure ) {
 	    for my $p (@providers) {
 		if ( $p->{id} eq $config->{option_provider} ) {
 		    if ( $config->{option_provider_desc} ne $p->{description} ) {
+			if ( $opt_auto_fail_on_provider_changes ) {
+			    print "provider:\n\t".$config->{option_provider}." \# ".$config->{option_provider_desc}.
+				"\nhas new description (".$p->{description}."), exitting\n";
+			    exit(1);
+			}
 			print "updating provider description to: $p->{description}\n";
 			$config->{option_provider_desc}=$p->{description};
 		    }
@@ -595,6 +640,11 @@ if ( $configure ) {
 		}
 	    }
 	    if ( $still_valid == 0 ) {
+		if ( $opt_auto_fail_on_provider_changes ) {
+		    print "provider:\n\t".$config->{option_provider}." \# ".$config->{option_provider_desc}.
+			"\nis no longer valid, exitting\n";
+		    exit(1);
+		}
 		print "provider:\n\t".$config->{option_provider}." \# ".$config->{option_provider_desc}.
 		    "\nis no longer valid, choose a new one\n";
 		delete($config->{option_provider});
@@ -650,6 +700,18 @@ if ( $configure ) {
     my $channelsUpdated=0;
     my $easyAnswer;
 
+    if ( defined($opt_auto_new_channels) ) {
+	if ( $opt_auto_new_channels eq "ignore" ) {
+	    $easyAnswer='no';
+	}
+	elsif ( $opt_auto_new_channels eq "add" ) {
+	    $easyAnswer='yes';
+	}
+	else {
+	    die "invalid auto_new_channels $opt_auto_new_channels\n";
+	}
+    }
+
     # notify user about update channel ids and new channels
     foreach my $channel (@channels) {
 	my $station=$channel->{description};
@@ -663,6 +725,9 @@ if ( $configure ) {
 		    $res=$easyAnswer;
 		    if ( $res eq 'yes' ) {
 			print "adding channel $station..\n";
+		    }
+		    else {
+			print "ignoring new channel $station..\n";
 		    }
 		}
 		else {
@@ -703,6 +768,19 @@ if ( $configure ) {
     }
 
     undef($easyAnswer);
+
+    if ( defined($opt_auto_missing_channels) ) {
+	if ( $opt_auto_missing_channels eq "ignore" ) {
+	    $easyAnswer='no';
+	}
+	elsif ( $opt_auto_missing_channels eq "remove" ) {
+	    $easyAnswer='yes';
+	}
+	else {
+	    die "invalid auto_missing_channels $opt_auto_missing_channels\n";
+	}
+    }
+
     # warn about channel declarations we didn't find
     foreach my $station ($config->stationsInDisplayOrder()) {
 	if ( defined($config->getStationTransientFlag($station, 'found')) ) {
@@ -713,11 +791,14 @@ if ( $configure ) {
 	    if ( $easyAnswer ) {
 		$res=$easyAnswer;
 		if ( $res eq 'yes' ) {
-		    print "dropping channel $station..\n";
+		    print "removing channel $station..\n";
+		}
+		else {
+		    print "ignoring missing channel $station..\n";
 		}
 	    }
 	    else {
-		$res=askQuestion("drop no-longer available channel $station ?", 'yes', ('yes', 'no', 'all'));
+		$res=askQuestion("remove no-longer available channel $station ?", 'yes', ('yes', 'no', 'all'));
 		$res=~tr/[A-Z]/[a-z]/;
 		if ( $res eq 'all' ) {
 		    $easyAnswer='yes';
