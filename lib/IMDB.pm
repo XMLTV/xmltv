@@ -1659,9 +1659,6 @@ sub invokeStage($$)
 		if ( $title=~s/\s+\((\d\d\d\d|\?\?\?\?)\)$//o ) {
 		    $year=$1;
 		}
-		elsif ( $title=~s/\s+\((\d\d\d\d|\?\?\?\?)\)$//o ) {
-		    $year=$1;
-		}
 		elsif ( $title=~s/\s+\((\d\d\d\d|\?\?\?\?)\/[IVX]+\)$//o ) {
 		    $year=$1;
 		}
