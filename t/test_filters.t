@@ -109,16 +109,26 @@ foreach (@inputs) {
 }
 my %all_encodings = reverse %input_encoding;
 
-my @new_inputs;
-foreach (@inputs) {
-    if ($_ eq $empty_input) {
-	unshift @new_inputs, $_;
+# For historical reasons we like to have certain files at the front of
+# the list.  Aargh, this is so horrible.
+#
+sub move_to_front( \@$ ) {
+    use vars '@l'; local *l = shift;
+    my $elem = shift;
+    my @r;
+    foreach (@l) {
+	if ($_ eq $elem) {
+	    unshift @r, $_;
+	}
+	else {
+	    push @r, $_;
+	}
     }
-    else {
-	push @new_inputs, $_;
-    }
+    @l = @r;
 }
-@inputs = @new_inputs;
+foreach ('dups.xml', 'clump.xml', 'amp.xml', $empty_input) {
+    move_to_front @inputs, $_;
+}
 
 # Add a test to the list.  Arguments are listref of filenames, and
 # optional name for this set of files.
