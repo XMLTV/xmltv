@@ -28,9 +28,9 @@ my @cmds = ([ 'tv_cat' ],
 	    [ 'tv_sort' ],
 	    [ 'tv_to_latex' ]);
 
-my $tests_dir = 'test_data'; # directory test files live in
-my $cmds_dir = '..';         # directory filter programs live in,
-                             # relative to $tests_dir
+my $tests_dir = 'data';        # directory test files live in
+my $cmds_dir = '../../filter'; # directory filter programs live in,
+                               # relative to $tests_dir
 my $verbose = 0;
 GetOptions('tests-dir=s' => \$tests_dir, 'cmds-dir=s' => \$cmds_dir,
 	   'verbose' => \$verbose);
