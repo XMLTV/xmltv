@@ -126,7 +126,12 @@ sub parse_eur_date($$) {
 	$summer = 0;
     }
     elsif (Date_Cmp($dp, $start_dst_skipto) < 0) {
-	croak "Date $date is impossible - time goes from $start_dst UTC to $start_dst_skipto DST";
+	# This date is impossible, since the clocks skip forwards an
+	# hour from $start_dst to $start_dst_skipto.  But some
+	# listings sources seem to use it.  Assume it means winter
+	# time.
+	#
+	$summer = 0;
     }
     elsif (Date_Cmp($dp, $end_dst) < 0) {
 	# During summer time.
