@@ -1,5 +1,5 @@
-# Miscellaneous timezone routines.  The code in Europe_TZ.pm builds on
-# these for handling European summer time conventions.  This should
+# Miscellaneous timezone routines.  The code in DST.pm builds on
+# these for handling summer time conventions.  This should
 # probably be moved into Date::Manip somehow.
 #
 # $Id$
