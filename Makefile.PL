@@ -32,7 +32,7 @@ my $opt_yes = 0;
 GetOptions('nodeps' => \$opt_nodeps, 'yes' => \$opt_yes);
 
 our $VERSION;
-$VERSION = '0.5.18';
+$VERSION = '0.5.19';
 
 our %extra_constants;
 %extra_constants
