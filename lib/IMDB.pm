@@ -161,7 +161,7 @@ sub checkIndexesOkay($)
 	return(undef);
     }
     else {
-	return("imdbDir index version of '$info->{db_version}' is invalid, rerun --prepStage 5\n".
+	return("imdbDir index version of '$info->{db_version}' is invalid, rerun --prepStage all\n".
 	       "if problem persists, submit bug report to xmltv-devel\@lists.sf.net\n");
     }
 }
@@ -1363,6 +1363,7 @@ sub status($$)
 
 use XMLTV::Gunzip;
 use IO::File;
+
 sub openMaybeGunzip($)
 {
     for ( shift ) {
@@ -1371,44 +1372,57 @@ sub openMaybeGunzip($)
     }
 }
 
+sub closeMaybeGunzip($$)
+{
+    if ( $_[0]=~m/\.gz$/o ) {
+	# Would close($fh) but that causes segfaults on my system.
+	# Investigating, but in the meantime just leave it open.
+	#
+	#return gunzip_close($_[1]);
+    }
+    return close($_[1]);
+}
+
 sub readMoviesOrGenres($$$$)
 {
     my ($self, $whichMoviesOrGenres, $countEstimate, $file)=@_;
     my $startTime=time();
     my $header;
     my $whatAreWeParsing;
-    my $progressBarDescription;
+    my $lineCount=0;
 
     if ( $whichMoviesOrGenres eq "Movies" ) {
 	$header="MOVIES LIST";
 	$whatAreWeParsing=1;
-	$progressBarDescription="parsing Movies";
     }
     elsif ( $whichMoviesOrGenres eq "Genres" ) {
 	$header="8: THE GENRES LIST";
 	$whatAreWeParsing=2;
-	$progressBarDescription="parsing Genres";
     }
     my $fh = openMaybeGunzip($file) || return(-2);
     while(<$fh>) {
+	$lineCount++;
 	if ( m/^$header/ ) {
 	    if ( !($_=<$fh>) || !m/^===========/o ) {
-		$self->error("missing ======= after $header at line $.");
+		$self->error("missing ======= after $header at line $lineCount");
+		closeMaybeGunzip($file, $fh);
 		return(-1);
 	    }
 	    if ( !($_=<$fh>) || !m/^\s*$/o ) {
-		$self->error("missing empty line after ======= at line $.");
+		$self->error("missing empty line after ======= at line $lineCount");
+		closeMaybeGunzip($file, $fh);
 		return(-1);
 	    }
 	    last;
 	}
-	elsif ( $. > 1000 ) {
-	    $self->error("$file: stopping at line $., didn't see \"$header\" line");
+	elsif ( $lineCount > 1000 ) {
+	    $self->error("$file: stopping at line $lineCount, didn't see \"$header\" line");
+	    closeMaybeGunzip($file, $fh);
 	    return(-1);
 	}
     }
 
-    my $progress=Term::ProgressBar->new({name  => $progressBarDescription,
+    my $progress=Term::ProgressBar->new({name  => "parsing $whichMoviesOrGenres",
 					 count => $countEstimate,
 					 ETA   => 'linear'})
       if Have_bar;
@@ -1419,8 +1433,9 @@ sub readMoviesOrGenres($$$$)
 
     my $count=0;
     while(<$fh>) {
+	$lineCount++;
 	my $line=$_;
-	#print "read line $.:$line";
+	#print "read line $lineCount:$line\n";
 
 	# end is line consisting of only '-'
 	last if ( $line=~m/^\-\-\-\-\-\-\-+/o );
@@ -1466,17 +1481,16 @@ sub readMoviesOrGenres($$$$)
 	    }
 	}
 	else {
-	    $self->error("$file:$.: unrecognized format (missing tab)");
+	    $self->error("$file:$lineCount: unrecognized format (missing tab)");
 	    $next_update=$progress->update($count) if Have_bar;
 	}
     }
     $progress->update($countEstimate) if Have_bar;
 
-    # Would close($fh) but that causes segfaults on my system.
-    # Investigating, but in the meantime just leave it open.
-    #
+    $self->status(sprintf("parsing $whichMoviesOrGenres found $count titles and ".
+			  "$lineCount lines in %d seconds",time()-$startTime));
 
-    $self->status(sprintf("Parsed $count titles in %d seconds",time()-$startTime));
+    closeMaybeGunzip($file, $fh);
     return($count);
 }
 
@@ -1487,6 +1501,7 @@ sub readCastOrDirectors($$$)
 
     my $header;
     my $whatAreWeParsing;
+    my $lineCount=0;
 
     if ( $whichCastOrDirector eq "Actors" ) {
 	$header="THE ACTORS LIST";
@@ -1513,27 +1528,33 @@ sub readCastOrDirectors($$$)
     $progress->max_update_rate(1) if Have_bar;
     my $next_update=0;
     while(<$fh>) {
+	$lineCount++;
 	if ( m/^$header/ ) {
 	    if ( !($_=<$fh>) || !m/^===========/o ) {
-		$self->error("missing ======= after $header at line $.");
+		$self->error("missing ======= after $header at line $lineCount");
+		closeMaybeGunzip($file, $fh);
 		return(-1);
 	    }
 	    if ( !($_=<$fh>) || !m/^\s*$/o ) {
-		$self->error("missing empty line after ======= at line $.");
+		$self->error("missing empty line after ======= at line $lineCount");
+		closeMaybeGunzip($file, $fh);
 		return(-1);
 	    }
 	    if ( !($_=<$fh>) || !m/^Name\s+Titles\s*$/o ) {
-		$self->error("missing name/titles line after ======= at line $.");
+		$self->error("missing name/titles line after ======= at line $lineCount");
+		closeMaybeGunzip($file, $fh);
 		return(-1);
 	    }
 	    if ( !($_=<$fh>) || !m/^[\s\-]+$/o ) {
-		$self->error("missing name/titles suffix line after ======= at line $.");
+		$self->error("missing name/titles suffix line after ======= at line $lineCount");
+		closeMaybeGunzip($file, $fh);
 		return(-1);
 	    }
 	    last;
 	}
-	elsif ( $. > 1000 ) {
-	    $self->error("$file: stopping at line $., didn't see \"$header\" line");
+	elsif ( $lineCount > 1000 ) {
+	    $self->error("$file: stopping at line $lineCount, didn't see \"$header\" line");
+	    closeMaybeGunzip($file, $fh);
 	    return(-1);
 	}
     }
@@ -1542,9 +1563,10 @@ sub readCastOrDirectors($$$)
     my $count=0;
     my $castNames=0;
     while(<$fh>) {
+	$lineCount++;
 	my $line=$_;
 	$line=~s/\n$//o;
-	#$self->status("read line $.:$line");
+	#$self->status("read line $lineCount:$line");
 	
 	# end is line consisting of only '-'
 	last if ( $line=~m/^\-\-\-\-\-\-\-+/o );
@@ -1642,8 +1664,11 @@ sub readCastOrDirectors($$$)
 	$count++;
     }
     $progress->update($castCountEstimate) if Have_bar;
-    # close($fh); # see earlier comment
-    $self->status(sprintf("Parsed $castNames $whichCastOrDirector in $count titles in %d seconds",time()-$startTime));
+
+    $self->status(sprintf("parsing $whichCastOrDirector found $castNames names, ".
+			  "$count titles and $lineCount lines in %d seconds",time()-$startTime));
+    closeMaybeGunzip($file, $fh);
+
     return($castNames);
 }
 
@@ -1651,22 +1676,27 @@ sub readRatings($$$$)
 {
     my ($self, $countEstimate, $file)=@_;
     my $startTime=time();
+    my $lineCount=0;
 
     my $fh = openMaybeGunzip($file) || return(-2);
     while(<$fh>) {
+	$lineCount++;
 	if ( m/^MOVIE RATINGS REPORT/o ) {
 	    if ( !($_=<$fh>) || !m/^\s*$/o) {
-		$self->error("missing empty line after \"MOVIE RATINGS REPORT\" at line $.");
+		$self->error("missing empty line after \"MOVIE RATINGS REPORT\" at line $lineCount");
+		closeMaybeGunzip($file, $fh);
 		return(-1);
 	    }
 	    if ( !($_=<$fh>) || !m/^New  Distribution  Votes  Rank  Title/o ) {
-		$self->error("missing \"New  Distribution  Votes  Rank  Title\" at line $.");
+		$self->error("missing \"New  Distribution  Votes  Rank  Title\" at line $lineCount");
+		closeMaybeGunzip($file, $fh);
 		return(-1);
 	    }
 	    last;
 	}
-	elsif ( $. > 1000 ) {
-	    $self->error("$file: stopping at line $., didn't see \"MOVIE RATINGS REPORT\" line");
+	elsif ( $lineCount > 1000 ) {
+	    $self->error("$file: stopping at line $lineCount, didn't see \"MOVIE RATINGS REPORT\" line");
+	    closeMaybeGunzip($file, $fh);
 	    return(-1);
 	}
     }
@@ -1682,8 +1712,9 @@ sub readRatings($$$$)
 
     my $count=0;
     while(<$fh>) {
+	$lineCount++;
 	my $line=$_;
-	#print "read line $.:$line";
+	#print "read line $lineCount:$line";
 
 	$line=~s/\n$//o;
 	
@@ -1707,17 +1738,15 @@ sub readRatings($$$$)
 	    }
 	}
 	else {
-	    $self->error("$file:$.: unrecognized format");
+	    $self->error("$file:$lineCount: unrecognized format");
 	    $next_update=$progress->update($count) if Have_bar;
 	}
     }
     $progress->update($countEstimate) if Have_bar;
 
-    # Would close($fh) but that causes segfaults on my system.
-    # Investigating, but in the meantime just leave it open.
-    #
-
-    $self->status(sprintf("Parsed $count titles in %d seconds",time()-$startTime));
+    $self->status(sprintf("parsing Ratings found $count titles and ".
+			  "$lineCount lines in %d seconds",time()-$startTime));
+    closeMaybeGunzip($file, $fh);
     return($count);
 }
 
@@ -1776,7 +1805,7 @@ sub invokeStage($$)
 
     my $startTime=time();
     if ( $stage == 1 ) {
-	$self->status("starting prep stage $stage (parsing movies.list)..");
+	$self->status("parsing Movies list for stage $stage..");
 	my $countEstimate=370000;
 	my $num=$self->readMoviesOrGenres("Movies", $countEstimate, "$self->{imdbListFiles}->{movies}");
 	if ( $num < 0 ) {
@@ -1826,7 +1855,7 @@ sub invokeStage($$)
 	}
     }
     elsif ( $stage == 2 ) {
-	$self->status("starting prep stage $stage (parsing directors.list)..");
+	$self->status("parsing Directors list for stage $stage..");
 
 	my $countEstimate=75500;
 	my $num=$self->readCastOrDirectors("Directors", $countEstimate, "$self->{imdbListFiles}->{directors}");
@@ -1892,7 +1921,7 @@ sub invokeStage($$)
 	#unlink("$self->{imdbDir}/stage1.data");
     }
     elsif ( $stage == 3 ) {
-	$self->status("starting prep stage $stage (parsing actors.list)..");
+	$self->status("parsing Actors list for stage $stage..");
 
 	#print "re-reading movies into memory for reverse lookup..\n";
 	my $countEstimate=460000;
@@ -1944,7 +1973,7 @@ sub invokeStage($$)
 	}
     }
     elsif ( $stage == 4 ) {
-	$self->status("starting prep stage $stage (parsing actresses.list)..");
+	$self->status("parsing Actresses list for stage $stage..");
 
 	my $countEstimate=280000;
 	my $num=$self->readCastOrDirectors("Actresses", $countEstimate, "$self->{imdbListFiles}->{actresses}");
@@ -1995,7 +2024,7 @@ sub invokeStage($$)
 	#unlink("$self->{imdbDir}/stage3.data");
     }
     elsif ( $stage == 5 ) {
-	$self->status("starting prep stage $stage (parsing genres.list)..");
+	$self->status("parsing Genres list for stage $stage..");
 	my $countEstimate=250000;
 	my $num=$self->readMoviesOrGenres("Genres", $countEstimate, "$self->{imdbListFiles}->{genres}");
 	if ( $num < 0 ) {
@@ -2045,7 +2074,7 @@ sub invokeStage($$)
 	}
     }
     elsif ( $stage == 6 ) {
-	$self->status("starting prep stage $stage (parsing ratings.list)..");
+	$self->status("parsing Ratings list for stage $stage..");
 	my $countEstimate=76000;
 	my $num=$self->readRatings($countEstimate, "$self->{imdbListFiles}->{ratings}");
 	if ( $num < 0 ) {
@@ -2098,12 +2127,10 @@ sub invokeStage($$)
     elsif ( $stage == 7 ) {
 	my $tab=sprintf("\t");
 
-	$self->status("starting prep stage $stage (creating indexes..)..");
+	$self->status("indexing all previous stage's data for stage 7..");
 
 	$self->status("parsing stage 1 data (movie list)..");
-
 	my %movies;
-
 	{
 	    my $countEstimate=$self->dbinfoGet("db_stat_movie_count", 0);
 	    my $progress=Term::ProgressBar->new({name  => "reading titles",
