@@ -195,7 +195,7 @@ sub date_to_eur( $$ ) {
 # function figures out (through parse_eur_date and date_to_eur) wheter
 # DST is in effect for the specified date, and adjusts the UTC offset
 # appropriately.
-
+#
 sub utc_offset( $$ ) {
     my ($indate, $basetz) = @_;
     croak "empty date" if not defined $indate;
