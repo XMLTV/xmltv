@@ -636,7 +636,7 @@ sub scrapehtml($$)
 		$prog->{subtitle}=massageText($1);
 	    }
 	    else {
-		print "FAILED to find subtitle\n";
+		print "FAILED to find subtitle\n" ( $self->{Debug} );
 	    }
 
 	    # categories may be " / " separated
@@ -646,7 +646,7 @@ sub scrapehtml($$)
 		}
 	    }
 	    else {
-		print "FAILED to find category\n";
+		print "FAILED to find category\n" ( $self->{Debug} );
 	    }
 
 	    #print "PREEXTRA: $desc\n";
