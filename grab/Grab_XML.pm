@@ -231,11 +231,22 @@ sub go( $ ) {
     my @listingses;
     foreach my $url (@to_get) {
 	my $xml;
+
+	# Set error handlers.  Strange bugs if you call warn() or
+	# die() inside these, at least I have seen such bugs in
+	# XMLTV.pm, so I'm avoiding it here.
+	#
 	local $SIG{__WARN__} = sub {
 	    my $msg = shift;
 	    $msg = "warning: something's wrong" if not defined $msg;
 	    print STDERR "$url: $msg\n";
 	};
+ 	local $SIG{__DIE__} = sub {
+ 	    my $msg = shift;
+ 	    $msg = 'died' if not defined $msg;
+ 	    print STDERR "$url: $msg, exiting\n";
+ 	    exit(1);
+ 	};
 
 	my $got = $pkg->get($url);
 	if (not defined $got) {
