@@ -44,11 +44,37 @@
 
 use strict;
 use HTML::TokeParser;
-use Date::Manip;
+
+# Date::Manip is used for parsing dates; all dates are stored
+# internally in UT (aka GMT).
+# 
+use Date::Manip; Date_Init('TZ=UT');
+require 'tz.pl';
+
 use LWP::Simple;
-use Term::ReadKey;
 use XML::Writer;
-use Text::Wrap;
+
+# I have a module I use for trace messages; you can get it at
+# <http://www.doc.ic.ac.uk/~epa98/lib/perl5/site_perl/Dbg.pm>.  That's
+# what all the t('hello') type statements are.  But you can probably
+# just leave them commented out.
+# 
+#use Dbg; $Dbg::On = 0;
+
+# Memoize some subroutines if possible (25x speedup)
+eval { require Memoize };
+if ($@) {
+    warn "could not load Memoize module, things will run slowly";
+}
+else {
+    foreach (qw/istime time12to24 parse_uk_date date_to_uk bst_dates
+	        gettz ParseDate UnixDate DateCalc Date_Cmp
+                ParseDateDelta/)
+    {
+	Memoize::memoize($_) or die "cannot memoize $_: $!";
+    }
+}
+
 
 
 ########
@@ -61,7 +87,7 @@ my @CHANNELS = qw[bbc1 bbc2 carlton ch4 ch5];
 my $NUMDAYS = 7;
 
 # Quicker version for testing
-#my @CHANNELS = qw[bbc1];
+#my @CHANNELS = qw[ch5];
 #my $NUMDAYS = 1;
 
 # What language the pages are in.  This has no real effect :-)
@@ -234,11 +260,11 @@ sub programmes_from_html($) {
 # 
 # Given a list of programme details (from extract_prog()) and the date
 # of this listing, remove the silly 12 hour times and add proper time
-# and date for each programme.
+# and date for each programme.  In UT.
 # 
 # Parameters:
 #   reference to list of programme details
-#   date (in Date::Manip format)
+#   date in format YYYYMMDD
 # 
 # Modifies the list passed in, so that each programme no longer has
 # {'time'} but has {'date'} instead.
@@ -246,21 +272,26 @@ sub programmes_from_html($) {
 sub date_programmes($$) {
     die 'usage: date_programmes(ref to list of programmes, date)'
       if @_ != 2;
-    my ($progs, $date) = @_;
-
+    my ($progs, $base_day) = @_;
+    die 'bad base day, format should be YYYYMMDD'
+      if $base_day !~ /^\d{8}$/;
+    
     my $prev_date;
-    my $base_day = $date;
     my $day_later = ParseDateDelta('+1 day') or die;
   
     foreach (@$progs) {
-	my $t = timecvt($_->{'time'});
+	my $t = time12to24($_->{'time'});
+#	t('converted 12 hour time ' . d($_->{'time'}) . ' to ' . d($t));
 	
-	# Calculate the time and day of the programme
-	my $time_delta = ParseDateDelta("$t:00") or die;
-	my $err;
-	my $prog_date = DateCalc($base_day, $time_delta, \$err);
-	die "error from DateCalc(): $err" if defined $err;
-	
+	# $t should be hours and minutes, add seconds
+	$t =~ s/\b(\d\d):(\d\d)\b/$1:$2:00/ or die "bad hh:mm $t";
+#	t('added seconds, time now ' . d($t));
+
+	my $prog_date = parse_uk_date("$base_day $t");
+	die "bad base day + time '$t'"
+	  if not defined $prog_date or $prog_date eq '';
+#	t('canonical form is ' . d($prog_date));
+
 	if (defined $prev_date
 	    and (Date_Cmp($prev_date, $prog_date) > 0))
         {
@@ -268,10 +299,11 @@ sub date_programmes($$) {
 	    # day.
 	    # 
 	    my $err;
-	    $base_day = DateCalc($base_day, $day_later, \$err);
+	    $base_day = UnixDate DateCalc($base_day, $day_later, \$err), '%Q';
 	    die "error from DateCalc(): $err" if defined $err;
-	    $prog_date = DateCalc($base_day, $time_delta, \$err);
-	    die "error from DateCalc(): $err" if defined $err;
+	    $prog_date = parse_uk_date("$base_day $t");
+	    die "bad base day + time '$t'"
+	      if not defined $prog_date or $prog_date eq '';
 	}
     
 	delete $_->{'time'};
@@ -281,7 +313,7 @@ sub date_programmes($$) {
 }
 
     
-# extract_prog
+# extract_prog()
 # 
 # Given a programme as a ref to a list of bits of text, each with
 # 'bold' and 'italic' flags, return [time, title, description].
@@ -297,6 +329,18 @@ sub extract_prog($) {
 	my ($b, $i, $t) = @$_{'bold', 'italic', 'TEXT'};
 	$t =~ s/^\s+//; $t =~ s/\s+$//; next if $t eq '';
 
+	# Clean up some of the mess from the HTML
+	$t =~ s/\xa3((?:\d|,)*)/($1 ne '') ? "$1 pounds" : ''/ge;
+	$t =~ s/\Q&nbsp;\E/ /g;
+
+	# XML::Simple turns '&' into '&amp;', but nsgmls -wxml doesn't
+	# like this.  Kludge round the problem by getting rid of '&'
+	# altogether.
+	# 
+	$t =~ s/\Q\&amp\;\E/ and /g;
+	$t =~ s/\Q&\E/ and /g;
+
+#	t("got bit of text '$t', bold=$b, italic=$i");
 	if ($b and not $i and istime($t)) {
 	    die "time already set to $time but $t found"
 	      if defined $time;
@@ -328,13 +372,13 @@ sub extract_prog($) {
 		# Ignore.
 	    }
 	    elsif ($t =~ /^Director: (.+)\.$/) {
-		die "italic text $t found, but director already defined"
+		warn "italic text $t found, but director already defined - ignoring", next
 		  if defined $director;
 		$director = $t;
 	    }
 	    else {
 		# Must be sub-title.
-		die "italic text $t found, but sub-title already defined"
+		warn "italic text $t found, but sub-title already defined - ignoring", next
 		  if defined $sub_title;
 		$sub_title = $t;
 	    }
@@ -358,13 +402,6 @@ sub extract_prog($) {
     }
     $title = '(unknown title)' if not defined $title;
 	
-    if (defined $desc) {
-	# Clean up some of the mess from the HTML
-	$desc =~ s/\xa3((?:\d|,)*)/($1 ne '') ? "$1 pounds" : ''/ge;
-	$desc =~ s/&nbsp;/ /g;
-	$desc =~ s/&amp;/ & /g;
-    }
-
     return { time => $time, title => $title,
 	     sub_title => $sub_title, desc => $desc };
 }
@@ -386,8 +423,14 @@ sub boldit($) {
     
     use HTML::TokeParser;
     my $p = new HTML::TokeParser(\$html) or die;
-    my @r = ();
 
+    # HTML::TokeParser is based on HTML::Parser, and has the same
+    # tendency to break chunks of text into multiple tokens.  Turn
+    # that off. 
+    # 
+    $p->unbroken_text(1);
+
+    my @r = ();
     my ($bold, $it) = (0, 0);
     while (my $t = $p->get_token()) {
 	if    ($t->[0] eq 'S' and $t->[1] eq 'b') { $bold = 1 }
@@ -453,17 +496,27 @@ sub splitlist($$) {
 sub istime($) {
     die 'usage: istime(possible time string)' if @_ != 1;
     local $_ = shift;
+
+    my $tz = gettz($_);
+    s/\Q$tz\E// if defined $tz;
+
+    s/\s+//g;
     return /^(\d\d?)[.:]?(\d\d)(am|pm)$/;
 }
 
 
-# timecvt()
+# time12to24()
 # 
 # Convert a 12 hour time to 24 hour.
 # 
-sub timecvt($) {
-    die 'usage: timecvt(12 hour time string)' if @_ != 1;
+sub time12to24($) {
+    die 'usage: time12to24(12 hour time string)' if @_ != 1;
     local $_ = shift;
+    
+    # Remove the timezone and stick it back on afterwards.
+    my $tz = gettz($_);
+    s/\Q$tz\E// if defined $tz;
+
     s/\s+//;
     my ($hours, $mins, $ampm) = /^(\d\d?)[.:]?(\d\d)(am|pm)$/
       or die "bad time $_";
@@ -486,12 +539,17 @@ sub timecvt($) {
 	else { die "bad number of hours $hours" }
     }
     else { die }
-    
-    return sprintf('%02d:%02d', $hours, $mins);
+
+    my $r = sprintf('%02d:%02d', $hours, $mins);
+    $r .= " $tz" if defined $tz;
+    return $r;
 }
 
 
 # get_date_from_page()
+# 
+# Returns date in 'YYYYMMDD' format from Ananova page, or undef if
+# none found.
 # 
 sub get_date_from_page($) {
     die 'usage: get_date_from_page(html string)' if @_ != 1;
@@ -504,8 +562,9 @@ sub get_date_from_page($) {
 	    my $text = $p->get_trimmed_text("/span");
 	    die "date already set to $date, but headline $text found"
 	      if defined $date;
-	    $date = ParseDate($text)
+	    my $pd = ParseDate($text)
 	      or die "bad date string $text\n";
+	    $date = UnixDate($pd, '%Q');
 	}
     }
     return $date;
@@ -527,18 +586,19 @@ sub write_programme($$) {
     my ($channel, $start, $end, $title, $sub_title, $desc, $director)
       = @$p{qw(channel date end title sub_title desc director)};
     
+    # The dates are converted to the appropriate timezone for output.
     if (defined $end) {
-	$w->startTag('programme', start   => $start,
-		                  stop    => $end,
+	$w->startTag('programme', start   => join(' ', @{date_to_uk($start)}),
+		                  stop    => join(' ', @{date_to_uk($end)}),
 		                  channel => $channel );
     }
     else {
-	$w->startTag('programme', start   => $start,
+	$w->startTag('programme', start   => join(' ', @{date_to_uk($start)}),
 			          channel => $channel );
     }
 
     $w->dataElement('title', $title, lang => $LANG);
-    $w->dataElement('sub_title', $sub_title, lang => $LANG)
+    $w->dataElement('sub-title', $sub_title, lang => $LANG)
       if defined $sub_title;
 
     # Write the description.  I'd like to line-wrap this so that the

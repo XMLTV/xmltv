@@ -24,6 +24,7 @@ use strict;
 use XML::Simple;
 use IO::File;
 use Date::Manip;
+require 'tz.pl';
 
 die "usage: $0 [filename]" if @ARGV >= 2;
 
@@ -41,7 +42,7 @@ END
 
 my $xml;
 if (@ARGV == 1) {
-    $xml = XMLin($ARGV[0], cache => [ 'storable' ]);
+    $xml = XMLin($ARGV[0], cache => [ 'storable' ], searchpath => '.');
 }
 elsif (@ARGV == 0) {
     $xml = XMLin('-');
@@ -51,7 +52,7 @@ else { die }
 my @programmes = @{$xml->{programme}};
 my @chunks = chunk(30, @programmes);
 
-my $curr_date;
+my ($curr_date, $curr_tz);
 foreach (@chunks) {
     my @programmes = @$_;
 
@@ -67,15 +68,36 @@ foreach (@chunks) {
 	my %h = %$_;
 	my ($start, $stop, $channel) = @h{qw(start stop channel)};
 	my $title = $h{title}->{content};
-	my $sub_title = $h{sub_title}->{content};
+	my $sub_title = $h{'sub-title'}->{content};
 	
 	die 'no start'   if not defined $start;
 	$stop = ''       if not defined $stop;
 	die 'no title'   if not defined $title;
 	die 'no channel' if not defined $channel;
 
-	# Convert date-and-time to just hhmm
-	foreach ($start, $stop) { s/^\d{8}(\d\d):(\d\d):00$/$1$2/ }
+	# Convert date-and-time to just hhmm, adding explicit timezone
+	# whenever it changes.
+	# 
+	foreach (\$start, \$stop) {
+	    my $p = ParseDate($$_) or die "bad date $$_";
+	    my $tz = gettz($$_) || 'UT';
+	    $$_ = UnixDate($p, '%R');
+	    
+	    if (not defined $curr_tz) {
+		# First date on this page.  Just assume it doesn't
+		# need printing (FIXME).
+		# 
+		$curr_tz = $tz;
+	    }
+	    elsif ($curr_tz ne $tz) {
+		# Add timezone to printed hh:mm
+		$$_ .= " $tz";
+		$curr_tz = $tz;
+	    }
+	    else {
+		# Timezone hasn't changed, don't print it again
+	    }
+	}
 
 	# Hardcoded channel lookup
 	$channel = $ch_to_num{$channel};
@@ -124,12 +146,17 @@ sub chunk($@) {
 }
 
 
+# start_date()
+# 
+# Returns the day on which a programme starts, in the form YYYYMMDD.
+# 
 sub start_date($) {
     my $prog = shift;
-    die "bad programme: " . d($prog) if not defined $prog->{title};
+    die "bad programme" if not defined $prog->{title};
     die "no start date for $prog->{title}"
       if not defined $prog->{start};
-    local $_ = $prog->{start};
-    /^(\d{8})/ or die "bad date $_";
-    return $1;
+
+    my $p = ParseDate($prog->{start});
+    die "bad start date for programme" if not defined $p or $p eq '';
+    return UnixDate($p, '%Q');
 }
