@@ -47,7 +47,7 @@ sub doRequest($$$$)
 	    print STDERR "==== what's an info response? ====\n";
 	}
 	else {
-	    print STDERR "==== bad ====\n";
+	    print STDERR "==== bad code ".$res->code().":".HTTP::Status::status_message($res->code())."\n";
 	}
 	#print STDERR $res->headers->as_string(), "\n";
 	#dumpPage($res->content());
@@ -86,7 +86,8 @@ sub getProviders($$$)
     }
 
     if ( !$res->is_success ) {
-	print STDERR "zap2it failed to give us a page\n";
+	print STDERR "zap2it failed to give us a page: ".$res->code().":".
+	  HTTP::Status::status_message($res->code())."\n";
 	print STDERR "check postal/zip code or www site (maybe they're down)\n";
 	return(undef);
     }
@@ -181,7 +182,8 @@ sub getChannelList($$$$)
     }
 
     if ( !$res->is_success ) {
-	print STDERR "zap2it failed to give us a page\n";
+	print STDERR "zap2it failed to give us a page: ".$res->code().":".
+	  HTTP::Status::status_message($res->code())."\n";
 	print STDERR "check postal/zip code or www site (maybe they're down)\n";
 	return(undef);
     }
@@ -382,7 +384,8 @@ sub new
 {
     my $proto = shift;
     my $class = ref($proto) || $proto;
-    my $self = $class->SUPER::new(@_, env_proxy => 1);
+    my $self = $class->SUPER::new(@_, env_proxy => 1,
+				  timeout => 180);
     bless ($self, $class);
     return $self;
 }
@@ -1094,14 +1097,12 @@ sub scrapehtml($$$)
 			    print STDERR "identified possible candidate for new language $sub in $i\n";
 			}
 			$prog->{qualifiers}->{Language}=$lang;
-			$prog->{qualifiers}->{Subtitles}->{Language}=$sub;
+			$prog->{qualifiers}->{Subtitles}=$sub;
 		    }
 		    #
 		    # lanuages added as we see them.
 		    #
 		    else {
-			my $localmatch=0;
-
 			my $declaration=$i;
 			if ( $declaration=~s/^\(//o && $declaration=~s/\)$//o ) {
 			    # '(Hindi and English)'
@@ -1128,7 +1129,7 @@ sub scrapehtml($$$)
 				if ( $found1 && $found2 ) {
 				    $prog->{qualifiers}->{Language}=$lang;
 				    $prog->{qualifiers}->{Dubbed}=$sub;
-				    $localmatch++;
+				    next;
 				}
 			    }
 			    
@@ -1138,7 +1139,7 @@ sub scrapehtml($$$)
 			    # '(English/French)'
 			    # '(English/Oji-Cree)'
 			    # '(Hindi/Punjabi/Urdu)', but I'm not sure what it means.
-			    if ( ! $localmatch && $declaration=~m;[/\-,];o ) {
+			    if ( $declaration=~m;[/\-,];o ) {
 				
 				my @arr=split(/[\/]|[\-]|[,]/, $declaration);
 				my @notfound;
@@ -1164,7 +1165,7 @@ sub scrapehtml($$$)
 				    # put "lang/lang/lang" in qualifier since we don't know
 				    # what it really means.
 				    $prog->{qualifiers}->{Language}=$declaration;
-				    $localmatch++;
+				    next;
 				}
 				elsif ( $matches !=0  ) {
 				    # matched 1 or more, warn about rest
@@ -1174,7 +1175,7 @@ sub scrapehtml($$$)
 				}
 			    }
 
-			    if ( ! $localmatch ) {
+			    if ( 1 ) {
 				# check for known languages 
 				my $found;
 				for my $k (@knownLanguages) {
@@ -1202,6 +1203,10 @@ sub scrapehtml($$$)
 				$success=0;
 				push(@backup, $i);
 			    }
+			}
+			else {
+			   $success=0;
+			   push(@backup, $i);
 			}
 		    }
 		}
@@ -1324,7 +1329,8 @@ sub readSchedule($$$$$)
 	}
 
 	if ( !$res->is_success ) {
-	    print STDERR "zap2it failed to give us a page\n";
+	    print STDERR "zap2it failed to give us a page: ".$res->code().":".
+	      HTTP::Status::status_message($res->code())."\n";
 	    print STDERR "check postal/zip code or www site (maybe they're down)\n";
 	    return(-1);
 	}
