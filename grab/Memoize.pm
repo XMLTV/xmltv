@@ -6,6 +6,7 @@
 #
 
 package XMLTV::Memoize;
+use strict;
 use File::Basename;
 use Getopt::Long;
 
@@ -89,6 +90,7 @@ sub check_argv( @ ) {
     my %cache;
     tie %cache, 'DB_File', $filename,
       POSIX::O_RDWR() | POSIX::O_CREAT(), 0666;
+    my @r;
     foreach (@_) {
 	my $r = Memoize::memoize($from_caller->($_),
 				 SCALAR_CACHE => [ HASH => \%cache ],
