@@ -699,19 +699,13 @@ sub MY::processPL {
     # And some of the .in generators need the share/ directory passed
     # as an extra argument.
     #
-    $inherited =~ s{(grab/uk/tv_grab_uk.PL grab/uk/tv_grab_uk)\s*$}
-      {$1 $::extra_constants{INSTALLSHARE}}m
-	or die "no call to tv_grab_uk.PL in: $inherited";
-    $inherited =~ s{(grab/uk_rt/tv_grab_uk_rt.PL grab/uk_rt/tv_grab_uk_rt)\s*$}
-      {$1 $::extra_constants{INSTALLSHARE}}m
-	or die "no call to tv_grab_uk_rt.PL in: $inherited";
-    $inherited =~ s{(grab/it/tv_grab_it.PL grab/it/tv_grab_it)\s*$}
-      {$1 $::extra_constants{INSTALLSHARE}}m
-	or die "no call to tv_grab_it.PL in: $inherited";
-    $inherited =~ s{(grab/nz/tv_grab_nz.PL grab/nz/tv_grab_nz)\s*$}
-      {$1 $::extra_constants{INSTALLSHARE}}m
-	or die "no call to tv_grab_nz.PL in: $inherited";
-
+    my @grab_need_share = qw(uk uk_rt it nz);
+    foreach (@grab_need_share) {
+	$inherited =~
+	  s<(grab/$_/tv_grab_$_.PL grab/$_/tv_grab_$_)\s*$>
+	    <$1 $::extra_constants{INSTALLSHARE}>m
+	    or die "no call to $_.PL in: $inherited";
+    }
     return $inherited;
 }
 
