@@ -706,12 +706,13 @@ sub MY::makefile {
 # Fix filename of some generated manpages.
 sub MY::manifypods {
     package MY;
-    my $inherited = shift->SUPER::manifypods(@_);
-    $inherited =~ s!\$\(INST_MAN3DIR\)/grab::Grab_XML.\$\(MAN3EXT\)!"\$(INST_MAN3DIR)/XMLTV::Grab_XML.\$(MAN3EXT)"!;
-    $inherited =~ s!\$\(INST_MAN3DIR\)/grab::Europe_TZ.\$\(MAN3EXT\)!"\$(INST_MAN3DIR)/XMLTV::Europe_TZ.\$(MAN3EXT)"!;
-    $inherited =~ s!\$\(INST_MAN3DIR\)/grab::Config_file.\$\(MAN3EXT\)!"\$(INST_MAN3DIR)/XMLTV::Config_file.\$(MAN3EXT)"!;
-    $inherited =~ s!\$\(INST_MAN3DIR\)/Summarize.\$\(MAN3EXT\)!"\$(INST_MAN3DIR)/XMLTV::Summarize.\$(MAN3EXT)"!;
-    return $inherited;
+    for (my $inherited = shift->SUPER::manifypods(@_)) {
+	foreach my $s (qw(Grab_XML Europe_TZ Config_file)) {
+	    s!\$\(INST_MAN3DIR\)/grab::$s[.]\$\(MAN3EXT\)!"\$(INST_MAN3DIR)/XMLTV::$s.\$(MAN3EXT)"!;
+	}
+	s!\$\(INST_MAN3DIR\)/Summarize.\$\(MAN3EXT\)!"\$(INST_MAN3DIR)/XMLTV::Summarize.\$(MAN3EXT)"!;
+	return $_;
+    }
 }
 
 # Split a section of makefile into targets.
