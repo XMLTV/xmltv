@@ -29,10 +29,14 @@ sub askBooleanQuestion( $$ );
 
 sub ask( $ )
 {
-    print "$_[0]";
-    my $result=<STDIN>;
-    chop($result) if ( defined($result) );
-    return($result);
+    print shift;
+    my $r = <STDIN>;
+    for ($r) {
+	return undef if not defined;
+	s/^\s+//;
+	s/\s+$//;
+	return $_;
+    }
 }
 
 # Ask a question where the answer is one of a set of alternatives.
