@@ -226,6 +226,11 @@ are present.",
        blurb => 'Tv_grab_es is the listings grabber for Spain.',
        exes => [ 'grab/es/tv_grab_es' ],
        prereqs => { 'HTML::TreeBuilder' => 0 } },
+
+     { name => 'tv_grab_nl',
+       blurb => 'Tv_grab_nl is the listings grabber for the Netherlands.',
+       exes => [ 'grab/nl/tv_grab_nl' ],
+       prereqs => { 'HTML::TreeBuilder' => 0 } },
     );
 
 foreach my $info (@opt_components) {
