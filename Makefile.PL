@@ -244,7 +244,7 @@ my @opt_components
        deps     => [ 'grab/na_dd/tv_grab_na_dd' => [ 'grab/na_dd/tv_grab_na_dd.IN' ] ],
        to_clean => [ 'grab/na_dd/tv_grab_na_dd' ],
        prereqs => { 'SOAP::Lite' => 0,
-		    'Term::ReadKey' => 0 }
+		    'Term::ReadKey' => 0 },
        grab_need_share => [ 'na_dd' ],
      },
 
