@@ -493,7 +493,7 @@ windows_dist ::
 	mv $(INSTALLPLAINDOC) $(PREFIX)/doc/
 	rmdir $(PREFIX)/share/doc
 	mkdir -p $(PREFIX)/doc/man
-	set -e; for i in $(INSTALLMAN1DIR)/*; do \
+	set -e; for i in $(INST_MAN1DIR)/*; do \
 	        b=`basename $$i .1`; \
 	        if test "$$b" = '*'; then \
 	                echo cannot find manpages in $(INSTALLMAN1DIR) >&2; \
@@ -503,8 +503,7 @@ windows_dist ::
 	        troff -mandoc -Tascii $$i | grotty -buo \
 	            >$(PREFIX)/doc/man/`basename $$i .1`.txt; \
 	done
-	rm -rfv $(INSTALLBIN) $(PREFIX)/lib/ $(INSTALLMAN1DIR) $(INSTALLMAN3DIR)
-	rmdir $(PREFIX)/share/man
+	rm -rfv $(INSTALLBIN) $(PREFIX)/lib/ $(INST_MAN1DIR) $(INSTALLMAN3DIR)
 	cp -avi xmltv.dtd $(PREFIX)
 	# The following command will not be necessary when the source
 	# tree was checked out on a DOSish system.
