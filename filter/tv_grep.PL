@@ -36,7 +36,8 @@ while (<$in_fh>) {
 		die if $mult eq '*' or $mult eq '+';
  		print $out_fh "B<--$_>\n\n";
  	    }
-	    elsif ($h_name eq 'scalar' or $h_name eq 'with-lang') {
+	    elsif ($h_name eq 'scalar' or $h_name eq 'with-lang'
+		   or $h_name eq 'with-lang-or-empty') {
 		# Some text, we can query it (whether one or several).
  		print $out_fh "B<--$_ REGEXP>\n\n";
  	    }
