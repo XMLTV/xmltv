@@ -21,7 +21,7 @@ END
 }
 
 use vars '$VERSION';
-$VERSION = '0.5.8';
+$VERSION = '0.5.9';
 
 use vars '%extra_constants';
 %extra_constants
