@@ -45,6 +45,10 @@ sub ask( $ )
     my $r = <STDIN>;
     for ($r) {
 	return undef if not defined;
+
+	# Handle backspace, for broken terminals that don't.
+	s/.\x08//g;
+
 	s/^\s+//;
 	s/\s+$//;
 	return $_;
