@@ -11,6 +11,25 @@ use base 'Exporter'; use vars qw(@EXPORT @EXPORT_OK);
 use vars qw($VERSION);
 $VERSION = '0.5';
 
+# Work around changing behaviour of XML::Twig.  On some systems (like
+# mine) it always returns UTF-8 data unless KeepEncoding is specified.
+# However the encoding() method tells you the encoding of the original
+# document, not of the data you receive.  To be sure of what you're
+# getting, it is easiest on such a system to not give KeepEncoding and
+# just use UTF-8.
+#
+# But on other systems (seemingly perl 5.8 and above), XML::Twig tries
+# to keep the original document's encoding in the strings returned.
+# You then have to call encoding() to find out what you're getting.
+# To make sure of this behaviour we set KeepEncoding to true on such a
+# system.
+#
+# So this variable should be false if you have an XML::Twig which
+# always converts to UTF-8, and true if your XML::Twig has a tendency
+# to keep the original encoding even when it's not asked to.
+#
+my $KEEP_ENCODING = 0;
+
 =pod
 
 =head1 NAME
@@ -171,13 +190,14 @@ sub read_data( $ ) { # FIXME remove altogether
 # ready to go.
 #
 sub new_doc() {
-    my @data = ('UTF-8', undef, {}, []);
+    my @data = (undef, undef, {}, []);
     my $t = new XML::Twig(StartTagHandlers =>
-			 { '/tv' => sub { tv_handler(\@data, @_) } },
-			 TwigHandlers =>
-			 { '/tv/channel'   => sub { do_channel(\@data, @_) },
-			   '/tv/programme' => sub { do_programme(\@data, @_) },
-			 });
+			  { '/tv' => sub { tv_handler(\@data, @_) } },
+			  TwigHandlers =>
+			  { '/tv/channel'   => sub { do_channel(\@data, @_) },
+			    '/tv/programme' => sub { do_programme(\@data, @_) },
+			  },
+			  KeepEncoding => $KEEP_ENCODING);
     return (\@data, $t);
 }
 
@@ -246,6 +266,11 @@ of the file and isnE<39>t worth handling through callbacks).  The next
 argument will be called with the Perl data structure for each channel
 as it is parsed, and likewise the fourth argument handles programmes.
 
+The four things will be filled in or called in order, that is, the
+encoding and credits will be set before the channel handler is called
+and all the channels will be dealt with before the first programme
+handler is called.
+
 For example:
 
     my $document = '<tv>...</tv>';
@@ -279,7 +304,23 @@ For example:
 sub new_doc_callback( $$$ ) {
     my ($data, $ch_cb, $p_cb) = @_;
     new XML::Twig(StartTagHandlers =>
-		  { '/tv' => sub { tv_handler($data, @_) } },
+		  { '/tv' => sub {
+			my ($t, $node) = @_;
+			use vars qw($encoding $credits);
+			local (*encoding, *credits) = $data->[0, 1];
+			if ($KEEP_ENCODING) {
+			    $encoding = $t->encoding();
+			    t 'got encoding: ' . d $encoding;
+			}
+			else {
+			    $encoding = 'UTF-8';
+			    t 'assuming UTF-8 encoding';
+			}
+			$credits = get_attrs($node);
+			t 'got attrs: ' . d $credits;
+		    },
+		  },
+
 		  TwigHandlers =>
 		  { '/tv/channel'   => sub {
 			my ($t, $node) = @_;
@@ -324,6 +365,14 @@ sub parsefile_callback( $$$$ ) {
 sub tv_handler( $$$ ) {
     my ($d, $t, $node) = @_; die if not defined $node;
     t 'tv_handler() ENTRY';
+    if ($KEEP_ENCODING) {
+	$d->[0] = $t->encoding();
+	t 'got encoding: ' . d $d->[0];
+    }
+    else {
+	$d->[0] = 'UTF-8';
+	t 'assuming UTF-8 encoding';
+    }
     $d->[1] = get_attrs($node);
     t 'got attrs: ' . d $d->[1];
 }
