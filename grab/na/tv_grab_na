@@ -41,8 +41,11 @@ B<--config-file FILE> The location of the config file, which is
 written in configure mode and read in grab mode.  The default location
 is B<~/.xmltv/tv_grab_na.conf>.
 
+B<--output FILE> Write output of --list-providers or --list-channels
+to FILE rather than standard output.
+
 Configuration is normally interactive, but it can be run
-noninteractively, usually to update an existing set of choices.  The
+noninteractively, usually to update an existing set of choices. The
 following options are used to invoke --configure in a non-interactive
 mode:
 
@@ -671,6 +674,10 @@ sub ConfigureUsage($)
     print $fp "   --config-file <file>\n";
     print $fp "     use <file> as config file\n";
     print $fp "\n";
+    print $fp "   --output <file>\n";
+    print $fp "     redirect output to <file> rather than stdout. Currently only effects\n";
+    print $fp "      --list-provider or --list-channels\n";
+    print $fp "\n";
     print $fp "   --retry-limit <count>\n";
     print $fp "       upon possible www site failure, retry <count> times before hard failure.\n";
     print $fp "       (default 2)\n";
@@ -695,10 +702,12 @@ sub ConfigureUsage($)
     print $fp "   --list-providers\n";
     print $fp "     produce a list of providers and their descriptions.\n";
     print $fp "     requires one of --postalcode or --zipcode specified.\n";
+    print $fp "     (use --output to redirect list to a file, rather than stdout)\n";
     print $fp "\n";
     print $fp "   --list-channels\n";
     print $fp "     produce a list of channels available.\n";
     print $fp "     requires --provider and one of --postalcode or --zipcode specifed.\n";
+    print $fp "     (use --output to redirect list to a file, rather than stdout)\n";
     print $fp "\n";
     print $fp "   --release-check <true|false>\n";
     print $fp "     specify whether or not we should attempt to check for new releases\n";
@@ -824,6 +833,7 @@ if ( $configure ) {
 	 $opt_zipcode,
 	 $opt_provider,
 	 $opt_config_file,
+	 $opt_output,
 	 $opt_retry_limit,
 	 $opt_retry_delay,
 	 $opt_auto_fail_on_provider_changes,
@@ -844,6 +854,7 @@ if ( $configure ) {
 			 quiet
 			 release-check=s
 			 config-file=s
+			 output=s
 			 postalcode=s
 			 zipcode=s
 			 provider=s
@@ -897,10 +908,24 @@ if ( $configure ) {
 	    exit(1);
 	}
 	# output list of providers to STDOUT
+	my $outputFD;
+	if ( defined($opt_output) ) {
+	    if ( !open($outputFD, "> $opt_output") ) {
+		errorMessage("$0: $opt_output: $!");
+		exit(1);
+	    }
+	}
+	else {
+	    if ( !open($outputFD, ">&STDOUT") ) {
+		errorMessage("$0: dup STDOUT failed: $!");
+		exit(1);
+	    }
+	}
 	foreach ( @providers ) {
 	    my ($id, $desc) = ($_->{id}, $_->{description});
-	    print STDOUT "$id:$desc\n";
+	    print $outputFD "$id:$desc\n";
 	}
+	close($outputFD);
 	exit(0);
     }
 
@@ -931,12 +956,28 @@ if ( $configure ) {
 	    $config->setStationTransientFlag($station, 'found', 1);
 	}
 
-	# output list of channels to STDOUT
-	my $writer = new XML::Writer(DATA_MODE => 1, DATA_INDENT => 2 );
+	my $outputFD;
+	if ( defined($opt_output) ) {
+	    if ( !open($outputFD, "> $opt_output") ) {
+		errorMessage("$0: $opt_output: $!");
+		exit(1);
+	    }
+	}
+	else {
+	    if ( !open($outputFD, ">&STDOUT") ) {
+		errorMessage("$0: dup STDOUT failed: $!");
+		exit(1);
+	    }
+	}
+
+	# output list of channels to STDOUT or --output specified file
+	my $writer = new XML::Writer(OUTPUT=>$outputFD,
+				     DATA_MODE => 1, DATA_INDENT => 2 );
 	writeListingsXMLHeader($writer);
 	writeOutChannels($config, $writer);
 	writeListingsXMLFooter($writer);
 	$writer->end();
+	close($outputFD);
 	exit(0);
     }
 
@@ -2169,7 +2210,7 @@ sub writeOutPrograms($$$$$$$)
 	}
 
 	if ( defined($prog->{qualifiers}) ) {
-	    for my $qf ('Live', 'Taped', 'If Necessary', 'Subject to Blackout') {
+	    for my $qf ('Live', 'Taped', 'If Necessary', 'Subject to Blackout', 'HDTV') {
 		if ( defined($prog->{qualifiers}->{$qf}) ) {
 		    # nowhere in xmltv.dtd to put this
 		    if ( defined($prog->{desc}) ) {
@@ -2243,15 +2284,19 @@ sub writeOutPrograms($$$$$$$)
 		    }
 		}
 	    }
-	    if ( defined($prog->{qualifiers}->{HDTV}) ) {
-		# nowhere to put this 
-		delete($prog->{qualifiers}->{HDTV});
-	    }
-	    if ( defined($prog->{qualifiers}->{BlackAndWhite}) ) {
+
+	    if ( defined($prog->{qualifiers}->{BlackAndWhite}) ||
+		 defined($prog->{qualifiers}->{VideoAspect}))  {
 		$writer->startTag('video');
-		$writer->dataElement('colour', 'no');
+		if ( defined($prog->{qualifiers}->{VideoAspect}) ) {
+		    $writer->dataElement('aspect', $prog->{qualifiers}->{VideoAspect});
+		    delete($prog->{qualifiers}->{VideoAspect});
+		}
+		if ( defined($prog->{qualifiers}->{BlackAndWhite}) ) {
+		    $writer->dataElement('colour', 'no');
+		    delete($prog->{qualifiers}->{BlackAndWhite});
+		}
 		$writer->endTag('video');
-		delete($prog->{qualifiers}->{BlackAndWhite});
 	    }
 	    if ( defined($prog->{qualifiers}->{InStereo}) ) {
 		$writer->startTag('audio');

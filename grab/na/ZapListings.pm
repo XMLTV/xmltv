@@ -1620,6 +1620,7 @@ sub scrapehtml($$$)
 		    }
 		    elsif ( $i=~/^HDTV$/io ) {
 			$prog->{qualifiers}->{HDTV}++;
+			$prog->{qualifiers}->{VideoAspect}="16:9";
 			push(@sure, $i);
 			next;
 		    }
