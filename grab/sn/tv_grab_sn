@@ -68,7 +68,7 @@ use Date::Manip;
 use IO::File;
 
 use XMLTV;
-use XMLTV::Memoize; XMLTV::Memoize::check_argv();
+use XMLTV::Memoize;
 use XMLTV::Ask;
 # Todo: perhaps we should internationalize messages and docs?
 use XMLTV::Usage <<END
@@ -110,7 +110,7 @@ my %char_map
      339  => 'u',
     );
 
-# Get options.
+# Get options, including undocumented --cache option.
 XMLTV::Memoize::check_argv('get');
 my ($opt_days, $opt_offset, $opt_help, $opt_output,
     $opt_configure, $opt_config_file, $opt_quiet);
@@ -316,19 +316,52 @@ sub process_table( $$$$ ) {
     if (not defined $data) {
 	die "could not fetch $url, aborting\n";
     }
+    t 'got data: ' . d $data;
     local $SIG{__WARN__} = sub {
 	warn "$url: $_[0]";
     };
 
-    t 'got data, creating HTML::TableExtract object';
-    my $te = new HTML::TableExtract(depth=>3, count=>5,keep_html=>1 );
-    my $ts;
+    # Previous versions used HTML::TableExtract to find tables at a
+    # fixed position in the page.  But since the listings for Sweden
+    # and Norway now differ in layout, and allowing for future layout
+    # changes, it's easier to just look at all the tables and find the
+    # one which contains listings.
+    #
+    t 'creating HTML::TableExtract object';
+    my $te = new HTML::TableExtract(keep_html => 1);
     $te->parse($data);
-    my $table=$te->first_table_found();
-    t 'first table with given depth and count: ' . d $table;
+    my ($best_ts, $best_num_matches);
+    foreach my $ts ($te->table_states()) {
+	t 'found table: ' . d $ts;
+	my $num_matches = 0;
+	t 'set $num_matches=0';
+	foreach my $r ($ts->rows()) {
+	    t 'testing row: ' . d $r;
+	    foreach (@$r) {
+		t 'testing field: ' . d $_;
+		if (/^\d\d:\d\d$/) {
+		    t 'matches';
+		    ++ $num_matches;
+		}
+	    }
+	}
+	if (not defined $best_ts or $num_matches > $best_num_matches) {
+	    $best_ts = $ts;
+	    $best_num_matches = $num_matches;
+	}
+    }
+    if (not defined $best_ts) {
+	warn "no tables found in page (strange), skipping";
+	return;
+    }
+    if ($best_num_matches == 0) {
+	warn "did not find any table containing listings, skipping";
+	return;
+    }
+
     $today =~ tr/-//d;
     my %program = (channel => $ch_xmltv_id);
-    foreach my $row ($te->rows($table)) {
+    foreach my $row ($best_ts->rows()) {
 	t 'doing row of table: ' . d $row;
 
 	# Get the interesting fields of this row.
