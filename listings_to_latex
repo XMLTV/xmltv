@@ -1,20 +1,20 @@
 #!/usr/bin/perl -w
-# 
+#
 # $Id$
 #
 # listings_to_latex
-# 
+#
 # Convert TV listings to LaTeX source.
-# 
+#
 # Usage: listings_to_latex [filename]
-# 
+#
 # XML listings data will be read from filename, or from stdin if no
 # filename is given.  LaTeX source will be written to stdout.
-# 
+#
 # See release notes and/or cvs logs entries for module history
-# 
+#
 # -- Ed Avis, epa98@doc.ic.ac.uk, 2000-08-16
-# 
+#
 
 use strict;
 use XML::DOM;
@@ -27,17 +27,14 @@ use Log::TraceMessages qw(t d); Log::TraceMessages::check_argv();
 use Lingua::Preferred qw(which_lang);
 
 # Prototype declarations
-sub chunk($$);
-sub start_date($);
+sub chunk( $$ );
+sub start_date( $ );
 sub get_u8_to_latin1();
-sub quote($);
-sub find_preferred_names($);
+sub quote( $ );
+sub find_channel_names( $ );
+sub best_name( $ );
 
 die "usage: $0 [filename]" if @ARGV >= 2;
-
-my $ch = read_channels();
-my $ch_name = find_preferred_names($ch);
-t 'preferred names: ' . d $ch_name;
 
 ########
 # Configuration
@@ -82,21 +79,17 @@ END
 
 # Parse stdin and make it into chunks of programmes
 my $filename = @ARGV ? $ARGV[0] : '-';
-my %credits;
-if ($filename ne '-') {
-    %credits = read_credits($filename);
-}
-else {
-    warn "cannot include credits when reading from stdin\n";
-}
-my $progs = read_programmes($filename);
+my ($encoding, $credits, $ch, $progs) = @{read_data($filename)};
+die if $encoding ne 'UTF-8';
+my $ch_name = find_channel_names($ch);
+t 'preferred names: ' . d $ch_name;
 my @chunks = @{chunk($CHUNK_SIZE, $progs)};
 
 # Print each chunk as a table
 my ($curr_date, $curr_tz);
 foreach (@chunks) {
     my @programmes = @$_;
-    
+
     my $chunk_date = start_date($programmes[0]);
     if (not defined $curr_date or $curr_date ne $chunk_date) {
 	my $df = UnixDate($chunk_date, "%m-%d (%A)");
@@ -107,16 +100,29 @@ foreach (@chunks) {
     print "\\begin{tabular}{r\@{--}lp{$WIDTH}r} \n";
     my $top_of_table = 1;
     foreach (@programmes) {
+	t 'doing programme: ' . d $_;
 	my %h = %$_;
 	my ($start, $stop, $channel) = @h{qw(start stop channel)};
 
-	# Title and sub-title can be multi-valued, so they're a list
-	my $title = join(' / ', @{$h{title}});
-	my $sub_title = join(' / ', @{$h{sub_title}});
+	t 'possible titles: ' . d $h{title};
+	my $title = best_name($h{title});
+	t 'chosen: ' . d $title;
+	warn "programme has no title" if not defined $title;
+
+	my $sub_title;
+	for ($h{'sub-title'}) {
+	    if (defined) {
+		t 'possible sub-titles: ' . d $h{'sub-title'};
+		warn "list of sub-titles but empty" if not @$_;
+		$sub_title = best_name($_);
+		t 'chosen: ' . d $sub_title;
+		warn "could not find sub-title" if not defined $sub_title;
+	    }
+	}
 	
 	# Convert date-and-time to just hhmm, adding explicit timezone
 	# whenever it changes.
-	# 
+	#
 	my $start_tz = gettz($start) || 'UT';
 	my $start_p = ParseDate_PreservingTZ($start)
 	  or die "bad date '$start'";
@@ -125,7 +131,7 @@ foreach (@chunks) {
 	if ($top_of_table and not defined $curr_tz) {
 	    # Assume that the first listing on a page doesn't need an
 	    # explicit timezone.  (FIXME not perfect)
-	    # 
+	    #
 	    $curr_tz = $start_tz;
 	}
 	$top_of_table = 0;
@@ -137,7 +143,7 @@ foreach (@chunks) {
 	    my $stop_p = ParseDate_PreservingTZ($stop)
 	      or die "bad date '$stop'";
 	    $stop_h = UnixDate($stop_p, '%R');
-	    
+
 	    if ((not defined $curr_tz)
 		or ($curr_tz ne $start_tz)
 		or ($start_tz ne $stop_tz) )
@@ -147,11 +153,11 @@ foreach (@chunks) {
 		  $stop_h .= " $stop_tz";
 		  undef $curr_tz;
 	    }
-	    
+
 	    if ($start_tz eq $stop_tz) {
 		# The programme starts and stops in the same TZ - we
 		# can assume that this is the one to use from now on.
-		# 
+		#
 		$curr_tz = $start_tz;
 	    }
 	}
@@ -163,22 +169,22 @@ foreach (@chunks) {
 	    }
 	}
 
-	# Look up pretty name of channel
+	# Look up pretty name of channel.
 	if (defined $ch_name->{$channel}) {
 	    $channel = $ch_name->{$channel};
 	}
 
 	$channel = quote($channel);
-	$title .= " // $sub_title" if $sub_title ne '';
+	$title .= " // $sub_title" if defined $sub_title;
 	$title = quote($u8_to_latin1->($title));
 
 	# Apparently, you have to put \smallskip _before_ each line
 	# (even the first) in order to get consistent spacing.  The
 	# blank line after $title is to explicitly end the paragraph,
 	# so that \raggedright takes effect.
-	# 
+	#
 	# Er, this needs fixing.  See my post to comp.text.tex.
-	# 
+	#
 	die 'no start'   if not defined $start_h;
 	$stop_h = '' if not defined $stop_h;
 	die 'no title'   if not defined $title;
@@ -198,8 +204,8 @@ print "\\end{tabular} \\\\ \n";
 print "\\end{flushleft}\n";
 
 # Acknowledgements
-my $g = $credits{'generator-info-name'}; $g =~ s!/(\d)! $1!;
-my $s = $credits{'source-info-name'};
+my $g = $credits->{'generator-info-name'}; $g =~ s!/(\d)! $1!;
+my $s = $credits->{'source-info-name'};
 if (not defined $g and not defined $s) {
     # No acknowledgement since unknown source.
 }
@@ -221,7 +227,7 @@ print "\\end{document}\n";
 # Split up a list of programmes into chunks of a certain maximum size,
 # also starting a new chunk for each day.
 # 
-sub chunk($$) {
+sub chunk( $$ ) {
     die 'usage: chunk(chunk size, ref to list of programmes)'
       if @_ != 2;
     my ($chunksize, $list) = @_;
@@ -247,7 +253,7 @@ sub chunk($$) {
 # 
 # Returns the day on which a programme starts, in the form YYYYMMDD.
 # 
-sub start_date($) {
+sub start_date( $ ) {
     my $prog = shift;
     die "bad programme" if not defined $prog->{title};
     die "no start date for $prog->{title}"
@@ -265,7 +271,7 @@ sub start_date($) {
 # converts UTF-8 strings to Latin-1 encoded strings.  What gets used
 # will depend on what the user has installed.
 # 
-sub get_u8_to_latin1() {
+sub get_u8_to_latin1( ) {
     die 'usage: get_u8_to_latin1()' if @_;
     
     # First preference is for Unicode::String.  With perl 5.6 we could
@@ -327,7 +333,7 @@ sub get_u8_to_latin1() {
 # Copied from <http://www.doc.ic.ac.uk/~epa98/work/apps/dtd2latex/>;
 # should put something like this into a 'LaTeX' module some day.
 # 
-sub quote($) {
+sub quote( $ ) {
     die 'usage: quote(string)' if @_ != 1;
     local $_ = shift;
 
@@ -350,7 +356,7 @@ sub quote($) {
     return $_;
 }
 
-# find_preferred_names()
+# find_channel_names()
 # 
 # Work out the best human-readable name to use for each channel.  This
 # isn't quite as simple as calling Lingua::Preferred::which_lang(),
@@ -359,44 +365,26 @@ sub quote($) {
 # language.  Also, we want to choose the shortest possible name to
 # avoid wasting ink :-).
 # 
-# Parameter: refhash of channels data from read_channels()
+# Parameter: refhash of channels data from read_data()
 # Returns: ref to hash mapping channel id to printable channel name
 # 
-sub find_preferred_names($) {
-    my $wanted_langs = (defined $ENV{LANG}) ? [ $ENV{LANG} ] : [];
+sub find_channel_names( $ ) {
     my $h = shift;
+    t 'channels hash: ' . d $h;
     my %r;
     foreach my $id (keys %$h) {
+	t 'doing id: ' . d $id;
 	my @names = @{$h->{$id}};
+	t 'names: ' . d \@names;
 	if (not @names) {
 	    warn "channels hash has no name for $id";
 	    next;
 	}
-	my @avail_langs;
-	my (%seen_lang, $seen_undef);
-	foreach (map { $_->[0] } @names) {
-	    if (defined) {
-		next if $seen_lang{$_}++;
-	    }
-	    else {
-		next if $seen_undef++;
-	    }
-	    push @avail_langs, $_;
-	}
-	my $pref_lang = which_lang($wanted_langs, \@avail_langs);
-	my ($shortest_so_far, $shortest_so_far_length);
-	foreach (@names) {
-	    my ($lang, $text) = @$_;
-	    next unless (not defined $lang) or ($lang eq $pref_lang);
-	    my $length = length $text;
-	    if (not defined $shortest_so_far
-		or $length < $shortest_so_far_length) {
-		$shortest_so_far = $text;
-		$shortest_so_far_length = $length;
-	    }
-	}
-	if (not defined $shortest_so_far) {
-	    die "couldn't get name for channel $id";
+	my $best = best_name(\@names);
+	t 'best name: ' . d $best;
+	if (not defined $best) {
+	    warn "couldn't get name for channel $id";
+	    $best = $id;
 	}
 
 	# There's no need to warn about more than one channel having
@@ -406,8 +394,51 @@ sub find_preferred_names($) {
 	# looked up to get the name, that the name hasn't been used
 	# for a different channel id.  But we won't even do that for
 	# now.
-	# 
-	$r{$id} = $shortest_so_far;
+	#
+	$r{$id} = $best;
     }
     return \%r;
+}
+
+
+# best_name()
+#
+# Given a list of [language, string] pairs, find the best one to use.
+# This means first finding the appropriate language and then picking
+# the shortest string in that language.  We want shortest because
+# we're making hardcopy listings; other applications would probably
+# pick the first (most canonical) name in that language.
+#
+# There could be some more fancy scheme where both length and language
+# are combined into some kind of goodness measure, rather than
+# filtering by language first and then length, but that's overkill for
+# now.
+#
+sub best_name( $ ) {
+    my $wanted_langs = (defined $ENV{LANG}) ? [ $ENV{LANG} ] : [];
+    my @pairs = @{shift()};
+    my @avail_langs;
+    my (%seen_lang, $seen_undef);
+    foreach (map { $_->[1] } @pairs) {
+	if (defined) {
+	    next if $seen_lang{$_}++;
+	} else {
+	    next if $seen_undef++;
+	}
+	push @avail_langs, $_;
+    }
+    my $pref_lang = which_lang($wanted_langs, \@avail_langs);
+    my ($shortest_so_far, $shortest_so_far_length);
+    foreach (@pairs) {
+	my ($text, $lang) = @$_;
+	next unless ((not defined $lang)
+		     or (defined $pref_lang and $lang eq $pref_lang));
+	my $length = length $text;
+	if (not defined $shortest_so_far
+	    or $length < $shortest_so_far_length) {
+	    $shortest_so_far = $text;
+	    $shortest_so_far_length = $length;
+	}
+    }
+    return $shortest_so_far;
 }

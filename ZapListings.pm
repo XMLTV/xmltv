@@ -586,26 +586,21 @@ sub setValue($$$$)
 #    we emit an error since it means either the format has
 #    changed or it contains info we didn't scrape properly.
 #    
+my %warnedCandidateDetail;
 sub scrapehtml($$$)
 {
     my ($self, $html, $htmlsource)=@_;
 
     # declare known languages here so we can more precisely identify
     # them in program details
-    my @knownLanguages=( 
-			 "Arabic",
-			 "Chinese",
-			 "Cree",
-			 "English",
-			 "French",
-			 "Greek",
-			 "Hindi",
-			 "Inuktitut",
-			 "Inuvialuktun",
-			 "Japanese",
-			 "Korean",
-			 "Ukrainian",
-			 );
+    my @knownLanguages=qw(Armenian Arabic Cambodian Cantonese Chinese
+			  Cree English Farsi French Greek Hindi
+			  Inuktitut Inuvialuktun Japanese Korean
+			  Mandarin Spanish Tagalog Ukrainian
+			  Vietnamese);
+    # FIXME some examples of things we don't handle: 'Hindi, English',
+    # 'Urdu, English', 'Japanese; English subtitles',
+    # 'Spanish and English'.
 
     my $rowNumber=0;
     $html=~s/<TR/<tr/og;
@@ -926,10 +921,10 @@ sub scrapehtml($$$)
 			}
 
 			if ( ! $found1 ) {
-			    print STDERR "identified possible canidate for new language $lang in ($lang with $sub subtitles)\n";
+			    print STDERR "identified possible candidate for new language $lang in ($lang with $sub subtitles)\n";
 			}
 			if ( ! $found2 ) {
-			    print STDERR "identified possible canidate for new language $sub in ($lang with $sub subtitles)\n";
+			    print STDERR "identified possible candidate for new language $sub in ($lang with $sub subtitles)\n";
 			}
 			$resultSure->{qualifiers}->{Language}=$lang;
 			$resultSure->{qualifiers}->{Subtitles}->{Language}=$sub;
@@ -952,10 +947,10 @@ sub scrapehtml($$$)
 			    }
 			    
 			    if ( ! $found1 ) {
-				print STDERR "identified possible canidate for new language $lang in ($lang/$sub)\n";
+				print STDERR "identified possible candidate for new language $lang in ($lang/$sub)\n";
 			    }
 			    if ( ! $found2 ) {
-				print STDERR "identified possible canidate for new language $sub in ($lang/$sub)\n";
+				print STDERR "identified possible candidate for new language $sub in ($lang/$sub)\n";
 			    }
 			    if ( $found1 && $found2 ) {
 				$resultSure->{qualifiers}->{Language}=$lang;
@@ -979,7 +974,8 @@ sub scrapehtml($$$)
 			    }
 			    
 			    if ( $i=~/^\(/o && $i=~/\)$/o ) {
-				print STDERR "possible canidate for program detail we didn't identify $i\n";
+				print STDERR "possible candidate for program detail we didn't identify $i\n"
+				  unless $warnedCandidateDetail{$i}++;
 			    }
 			    
 			    $success=0;

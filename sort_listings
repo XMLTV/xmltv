@@ -1,26 +1,26 @@
 #!/usr/bin/perl -w
-# 
+#
 # $Id$
 #
 # sort_listings
-# 
+#
 # Sort the programmes in an XMLTV file according to:
 #   - start time, or
 #   - stop time, or
 #   - internal channel name
-# 
+#
 # and guess stop time for each programme if it isn't already given.
 # This converts an XMLTV listing into a kind of 'canonical form'.
-# 
+#
 # Usage: sort_listings [filename]
-# 
+#
 # See release notes and/or cvs logs entries for module history
-# 
-# -- Ed Avis, epa98@doc.ic.ac.uk, 2000-09-09
-# 
+#
+# -- Ed Avis, epa98@doc.ic.ac.uk, 2001-12-11
+#
 
 use strict;
-use XML::DOM;
+use XMLTV;
 use Date::Manip;
 use Log::TraceMessages qw<t d>; Log::TraceMessages::check_argv(); $| = 1;
 Date_Init(); # because we call ParseDate() while sorting
@@ -38,26 +38,29 @@ else {
 
 # Prototype declarations
 sub programme_cmp();
-sub chan_cmp($$);
-sub clumpidx_cmp($$);
-sub add_stop($);                                                         
+sub chan_cmp( $$ );
+sub clumpidx_cmp( $$ );
+sub add_stop( $ );
 
-@ARGV = ('-') if not @ARGV;
-my $p = new XML::DOM::Parser or die;
-my $doc = $p->parsefile($ARGV[0]);
+my $filename;
+if (@ARGV == 0) {
+    $filename = '-';
+}
+elsif (@ARGV == 1) {
+    $filename = $ARGV[0];
+}
+elsif (@ARGV >= 2) {
+    die "usage: $0 [filename]";
+}
+else { die }
 
-# Get list of programmes
-my @tops = grep { $_->getNodeType() == ELEMENT_NODE }
-           $doc->getChildNodes();
-die "expected one top-level element" if @tops != 1;
-my $tv = $tops[0];
-my @progs = grep { $_->getNodeType() == ELEMENT_NODE }
-            $tv->getChildNodes();
+my ($encoding, $credits, $channels, $progs) = @{read_data($filename)};
+my @progs = @$progs;
 
 # Split up programmes according to channel
 my %chan;
 foreach (@progs) {
-    push @{$chan{$_->getAttribute('channel')}}, $_;
+    push @{$chan{$_->{channel}}}, $_;
 }
 
 # Sort each channel individually, and guess stop times.
@@ -67,72 +70,56 @@ foreach (keys %chan) {
 }
 
 # Mix the channels back into a big list and sort again (could use
-# merge sort)
-# 
+# merge sort).
+#
 @progs = ();
 foreach (keys %chan) {
     push @progs, @{$chan{$_}};
 }
 @progs = sort programme_cmp @progs;
 
-# Insert the sorted results into the document (replacing old contents)
-foreach (@progs) {
-    $tv->insertBefore($_, undef);
-}
-
 # Write out the new document
-$doc->printToFileHandle(\*STDOUT);
+t 'writing out data';
+t 'new programmes list: ' . d \@progs;
+write_data([ $encoding, $credits, $channels, \@progs ]);
 
 exit();
 
 
-# Compare two XML::DOM::Elements representing two programmes.
+# Compare two programme hashes.
 sub programme_cmp() {
     my $xa = $a; my $xb = $b;
     my $r;
-    $r = Date_Cmp(ParseDate($xa->getAttribute('start')),
-		  ParseDate($xb->getAttribute('start')) );
+
+    # Assume that {start} is always there, as it should be.
+    $r = Date_Cmp(ParseDate($xa->{start}), ParseDate($xb->{start}));
     t "compare start times: " . d $r;
     return $r if $r;
 
-    $r = Date_Cmp(ParseDate($xa->getAttribute('stop')),
-		  ParseDate($xb->getAttribute('stop')) );
-    t "compare stop times: " . d $r;
-    return $r if $r;
+    # But {stop} is optional.  If both progs have stop we sort on it,
+    # otherwise it is not used.  (It doesn't seem right to have
+    # undefined values taking part in sort comparisons, and besides,
+    # it stops sort_listings from being idempotent.)
+    #
+    my ($a_stop, $b_stop) = ($xa->{stop}, $xb->{stop});
+    if (defined $a_stop and defined $b_stop) {
+	$r = Date_Cmp(ParseDate($a_stop), ParseDate($b_stop));
+	t "compare stop times: " . d $r;
+	return $r if $r;
+    }
 
-    $r = chan_cmp($xa->getAttribute('channel'),
-		  $xb->getAttribute('channel') );
+    # Channel.  Ideally would sort on pretty name, but no big deal.
+    $r = $xa->{channel} cmp $xb->{channel};
     t "compare channels: " . d $r;
     return $r if $r;
 
-    $r = clumpidx_cmp($xa->getAttribute('clumpidx'),
-		      $xb->getAttribute('clumpidx') );
+    $r = clumpidx_cmp($xa->{clumpidx}, $xb->{clumpidx});
     t "compare clumpidxes: " . d $r;
     return $r if $r;
 
     t 'do not sort';
-    warn('programmes at ' . $a->getAttribute('start') . ' on ' .
-	 $a->getAttribute('channel') . ' do not sort' );
+    warn("programmes at $a->{start} on $a->{channel} do not sort");
     return 0;
-}
-
-
-# Compare internal channel names.  These can be numbers or strings.
-# 
-# We could try to convert these to pretty channel names and sort based
-# on those, but the ordering of channels is pretty arbitrary anyway.
-# 
-# FIXME: remove support for numbers at some point, since we're moving
-# to RFC2838-style channel names.
-# 
-sub chan_cmp($$) {
-    my ($a, $b) = @_;
-    if ($a =~ /^\d+$/ and $b =~ /^\d+$/) {
-	$a <=> $b;
-    }
-    else {
-	$a cmp $b;
-    }
 }
 
 
@@ -140,15 +127,15 @@ sub chan_cmp($$) {
 sub clumpidx_cmp($$) {
     my ($A, $B) = @_;
 
-    if ($A eq '' and $B eq '') {
+    if (not defined $A and not defined $B) {
 	return 0; # equal
     }
-    elsif (($A eq '' and $B ne '')
-	   or ($A ne '' and $B eq '')) {
-	warn "mismatching clumpidxs: '$A' and '$B'";
+    elsif ((not defined $A and defined $B)
+	   or (defined $A and not defined $B)) {
+	warn "mismatching clumpidxs: one programme has, one doesn't";
 	return undef;
     }
-    elsif ($A ne '' and $B ne '') {
+    elsif (defined $A and defined $B) {
 	$A =~ m!^(\d+)/(\d+)$! or die "bad clumpidx $A";
 	my ($ai, $num_in_clump) = ($1, $2);
 	$B =~ m!^(\d+)/(\d+)$! or die "bad clumpidx $B";
@@ -163,39 +150,37 @@ sub clumpidx_cmp($$) {
     else { die }
 }
 
-   
-# Add 'stop time' to a list of programmes (XML::DOM::Elements).  The
+
+# Add 'stop time' to a list of programmes (hashrefs).
 # stop time of a programme is the start time of the next.
-# 
-# Parameters: reference to list of programmes
-# 
+#
+# Parameters: reference to list of programmes, sorted by date, to be
+# shown consecutively (except for 'clumps').
+#
 # Modifies the list passed in.
-# 
+#
 sub add_stop($) {
-    die 'usage: add_stop(ref to list of programme nodes)' if @_ != 1;
+    die 'usage: add_stop(ref to list of programme hashrefs)' if @_ != 1;
     my $l = shift;
 
     my $this_start; # Start time of current clump
     my $next_start; # Start time of next clump
     for (my $i = $#$l; $i >= 0; $i--) {
 	my $this = $l->[$i];
-	my $clumpidx = $this->getAttribute('clumpidx');
-	$clumpidx = '0/1' if $clumpidx eq '';
+	my $clumpidx = $this->{clumpidx};
+	$clumpidx = '0/1' if not defined $clumpidx;
 	$clumpidx =~ s!/\d+$!!; # not interested in clump size
-	$clumpidx =~ m!^\d+$!
-	  or die "bad clumpidx '" . $this->getAttribute('clumpidx') . "'";
+	$clumpidx =~ m!^\d+$! or die "bad clumpidx '$_->{clumpidx}'";
 	
-	$this_start = $this->getAttribute('start');
-	if ($this->getAttribute('stop') eq ''
-	    and defined $next_start )
-	{
-	    $this->setAttribute('stop', $next_start);
+	$this_start = $this->{start};
+	if (not defined $this->{stop} and defined $next_start) {
+	    $this->{stop} = $next_start;
 	}
 
 	if ($clumpidx == 0) {
 	    # First programme in clump - we're going backwards, so
 	    # next time we will move on to the previous clump.
-	    # 
+	    #
 	    $next_start = $this_start;
 	}
     }
