@@ -5,7 +5,7 @@ use File::Basename ();
 use strict;
 
 use vars '$VERSION';
-$VERSION = '0.5.2';
+$VERSION = '0.5.3';
 
 use vars '%extra_constants';
 %extra_constants
