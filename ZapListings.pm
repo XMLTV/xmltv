@@ -87,7 +87,7 @@ sub getProviders($$$)
 
     if ( !$res->is_success ) {
 	print STDERR "zap2it failed to give us a page\n";
-	print STDERR "check postal/zip code or www site (maybe their down)\n";
+	print STDERR "check postal/zip code or www site (maybe they're down)\n";
 	return(undef);
     }
 
@@ -132,7 +132,7 @@ sub getProviders($$$)
     }
     if ( !defined($providers) ) {
 	print STDERR "zap2it gave us a page with no service provider options\n";
-	print STDERR "check postal/zip code or www site (maybe their down)\n";
+	print STDERR "check postal/zip code or www site (maybe they're down)\n";
 	print STDERR "(LWP::UserAgent version is ".$ua->_agent().")\n";
 	return(undef);
     }
@@ -179,7 +179,7 @@ sub getChannelList($$$$)
 
     if ( !$res->is_success ) {
 	print STDERR "zap2it failed to give us a page\n";
-	print STDERR "check postal/zip code or www site (maybe their down)\n";
+	print STDERR "check postal/zip code or www site (maybe they're down)\n";
 	return(undef);
     }
 
@@ -521,7 +521,7 @@ sub new
 	die "no PostalCode or ZipCode specified in create";
     }
     
-    # since I know we don't care, lets pretend theirs only one code :)
+    # since I know we don't care, lets pretend there's only one code :)
     if ( defined($self->{PostalCode}) ) {
 	$self->{ZipCode}=$self->{PostalCode};
 	delete($self->{PostalCode});
@@ -1202,7 +1202,7 @@ sub readSchedule($$$$$)
 	
 	if ( !$res->is_success ) {
 	    print STDERR "zap2it failed to give us a page\n";
-	    print STDERR "check postal/zip code or www site (maybe their down)\n";
+	    print STDERR "check postal/zip code or www site (maybe they're down)\n";
 	    return(-1);
 	}
 	$content=$res->content();
