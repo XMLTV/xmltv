@@ -75,7 +75,7 @@ It should be possible to fully automate the registration process.
 
 use strict;
 
-# of We work by inheriting from XMLTV::Grab_XML and overriding certain
+# We work by inheriting from XMLTV::Grab_XML and overriding certain
 # methods.
 #
 use XMLTV::Grab_XML;
@@ -83,6 +83,38 @@ package Grab_XML_us_gist;
 use base 'XMLTV::Grab_XML';
 
 use Date::Manip;
+use LWP::UserAgent;
+
+# Use Compress::Zlib if installed, else spawn external gzip.
+#
+# This code is copied from tv_grab_de, it could be made into a
+# library.  But then again it only exists as a workaround for not
+# having the real Compress::Zlib library.
+#
+# FIXME Compress::Zlib is standard with perl 5.8.0, remove this?
+#
+use File::Temp;
+sub my_gunzip {
+    my ($fh, $fname) = File::Temp::tempfile();
+    print $fh $_[0] or die "cannot write to $fname: $!";
+    close $fh or die "cannot close $fname: $!";
+    open(GZIP, "gzip -d <$fname |") or die "cannot run gzip: $!";
+    local $/ = undef;
+    my $r = <GZIP>;
+    close GZIP or die "cannot close pipe from gzip: $!";
+    unlink $fname or die "cannot unlink $fname: $!";
+    return $r;
+}
+BEGIN {
+    eval { require Compress::Zlib };
+    if ($@) { *gunzip = \&my_gunzip }
+    else {
+	# eval()ed to quieten 'used only once' warning if the module
+	# was not loaded.
+	#
+	eval '*gunzip = \*Compress::Zlib::memGunzip';
+    }
+}
 
 # Todo: perhaps we should internationalize messages and docs?
 sub country( $ ) {
@@ -102,6 +134,30 @@ sub urls_by_date( $ ) {
 	$date = $pkg->nextday($date);
     }
     return %urls;
+}
+
+# Fetch a page.  This code is necessary because I can't seem to
+# persuade libwww-perl to do transparent 'deflate' decompression.
+#
+sub get( $$ ) {
+    my $pkg = shift;
+    my $url = shift;
+    
+    my $ua = new LWP::UserAgent();
+    my $req = HTTP::Request->new(GET => $url);
+    $req->header('Accept-Encoding' => [ 'deflate', 'gzip' ]);
+    my $res = $ua->request($req);
+    if (not $res->is_success()) {
+	warn "$url: could not fetch, result code $res";
+	return undef;
+    }
+    my $c = $res->content();
+    local $_ = gunzip($res->content());
+    if (not defined) {
+	warn "$url: could not gunzip";
+	return undef;
+    }
+    return $_;
 }
 
 # Given some data downloaded for a particular day, turn it into XML.
