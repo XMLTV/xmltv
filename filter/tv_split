@@ -1,0 +1,180 @@
+#!/usr/bin/perl -w
+
+=head1 NAME
+
+tv_split - Split XMLTV listings into separate files by date and
+channel.
+
+=head1 SYNOPSIS
+
+tv_split --output TEMPLATE [FILE...]
+
+=head1 DESCRIPTION
+
+Read XMLTV listings and split them into some number of output files.
+The output file chosen for each programme is given by substitutions on
+the filename template supplied.  You can split listings by time and by
+channel.
+
+The TEMPLATE is a filename but substitutions are applied: first
+C<%channel> is replaced with the id of a programmeE<39>s channel, and
+then L<Date::Manip> substitutions (which broadly follow L<date(1)>)
+are applied based on the start time of each programme.  In this way
+each programme is written to a particular output file.  When an output
+file is created it will also contain all the channel elements from the
+input.
+
+One or more input files can be given; if more than one then they are
+concatenated in the same way as L<tv_cat>.  If no input files are
+given then standard input is read.
+
+=head1 EXAMPLE
+
+Use C<tv_split --output %channel-%Y%m%d.xml> to separate standard
+input into separate files for each day and channel.  The files will be
+created with names like B<bbc1.bbc.co.uk-20020330.xml>.
+
+=head1 SEE ALSO
+
+L<xmltv(5)>, L<Date::Manip(3)>.
+
+=head1 AUTHOR
+
+Ed Avis, ed@membled.com.
+
+=cut
+
+use strict;
+use Data::Dumper;
+use Getopt::Long;
+use Date::Manip;
+
+# Use Log::TraceMessages if installed.
+BEGIN {
+    eval { require Log::TraceMessages };
+    if ($@) {
+	*t = sub {};
+	*d = sub { '' };
+    }
+    else {
+	*t = \&Log::TraceMessages::t;
+	*d = \&Log::TraceMessages::d;
+	Log::TraceMessages::check_argv();
+    }
+}
+
+use XMLTV;
+use XMLTV::Usage <<END
+$0: concatenate listings, merging channels
+usage: $0 [--help] [--output FILE] [FILE...]
+END
+;
+
+sub new_writer( $ );
+
+my ($opt_help, $opt_output);
+GetOptions('help' => \$opt_help, 'output=s' => \$opt_output) or usage(0);
+usage(1) if $opt_help;
+usage(1) if not defined $opt_output;
+@ARGV = ('-') if not @ARGV;
+
+my ($encoding, $credits, %channels);
+sub encoding_cb( $ ) { $encoding = shift }
+sub credits_cb( $ ) { $credits = shift }
+
+my %seen_unstripped;
+sub channel_cb( $ ) {
+    my $c = shift;
+    for ($c->{id}) {
+	my $old = $_;
+	if (tr/%//d) {
+	    warn "stripping % characters from channel id '$old' (which is not RFC2838 anyway)";
+	    if (defined $seen_unstripped{$old}
+		and $seen_unstripped{$old} ne $_) {
+		die "two channel ids ('$old' and '$seen_unstripped{$old}') not unique after stripping %";
+	    }
+	    $seen_unstripped{$old} = $_;
+	}
+	$channels{$_} = $c;
+    }
+}
+
+my %writers; # map filename to XMLTV::Writer objects
+my %todo; # map filename to programmes, in case too many open files
+my $too_many = 0;
+sub programme_cb( $ ) {
+    my $p = shift;
+
+    my $filename = $opt_output;
+    for ($filename) {
+	s/%channel/$p->{channel}/g;
+	$_ = UnixDate($p->{start}, $_)
+	  if tr/%//;
+    }
+
+    if (not defined $writers{$filename} and not $too_many) {
+	my $w = new_writer($filename);
+	if ($w) {
+	    $writers{$filename} = $w;
+	}
+	else {
+	    if ($! =~ /[Tt]oo many open files/) {
+		warn "too many open files, storing programmes in memory\n";
+		$too_many = 1;
+	    }
+	    else {
+		die "cannot write to $filename: $!, aborting";
+	    }
+	}
+    }
+
+    if (defined $writers{$filename}) {
+	$writers{$filename}->write_programme($p);
+    }
+    else {
+	# Can't write it now, do it later.
+	push @{$todo{$filename}}, $p;
+    }
+}
+
+XMLTV::parsefiles_callback(\&encoding_cb, \&credits_cb,
+			   \&channel_cb, \&programme_cb,
+			   @ARGV);
+
+# Now finish up (write </tv>, etc).
+END {
+    # First those which have XML::Writer objects to hand.
+    foreach my $f (keys %writers) {
+	my $w = $writers{$f};
+	my $todo = delete $todo{$f};
+	if ($todo) {
+	    $w->write_programme($_) foreach @$todo;
+	}
+	$w->end();
+    }
+
+    # We've freed up some filehandles so we can write the remaining
+    # todo programmes, if any.
+    #
+    foreach my $f (keys %todo) {
+	my $w = new_writer($f);
+	die "cannot write to $f: $!, aborting" if not $w;
+	$w->write_programme($_) foreach @{$todo{$f}};
+	$w->end();
+    }
+}
+
+
+# Create a new XMLTV::Writer and get it ready to write programmes
+# (using the global variables set above).  Returns undef if failure.
+#
+sub new_writer( $ ) {
+    my $f = shift;
+    my $fh = new IO::File ">$f" or return undef;
+    my $w = new XMLTV::Writer(OUTPUT => $fh,
+			      encoding => $encoding)
+      or return undef;
+    $w->start($credits);
+    $w->write_channels(\%channels);
+    return $w;
+}
