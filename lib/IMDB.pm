@@ -2164,7 +2164,7 @@ sub invokeStage($$)
 	$self->status("merging in stage 2 data (directors)..");
 	if ( 1 ) {
 	    my $countEstimate=$self->dbinfoGet("db_stat_movie_count", 0);
-	    my $progress=Term::ProgressBar->new({name  => "reading directors",
+	    my $progress=Term::ProgressBar->new({name  => "merging directors",
 						 count => $countEstimate,
 						 ETA   => 'linear'})
 	      if Have_bar;
@@ -2209,7 +2209,7 @@ sub invokeStage($$)
 	$self->status("merging in stage 3 data (actors)..");
 	if ( 1 ) {
 	    my $countEstimate=$self->dbinfoGet("db_stat_movie_count", 0);
-	    my $progress=Term::ProgressBar->new({name  => "reading actors",
+	    my $progress=Term::ProgressBar->new({name  => "merging actors",
 						 count => $countEstimate,
 						 ETA   => 'linear'})
 	      if Have_bar;
@@ -2251,7 +2251,7 @@ sub invokeStage($$)
 	$self->status("merging in stage 4 data (actresses)..");
 	if ( 1 ) {
 	    my $countEstimate=$self->dbinfoGet("db_stat_movie_count", 0);
-	    my $progress=Term::ProgressBar->new({name  => "reading actresses",
+	    my $progress=Term::ProgressBar->new({name  => "merging actresses",
 						 count => $countEstimate,
 						 ETA   => 'linear'})
 	      if Have_bar;
@@ -2301,7 +2301,7 @@ sub invokeStage($$)
 	$self->status("merging in stage 5 data (genres)..");
 	if ( 1 ) {
 	    my $countEstimate=$self->dbinfoGet("db_stat_genres_count", 0);
-	    my $progress=Term::ProgressBar->new({name  => "reading genres",
+	    my $progress=Term::ProgressBar->new({name  => "merging genres",
 						 count => $countEstimate,
 						 ETA   => 'linear'})
 	      if Have_bar;
@@ -2335,8 +2335,8 @@ sub invokeStage($$)
 	    }
 	    $progress->update($countEstimate) if Have_bar;
 	    close(IN);
-	    
 	}
+
 	if ( 1 ) {
 	    # fill in placeholder if no genres were found
 	    for my $key (keys %movies) {
@@ -2354,7 +2354,7 @@ sub invokeStage($$)
 	$self->status("merging in stage 6 data (ratings)..");
 	if ( 1 ) {
 	    my $countEstimate=$self->dbinfoGet("db_stat_ratings_count", 0);
-	    my $progress=Term::ProgressBar->new({name  => "reading ratings",
+	    my $progress=Term::ProgressBar->new({name  => "merging ratings",
 						 count => $countEstimate,
 						 ETA   => 'linear'})
 	      if Have_bar;
@@ -2417,11 +2417,10 @@ sub invokeStage($$)
 	# note: not all movies end up with a cast, but we include them anyway.
 	#
 	
-	$self->status("computing indexes..");
 	my %nmovies;
 	{
 	    my $countEstimate=$self->dbinfoGet("db_stat_movie_count", 0);
-	    my $progress=Term::ProgressBar->new({name  => "indexing by title",
+	    my $progress=Term::ProgressBar->new({name  => "computing index",
 						 count => $countEstimate,
 						 ETA   => 'linear'})
 	      if Have_bar;
@@ -2520,10 +2519,9 @@ sub invokeStage($$)
 	    undef(%movies);
 	}
 
-	$self->status("writing out indexes..");
 	{
 	    my $countEstimate=$self->dbinfoGet("db_stat_movie_count", 0);
-	    my $progress=Term::ProgressBar->new({name  => "writing index",
+	    my $progress=Term::ProgressBar->new({name  => "writing database",
 						 count => $countEstimate,
 						 ETA   => 'linear'})
 	      if Have_bar;
@@ -2566,26 +2564,13 @@ sub invokeStage($$)
 		    $details.=$tab."<>";
 		}
 		else {
-		    my %order;
 		    $details.=$tab;
 
 		    # sort actors by billing
+		    # be warned, two actors may have the same billing level
 		    for my $c (sort {$a cmp $b} split('\|', $actors)) {
 			my ($billing, $name)=split(':', $c);
-			if ( $billing != 9999 && defined($order{$billing}) ) {
-			    # this occurs, most of the time so we don't check it  :<
-			    #$self->error("title \"$dbkey\" has two actors at billing level $billing ($order{$billing} and $name)");
-			}
 			# remove Host/Narrators from end
-			$order{$billing}=$name;
-			#if ( !defined($billing) || ! defined($name) ) {
-			#warn "no billing or name in $c from movie $dbkey";
-			#warn "y=$year";
-			#warn "q=$qualifier";
-			#warn "d=$directors";
-			#warn "a=$actors";
-			#}
-			#
 			# BUG - should remove (I)'s from actors/actresses names when details are generated
 			$name=~s/\s\([IVX]+\)\[/\[/o;
 			$name=~s/\s\([IVX]+\)$//o;
@@ -2627,9 +2612,13 @@ sub invokeStage($$)
 	my $imdb=new XMLTV::IMDB('imdbDir' => $self->{imdbDir},
 				 'verbose' => $self->{verbose});
 
+	if ( -e "$self->{moviedbOffline}" ) {
+	    unlink("$self->{moviedbOffline}");
+	}
+
 	if ( my $errline=$imdb->sanityCheckDatabase() ) {
 	    open(OFF, "> $self->{moviedbOffline}") || die "$self->{moviedbOffline}:$!";
-	    print OFF $errline;
+	    print OFF $errline."\n";
 	    print OFF "one of the prep stages' must have produced corrupt data\n";
 	    print OFF "report the following details to xmltv-devel\@lists.sf.net\n";
 	    
@@ -2653,11 +2642,6 @@ sub invokeStage($$)
 	    close(OFF);
 	    return(1);
 	}
-	else {
-	    # success, unlink offline if it exists
-	    unlink("$self->{moviedbOffline}");
-	}
-
 	$self->status("sanity intact :)");
     }
     else {
@@ -2704,6 +2688,10 @@ sub crunchStage($$)
 	}
 	else {
 	    $self->status("prep stage $stage succeeded with $self->{errorCountInLog} errors in $self->{imdbDir}/stage$stage.log");
+	    if ( $stage == 7 && $self->{errorCountInLog} > 30 && $self->{errorCountInLog} < 50 ) {
+		$self->status("this stage commonly produces around 44 (or so) warnings because of imdb");
+		$self->status("list file inconsistancies, they can usually be safely ignored");
+	    }
 	}
     }
     else {
