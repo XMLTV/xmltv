@@ -59,7 +59,10 @@ END
 #
 # some programs use a "share" directory
 #
-if ($cmd eq 'tv_grab_uk' or $cmd eq 'tv_grab_uk_rt')
+if ($cmd eq 'tv_grab_uk'
+ or $cmd eq 'tv_grab_uk_rt'
+ or $cmd eq 'tv_grab_it'
+ )
 {
     unless (grep(/^--share/i,@ARGV))  # don't add our --share if one supplied
     {
@@ -71,6 +74,7 @@ if ($cmd eq 'tv_grab_uk' or $cmd eq 'tv_grab_uk_rt')
     	    {
 	        die "directory $dir not found\n If not kept with the executable, specify with --share\n"
 	        }
+        print "adding '--share=$dir'\n";
         push @ARGV,"--share",$dir;
     }
 } 
