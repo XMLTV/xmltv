@@ -76,6 +76,7 @@ my %pm
      'lib/Ask.pm'                 => '$(INST_LIBDIR)/XMLTV/Ask.pm',
      'lib/Summarize.pm'           => '$(INST_LIBDIR)/XMLTV/Summarize.pm',
      'lib/IMDB.pm'                => '$(INST_LIBDIR)/XMLTV/IMDB.pm',
+     'lib/Gunzip.pm'              => '$(INST_LIBDIR)/XMLTV/Gunzip.pm',
      'filter/Grep.pm'             => '$(INST_LIBDIR)/XMLTV/Grep.pm',
      'grab/Memoize.pm'            => '$(INST_LIBDIR)/XMLTV/Memoize.pm',
      'grab/Grab_XML.pm'           => '$(INST_LIBDIR)/XMLTV/Grab_XML.pm',
@@ -807,7 +808,7 @@ sub MY::makefile {
 sub MY::manifypods {
     package MY;
     for (my $inherited = shift->SUPER::manifypods(@_)) {
-	foreach my $s (qw(Grab_XML Europe_TZ Config_file Get_nice Mode Summarize)) {
+	foreach my $s (qw(Grab_XML Europe_TZ Config_file Get_nice Mode Summarize Gunzip)) {
 	    s!\$\(INST_MAN3DIR\)/(?:grab::|)$s[.]\$\(MAN3EXT\)!"\$(INST_MAN3DIR)/XMLTV::$s.\$(MAN3EXT)"!;
 	    s!\$\(INSTALLMAN3DIR\)/$s.\$\(MAN3EXT\)!"\$(INSTALLMAN3DIR)/XMLTV::$s.\$(MAN3EXT)"!;
 	}
