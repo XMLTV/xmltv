@@ -110,7 +110,7 @@ are present.",
        exes => [],
        pm => {},
        docs => [],
-       prereqs => { 'CGI' => 0, 'CGI::Carp' => 0 } },
+       prereqs => { 'CGI' => 0 } },
 
      { name => 'tv_grab_na',
        blurb => "Tv_grab_na is the listings grabber for North America.",
@@ -184,7 +184,7 @@ sub test_prereq( $$ ) {
     my ($mod, $minver) = @_;
     die if not defined $mod; die if not defined $minver;
     eval "require $mod";
-    if (defined $@) {
+    if ($@) {
 	# This if-test is separate to suppress spurious 'Use of
 	# uninitialized value in numeric lt (<)' warning.
 	#
