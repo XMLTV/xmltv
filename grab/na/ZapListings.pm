@@ -337,21 +337,16 @@ sub getForms($)
 
 			$option->{cdata}=$optionValue;
 			$option->{value}=$optionValue; # default value is contents
-			while ( $optionAttrs=~s/^\s*([^=]+)=//ios ) {
-			    my $attr=$1;
-			    $attr=~tr/[A-Z]/[a-z]/;
-			    if ( $optionAttrs=~m/^\"/o ) { #"
-				$optionAttrs=~s/^\"([^\"]*)\"\s*//o; #"
-				$option->{attrs}->{$attr}=$1;
+			foreach my $oa (split(' ', $optionAttrs)) {
+			    if ($oa =~ /^selected$/i) {
+				$option->{selected} = 1;
+			    } elsif ($oa =~ /([^=]+)=([^=]+)/) {
+				my $attr = $1;
+				my $aval = $2;
+				$attr =~ tr/[A-Z]/[a-z]/;
+				$aval =~ s/\"//g;
+				$option->{attrs}->{$attr} = $aval;
 			    }
-			    else {
-				$optionAttrs=~s/^(\S+)\s*//o;
-				$option->{attrs}->{$attr}=$1;
-			    }
-			    $optionAttrs=~s/\s+$//o;
-			}
-			while ( $optionAttrs=~s/^\s*selected//ios ) {
-			    $option->{selected}=1;
 			}
 			push(@{$select->{options}}, $option);
 		    }
@@ -574,7 +569,13 @@ sub Form2Request($$)
 	    $button=$input;
 	}
 	if ( defined($input->{name}) ) {
-	    if ( !defined($input->{value}) ) {
+	    if ( $input->{type} eq "radio" &&
+		 ($input->{value} ne $self->{formSettings}->{$input->{name}})
+	       ) {
+		# skip unselected radio button
+		next;
+	    }
+	    if ( !defined($input->{value}) || $input->{value} eq "" ) {
 		if ( defined($self->{formSettings}->{$input->{name}}) ) {
 		    $input->{value}=$self->{formSettings}->{$input->{name}};
 		}
@@ -586,10 +587,12 @@ sub Form2Request($$)
 	    }
 	}
 	if ( $input->{type} eq "image" ) {
+	    if ( defined $input->{name} ) {
 	    push(@pairs, $input->{name}.".x");
 	    push(@pairs, "1");
 	    push(@pairs, $input->{name}.".y");
 	    push(@pairs, "1");
+	}
 	}
 	else {
 	    push(@pairs, $input->{name});
@@ -605,6 +608,21 @@ sub Form2Request($$)
 		    push(@pairs, $self->{formSettings}->{$name});
 		}
 		else {
+		    my $default = 0;
+		  opt:
+		    for my $option (@{$select->{options}}) {
+			if ( defined $option->{selected} ) {
+			    $default = 1;
+			    my $oval = $option->{attrs}->{value};
+			    if ( ! defined $oval ) {
+				$oval = $option->{value};
+			    }
+			    push(@pairs, $name);
+			    push(@pairs, $oval);
+			    last opt;
+			}
+		    }
+		    if (! $default) {
 		  main::errorMessage("zap2it form has select '$name' we don't have a value for");
 		    
 		    return(undef);
@@ -612,13 +630,20 @@ sub Form2Request($$)
 	    }
 	}
     }
+    }
 
     if ( $form->{attrs}->{method} eq "get" ) {
 	my $url="$form->{attrs}->{action}";
 	@pairs=reverse(@pairs);
+	my $args="";
 	while (scalar(@pairs)) {
-	    $url.="&".pop(@pairs)."=".pop(@pairs);
+	    if ($args eq "") {
+		$args.="?".pop(@pairs)."=".pop(@pairs);
+	    } else {
+		$args.="&".pop(@pairs)."=".pop(@pairs);
+	    }
 	}
+	$url.=$args;
 	return(GET(URI->new_abs($url, $self->{formSettings}->{urlbase})));
     }
     elsif ( $form->{attrs}->{method} eq "post" ) {
@@ -737,7 +762,11 @@ sub getZipCodeForm($$$)
 
     $self->{formSettings}->{zipcode}=$geocode;
     $self->{formSettings}->{urlbase}=$urlbase;
+    $self->{formSettings}->{listingssite}="tvl";
 
+    # this is such a HACK, forcing the method change to "get"... but it
+    # fixes things...so we go with the flow
+    $self->{ZipCodeForm}->{attrs}->{method} = "get";
     return($self->Form2Request($self->{ZipCodeForm}));
 }
 
@@ -764,9 +793,11 @@ sub initGeoCodeAndGetProvidersList($$)
     my @forms=getForms($res->content());
     for my $form (@forms) {
 	my $dump=dumpForm($form);
-	#print STDERR $dump;
 	if ( $dump=~m/\s+name=zipcode/ois ) {
 	    $self->{ZipCodeForm}=$form;
+	    if ( $self->{Debug} ) {
+		print STDERR "ZipCode Form:\n$dump";
+	    }
 	    last;
 	}
     }
@@ -807,7 +838,9 @@ sub initGeoCodeAndGetProvidersList($$)
 	my $dump=dumpForm($form);
 	if ( $dump=~m/\s+name=provider/oi ) {
 	    $self->{ProviderForm}=$form;
-	    #print STDERR "Providers Form:\n$dump";
+	    if ( $self->{Debug} ) {
+		print STDERR "Providers Form:\n$dump";
+	    }
 	    last;
 	}
     }
@@ -872,6 +905,7 @@ sub getChannelList($$)
     # ensure you have formSetting set up
     $self->{formSettings}->{zipcode}=$self->{GeoCode};
     $self->{formSettings}->{provider}=$providerId;
+    $self->{formSettings}->{page_from}="";
 
     my $req=$self->Form2Request($self->{ProviderForm});
     if ( !defined($req) ) {
@@ -899,11 +933,26 @@ sub getChannelList($$)
 	return(undef);
     }
 
-    if ( !($res->content()=~m;<a href="([^\"]+)"[^>]+><B>All Channels</B></a>;ios) ) { 
-	main::errorMessage("zap2it gave us a grid listings, but no <All Channels> link\n");
+    my $content=$res->content();
+
+    for my $form (getForms($content)) {
+	my $dump=dumpForm($form);
+	if ( $dump=~m/\s+name="form1"/oi ) {
+	    $self->{GridForm}=$form;
+	    if ( $self->{Debug} ) {
+		print STDERR "Grid Form:\n$dump";
+	    }
+	    last;
+	}
+    }
+
+    if ( !defined($self->{GridForm}) ) {
+      main::errorMessage("zap2it doesn't have a grid form\n");
 	return(undef);
     }
-    $req=GET(URI->new_abs($1,$self->{formSettings}->{urlbase}));
+
+    $self->{formSettings}->{rowdisplay} = 0;  # All Channels
+    $req = $self->Form2Request($self->{GridForm});
 
     $res=&doRequest($self->{ua}, $req, $self->{Debug});
     if ( !$res->is_success || $res->content()=~m/your session has timed out/i ) {
@@ -926,7 +975,7 @@ sub getChannelList($$)
 	return(undef);
     }
 
-    my $content=$res->content();
+    $content=$res->content();
 
     if ( $self->{Debug} ) {
 	open(FD, "> channels.html") || die "channels.html: $!";
@@ -942,7 +991,9 @@ sub getChannelList($$)
 	     $dump=~m/\s+name=startTime/io &&
 	     $dump=~m/\s+name=station/io ) {
 	    $self->{ChannelByTextForm}=$form;
-	    #print STDERR "ChannelByTextForm:\n$dump";
+	    if ( $self->{Debug} > 1 ) {
+		print STDERR "ChannelByTextForm:\n$dump";
+	    }
 	    last;
 	}
     }
