@@ -67,6 +67,114 @@ sub unsetValue($$$)
     delete($self->{$key}) if ( defined($self->{$key}));
 }
 
+#
+# get list of stations in display-name order
+#
+# sad but true, I can't figure a better way of
+# doing this, but then again I don't care - jv
+#
+sub stationsInDisplayOrder($)
+{
+    my $self=shift;
+
+    # create reverse hash with key/values swapped
+    my @nums;
+    foreach my $station (keys (%{$self->{channels}})) {
+	my $key=0;
+	if ( $self->{channels}->{$station}->{description}=~m/^\s*(\d+)/o ) {
+	    $key=$1;
+	}
+	# seems very odd, but occasionally, you get two channels with the
+	# same channel # on the dial
+	if ( defined($nums[$key]) ) {
+	    $nums[$key]="$nums[$key],$station";
+	}
+	else {
+	    $nums[$key]="$station";
+	}
+    }
+    
+    my @ret;
+    for (my $n=0; $n<scalar(@nums) ; $n++ ) {
+	if ( defined($nums[$n]) ) {
+	    push(@ret, sort (split(',', $nums[$n])))
+	}
+    }
+    return(@ret);
+}
+
+sub haveAnyChannels($)
+{
+    my $self=shift;
+    return(defined($self->{channels}));
+}
+
+sub stationRemove($$)
+{
+    my ($self, $station)=@_;
+    delete($self->{channels}->{$station});
+}
+
+sub stationExists($$)
+{
+    my ($self, $station)=@_;
+    return(defined($self->{channels}->{$station}));
+}
+
+sub stationDescription($$)
+{
+    my ($self, $station)=@_;
+    return($self->{channels}->{$station}->{description});
+}
+
+sub setStationIncluded($$$)
+{
+    my ($self, $station, $in)=@_;
+    $self->{channels}->{$station}->{in}=$in;
+}
+
+sub stationIncluded($$)
+{
+    my ($self, $station)=@_;
+    return($self->{channels}->{$station}->{in});
+}
+
+sub setStationDescription($$$)
+{
+    my ($self, $station, $desc)=@_;
+    $self->{channels}->{$station}->{description}=$desc;
+}
+
+sub stationIcon($$)
+{
+    my ($self, $station)=@_;
+    return($self->{channels}->{$station}->{icon});
+}
+
+sub setStationIcon($$$)
+{
+    my ($self, $station, $icon)=@_;
+    $self->{channels}->{$station}->{icon}=$icon;
+}
+
+sub setStationTransientFlag($$$$)
+{
+    my ($self, $station, $flag, $value)=@_;
+    $self->{channels}->{$station}->{transient}->{$flag}=$value;
+}
+
+sub getStationTransientFlag($$$)
+{
+    my ($self, $station, $flag)=@_;
+    return($self->{channels}->{$station}->{transient}->{$flag});
+}
+
+sub removeStationTransientFlag($$$)
+{
+    my ($self, $station, $flag)=@_;
+    delete($self->{channels}->{$station}->{transient}->{$flag});
+}
+
 sub save($$)
 {
     my ($self, $file)=@_;
@@ -88,12 +196,12 @@ sub save($$)
     print FD "provider: $self->{option_provider} \# ".
 	$self->{option_provider_desc}."\n";
     
-    foreach my $station (sort keys (%{$self->{channels}})) {
-	if ( $self->{channels}->{$station}->{in} ) {
-	    print FD "channel: $station # ".$self->{channels}->{$station}->{description}."\n";
+    foreach my $station ($self->stationsInDisplayOrder()) {
+	if ( $self->stationIncluded($station) ) {
+	    print FD "channel: $station # ".$self->stationDescription($station)."\n";
 	}
 	else {
-	    print FD "#channel: $station # ".$self->{channels}->{$station}->{description}."\n";
+	    print FD "#channel: $station # ".$self->stationDescription($station)."\n";
 	}
     }
     close(FD);
@@ -133,12 +241,16 @@ sub load($$)
 	    $self->setValue("option_provider_desc", $2);
 	}
 	elsif ( m/^\#+channel:\s*([^\s]+)\s+\#\s+(.*)$/o ) {
-	    $self->{channels}->{$1}->{in}=0;
-	    $self->{channels}->{$1}->{description}=$2;
+	    my $station=$1;
+	    my $desc=$2;
+	    $self->setStationIncluded($station, 0);
+	    $self->setStationDescription($station, $desc);
 	}
 	elsif ( m/^channel:\s*([^\s]+)\s+\#\s+(.*)$/o ) {
-	    $self->{channels}->{$1}->{in}=1;
-	    $self->{channels}->{$1}->{description}=$2;
+	    my $station=$1;
+	    my $desc=$2;
+	    $self->setStationIncluded($station, 1);
+	    $self->setStationDescription($station, $desc);
 	}
 	elsif ( m/^#/o ) {
 	    next;
@@ -442,7 +554,7 @@ if ( $configure ) {
     # if we're in the configure step, lets refresh the list of channels
     # being careful to warn about additions and deletions
     
-    if ( defined($config->{channels}) ) {
+    if ( $config->haveAnyChannels() ) {
 	print STDERR "\nchecking for changes to channel list, be patient..\n";
     }
     else {
@@ -465,17 +577,17 @@ if ( $configure ) {
     # notify user about update channel ids and new channels
     foreach my $channel (@channels) {
 	my $station=$channel->{station};
-	if ( defined($config->{channels}) ) {
-	    if ( $config->{channels}->{$station} ) {
-		$config->{channels}->{$station}->{found}=1;
+	if ( $config->haveAnyChannels() ) {
+	    if ( $config->stationExists($station) ) {
+		$config->setStationTransientFlag($station, 'found', 1);
 
 		# update description
-		if ( $config->{channels}->{$station}->{description} ne 
+		if ( $config->stationDescription($station) ne 
 		     $channel->{description} ) {
 		    print STDERR "Updated channel id: $station from \"".
-			$config->{channels}->{$station}->{description}."\" to \"".
+			$config->stationDescription($station)."\" to \"".
 			$channel->{description}."\"\n";
-		    $config->{channels}->{$station}->{description}=$channel->{description};
+		    $config->setStationDescription($station, $channel->{description});
 		    $channelsUpdated++;
 		}
 	    }
@@ -483,46 +595,50 @@ if ( $configure ) {
 		my $res=askyesorno('yes', "add channel $station \# ".$channel->{description}." ?");
 		$res=~tr/[A-Z]/[a-z]/;
 		if ( $res eq 'yes' ) {
-		    #print STDERR "Adding new channel id: $station \#".$channel->{description}."\n";
-		    $config->{channels}->{$station}->{found}=1;
-		    $config->{channels}->{$station}->{in}=1;
-		    $config->{channels}->{$station}->{description}=$channel->{description};
-		    $channelsUpdated++;
+		    $config->setStationIncluded($station, 1);
 		}
+		else {
+		    $config->setStationIncluded($station, 0);
+		}
+		$config->setStationTransientFlag($station, 'found', 1);
+		$config->setStationDescription($station, $channel->{description});
+		$channelsUpdated++;
 	    }
 	}
 	else {
 	    my $res=askyesorno('yes', "add channel $station \# ".$channel->{description}." ?");
 	    $res=~tr/[A-Z]/[a-z]/;
 	    if ( $res eq 'yes' ) {
-		#print STDERR "Adding new channel id: $station \#".$channel->{description}."\n";
-		$config->{channels}->{$station}->{found}=1;
-		$config->{channels}->{$station}->{in}=1;
-		$config->{channels}->{$station}->{description}=$channel->{description};
-		$channelsUpdated++;
+		$config->setStationIncluded($station, 1);
 	    }
+	    else {
+		$config->setStationIncluded($station, 0);
+	    }
+	    $config->setStationTransientFlag($station, 'found', 1);
+	    $config->setStationDescription($station, $channel->{description});
+	    $channelsUpdated++;
 	}
     }
 
     # warn about channel declarations we didn't find
-    foreach my $station (sort keys (%{$config->{channels}})) {
-	if ( defined($config->{channels}->{$station}->{found}) ) {
-	    delete($config->{channels}->{$station}->{found});
+    foreach my $station ($config->stationsInDisplayOrder()) {
+	if ( defined($config->getStationTransientFlag($station, 'found')) ) {
+	    $config->removeStationTransientFlag($station, 'found');
 	}
 	else {
-	    my $res=askyesorno('yes', "drop no-longer available channel $station \# ".$config->{channels}->{$station}->{description}." ?");
+	    my $res=askyesorno('yes', "drop no-longer available channel $station \# ".$config->stationDescription($station)." ?");
 	    $res=~tr/[A-Z]/[a-z]/;
 	    if ( $res eq 'yes' ) {
 		#print STDERR "warning: didn't find channel id: $station \#".
-		#    $config->{channels}->{$station}->{description}."\n";
-		delete($config->{channels}->{$station});
+		#    $config->stationDescription($station)."\n";
+		$config->stationRemove($station);
 		$channelsUpdated++;
 	    }
 	}
     }
 
     if ( $channelsUpdated == 0 ) {
-	if ( defined($config->{channels}) ) {
+	if ( $config->haveAnyChannels() ) {
 	    print STDERR "\nchannel line-up hasn't changed\n";
 	}
 	else {
@@ -652,6 +768,9 @@ sub grab
     
     # collect information about channels.
     if ( 1 ) {
+	
+	print STDERR "double checking channel information, be patient..\n";
+
 	my @channels=ZapListings::getChannelList($config->{option_postalcode},
 						 $config->{option_zipcode},
 						 $config->{option_provider},
@@ -668,19 +787,20 @@ sub grab
 	# notify user about update channel ids and new channels
 	foreach my $channel (@channels) {
 	    my $station=$channel->{station};
-	    if ( defined($config->{channels}) ) {
-		if ( defined($config->{channels}->{$station}) ) {
-		    $config->{channels}->{$station}->{found}=1;
+	    if ( $config->haveAnyChannels() ) {
+		if ( $config->stationExists($station) ) {
+		    $config->setStationTransientFlag($station, 'found', 1);
 		    
 		    # update description
-		    if ( $config->{channels}->{$station}->{description} ne $channel->{description} ) {
+		    if ( $config->stationDescription($station) ne $channel->{description} ) {
 			print STDERR "Updated channel id: $station from \"".
-			    $config->{channels}->{$station}->{description}."\" to \"".
+			    $config->stationDescription($station)."\" to \"".
 			    $channel->{description}."\"\n";
+			$config->setStationDescription($station, $channel->{description});
 			$channelsUpdated++;
 		    }
 		    if ( defined($channel->{icon}) ) {
-			$config->{channels}->{$station}->{icon}=$channel->{icon};
+			$config->setStationIcon($station, $channel->{icon});
 		    }
 		}
 		else {
@@ -693,14 +813,19 @@ sub grab
 	}
 
 	# warn about channel declarations we didn't find
-	foreach my $station (sort keys (%{$config->{channels}})) {
-	    if ( defined($config->{channels}->{$station}->{found}) ) {
-		delete($config->{channels}->{$station}->{found});
+	foreach my $station ($config->stationsInDisplayOrder()) {
+	    if ( defined($config->getStationTransientFlag($station, 'found')) ) {
+		$config->removeStationTransientFlag($station, 'found');
 	    }
 	    else {
-		print STDERR "Noticed station unavailable ($station \#".$config->{channels}->{$station}->{description}."), re-run --configure:\n";
-		$config->{channels}->{$station}->{notavailable}=1;
+		print STDERR "Noticed station unavailable ($station \#".
+		    $config->stationDescription($station)."), re-run --configure\n";
+		$config->setStationTransientFlag($station, 'notavailable', 1);
 	    }
+	}
+
+	if ( $channelsUpdated++ ) {
+	    print STDERR "some channel information is out of date, re-run --configure\n";
 	}
     }
 
@@ -770,19 +895,19 @@ sub grab
 					'ProviderID'=>$config->{option_provider},
 					'Debug'     =>$opt_debug);
 
-	foreach my $station (keys %{$config->{channels}}) {
+	foreach my $station ($config->stationsInDisplayOrder()) {
 	    
-	    next if ( !$config->{channels}->{$station}->{in} );
+	    next if ( !$config->stationIncluded($station) );
 	    
-	    if ( defined($config->{channels}->{$station}->{notavailable}) ) {
-		print STDERR "skipping unavailable channel ".$config->{channels}->{$station}->{description}."\n";
+	    if ( defined($config->getStationTransientFlag($station, 'notavailable')) ) {
+		print STDERR "skipping unavailable channel ".$config->stationDescription($station)."\n";
 		next;
 	    }
 
 	    my ($year,$month,$day,$hr,$min,$sec)=Date::Manip::Date_NthDayOfYear($y, $startNDay+$nday);
 	    
 	    if ( $lg->readSchedule($station, 
-				   $config->{channels}->{$station}->{description},
+				   $config->stationDescription($station),
 				   $day, $month, $year) == -1 ) {
 		warn("readSchedule failed for $year-$month-$day for station $station");
 		$failedCount++;
@@ -1043,17 +1168,17 @@ sub writeOutChannels($$)
     my ($config, $writer)=@_;
 
     my $count=0;
-    foreach my $station (keys %{$config->{channels}}) {
+    foreach my $station ($config->stationsInDisplayOrder()) {
 	
-	next if ( defined($config->{channels}->{$station}->{notavailable}) );
-	next if ( !$config->{channels}->{$station}->{in} );
+	next if ( defined($config->getStationTransientFlag($station, 'notavailable')) );
+	next if ( !$config->stationIncluded($station));
 
 	$writer->startTag('channel', id=> $station);
 
-	$writer->dataElement('display-name', "Channel $config->{channels}->{$station}->{description}");
-	if ( defined($config->{channels}->{$station}->{icon}) ) {
+	$writer->dataElement('display-name', "Channel ".$config->stationDescription($station));
+	if ( defined($config->stationIcon($station)) ) {
 	    # Write as empty tag because icon can never contain anything.
-	    $writer->emptyTag('icon', 'src'=>$config->{channels}->{$station}->{icon});
+	    $writer->emptyTag('icon', 'src'=>$config->stationIcon($station));
 	}
 
 	# not supported as of yet
