@@ -12,8 +12,7 @@ tv_grab_pt --help
 
 tv_grab_pt [--config-file FILE] --configure [--gui OPTION]
 
-tv_grab_pt [--config-file FILE] [--output FILE] [--days N]
-           [--offset N] [--quiet]
+tv_grab_pt [--config-file FILE] [--output FILE] [--quiet]
 
 tv_grab_pt --list-channels
 
@@ -39,11 +38,6 @@ default is B<~/.xmltv/tv_grab_pt.conf>.  This is the file written by
 B<--configure> and read when grabbing.
 
 B<--output FILE> write to FILE rather than standard output.
-
-B<--days N> grab N days.  The default is 3.
-
-B<--offset N> start N days in the future.  The default is to start
-from today.
 
 B<--quiet> suppress the progress messages normally written to standard
 error.
@@ -74,6 +68,8 @@ use Data::Dumper;
 use HTML::TreeBuilder;
 use HTML::Entities; # parse entities
 use IO::File;
+use File::Path;
+use File::Basename;
 
 use XMLTV;
 use XMLTV::Memoize;
@@ -87,15 +83,14 @@ use XMLTV::Mode;
 use XMLTV::Usage <<END
 $0: get Portuguese television listings in XMLTV format
 To configure: $0 --configure [--config-file FILE] [--gui OPTION]
-To grab listings: $0 [--config-file FILE] [--output FILE] [--days N]
-        [--offset N] [--quiet]
+To grab listings: $0 [--config-file FILE] [--output FILE] [--quiet]
 To list channels: $0 --list-channels
 END
   ;
 
 # Attributes of the root element in output.
-my $HEAD = { 'source-info-url'     => 'http://tv.clix.pt',
-	     'source-data-url'     => "http://tv.clix.pt",
+my $HEAD = { 'source-info-url'     => 'http://tvcabo.pt',
+	     'source-data-url'     => "http://tvcabo.pt/tv_cabo_progr_canal.asp",
 	     'generator-info-name' => 'XMLTV',
 	     'generator-info-url'  => 'http://membled.com/work/apps/xmltv/',
 	   };
@@ -111,29 +106,32 @@ our @ch_all;
 
 # Get options, including undocumented --cache option.
 XMLTV::Memoize::check_argv('XMLTV::Get_nice::get_nice_aux');
-my ($opt_days, $opt_offset, $opt_help, $opt_output,
+my ($opt_help, $opt_output,
     $opt_configure, $opt_config_file, $opt_gui, $opt_quiet,
     $opt_list_channels);
-$opt_days  = 2; # default
-$opt_offset = 0; # default
 $opt_quiet  = 0; # default
-GetOptions('days=i'        => \$opt_days,
-	   'offset=i'      => \$opt_offset,
-	   'help'          => \$opt_help,
+GetOptions('help'          => \$opt_help,
 	   'configure'     => \$opt_configure,
 	   'config-file=s' => \$opt_config_file,
-       'gui:s'         => \$opt_gui,
+	   'gui:s'         => \$opt_gui,
 	   'output=s'      => \$opt_output,
 	   'quiet'         => \$opt_quiet,
-	   'list-channels' => \$opt_list_channels
+	   'list-channels' => \$opt_list_channels,
+	   'offset=i'      => \ my $opt_offset,        # ignored
+           'days=i'        => \ my $opt_days,          # ignored
 	  )
   or usage(0);
-die 'number of days must not be negative'
-  if (defined $opt_days && $opt_days < 0);
-warn "site normally has only two days of listings\n"
-  if $opt_days + $opt_offset > 2;
 usage(1) if $opt_help;
 XMLTV::Ask::init($opt_gui);
+
+# --offset and --days are ignored (we return more data than was
+# requested) but at least check the user didn't ask for something
+# impossible.
+#
+my $first_day = ($opt_offset || 0) + ($opt_days || 0);
+die 'cannot grab more than one week ahead' if $first_day >= 7;
+warn "ignoring --offset\n" if defined $opt_offset;
+warn "ignoring --days\n" if defined $opt_days;
 
 my $mode = XMLTV::Mode::mode('grab', # default
 			     $opt_configure => 'configure',
@@ -147,6 +145,7 @@ my $config_file
 my @config_lines; # used only in grab mode
 if ($mode eq 'configure') {
     XMLTV::Config_file::check_no_overwrite($config_file);
+    mkpath(dirname($config_file));
 }
 elsif ($mode eq 'grab') {
     @config_lines = XMLTV::Config_file::read_lines($config_file);
@@ -180,8 +179,7 @@ if ($mode eq 'configure') {
 	# Print a config line, but comment it out if channel not wanted.
 	print CONF '#' if not $w;
 	my $name = shift @names;
-	print CONF "channel $_\n";
-	# TODO don't store display-name in config file.
+	print CONF "channel $_.tvcabo.pt\n";
     }
 
     close CONF or warn "cannot close $config_file: $!";
@@ -204,10 +202,11 @@ if (defined $opt_output) {
     $w_args{OUTPUT} = $fh;
 }
 $w_args{encoding} = 'ISO-8859-1';
-my $writer = new XMLTV::Writer(%w_args);
-$writer->start($HEAD);
+my $writer;
+sub start_writing() { ($writer = new XMLTV::Writer(%w_args))->start($HEAD) }
 
 if ($mode eq 'list-channels') {
+    start_writing;
     $writer->write_channel($_) foreach @ch_all;
     $writer->end();
     exit();
@@ -222,9 +221,22 @@ my $line_num = 1;
 foreach (@config_lines) {
     ++ $line_num;
     next if not defined;
-    if (/^channel:?\s+(\S+)(s+)?/) {
+
+    # For now, check that tvcabo.pt appears on every line.  This
+    # ensures we don't have a config file left over from the old
+    # grabber.
+    #
+    if (/^channel:?\s+(\d+).tvcabo.pt\s*$/) {
 	my $ch_did = $1;
+	die if not defined $ch_did;
 	push @channels, $ch_did;
+    }
+    elsif (/^channel/) {
+	die <<END
+The configuration file is left over from the old tv_grab_pt.  The new
+site uses different channels so you need to reconfigure the grabber.
+END
+  ;
     }
     else {
 	warn "$config_file:$line_num: bad line\n";
@@ -234,8 +246,9 @@ foreach (@config_lines) {
 ######################################################################
 # begin main program
 
+start_writing;
+
 # Assume the listings source uses CET (see BUGS above).
-my $now = DateCalc(ParseDate('now'), "$opt_offset days");
 die "No channels specified, run me with --configure\n"
   if not keys %channels;
 my @to_get;
@@ -244,34 +257,30 @@ my @to_get;
 # This progress bar is for both downloading and parsing.  Maybe
 # they could be separate.
 #
+
 my $bar = new XMLTV::ProgressBar('getting listings',
-				scalar(@channels) * $opt_days)
+				scalar @channels)
   if not $opt_quiet;
 foreach my $ch_did (@channels) {
+    die if not defined $ch_did;
     my $ch_name=$channels{$ch_did};
-    $writer->write_channel({ id => $ch_did,
+    $writer->write_channel({ id => $ch_did.'.tvcabo.pt',
                              'display-name' => [ [ $ch_name ] ] });
 }
 
-my $date = UnixDate($now,'%Q');
-for (my $i = 0; $i < $opt_days; $i++) {
-    my $some = 0;
-    foreach my $ch_did (@channels) {
-	foreach (process_table($ch_did, $date)) {
+
+my $some=0;
+foreach my $ch_did (@channels) {
+	foreach (process_table($ch_did)) {
 	    $writer->write_programme($_);
 	    $some = 1;
 	}
 	update $bar if $bar;
-    }
-    if (not $some) {
-	die "no programmes found\n" if $i == 0;
-	warn "only one day of listings found\n" if $i == 1;
-	warn "only $i days of listings found\n" if $i > 1;
-	last;
-    }
-    $date = nextday($date); die if not defined $date;
 }
-$bar->finish() if $bar;
+if (not $some) {
+  die "no programmes found\n" unless $some;
+}
+
 $writer->end();
 
 ######################################################################
@@ -292,28 +301,22 @@ BEGIN {
 }
 
 # Clean up bad characters in HTML.
-my $warned_bad_chars;
 sub tidy( $ ) {
     for (my $s = shift) {
 	# Character 150 seems to be used for 'versus' in sporting
 	# events, but I don't know what that is in Portuguese.
 	#
 	s/\s\226\s/ vs /g;
-	if (tr/\012\015\040-\176\240-\377//dc) {
-	    warn 'removing bad characters' unless $warned_bad_chars++;
-	}
 	return $_;
     }
 }
 
 sub process_table {
-    my ($ch_xmltv_id, $date) = @_;
+    my ($ch_xmltv_id) = @_;
 
-    t "Getting channel $ch_xmltv_id, date $date\n";
+    t "Getting channel $ch_xmltv_id\n";
 
-    die unless $date =~ /(\d{4})(\d{2})(\d{2})/;
-    my $my_date = "$1-$2-$3";
-    my $url = $HEAD->{'source-info-url'}."/canais.html?dia=$my_date&channel=$channels{$ch_xmltv_id}";
+    my $url = $HEAD->{'source-data-url'}."?identificadorCanal=$ch_xmltv_id&l1.x=1&l1.y=2";
     #print STDERR "Getting url : $url"; 
     t $url;
     my $data=tidy(get_nice($url));
@@ -336,23 +339,26 @@ sub process_table {
     my $first = $program_data[0];
     my @r;
     foreach my $p (@program_data) {
-	push @r, make_programme_hash($ch_xmltv_id, $p, $first, $date);
+	push @r, make_programme_hash($ch_xmltv_id, $p, $first);
     }
     return @r;
 }
 
 sub make_programme_hash {
-    my ($ch_xmltv_id, $cur, $first, $date) = @_;
+    my ($ch_xmltv_id, $cur, $first) = @_;
+
+    my $date = $cur->{date};
 
     my %prog;
 
-    $prog{channel}=$ch_xmltv_id;
-    $prog{title}=[ [ $cur->{title}, $LANG ] ];
-    $prog{"sub-title"}=[ [ $cur->{subtitle}, $LANG ] ] if $cur->{subtitle};
-    $prog{category}=[ [ $cur->{category}, $LANG ] ] if $cur->{category};
+    $prog{channel}       =$ch_xmltv_id.'.tvcabo.pt';
+    $prog{title}         =[ [ $cur->{title}, $LANG ] ];
+    $prog{"sub-title"}   =[ [ $cur->{subtitle}, $LANG ] ] if $cur->{subtitle};
+    $prog{category}      =[ [ $cur->{category}, $LANG ] ] if $cur->{category};
+    $prog{"episode-num"} = $cur->{"episode-num"} if $cur->{"episode-num"};
 
 
-    if ( $cur->{time} < $first->{time} ) {
+    if ( ($cur->{time} < $first->{time}) && ($cur->{date} == $first->{date}) ) {
 	t "Jumping for next day of (".$cur->{time}.",".$first->{time}.") $date...";
 	$date = nextday($date);
 	t "Got $date\n";
@@ -375,46 +381,102 @@ sub make_programme_hash {
 }
 
 
+# as_trimmed_text() doesn't deal with ASCII 160, non-breaking space.
+sub trim( $ ) {
+    for (my $tmp = shift) {
+	tr/\240/ /;
+	s/^\s+//;
+	s/\s+$//;
+	return $_;
+    }
+}
+
 #
 sub get_program_data {
     my ($tree) = @_;
 
     my @data;
 
+    my %month_conv = (
+		'Jan' => 'Jan',
+		'Fev' => 'Feb',
+		'Mar' => 'Mar',
+		'Abr' => 'Apr',
+		'Mai' => 'May',
+		'Jun' => 'Jun',
+		'Jul' => 'Jul',
+		'Ago' => 'Aug',
+		'Set' => 'Sep',
+		'Out' => 'Oct',
+		'Nov' => 'Nov',
+		'Dez' => 'Dec',
+    );
+
     my @tables = $tree->find_by_tag_name("_tag"=>"table");
 
+
     # Actually time and title are required, but we don't check that.
+    my $table_n = 0;
     foreach my $table (@tables) {
-	
 	my @trs = $table->find_by_tag_name("_tag"=>"tr");
 	next unless $trs[2];
-	my $tr = $trs[3];
-	my @tds = $tr->find_by_tag_name("_tag"=>"td");
-	next unless (scalar(@tds) >= 2);
-	my $should_be_hour = $tds[0]->as_trimmed_text."\n";
-	#print STDERR "*".$should_be_hour."*\n";
-	next unless ($should_be_hour =~ /^Hora/);
-	#print STDERR "Found the leading html\n";
+	my @tds = $trs[2]->find_by_tag_name("_tag"=>"td");
+	next unless (scalar(@tds) == 1);
+	my $should_be_hour = trim($tds[0]->as_trimmed_text())."\n";
+	next unless ($should_be_hour =~ /.* - (\d+) de (.*) de (\d+)/);
+	#print STDERR "\n*".$should_be_hour."*\n";
+	my ($day, $month, $year) = ($1, $2, $3);
+	$month =~ s/^(\w{3}).*$/$1/;
+	$month = $month_conv{$month};
+	
+	#print STDERR "Parsed date to $day, $month, $year -> ".ParseDate("$day $month $year")."\n";
+	my $parsed_date = ParseDate(sprintf("%02d %3s %04d",$day, $month, $year));
+	die "Parse error, could not parse date" unless $parsed_date;
+	my $f_date = $parsed_date;
+	$f_date =~ s/^(\d{4})(\d{2})(\d{2}).*/$1$2$3/; 
+	#print "Final date found : $f_date\n";
+	#print "--- $f_date matched\n";
 
-	my $index = 4;
+	my $index = 3;
 	while ($trs[$index]) {
 		my @tds = $trs[$index]->find_by_tag_name("_tag"=>"td");
-		my $time = $tds[0]->as_trimmed_text; 
-		my $title = $tds[1]->as_trimmed_text;
-		my $cat = $tds[2]->as_trimmed_text;
+		last unless( $tds[0] && $tds[1] );
+		my $time = trim($tds[0]->as_trimmed_text());
+		my $title = trim($tds[1]->as_trimmed_text());
+		my $sub_t = "";
+		my $episode = "";
 
-		#print STDERR "Found $time | $title | $cat\n";
+		if ( my $i =  $tds[1]->find_by_tag_name("_tag"=>"i") ) {
+			my $tmp = trim($i->as_trimmed_text());	
+			$tmp =~ s/\(/\\\(/g;
+			$tmp =~ s/\)/\\\)/g;
+			$title =~ s/$tmp//;
+			$tmp =~ s/^\s*?(.*?)\s*?/$1/;
+			if ($tmp =~ /(Epis..io\s+\d+)/) {
+				my $ep = $1;
+				$tmp =~ s/$ep//;
+				$ep =~ s/^Epis..io\s+//;
+				$episode = "";
+
+			}
+			if ($tmp) {
+				$sub_t = $tmp;
+			}
+		}	
+
 		$time =~ s/://g;
+		#print STDERR "Found $time | $title\n";
 
+		for ($title) { s/^\s+$//; s/\s+$// }
                 my %h = (       time =>         $time,
-                                category=>      $cat,
                                 title=>         $title,
-                                subtitle=>      "",
+				date =>         $f_date,
+				"episode-num" =>      $episode,
+                                subtitle=>      $sub_t,
                                 desc =>         "");
                 push @data, \%h;
         	$index = $index + 1;
 	}
-	last;
     }
     return @data;
 }
@@ -424,7 +486,7 @@ sub get_channels {
     my $bar = new XMLTV::ProgressBar('getting list of channels', 1)
 	if not $opt_quiet;
     my %channels;
-    my $url=$HEAD->{'source-info-url'};
+    my $url=$HEAD->{'source-data-url'};
     t $url;
     my $local_data=get_nice($url);
     die "could not get channel listing $url, aborting\n"
@@ -433,35 +495,23 @@ sub get_channels {
     my $tree = HTML::TreeBuilder->new();
     $tree->parse($local_data);
     my @menus = $tree->find_by_tag_name("_tag"=>"select");
-
+    
     foreach my $elem (@menus) {
 	my $cname = $elem->attr('name');
-	next unless $cname eq 'Channel';	
+	next unless $cname eq 'identificadorCanal';	
         my @ocanals = $elem->find_by_tag_name("_tag"=>"option");
         @ocanals = sort @ocanals;
 	foreach my $opt (@ocanals) {
-		    my $channel_id  = $opt->content->[0];
-		    $channel_id =~ s/\s*$//;
-		    $channel_id =~ s/\s/\_/g;
-		    my $channel_name= $opt->content->[0];
-		    next if ($channel_id =~ /^[\-]+$/);
-		    next if ($channel_id =~ /^Canal$/);
-		    for ($channel_name) { s/^\s+//; s/\s+$// }
+		    my $channel_id  = $opt->attr('value');
+		    my $channel_name= trim($opt->content->[0]);
 		    $channels{$channel_id}=$channel_name;
 		    push @ch_all, { 'display-name' => [ [ $channel_name,
 							  $LANG ] ],
 				    'id'=> "$channel_id" };
 	} #foreach
     } #while
-
-    if (not %channels) {
-	if ($local_data =~ /(P.gina tempor.riamente indisponivel)/) {
-	    die "$url says $1, cannot grab\n";
-	}
-	die "no channels could be found in $url\n";
-    }
+    die "no channels could be found" if not keys %channels;
     update $bar if not $opt_quiet;
-    $bar->finish() if not $opt_quiet;
     return %channels;
 }
 
@@ -471,5 +521,3 @@ sub nextday {
     my $n = DateCalc($p, '+ 1 day');
     return UnixDate($n, '%Q');
 }
-
-

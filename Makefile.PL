@@ -387,10 +387,10 @@ my @opt_components
 		    'HTML::LinkExtractor' => 0 },
      },
 
-#     { name => 'tv_grab_pt',
-#       blurb => 'Grabber for Portugal',
-#       exes => [ 'grab/pt/tv_grab_pt' ],
-#       prereqs => { 'HTML::TreeBuilder' => 0 } },
+     { name => 'tv_grab_pt',
+       blurb => 'Grabber for Portugal',
+       exes => [ 'grab/pt/tv_grab_pt' ],
+       prereqs => { 'HTML::TreeBuilder' => 0 } },
 
      { name => 'tv_check',
        blurb => 'Program to report exceptions and changes in a schedule',
