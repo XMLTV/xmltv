@@ -309,20 +309,64 @@ if (not $opt_slow) {
     foreach (@to_get) {
 	my ($url, $day, $ch_xmltv_id, $ch_tvgids_id) = @$_;
 	die if not defined $day;
+	my @l;
 	foreach (process_summary_page($url, $day, $day)) {
 	    my ($start, $stop, $title, $url) = @$_;
-	    if (not defined $start or not defined $stop) {
-		warn "couldn't get times for $title, skipping\n";
-		next;
+	    die if defined $stop and not defined $start;
+	    my %h = (channel => $ch_xmltv_id,
+		     title => [ [ $title, $LANG ] ],
+		    );
+	    if (defined $start) {
+		$h{start} = utc_offset($start, $TZ);
 	    }
-	    my ($start_base, $start_tz) = @{date_to_eur($start, $TZ)};
-	    my ($stop_base, $stop_tz) = @{date_to_eur($stop, $TZ)};
-	    $writer->write_programme
-	      ({ start => UnixDate($start_base, '%q') . " $start_tz",
-		 stop => UnixDate($stop_base, '%q') . " $stop_tz",
-		 channel => $ch_xmltv_id,
-		 title => [ [ $title, $LANG ] ],
-	       });
+	    if (defined $stop) {
+		$h{stop} = utc_offset($stop, $TZ);
+	    }
+	    push @l, \%h;
+	}
+
+	# Try to do something with the programmes that have no start
+	# time.  Put them into a clump with the preceding valid
+	# programme.
+	#
+	my $clump;
+	my @clumps;
+	foreach (@l) {
+	    if (not defined $_->{start}) {
+		die if defined $_->{stop};
+		if (not $clump) {
+		    warn "programme $_->{title} with no start time at beginning of page, dropping\n";
+		    next;
+		}
+		$_->{start} = $clump->[0]->{start};
+		$_->{stop} = $clump->[0]->{stop} if defined $clump->[0]->{stop};
+		push @$clump, $_;
+	    }
+	    else {
+		# Start a new clump.
+		push @clumps, $clump if $clump;
+		$clump = [ $_ ];
+	    }
+	}
+	push @clumps, $clump if $clump;
+
+	# Now add the clumpidx attributes.
+	foreach (@clumps) {
+	    my $l = @$_;
+	    if ($l == 1) {
+		# Common case, no clumpidx needed.
+	    }
+	    elsif ($l > 1) {
+		foreach my $i (0 .. $#$_) {
+		    $_->[$i]->{clumpidx} = "$i/$l";
+		}
+	    }
+	    else { die }
+	}
+
+	# Finally write programmes.
+	foreach (@clumps) {
+	    $writer->write_programme($_) foreach @$_;
 	}
 
 	update $bar if Have_bar and not $opt_quiet;
@@ -848,7 +892,8 @@ sub get_channels() {
 # The meaning of this is that the times for that programme were
 # completely nonsensical, and you should do something like putting it
 # into a clump with the last valid programme that appeared before it,
-# or else drop it with a warning.
+# or else drop it with a warning.  (However if stop is set, start will
+# be.)
 #
 sub process_summary_page( $$$ ) {
     my ($url, $day, $official_day) = @_;
