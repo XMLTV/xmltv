@@ -56,8 +56,8 @@ my @cmds
      [ [ 'tv_sort'                                               ], 1 ],
      [ [ 'tv_sort', '--by-channel'                               ], 1 ],
      [ [ 'tv_to_latex'                                           ], 0 ],
-     [ [ 'tv_grep', '--on-after', '200302161330'                 ], 1 ],
-     [ [ 'tv_grep', '--on-before', '200302161330'                ], 1 ],
+     [ [ 'tv_grep', '--on-after', '200302161330 UTC'             ], 1 ],
+     [ [ 'tv_grep', '--on-before', '200302161330 UTC'            ], 1 ],
     );
 
 if ($full) {
@@ -71,7 +71,7 @@ if ($full) {
        [ [ 'tv_grep', '--premiere', ''                             ], 1 ],
        [ [ 'tv_grep', '--new'                                      ], 1 ],
        [ [ 'tv_grep', '--channel-id', 'channel4.com'               ], 1 ],
-       [ [ 'tv_grep', '--on-after', '2002-02-05'                   ], 1 ],
+       [ [ 'tv_grep', '--on-after', '2002-02-05 UTC'               ], 1 ],
        [ [ 'tv_grep', '--eval', 'scalar keys %$_ > 5'              ], 0 ],
        [ [ 'tv_grep', '--category', 'e', '--and', '--title', 'f'   ], 1 ],
        [ [ 'tv_grep', '--category', 'g', '--or', '--title', 'h'    ], 1 ],
