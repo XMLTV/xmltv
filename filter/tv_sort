@@ -146,7 +146,7 @@ sub check_sorted( $$ ) {
 	    local $Log::TraceMessages::On = 1;
 	    t 'not sorted elements: ' . d($a);
 	    t '...and: ' . d($b);
-	    croak 'failed to sort correctly';
+	    confess 'failed to sort correctly';
 	}
     }
 }
@@ -159,11 +159,12 @@ foreach (@progs) {
 
 # Sort each channel individually, and guess stop times.
 foreach (keys %chan) {
-    my $f = make_stable_sort_fn($chan{$_}, \&programme_cmp);
-    @{$chan{$_}} = sort { $f->() } @{$chan{$_}};
-    check_sorted(\&programme_cmp, $chan{$_});
-    add_stop($chan{$_});
-    check_sorted(\&programme_cmp, $chan{$_});
+    use vars '@ps'; local *ps = $chan{$_};
+    my $f = make_stable_sort_fn(\@ps, \&programme_cmp);
+    @ps = sort { $f->() } @ps;
+    check_sorted(\&programme_cmp, \@ps);
+    add_stop(\@ps);
+    check_sorted(\&programme_cmp, \@ps);
 }
 
 # Remove duplicates and sanity-check that there is no overlap on a
@@ -262,18 +263,30 @@ sub programme_cmp() {
     t "compare start times: " . d $r;
     return $r if $r;
 
-    # But {stop} is optional.  If both progs have stop we sort on it,
-    # otherwise it is not used.  (It doesn't seem right to have
-    # undefined values taking part in sort comparisons, and besides,
-    # it stops tv_sort from being idempotent.)
+    # {stop} is optional and a programme without stop comes before one
+    # with (assuming they have the same start).  I did try comparing
+    # stop only if both programmes had it, but this made the sort
+    # function inconsistent, eg
+    #
+    # (0, 1) <= (0, undef) <= (0, 0).
     #
     my ($a_stop_u, $b_stop_u) = ($xa->{stop}, $xb->{stop});
-    if (defined $a_stop_u and defined $b_stop_u) {
+    if (not defined $a_stop_u and not defined $b_stop_u) {
+	# Go on to to compare other things.
+    }
+    elsif (not defined $a_stop_u and defined $b_stop_u) {
+	return -1;
+    }
+    elsif (defined $a_stop_u and not defined $b_stop_u) {
+	return 1;
+    }
+    elsif (defined $a_stop_u and defined $b_stop_u) {
 	my ($a_stop, $b_stop) = (pd($a_stop_u), pd($b_stop_u));
 	$r = Date_Cmp($a_stop, $b_stop);
 	t "compare stop times: " . d $r;
 	return $r if $r;
     }
+    else { die }
 
     # Channel.  Ideally would sort on pretty name, but no big deal.
     $r = $xa->{channel} cmp $xb->{channel};
@@ -388,41 +401,68 @@ sub overlap( $$ ) {
 #
 # Modifies the list passed in.
 #
+# Precondition: the list of programmes is sorted.  Postcondition: it's
+# still sorted.
+#
 sub add_stop( $ ) {
-#    local $Log::TraceMessages::On = 1;
     die 'usage: add_stop(ref to list of programme hashrefs)' if @_ != 1;
     use vars '@l'; local *l = shift;
-  P: for (my $i = 0; $i < @l; $i++) {
-	my $p = $l[$i];
+
+    # We make several passes over the programmes, stopping when no
+    # further stop times can be added.
+    #
+  PASS:
+    t 'doing a pass through list of programmes: ' . d \@l;
+    my $changed = 0;
+    my $p = undef;
+    for (my $i = 0; $i < @l - 1; $i++) {
+	my ($last_start, $last_stop);
+	if ($p) {
+	    $last_start = $p->{start};
+	    $last_stop = $p->{stop};
+	}
+	$p = $l[$i];
 	next if defined $p->{stop};
 	t 'programme without stop time: ' . d $p;
-	my @following = @l[$i + 1 .. $#l];
-	t 'following programmes: ' . d \@following;
-	t 'looking for first following with different start time';
-	foreach my $f (@following) {
-	    my $cmp = Date_Cmp(pd($f->{start}), pd($p->{start}));
-	    if ($cmp < 0) {
-		die 'strange, programmes not sorted in add_sort()';
-	    }
-	    elsif ($cmp == 0) {
-		# The following programme has the same start time as
-		# this one.  Don't use it as a stop time, that would
-		# make this one be zero length.
-		#
-	    }
-	    elsif ($cmp > 0) {
-		$p->{stop} = $f->{start};
-		next P;
-	    }
-	    else { die }
 
+	my $f = $l[$i + 1];
+	if (not defined $f) {
+	    t 'this is the last programme, cannot pick following';
+	    next;
+	}
+	t 'look at following: ' . d $f;
+	my $cmp = Date_Cmp(pd($f->{start}), pd($p->{start}));
+	if ($cmp < 0) {
+	    die 'strange, programmes not sorted in add_sort()';
+	}
+	elsif ($cmp == 0) {
+	    # The following programme has the same start time as
+	    # this one.  Don't use it as a stop time, that would
+	    # make this one be zero length.
+	    #
+	    # If the following programme has a stop time we can use it
+	    # and still have this <= following.
+	    #
 	    if (defined $f->{stop}) {
+		t 'following has stop time, use it';
 		$p->{stop} = $f->{stop};
-		next P;
+		$changed = 1;
 	    }
 	}
-	# Well, there really is nothing we can guess a time from.
+	elsif ($cmp > 0) {
+	    t 'found programme with later start time, use that as stop time';
+
+	    # Since the list was sorted we know that this
+	    # programme is the last with its start time.  So we
+	    # can set the stop time and it will still be the last.
+	    #
+	    t 'following has later start than our start, use it as stop';
+	    $p->{stop} = $f->{start};
+	    $changed = 1;
+	}
+	t 'doing next programme';
     }
+    goto PASS if $changed;
 }
 
 
