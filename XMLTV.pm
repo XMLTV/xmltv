@@ -19,7 +19,7 @@ use Carp;
 
 use base 'Exporter'; use vars qw(@EXPORT @EXPORT_OK);
 @EXPORT = qw(read_data write_data);
-@EXPORT_OK = qw(best_name);
+@EXPORT_OK = qw(best_name list_programme_keys);
 
 # Handlers for different subelements of programme.  First value is the
 # name of the element, second is a subroutine which turns the DOM node
@@ -59,6 +59,60 @@ my @Handlers =
    [ 'star-rating',      \&read_star_rating, \&write_star_rating, '?' ],
   );
 
+# Some users of this module may wish to enquire about which keys a
+# programme can contain.  You can get a list of keys and a summary of
+# what type they are: but to write real programs using this module
+# you'll need to familiarize yourself with the data structures in
+# detail.  This list was just added for the benefit of tv_grep.
+#
+# Returns: hash mapping key => type
+#   where type is one of
+#     'scalar',            meaning a single string;
+#     'with_lang',         a [text, lang] pair;
+#     'many',              a list of strings;
+#     'many_with_lang',    a list of [text, lang] pairs;
+#     'boolean',           true or false;
+#     'other'.
+#
+# Of course any particular programme need not have all of these keys
+# (information on which are optional and which mandatory is not
+# returned).
+#
+# Some 'with_lang' values may be meaningful even if empty, for example
+# premiere.  Others such as title are not.
+#
+sub list_programme_keys() {
+    my %r;
+    my %lookup;
+    $lookup{\&read_with_lang}->{'*'} = 'many_with_lang';
+    $lookup{\&read_with_lang}->{'+'} = 'many_with_lang';
+    $lookup{\&read_with_lang}->{'?'} = 'with_lang';
+    $lookup{\&read_with_lang}->{''} = 'with_lang';
+    $lookup{\&read_url}->{'*'} = 'many';
+    $lookup{\&read_url}->{'+'} = 'many';
+    $lookup{\&read_url}->{'?'} = 'scalar';
+    $lookup{\&read_url}->{''} = 'scalar';
+    $lookup{\&read_new}->{'*'} = 'error';
+    $lookup{\&read_new}->{'+'} = 'error';
+    $lookup{\&read_new}->{'?'} = 'boolean';
+    $lookup{\&read_new}->{''} = 'boolean';
+    # But the rest are not mentioned, just leave them undef meaning
+    # 'other'.
+    #
+
+    foreach (@Handlers) {
+	my ($k, $rdr, $wtr, $mult) = @$_;
+	my $l = $lookup{$rdr}->{$mult};
+	if (not defined $l) {
+	    $r{$k} = 'other';
+	    next;
+	}
+	die "bad multiplicity $mult for $k" if $l eq 'error';
+	$r{$k} = $l;
+    }
+    return \%r;
+}
+
 # Same for <channel> elements.
 my @Channel_handlers =
   (
@@ -66,6 +120,7 @@ my @Channel_handlers =
    [ 'icon',         \&read_icon,      \&write_icon,      '*' ],
    [ 'url',          \&read_url,       \&write_url,       '*' ],
   );
+# But no list_channel_keys() as yet.
 
 # Private.
 sub node_to_programme( $ ) {
