@@ -22,6 +22,24 @@ $SIG{__WARN__} = sub {
     }
 };
 
+# ExtUtils::MakeMaker before 6.21 or so has a bug when PREFIX is not
+# given explicitly -
+# <http://article.gmane.org/gmane.comp.tv.xmltv.devel/3634>.
+#
+unless ($ExtUtils::MakeMaker::VERSION >= 6.21) {
+    if (not grep /^PREFIX=/, @ARGV) {
+	my $dir = '/usr/local';
+	if (-d $dir) {
+	    my $arg = 'PREFIX=/usr/local';
+	    push @ARGV, $arg;
+	    warn "assuming $arg\n";
+	}
+	else {
+	    warn "You may want to explicitly give PREFIX to work around MakeMaker bugs.\n";
+	}
+    }
+}
+
 use strict;
 
 sub test_module( $$ );
