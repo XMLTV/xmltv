@@ -53,11 +53,7 @@ use vars '@docs';
 
 # Executables to be installed.
 my @exes
-  = qw(grab/de/tv_grab_de
-       grab/uk/tv_grab_uk
-       grab/uk_rt/tv_grab_uk_rt
-       grab/it/tv_grab_it
-       filter/tv_extractinfo_en
+  = qw(filter/tv_extractinfo_en
        filter/tv_grep
        filter/tv_sort
        filter/tv_to_latex
@@ -98,35 +94,31 @@ my %prereqs
 
 # Files which are run to generate source code.
 my %pl_files = ('filter/tv_grep.PL'     => 'filter/tv_grep',
-		'grab/uk/tv_grab_uk.PL' => 'grab/uk/tv_grab_uk',
-		'grab/uk_rt/tv_grab_uk_rt.PL' => 'grab/uk_rt/tv_grab_uk_rt',
-		'grab/it/tv_grab_it.PL' => 'grab/it/tv_grab_it',
 		'lib/XMLTV.pm.PL'       => 'lib/XMLTV.pm',
 	       );
 
 # Files to be installed in the system-wide share/ directory.
-my %share_files = ('grab/uk/channel_ids' => 'tv_grab_uk/channel_ids',
-		   'grab/uk_rt/channel_ids' => 'tv_grab_uk_rt/channel_ids',
-		   'grab/it/dud_channels' => 'tv_grab_it/dud_channels',
-		  );
+my %share_files;
 
 # Files which 'make clean' should remove, but doesn't by default, so
 # we have to patch it.
 #
 my @to_clean = ('filter/tv_grep',
-		(map { "grab/$_/tv_grab_$_" } qw(uk uk_rt it)),
 		'lib/XMLTV.pm');
 
 # Extra dependencies to add to the Makefile.
 my @deps = ('filter/tv_grep' => [ qw(filter/tv_grep.in pm_to_blib) ],
-	    (map { ("grab/$_/tv_grab_$_" => [ "grab/$_/tv_grab_$_.in" ]) }
-	     qw(uk uk_rt it)),
 	    'lib/XMLTV.pm' => [ 'lib/XMLTV.pm.in' ]);
 
 # Some grabbers which are generated from .PL files need the share/
 # directory passed as an extra argument.
 #
-my @grab_need_share = qw(uk uk_rt it);
+my @grab_need_share;
+
+# Flag to trigger special installation for tv_grab_uk (currently no
+# other grabber needs the same variable-number-of-files installation).
+#
+my $do_uk_channel_pkgs = 0;
 
 # There is something particularly broken about Date::Manip on Red Hat
 # 8.0, we check for that specially.
@@ -199,35 +191,40 @@ END
 # spun off into separate projects.
 #
 my @opt_components
-  = ({ name => 'tv_check',
-       blurb =>
-       'Tv_check is a graphical front-end to listings data.  You pick the
-shows you are interested in, and then tv_check alerts you to
-unexpected extra episodes or schedule changes.',
-       exes => [ 'choose/tv_check/tv_check' ],
-       docs => [ qw(choose/tv_check/README.tv_check
-		    choose/tv_check/tv_check_doc.html
-		    choose/tv_check/tv_check_doc.jpg
-		   ) ],
-       prereqs => { 'Tk' => 0,
-		    'Tk::TableMatrix' => 0,
-		    'XML::Simple' => 0,
-		  } },
+  = ({ name => 'tv_grab_de',
+       blurb => 'Tv_grab_de is the listings grabber for Germany and Austria.',
+       exes => [ 'grab/de/tv_grab_de' ],
+     },       
 
-     { name => 'tv_pick_cgi',
-       blurb =>
-       "Tv_pick_cgi is a front-end to choose your TV viewing.  It presents all
-programmes in the listings and asks you about each one.  But you can
-killfile programmes by answering 'never', in which case you won't be
-asked again about that show.
+     { name => 'tv_grab_uk',
+       blurb => 'Tv_grab_uk is the listings grabber for Britain.',
+       exes => [ 'grab/uk/tv_grab_uk' ],
+       pl_files => { 'grab/uk/tv_grab_uk.PL' => 'grab/uk/tv_grab_uk' },
+       share_files => { 'grab/uk/channel_ids' => 'tv_grab_uk/channel_ids' },
+       to_clean => [ 'grab/uk/tv_grab_uk' ],
+       deps => [ 'grab/uk/tv_grab_uk' => [ 'grab/uk/tv_grab_uk.in' ] ],
+       grab_need_share => [ 'uk' ],
+       do_uk_channel_pkgs => 1,
+     },
 
-It is a CGI program which runs through a web server and web browser, or
-with the lynxcgi mode of the lynx web browser.  You need to install it
-by hand; this Makefile.PL will only check that the necessary libraries
-are present.",
-       prereqs => { 'CGI' => 0 },
-       type => 'run',
-       default => 0,
+     { name => 'tv_grab_uk_rt',
+       blurb => 'Tv_grab_uk_rt is an alternative listings grabber for Britain.',
+       exes => [ 'grab/uk_rt/tv_grab_uk_rt' ],
+       pl_files => { 'grab/uk_rt/tv_grab_uk_rt.PL' => 'grab/uk_rt/tv_grab_uk_rt' },
+       share_files => { 'grab/uk_rt/channel_ids' => 'tv_grab_uk_rt/channel_ids' },
+       to_clean => [ 'grab/uk_rt/tv_grab_uk_rt' ],
+       deps => [ 'grab/uk_rt/tv_grab_uk_rt' => [ 'grab/uk_rt/tv_grab_uk_rt.in' ] ],
+       grab_need_share => [ 'uk_rt' ],
+     },
+
+     { name => 'tv_grab_it',
+       blurb => 'Tv_grab_it is the listings grabber for Italy.',
+       exes => [ 'grab/it/tv_grab_it' ],
+       pl_files => { 'grab/it/tv_grab_it.PL' => 'grab/it/tv_grab_it' },
+       share_files => { 'grab/it/dud_channels' => 'tv_grab_it/dud_channels' },
+       to_clean => [ 'grab/it/tv_grab_it' ],
+       deps => [ 'grab/it/tv_grab_it' => [ 'grab/it/tv_grab_it.in' ] ],
+       grab_need_share => [ 'it' ],
      },
 
      { name => 'tv_grab_na',
@@ -288,6 +285,37 @@ are present.",
        blurb => 'Tv_grab_dk is the listings grabber for Denmark.',
        exes => [ 'grab/dk/tv_grab_dk' ],
        prereqs => { 'HTML::TreeBuilder' => 0 } },
+
+     { name => 'tv_check',
+       blurb =>
+       'Tv_check is a graphical front-end to listings data.  You pick the
+shows you are interested in, and then tv_check alerts you to
+unexpected extra episodes or schedule changes.',
+       exes => [ 'choose/tv_check/tv_check' ],
+       docs => [ qw(choose/tv_check/README.tv_check
+		    choose/tv_check/tv_check_doc.html
+		    choose/tv_check/tv_check_doc.jpg
+		   ) ],
+       prereqs => { 'Tk' => 0,
+		    'Tk::TableMatrix' => 0,
+		    'XML::Simple' => 0,
+		  } },
+
+     { name => 'tv_pick_cgi',
+       blurb =>
+       "Tv_pick_cgi is a front-end to choose your TV viewing.  It presents all
+programmes in the listings and asks you about each one.  But you can
+killfile programmes by answering 'never', in which case you won't be
+asked again about that show.
+
+It is a CGI program which runs through a web server and web browser, or
+with the lynxcgi mode of the lynx web browser.  You need to install it
+by hand; this Makefile.PL will only check that the necessary libraries
+are present.",
+       prereqs => { 'CGI' => 0 },
+       type => 'run',
+       default => 0,
+     },
     );
 
 foreach my $info (@opt_components) {
@@ -363,6 +391,12 @@ foreach my $info (@opt_components) {
 	push @deps, @{$info->{deps}}                  if $info->{deps};
 	push @grab_need_share, @{$info->{grab_need_share}}
 	if $info->{grab_need_share};
+	for ($info->{do_uk_channel_pkgs}) {
+	    if (defined) {
+		die 'turn on, but not off' if not $_;
+		$do_uk_channel_pkgs = 1;
+	    }
+	}
     }
     print STDERR "\n";
 }
@@ -616,15 +650,19 @@ sub MY::installbin {
     foreach (@::docs) {
 	$doc_files{$_} = File::Basename::basename($_);
     }
-    my $ch_pkgs_dir= 'grab/uk/channel_pkgs';
-    my $wanted = sub {
-	return if -d;
-	return if $File::Find::name =~ m!/CVS/!; # handy in working copy
-	die if defined $share_files{$File::Find::name};
-	(my $inst = $File::Find::name) =~ s!^grab/uk/!tv_grab_uk/! or die;
-	$share_files{$File::Find::name} = $inst;
-    };
-    File::Find::find($wanted, $ch_pkgs_dir);
+
+    # Special case for tv_grab_uk.
+    if ($do_uk_channel_pkgs) {
+	my $ch_pkgs_dir= 'grab/uk/channel_pkgs';
+	my $wanted = sub {
+	    return if -d;
+	    return if $File::Find::name =~ m!/CVS/!; # handy in working copy
+	    die if defined $share_files{$File::Find::name};
+	    (my $inst = $File::Find::name) =~ s!^grab/uk/!tv_grab_uk/! or die;
+	    $share_files{$File::Find::name} = $inst;
+	};
+	File::Find::find($wanted, $ch_pkgs_dir);
+    }
 
     my %new_filetypes = (plaindoc => \%doc_files, share => \%share_files);
     my %seen_dir;
@@ -729,12 +767,13 @@ sub MY::processPL {
 sub MY::makefile {
     package MY;
     my $inherited = shift->SUPER::makefile(@_);
-
-    # Add an extra dependency: the contents of tv_grab_uk's packages
-    # directory.
-    #
-    $inherited =~ s{^(Makefile\s+:)}{$1 grab/uk/channel_pkgs}m
-      or die "no Makefile dependencies line in: $inherited";
+    if ($do_uk_channel_pkgs) {
+	# Add an extra dependency: the contents of tv_grab_uk's
+	# packages directory.
+	#
+	$inherited =~ s{^(Makefile\s+:)}{$1 grab/uk/channel_pkgs}m
+	  or die "no Makefile dependencies line in: $inherited";
+    }
     return $inherited;
 }
 
