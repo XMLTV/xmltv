@@ -213,7 +213,8 @@ sub test_prereq( $$ ) {
 		return [ 'NOT_INSTALLED', undef ];
 	    }
 	    else {
-		return [ 'FAILED', $@ ];
+		chomp (my $msg = $@);
+		return [ 'FAILED', $msg ];
 	    }
 	}
     }
@@ -228,12 +229,8 @@ sub test_prereq( $$ ) {
 }
 
 # MakeMaker's warning message can be intimidating, check ourselves
-# first.  This code can later be replaced with a less demanding
-# dependency checker that asks what you intend to run and picks those
-# dependencies.
-#
-# We warn about missing 'recommended' modules but don't abort because
-# of them.
+# first.  We warn about missing 'recommended' modules but don't abort
+# because of them.
 #
 my $err = 0;
 foreach my $p ((sort keys %prereqs), (sort keys %recommended)) {
@@ -247,11 +244,13 @@ foreach my $p ((sort keys %prereqs), (sort keys %recommended)) {
 	# Installed and recent enough.
     }
     elsif ($r eq 'NOT_INSTALLED') {
-	print STDERR "$Verbed module $p seems not to be installed.\n";
+	print STDERR "Module $p seems not to be installed.\n";
+	print(($minver ? "$p $minver" : $p), " is $verbed.\n");
 	++ $err if $required;
     }
     elsif ($r eq 'FAILED') {
 	print STDERR "$Verbed module $p failed to load: $more\n";
+	print(($minver ? "$p $minver" : $p), " is $verbed.\n");
 	++ $err if $required;
     }
     elsif ($r eq 'TOO_OLD') {
