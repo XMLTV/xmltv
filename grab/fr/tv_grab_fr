@@ -15,7 +15,7 @@ Help: tv_grab_fr --help
 
 Output TV listings for several channels available in France (Hertzian,
 Cable/satellite, Canal+ Sat, TPS).  The data comes from
-tf1.guidetele.com.  The default is to grab as many days as possible
+telepoche.guidetele.com.  The default is to grab as many days as possible
 from the current day onwards. By default the program description are
 not downloaded, so if you want description and ratings, you should
 active the --slow option.
@@ -85,6 +85,11 @@ use XMLTV::Mode;
 use XMLTV::Config_file;
 use XMLTV::DST;
 use XMLTV::Get_nice;
+use threads;
+use threads::shared;
+
+# Force the infamous delay value to 0
+$XMLTV::Get_nice::Delay = 0;
 
 #***************************************************************************
 # Main declarations
@@ -96,7 +101,7 @@ my $ROOT_URL  = "http://telepoche.guidetele.com/";
 my $LANG = "fr";
 my $MAX_STARS = 4;
 my $MAX_RETRY = 5;
-my $VERSION   = "241104-01";
+my $VERSION   = "130205-01";
 
 # Temporary avoid XML warnings (to be investigated)
 no warnings;
@@ -215,20 +220,20 @@ sub get_page( $ ) {
     my $url = shift;
     # For Memoize s sake make extra sure of scalar context
     #return scalar get_page_aux($url);
-    return get_nice($url);
-    #return get_page_aux($url);
+    #return get_nice($url);
+    return get_page_aux($url);
 }
 
 # Curious function to deal with the Get_nice API which does not offer an internal retry mode.
 # Awful, but it seems to work.
+# It works well, and it is mandatory with the telepoche website... Sorry for the ugly code...
 sub get_page_aux {
     my $url = shift;
     my $retry = $MAX_RETRY;
     my $got;
 
 GET:
-    print "Get URL";
-    eval { $got = get_nice_french($url) };
+    eval { $got = get_nice($url) };
     goto GET if $@ and $@ =~ /could not fetch/ and --$retry;
 
     die "Can\'t download $url !!! Check you internet connection." if $retry == 0;
@@ -339,7 +344,7 @@ if (defined $opt_output) {
     $w_args{OUTPUT} = $fh;
 }
 
-$w_args{encoding} = 'UTF-8';
+$w_args{encoding} = 'ISO-8859-1';
 my $writer = new XMLTV::Writer(%w_args);
 $writer->start
   ({ 'source-info-url'     => 'http://telepoche.guidetele.com/',
@@ -408,6 +413,7 @@ foreach (@config_lines) {
 #***************************************************************************
 my @to_get;
 warn "No working channels configured, so no listings\n" if not %channels;
+my $script_duration = time();
 
 # The website stores channel information by hour area for a whole week !
 foreach $chid (sort keys %channels) {
@@ -418,13 +424,21 @@ foreach $chid (sort keys %channels) {
     }
 }
 my $bar = new XMLTV::ProgressBar('getting listings', scalar @to_get)  if not $opt_quiet;
+Date_Init("TZ=UTC");
+
 foreach (@to_get) {
-    my ($url, $chid, $slot ) = @$_;
+    my ($url, $chid, $slot) = @$_;
+    #my $th = threads->new(\&process_channel_grid_page, $writer, $chid, $url, $slot);
+    #$th->join();
     process_channel_grid_page($writer, $chid, $url, $slot);
     update $bar if not $opt_quiet;
 }
 $writer->end();
 $bar->finish() if not $opt_quiet;
+
+# Print the duration
+$script_duration = time() - $script_duration;
+print "Grabber process finished in " . $script_duration . " seconds.\n" if not $opt_quiet;
 
 #***************************************************************************
 # Specific functions for grabbing information
@@ -459,13 +473,17 @@ sub process_channel_grid_page( $$$$ ) {
     my ($genre, $showview, $hours, $starthour, $endhour, $date, $dateindex) = 0;
     my ($title, $subgenre, $footext, $star_rating, $datecreate) = 0;
 
-    Date_Init("TZ=UTC");
+    # Get the current page
     my $t = HTML::TreeBuilder->new;
-    my $nbloop = 0;
     debug_print("Now getting page : " . $url . "\n");
     $t->parse(tidy(get_page($url)));
     $t->eof;
+
+    # Reset some working variables
     my $cont = 0;
+    my $nbloop = 0;
+
+    # The process the page ...
     # Each day is encapsulated in a table with the following parameters :
     foreach my $tableTree ($t->look_down('_tag', 'table', 'width', '532', 'bgcolor', '#ffffff') ) {
       # The new website display 2 times this table before real content table, so skip to tables occurence...
@@ -568,6 +586,8 @@ sub process_channel_grid_page( $$$$ ) {
 	  die if not $start; die if not $stop;
 	  $start = utc_offset( $start, "+0100");
 	  $stop  = utc_offset( $stop , "+0100");
+	  # Now use the utf8 conversion (???)
+	  utf8::encode($title)  if (utf8::is_utf8($title) );
 	  my %prog = (channel  => "C".$chid.".telepoche.com",
 		      title    => [ [ $title ] ],             # lang unknown
 		      start    => $start,
@@ -594,6 +614,9 @@ sub process_channel_grid_page( $$$$ ) {
 	    for ($genre) { s/^\s+//; s/\s+$// }
 	    if (defined $subgenre) {
 	      for ($subgenre) { s/^\s+//; s/\s+$// }
+	      # utf8 conversion...
+	      utf8::encode($genre) if (utf8::is_utf8($genre));
+	      utf8::encode($subgenre) if (utf8::is_utf8($subgenre));
 	      $prog{category} = [ [ xmlencoding($genre), $LANG ], [ xmlencoding($subgenre), $LANG ] ];
 	    } else {
 	      $prog{category} = [ [ xmlencoding($genre), $LANG ] ];
@@ -639,7 +662,7 @@ sub process_channel_grid_page( $$$$ ) {
 	      my @children = $tdesc->content_list();
 	      foreach my $desc (@children)  {
 		# Remove leading and trailing spaces
-		$desc =~ s/^ : //;
+		$desc =~ s/^ ://;
 		$desc =~ s/ $//;
 		if ($nextIsResume == 1) {
 		  warn "RESUME seen twice\n" if defined $resume;
