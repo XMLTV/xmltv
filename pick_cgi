@@ -1,0 +1,424 @@
+#!/usr/bin/perl -wT
+# 
+# pick.cgi
+# 
+# Web page for the user to pick which programmes he wants to watch.
+# 
+# The idea is to get TV listings for the next few days and store them
+# as XML in the file $LISTINGS.  Then 'run' this program (install it
+# as a CGI script and view it in a web browser, or use Lynx's
+# CGI emulation) to pick which programmes you want to watch.
+# 
+# Your preferences will be stored in the file $PREFS_FILE, and if a
+# programme title is listed in there, you won't be asked about it.  So
+# although you may get hundreds of programmes to wade through the
+# first time, the second time round most of them will be listed in the
+# preferences file and you'll be asked only about new ones.
+# 
+# The final list of programmes to watch is stored in $TOWATCH.
+# Unfortunately at the moment this needs post-processing with
+# pick_process, due to sloppiness in writing this program.  I will do
+# things properly soon.
+# 
+# So to use this CGI script to plan your TV viewing, here's what
+# you'll typically need to do:
+#
+# - Get listings for the next few days using the appropriate backend,
+# for example if you want British listings do:
+# 
+# % getlistings_pa >tv.xml
+# 
+# - Optionally, filter these listings to remove programmes which have
+# already been broadcast:
+# 
+# % filter_shown <tv.xml >tmp; mv tmp tv.xml
+# 
+# - Install this file as a CGI script, and make sure that the
+# Configuration section below points to the correct filenames.
+# 
+# - View the page from a web browser, and choose your preferences for
+# the shows listed.  If you choose 'never' or 'always' as your
+# preference, you won't be asked about that programme ever again, so
+# 'no' or 'yes' would be a more cautious choice, since that will mean
+# you are asked again next time.
+# 
+# - Submit the form and go on to the next page.  Repeat until you have
+# got to the end of the listings ('Finished').
+# 
+# - Now the numbers of programmes you want to watch are stored in
+# $TOWATCH.  Process it to get an XML listing:
+# 
+# % pick_process <towatch >towatch.xml
+# 
+# and you might want to print out this XML file:
+# 
+# % listings_to_latex <towatch.xml >towatch.tex
+# % latex towatch.tex
+# % dvips towatch.dvi
+# 
+# - Also look at $PREFS_FILE to see all the programmes you have
+# killfiled (including those you 'always' want to see without
+# prompting).  This list can only get bigger, there's currently no way
+# to unkill a programme except by editing the file by hand.
+# 
+# The first time you do this, you might find that you accidentally say
+# 'never' to a programme you wanted to watch.  So it would be best to
+# print out a full copy of the TV listings from tv.xml and
+# double-check that everything you want is listed in towatch.xml.
+# Remember, once you've said 'never' to watch a programme, it becomes
+# as if it does not exist at all!
+# 
+# -- Ed Avis, epa98@doc.ic.ac.uk, 2000-06-30
+#  
+
+
+use strict;
+use lib '/homes/epa98/lib/perl5/';
+use lib '/homes/epa98/lib/perl5/site_perl';
+use lib '/homes/epa98/lib/perl5/site_perl/5.005';
+use CGI qw<:standard -newstyle_urls>;
+use CGI::Carp qw<fatalsToBrowser carpout>; BEGIN { carpout(\*STDOUT) }
+use XML::Simple;
+use Fcntl ':flock';
+use Dbg; $Dbg::On = 0; $Dbg::As_HTML = 1;
+use Date::Manip;
+
+
+########
+# Configuration
+
+# Maximum number of programmes to display in a single page
+my $CHUNK_SIZE = 100;
+
+# Input file containing all TV listings
+my $LISTINGS = './tv.xml'; # path needed for XML::Simple strangeness
+
+# Output file where programme numbers to watch will be placed
+my $TOWATCH = 'towatch';
+
+# Input file containing preferences (killfiled programmes, etc)
+my $PREFS_FILE = 'tvprefs';
+
+########
+# End of configuration
+
+# Keep the taint checking happy (the Cwd module runs pwd(1))
+$ENV{PATH} = '/bin:/usr/bin';
+
+print header(-expires => 'now');
+print start_html("TV listings");
+
+# FIXME: what if we read one XML file to display the form, and then it
+# has changed by the time the user submits the form?
+# 
+my $xml = XMLin($LISTINGS);
+my @programmes = @{$xml->{programme}};
+
+# %wanted
+# 
+# Does the user wish to watch a programme?
+# 
+# Maps title to:
+#   undef     -  this programme is not known
+#   'never'   -  no, the user never watches this programme
+#   'maybe'   -  it depends on what this particular episode is
+#   'always'  -  yes, the user always watches this programme
+# 
+# Read in from the file $PREFS_FILE.
+# 
+my %wanted = ();
+
+# Open for 'appending' - but really we just want to create an empty
+# file if needed.
+# 
+open(PREFS, "+>>$PREFS_FILE") or die "cannot open $PREFS_FILE: $!";
+flock(PREFS, LOCK_SH);
+seek PREFS, 0, 0;
+while (<PREFS>) {
+    t("got line from $PREFS_FILE: " . d($_));
+    s/^\s+//; s/\s+$//;
+    s/\#.*//;
+    next if $_ eq '';
+    if (/^(never|always|maybe): (.+)$/) {
+	$wanted{$2} = $1;
+    }
+    else { die "$PREFS_FILE:$.: bad line (remnant is $_)\n" }
+}
+t('\%wanted=' . d(\%wanted));
+
+my ($skip, $next) = (url_param('skip'), url_param('next'));
+foreach ($skip, $next) {
+    die "bad URL parameter $_" if defined and tr/0-9//c;
+}
+t('$skip=' . d($skip) . ', $next=',  d($next));
+
+if (defined $skip and defined $next) {
+    # Must be that the user has submitted some preferences.
+    store_prefs($skip, $next);
+}
+elsif (defined $skip and not defined $next) {
+    # This is one of the form pages, skipping some programmes already
+    # seen. 
+    # 
+    close PREFS;
+    display_form($skip);
+}
+elsif (not defined $skip and not defined $next) {
+    # Initial page, corresponding to skip=0.
+    if (-e $TOWATCH) {
+	print p("The output file $TOWATCH already exists - "
+		. 'refusing to overwrite it');
+	print end_html();
+	exit();
+    }
+
+    # Should really have file locking here
+    open(TOWATCH, ">>$TOWATCH") 
+      or die "cannot append to $TOWATCH: $!";
+    print TOWATCH <<END
+# 'towatch' file
+# 
+# This file was created by $0 and contains the numbers of programmes
+# that the user has chosen to watch, either by giving a preference of
+# 'yes' or 'always', or because the stored preference for that
+# programme was 'always'.
+# 
+# The format is 'filename/number' on each line.
+# 
+# Process this file with pick_process to get the actual XML listings.
+# Note that if the XML file referenced changes, then so will the
+# results from processing this file.
+# 
+
+END
+  ;
+    close TOWATCH;
+
+    close PREFS;
+    display_form(0);
+}
+else { die 'bad URL parameters' }
+
+
+# store_prefs()
+# 
+# Store the user's preferences for $CHUNK_SIZE programmes starting
+# from 'skip'.
+# 
+# Parameters:
+#   number of programmes to skip from the beginning of @programmes
+#   the new value of 'skip' for the next page in the list
+# 
+sub store_prefs($$) {
+    die 'usage: store_prefs(skip, next)' if @_ != 2;
+    my ($skip, $next) = @_;
+
+    my $saveprefs = 0;
+    for (my $i = 0; $i < @programmes; $i++) {
+	my $val = param("prog$i");
+	if (defined $val) {
+	    # Check that this programme really did appear in the
+	    # previous page.
+	    # 
+	    die "bad programme number $i for skip $skip, next $next"
+	      unless $skip <= $i and $i < $next;
+	    
+	    my $title = $programmes[$i]->{title}->{content};
+	    print "$title: $val<br>\n";
+	    
+	    if ($val eq 'yes' or $val eq 'no') {
+		$wanted{$title} = 'maybe';
+	    }
+	    elsif ($val eq 'never' or $val eq 'always') {
+		$wanted{$title} = $val;
+		$saveprefs = 1;
+	    }
+	    else { die "bad preference '$val' for prog$i" }
+	}
+    }
+
+    if ($saveprefs) {
+	# Update $PREFS_FILE with the titles of programmes we 'never'
+	# or 'always' want to see.
+	# 
+	flock(PREFS, LOCK_EX);
+	truncate PREFS, 0 or die "cannot truncate $PREFS_FILE: $!";
+	print PREFS <<END
+# 'prefs' file
+# 
+# This file contains stored preferences for programme titles, so that
+# the user need never be bothered about these shows again.  It's like
+# a killfile.  But as well as saying you 'never' want to watch 'That's
+# Esther', you can have a preference of 'always' watching some
+# programmes, without being asked.
+# 
+# Generated by $0.
+# 
+
+END
+  ;
+	foreach (sort keys %wanted) {
+	    my $pref = $wanted{$_};
+	    print PREFS "$pref: $_\n";
+	}
+	
+	print p(strong("Preferences saved in $PREFS_FILE"));
+    }
+
+    # Write out the list of programmes that the user wants to watch
+    # this week.  For the time being, we do this as a list of numbers
+    # that must be processed later - but really we should write out
+    # XML programme details.  To do this we'd need to dump XML::Simple
+    # and perhaps use XML::DOM both for reading programme details and
+    # writing out selected programmes.
+    # 
+    open(TOWATCH, ">>$TOWATCH") or die "cannot append to $TOWATCH: $!";
+    flock(TOWATCH, LOCK_EX);
+    for (my $i = $skip; $i < $next; $i++) {
+	my $val = param("prog$i");
+	my $title = $programmes[$i]->{title}->{content};
+	if ($wanted{$title} eq 'always' or $val eq 'yes') {
+	    print TOWATCH "$LISTINGS/$i\n";
+	    print br(), "Planning to watch $title\n";
+	}
+    }
+    close TOWATCH;
+    print p(strong("List of programme numbers to watch added to $TOWATCH"));
+
+    if ($next >= @programmes) {
+	print p('Finished.');
+    }
+    else {
+	my $url = url(-relative => 1);
+	print a({ href => "$url?skip=$next" }, "Next page");
+    }
+    print end_html();
+    exit();
+}
+
+
+# display_form()
+# 
+# Parameters:
+#   number of programmes to skip at start of @programmes
+# 
+sub display_form($) {
+    die 'usage: display_form(skip)' if @_ != 1;
+    my $skip = shift;
+
+    my @nums_to_show = ();
+    my $i;
+    for ($i = $skip;
+	 $i < @programmes and @nums_to_show < $CHUNK_SIZE;
+	 $i++ )
+    {
+	my $prog = $programmes[$i];
+	my $title = $prog->{title}->{content};
+	my $wanted = $wanted{$title};
+	if (not defined $wanted or $wanted eq 'maybe') {
+	    push @nums_to_show, $i;
+	}
+	elsif ($wanted eq 'never' or $wanted eq 'always') {
+	    # Don't bother the user with this programme
+	}
+	else { die }
+    }
+
+    # Now actually print the things, we had to leave it until now
+    # because we didn't know what the new 'skip' would be.
+    # 
+    print start_form(-action => url(-relative => 1) .
+		     "?skip=$skip;next=$i");
+
+    print '<table border="1">', "\n";
+    my $prev;
+    foreach my $n (@nums_to_show) {
+	my %h = %{$programmes[$n]};
+	my ($start, $stop, $channel) = @h{qw(start stop channel)};
+	$stop = '' if not defined $stop;
+	my $title = $h{title}->{content};
+	my $sub_title = $h{sub_title}->{content};
+	my $desc      = $h{desc}->{content};
+	
+	if (defined $prev) {
+	    print_date_for(\%h, $prev);
+	}
+	else {
+	    print_date_for(\%h);
+	}
+
+	print "<tr>\n";
+	print "<td>\n";
+	print "<strong>$title</strong>\n";
+	print "<em>$sub_title</em>\n" if defined $sub_title;
+	print "<p>\n$desc\n</p>\n" if defined $desc;
+	print "</td>\n";
+	
+	my $default;
+	if (not defined $wanted{$title}) {
+	    $default = 'never';
+	}
+	elsif ($wanted{$title} eq 'maybe') {
+	    $default = 'yes';
+	}
+	else {
+	    die "bad \$wanted{$title}: $wanted{$title}";
+	}
+
+	foreach (qw<never no yes always>) {
+	    print "<td>\n";
+	    my $checked = ($_ eq $default) ? 'checked' : '';
+	    print qq[<input type="radio" name="prog$n" $checked value="$_">$_</input>\n];
+	    print "</td>\n";
+	}
+	print "</tr>\n";
+	$prev = \%h;
+    }
+    
+    print "</table>\n";
+    print submit();
+    print end_form();
+    print end_html();
+}
+
+
+# print_date_for()
+# 
+# Print the date for a programme as part of the form, so that the
+# reader will have some idea of when the programmes will be shown.
+# 
+# Printing the date ends the current table, prints the date, and then
+# starts a new table.  But it won't happen unless it is needed, ie the
+# date has changed since the previous programme.
+# 
+# Parameters:
+#   (ref to) programme to print
+#   (optional) (ref to) previous programme
+# 
+# If the previous programme is not given, the date will always be
+# printed.
+# 
+# Printing the date also (at least ATM) ends the current HTML table
+# and begins a new one after the date.
+# 
+sub print_date_for($$;) {
+    local $Dbg::On = 0;
+    die 'usage: print_date_for(programme, [prev programme])'
+      unless 1 <= @_ and @_ < 3;
+    my ($prog, $prev) = @_;
+    t('$prog=' . d($prog));
+    t('$prev=' . d($prev));
+
+    my $DAY_FMT = '%A'; # roughly as for date(1)
+
+    my $day = UnixDate($prog->{start}, $DAY_FMT);
+    my $prev_day = defined $prev ? UnixDate($prev->{start}, $DAY_FMT) : undef;
+    t('$day=' . d($day));
+    t('$prev_day=' . d($prev_day));
+
+    if ((not defined $prev_day) or ($day ne $prev_day)) {
+	print "</table>\n";
+	print h1($day);
+	print '<table border="1">', "\n";
+    }
+}

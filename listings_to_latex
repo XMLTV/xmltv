@@ -1,0 +1,135 @@
+#!/usr/bin/perl -w
+# 
+# listings_to_latex
+# 
+# Convert TV listings to LaTeX source.
+# 
+# Usage: listings_to_latex [filename]
+# 
+# XML listings data will be read from filename, or from stdin if no
+# filename is given.  LaTeX source will be written to stdout.
+# 
+# BUGS / REQUIREMENTS
+# 
+# I've made a small change to XML::Simple so that you can give the
+# filename '-' to read from stdin.  Hopefully this will be included in
+# the next version of XML::Simple - until then, reading from stdin
+# will not work (unless you download my version from
+# <http://www.doc.ic.ac.uk/~epa98/lib/perl5/site_perl/5.005/XML/Simple.pm>).
+# 
+# -- Ed Avis, epa98@doc.ic.ac.uk, 2000-06-27
+# 
+
+use strict;
+use XML::Simple;
+use IO::File;
+use Date::Manip;
+
+die "usage: $0 [filename]" if @ARGV >= 2;
+
+my %ch_to_num = (bbc1 => 1, bbc2 => 2, carlton => 3, lwt => 3,
+		 ch4 => 4, ch5 => 5 );
+
+# Width of programme title
+my $WIDTH = '0.7\textwidth';
+
+print <<'END';
+\documentclass[a4paper]{article}
+\begin{document}
+\begin{flushleft}
+END
+
+my $xml;
+if (@ARGV == 1) {
+    $xml = XMLin($ARGV[0], cache => [ 'storable' ]);
+}
+elsif (@ARGV == 0) {
+    $xml = XMLin('-');
+}
+else { die }
+
+my @programmes = @{$xml->{programme}};
+my @chunks = chunk(30, @programmes);
+
+my $curr_date;
+foreach (@chunks) {
+    my @programmes = @$_;
+
+    my $chunk_date = start_date($programmes[0]);
+    if (not defined $curr_date or $curr_date ne $chunk_date) {
+	my $df = UnixDate($chunk_date, "%m-%d (%A)");
+	print "\\section*{$df}\n";
+	$curr_date = $chunk_date;
+    }
+
+    print "\\begin{tabular}{r\@{--}lp{$WIDTH}r} \n";
+    foreach (@programmes) {
+	my %h = %$_;
+	my ($start, $stop, $channel) = @h{qw(start stop channel)};
+	my $title = $h{title}->{content};
+	my $sub_title = $h{sub_title}->{content};
+	
+	die 'no start'   if not defined $start;
+	$stop = ''       if not defined $stop;
+	die 'no title'   if not defined $title;
+	die 'no channel' if not defined $channel;
+
+	# Convert date-and-time to just hhmm
+	foreach ($start, $stop) { s/^\d{8}(\d\d):(\d\d):00$/$1$2/ }
+
+	# Hardcoded channel lookup
+	$channel = $ch_to_num{$channel};
+
+	# Join title and sub-title
+	$title .= " // $sub_title" if defined $sub_title;
+
+	# Apparently, you have to put \smallskip _before_ each line
+	# (even the first) in order to get consistent spacing.  The
+	# blank line after $title is to explicitly end the paragraph,
+	# so that \raggedright takes effect.
+	# 
+	# Er, this needs fixing.  See my post to comp.text.tex.
+	# 
+	print <<END;
+\\smallskip
+$start & $stop &
+{ \\small \\raggedright
+$title
+} & $channel \\\\
+END
+    }
+
+    print "\\end{tabular} \\\\ \n";
+}
+print "\\end{flushleft}\n";
+print "\\end{document}\n";
+
+
+sub chunk($@) {
+    my ($chunksize, @list) = @_;
+    my @r;
+    my @currchunk = ();
+    while (@list) {
+	push @currchunk, scalar (shift @list);
+
+	if (@currchunk == $chunksize
+	    or @list == 0
+	    or start_date($currchunk[-1]) ne start_date($list[0]) )
+        {
+	    push @r, [ @currchunk ];
+	    @currchunk = ();
+	}
+    }
+    return @r;
+}
+
+
+sub start_date($) {
+    my $prog = shift;
+    die "bad programme: " . d($prog) if not defined $prog->{title};
+    die "no start date for $prog->{title}"
+      if not defined $prog->{start};
+    local $_ = $prog->{start};
+    /^(\d{8})/ or die "bad date $_";
+    return $1;
+}
