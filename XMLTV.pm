@@ -865,8 +865,8 @@ sub write_with_lang( $$$ ) {
 
 # best_name()
 #
-# Given a list of acceptable languages and a list of [language,
-# string] pairs, find the best one to use.  This means first finding
+# Given a list of acceptable languages and a list of [string,
+# language] pairs, find the best one to use.  This means first finding
 # the appropriate language and then picking the 'best' string in that
 # language.  The best is normally defined as the first one found in a
 # usable language, since the XMLTV format puts the most canonical
@@ -874,12 +874,12 @@ sub write_with_lang( $$$ ) {
 #
 # Parameters:
 #     reference to list of languages (in Lingua::Preferred format),
-#     reference to list of [language, string] pairs.
+#     reference to list of [string, language] pairs.
 #     (optional) function that compares two strings of text and
 #       returns 1 if its first argument is better than its second
 #       argument, or 0 if equally good, or -1 if first argument worse.
 #
-# Returns: [l, s] pair, where s is the best of the strings to use
+# Returns: [s, l] pair, where s is the best of the strings to use
 # and l is its language.
 #
 # There could be some more fancy scheme where both length and language
@@ -925,7 +925,7 @@ sub best_name( $$;$ ) {
     @candidates = sort { $compare->($a, $b) } @candidates
       if defined $compare;
     my $chosen = $candidates[0];
-    return [ $cand_lang{$chosen}, $chosen ];
+    return [ $chosen, $cand_lang{$chosen} ];
 }
 
 
