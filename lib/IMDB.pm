@@ -2507,7 +2507,7 @@ sub invokeStage($$)
 		    $year="0000";
 		}
 		else {
-		    warn "unable to decode year from title key \"$title\", report to xmltv-devel\@lists.sf.net";
+		    $self->error("movie list format failed to decode year from title '$title'");
 		    $year="0000";
 		}
 		$title=~s/(.*),\s*(The|A|Une|Les|L\'|Le|La|El|Das)$/$2 $1/og;
