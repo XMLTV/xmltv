@@ -30,7 +30,7 @@ sub askBooleanQuestion( $$ );
 sub ask( $ )
 {
     print "$_[0]";
-    my $result=<>;
+    my $result=<STDIN>;
     chop($result) if ( defined($result) );
     return($result);
 }
