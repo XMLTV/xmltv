@@ -48,9 +48,9 @@ my %pm
      'lib/Clumps.pm'              => '$(INST_LIBDIR)/XMLTV/Clumps.pm',
      'lib/Usage.pm'               => '$(INST_LIBDIR)/XMLTV/Usage.pm',
      'lib/Ask.pm'                 => '$(INST_LIBDIR)/XMLTV/Ask.pm',
+     'lib/UK_TZ.pm'           => '$(INST_LIBDIR)/XMLTV/UK_TZ.pm',
      'grab/Memoize.pm'            => '$(INST_LIBDIR)/XMLTV/Memoize.pm',
      'grab/uk/Ananova_Channel.pm' => '$(INST_LIBDIR)/XMLTV/Ananova_Channel.pm',
-     'grab/uk/UK_TZ.pm'           => '$(INST_LIBDIR)/XMLTV/UK_TZ.pm',
     );
 
 # Modules required to install.
