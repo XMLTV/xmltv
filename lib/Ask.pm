@@ -7,7 +7,7 @@ package XMLTV::Ask;
 use strict;
 use base 'Exporter';
 our @EXPORT = qw(ask askQuestion askBooleanQuestion askManyBooleanQuestions);
-use Carp qw(croak);
+use Carp qw(croak carp);
 
 # Use Log::TraceMessages if installed.
 BEGIN {
@@ -139,6 +139,13 @@ sub askBooleanQuestion( $$ )
 sub askManyBooleanQuestions( $@ )
 {
     my $default = shift;
+
+    # Catch a common mistake - passing the answer string as default
+    # instead of a Boolean.
+    #
+    carp "default is $default, should be 0 or 1"
+      if $default ne '0' and $default ne '1';
+
     my @r;
     while (@_) {
 	my $q = shift @_;
