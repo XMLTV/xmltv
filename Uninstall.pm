@@ -25,7 +25,14 @@ sub uninstall( % ) {
 	find(sub { 
 		 for ($File::Find::name) {
 #		     return if not -f; # why doesn't this work?
-		     s!^\Q$from\E/*!! or die "filename '$_' doesn't start with $from/";
+		     
+		     # The behaviour of File::Find seems different
+		     # under 5.005.
+		     #
+		     s!^\Q$from\E/*!!
+		       or ($[ < 5.006)
+			 or die "filename '$_' doesn't start with $from/";
+
 		     return if not length; # skip directory itself
 		     return if m!(?:/|^)\.exists!;
 		     my $inside_to = "$to/$_";
