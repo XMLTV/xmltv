@@ -1,3 +1,4 @@
+# $Id$
 package XMLTV::Grab_XML;
 use strict;
 use Getopt::Long;

@@ -1,3 +1,4 @@
+# $Id$
 package XMLTV::Summarize;
 use strict;
 use base 'Exporter';

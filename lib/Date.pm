@@ -1,3 +1,4 @@
+# $Id$
 package XMLTV::Date;
 use warnings;
 use strict;

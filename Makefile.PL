@@ -1,4 +1,5 @@
 #!/usr/bin/perl -w
+# $Id$
 
 use ExtUtils::MakeMaker;
 use Config;

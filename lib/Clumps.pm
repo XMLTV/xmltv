@@ -24,6 +24,8 @@
 #
 # Again, this all works but a better mechanism is needed.
 #
+# $Id$
+#
 
 package XMLTV::Clumps;
 use XMLTV::Date;

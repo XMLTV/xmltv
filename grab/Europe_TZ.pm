@@ -1,3 +1,5 @@
+# $Id$
+#
 # Timezone stuff, including routines to guess timezones in European
 # countries that have daylight saving time.
 #

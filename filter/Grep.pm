@@ -1,6 +1,8 @@
 # This is intended mostly as a helper library for tv_grep and not for
 # general purpose use (yet).
 #
+# $Id$
+#
 package XMLTV::Grep;
 use strict;
 use XMLTV;
@@ -12,7 +14,7 @@ my %key_type = %{XMLTV::list_programme_keys()};
 # Parameters:
 #   key found in programme hashes
 #   ignore-case flag
-# 
+#
 # Returns:
 #   extra argument type needed to filter on this key:
 #     undef: no extra argument required

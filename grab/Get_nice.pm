@@ -1,3 +1,5 @@
+# $Id$
+#
 # Library to wrap LWP::Simple to put in a random delay between
 # requests and to set User-Agent.  We really should be using
 # LWP::RobotUI but this is better than nothing.

@@ -1,3 +1,4 @@
+# $Id$
 package XMLTV::Config_file;
 use strict;
 use XMLTV::Ask;

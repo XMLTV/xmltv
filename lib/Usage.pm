@@ -19,6 +19,8 @@
 # some programs have different help messages depending on what other
 # options were given.
 #
+# $Id$
+#
 
 package XMLTV::Usage;
 use base 'Exporter'; our @EXPORT = qw(usage);
