@@ -15,6 +15,7 @@ use Date::Manip;
 use UK_TZ;
 use Memoize;
 use Lingua::Preferred qw(which_lang);
+use Carp;
 
 use base 'Exporter'; use vars qw(@EXPORT @EXPORT_OK);
 @EXPORT = qw(read_data write_data);
@@ -79,7 +80,7 @@ sub node_to_programme( $ ) {
 			 videoplus channel clumpidx);
     my %ka; ++$ka{$_} foreach @known_attrs;
     foreach (keys %programme) {
-	unless ($ka{$_}) {
+	unless (/^_/ or $ka{$_}) {
 	    warn "deleting unknown attribute '$_'";
 	    delete $programme{$_};
 	}
@@ -413,7 +414,7 @@ sub read_credits( $ ) {
     my %r;
     foreach (dom_subelements($node)) {
 	my $role = $_->getNodeName();
-	if (not $known_role{$role}++) {
+	unless ($role =~ /^_/ or $known_role{$role}++) {
 	    warn "unknown thing in credits: $role";
 	    next;
 	}
@@ -437,7 +438,7 @@ sub write_credits( $$$ ) {
     }
     $w->endTag($e);
     foreach (keys %v) {
-	warn "unknown credit: $_";
+	warn "unknown credit: $_" unless /^_/;
     }
 }
 
@@ -573,7 +574,7 @@ sub write_video( $$$ ) {
 	$w->dataElement('aspect', encode_boolean($val));
     }
     foreach (sort keys %h) {
-	warn "unknown key in video hash: $_";
+	warn "unknown key in video hash: $_" unless /^_/;
     }
     $w->endTag($e);
 }
@@ -614,7 +615,7 @@ sub write_audio( $$$ ) {
 	$w->dataElement('stereo', $val);
     }
     foreach (sort keys %h) {
-	warn "unknown key in video hash: $_";
+	warn "unknown key in video hash: $_" unless /^_/;
     }
     $w->endTag($e);
 }
@@ -632,7 +633,7 @@ sub read_prev_shown( $ ) {
 	$r->{$_} = $v if defined $v;
     }
     foreach (keys %attrs) {
-	warn "unknown attribute $_ in previously-shown";
+	warn "unknown attribute $_ in previously-shown" unless /^_/;
     }
     return $r;
 }
@@ -701,7 +702,9 @@ sub read_rating( $ ) {
     my $node = shift;
     my %attrs = %{dom_attrs($node)};
     my $system = delete $attrs{system} if exists $attrs{system};
-    warn "unknown attribute in rating: $_" foreach keys %attrs;
+    foreach (keys %attrs) {
+	warn "unknown attribute in rating: $_" unless /^_/;
+    }
     my @children = dom_subelements($node);
 
     # First child node is value.
@@ -889,13 +892,18 @@ sub write_with_lang( $$$ ) {
 # now.
 #
 sub best_name( $$;$ ) {
-    my $wanted_langs = shift;
-    my $pairs = shift; return undef if not defined $pairs;
+#    local $Log::TraceMessages::On = 1;
+    my ($wanted_langs, $pairs, $compare) = @_;
+    t 'best_name() ENTRY';
+    t 'wanted langs: ' . d $wanted_langs;
+    t '[text,lang] pairs: ' . d $pairs;
+    t 'comparison fn: ' . d $compare;
+    return undef if not defined $pairs;
     my @pairs = @$pairs;
-    my $compare = shift;
 
     my @avail_langs;
     my (%seen_lang, $seen_undef);
+    # Collect the list of available languages.
     foreach (map { $_->[1] } @pairs) {
 	if (defined) {
 	    next if $seen_lang{$_}++;
@@ -1150,6 +1158,10 @@ sub write_programme {
 	}
     }
 
+    foreach (keys %p) {
+	warn "unknown key $_ in programme hash" unless /^_/;
+    }
+
     t "ending 'programme' element";
     $self->endTag('programme');
 }
@@ -1192,7 +1204,7 @@ sub order_attrs {
     }
 
     foreach (sort keys %in) {
-	warn "unknown attribute $_";
+	warn "unknown attribute $_" unless /^_/;
 	push @r, $_, $in{$_};
     }
 
