@@ -55,7 +55,7 @@ sub askQuestion( $$@ )
 	    }
 	    my @poss;
 	    foreach (@options) {
-		push @poss, $_ if /$res/i;
+		push @poss, $_ if /\Q$res\E/i;
 	    }
 	    if ( @poss == 1 ) {
 		# Unambiguous substring match.
