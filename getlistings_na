@@ -15,19 +15,12 @@
 #  - not all program qualifiers have been defined, so sometimes
 #    program descriptions include qualifiers that are unidentified
 #    These should be reported to the author
-#  - hard to debug when problems occur
-#  - some error messages come to stdout instead of stderr
-#  - scraping error should include failed html (especially when they
-#    successfuly scrape half of it then start missing.)
-#  - channels should be dealt with in sorted order by channel #
-#    not stationid order.
-#
 #
 # See release notes and/or cvs logs entries for module history
 #
 
-my $VersionMajor="1";
-my $VersionMinor="5";
+my $VersionMajor="2";
+my $VersionMinor="0";
 
 my $VersionID="getlistings_na V$VersionMajor\.$VersionMinor";
 
@@ -90,7 +83,7 @@ sub stationsInDisplayOrder($)
     my @nums;
     foreach my $station (keys (%{$self->{channels}})) {
 	my $key=0;
-	if ( $self->{channels}->{$station}->{description}=~m/^\s*(\d+)/o ) {
+	if ( $station=~m/^\s*(\d+)/o ) {
 	    $key=$1;
 	}
 	# seems very odd, but occasionally, you get two channels with the
@@ -130,12 +123,6 @@ sub stationExists($$)
     return(defined($self->{channels}->{$station}));
 }
 
-sub stationDescription($$)
-{
-    my ($self, $station)=@_;
-    return($self->{channels}->{$station}->{description});
-}
-
 sub setStationIncluded($$$)
 {
     my ($self, $station, $in)=@_;
@@ -146,12 +133,6 @@ sub stationIncluded($$)
 {
     my ($self, $station)=@_;
     return($self->{channels}->{$station}->{in});
-}
-
-sub setStationDescription($$$)
-{
-    my ($self, $station, $desc)=@_;
-    $self->{channels}->{$station}->{description}=$desc;
 }
 
 sub stationIcon($$)
@@ -207,27 +188,42 @@ sub save($$)
     
     foreach my $station ($self->stationsInDisplayOrder()) {
 	if ( $self->stationIncluded($station) ) {
-	    print FD "channel: $station # ".$self->stationDescription($station)."\n";
+	    print FD "channel: $station\n"
 	}
 	else {
-	    print FD "#channel: $station # ".$self->stationDescription($station)."\n";
+	    print FD "#channel: $station\n";
 	}
     }
     close(FD);
     return(0);
 }
 
-sub load($$)
+sub load($$$)
 {
-    my ($self, $file)=@_;
+    my ($self, $file, $debug)=@_;
 
+    my $majorVersion;
     open(FD, "< $file") || return(-1);
     while (<FD>) {
 	s/\n$//o;
+
+	# auto-upgrading from version 1 to 2
+	if ( defined($majorVersion) && $majorVersion == 1 ) {
+	    if ( m/^\#+channel:\s*([^\s]+)\s+\#\s+(.*)$/o ) {
+		$_="#channel: $2";
+	    }
+	    elsif ( m/^channel:\s*([^\s]+)\s+\#\s+(.*)$/o ) {
+		$_="channel: $2";
+	    }
+	}
+
 	if ( $. == 1 ) {
 	    if ( m/^\#\s+config\s+file:\s*getlistings_na (\d+)\.(\d+)/o ) {
-		# assumes version number is still 1.1
-		if ( $1 != $VersionMajor || $2 > $VersionMinor ) {
+		$majorVersion=$1;
+		if ( $1 == 1 ) {
+		    print STDERR "$file: older format identified, coping, re-run --configure to upgrade\n";
+		}
+		elsif ( $1 != $VersionMajor || $2 > $VersionMinor ) {
 		    print STDERR "$0: $file:$.: $1\.$2 is an unsupported version number\n";
 		    close(FD);
 		    return(-1);
@@ -249,17 +245,13 @@ sub load($$)
 	    $self->setValue("option_provider", $1);
 	    $self->setValue("option_provider_desc", $2);
 	}
-	elsif ( m/^\#+channel:\s*([^\s]+)\s+\#\s+(.*)$/o ) {
-	    my $station=$1;
-	    my $desc=$2;
-	    $self->setStationIncluded($station, 0);
-	    $self->setStationDescription($station, $desc);
+	elsif ( m/^\#+channel:\s*(.+)$/o ) {
+	    $self->setStationIncluded($1, 0);
+	    #$self->setStationDescription($1, $1);
 	}
-	elsif ( m/^channel:\s*([^\s]+)\s+\#\s+(.*)$/o ) {
-	    my $station=$1;
-	    my $desc=$2;
-	    $self->setStationIncluded($station, 1);
-	    $self->setStationDescription($station, $desc);
+	elsif ( m/^channel:\s*(.+)$/o ) {
+	    $self->setStationIncluded($1, 1);
+	    #$self->setStationDescription($1, $1);
 	}
 	elsif ( m/^#/o ) {
 	    next;
@@ -452,7 +444,7 @@ if ( $configure ) {
 	$configfile=$opt_config;
     }
 
-    if ( -f $configfile && $config->load($configfile) != 0 ) {
+    if ( -f $configfile && $config->load($configfile, $opt_debug) != 0 ) {
 	print STDERR "$0: Failed to read $configfile\n";
 	exit(1);
     }
@@ -587,46 +579,26 @@ if ( $configure ) {
 
     # notify user about update channel ids and new channels
     foreach my $channel (@channels) {
-	my $station=$channel->{station};
+	my $station=$channel->{description};
 	if ( $config->haveAnyChannels() ) {
 	    if ( $config->stationExists($station) ) {
 		$config->setStationTransientFlag($station, 'found', 1);
-
-		# update description
-		if ( $config->stationDescription($station) ne 
-		     $channel->{description} ) {
-		    print STDERR "Updated channel id: $station from \"".
-			$config->stationDescription($station)."\" to \"".
-			$channel->{description}."\"\n";
-		    $config->setStationDescription($station, $channel->{description});
-		    $channelsUpdated++;
-		}
 	    }
 	    else {
-		my $res=askyesorno('yes', "add channel $station \# ".$channel->{description}." ?");
+		my $res=askyesorno('yes', "add channel $station ?");
 		$res=~tr/[A-Z]/[a-z]/;
-		if ( $res eq 'yes' ) {
-		    $config->setStationIncluded($station, 1);
-		}
-		else {
-		    $config->setStationIncluded($station, 0);
-		}
+		$config->setStationIncluded($station, ($res eq 'yes'));
 		$config->setStationTransientFlag($station, 'found', 1);
-		$config->setStationDescription($station, $channel->{description});
+		#$config->setStationDescription($station, $channel->{description});
 		$channelsUpdated++;
 	    }
 	}
 	else {
-	    my $res=askyesorno('yes', "add channel $station \# ".$channel->{description}." ?");
+	    my $res=askyesorno('yes', "add channel $station ?");
 	    $res=~tr/[A-Z]/[a-z]/;
-	    if ( $res eq 'yes' ) {
-		$config->setStationIncluded($station, 1);
-	    }
-	    else {
-		$config->setStationIncluded($station, 0);
-	    }
+	    $config->setStationIncluded($station, ($res eq 'yes'));
 	    $config->setStationTransientFlag($station, 'found', 1);
-	    $config->setStationDescription($station, $channel->{description});
+	    #$config->setStationDescription($station, $channel->{description});
 	    $channelsUpdated++;
 	}
     }
@@ -637,7 +609,7 @@ if ( $configure ) {
 	    $config->removeStationTransientFlag($station, 'found');
 	}
 	else {
-	    my $res=askyesorno('yes', "drop no-longer available channel $station \# ".$config->stationDescription($station)." ?");
+	    my $res=askyesorno('yes', "drop no-longer available channel $station ?");
 	    $res=~tr/[A-Z]/[a-z]/;
 	    if ( $res eq 'yes' ) {
 		#print STDERR "warning: didn't find channel id: $station \#".
@@ -811,7 +783,7 @@ sub grab
 	}
     }
 
-    if ( $config->load($configfile) != 0 ) {
+    if ( $config->load($configfile, $opt_debug) != 0 ) {
 	print STDERR "$0: Failed to read $configfile\n";
 	return(1);
     }
@@ -836,29 +808,24 @@ sub grab
 
 	# notify user about update channel ids and new channels
 	foreach my $channel (@channels) {
-	    my $station=$channel->{station};
+	    my $station=$channel->{description};
 	    if ( $config->haveAnyChannels() ) {
 		if ( $config->stationExists($station) ) {
 		    $config->setStationTransientFlag($station, 'found', 1);
+
+		    # save zap2it channel id for grabbing url usage
+		    $config->setStationTransientFlag($station, 'zap2it-id', $channel->{stationid});
 		    
-		    # update description
-		    if ( $config->stationDescription($station) ne $channel->{description} ) {
-			print STDERR "Updated channel id: $station from \"".
-			    $config->stationDescription($station)."\" to \"".
-			    $channel->{description}."\"\n";
-			$config->setStationDescription($station, $channel->{description});
-			$channelsUpdated++;
-		    }
 		    if ( defined($channel->{icon}) ) {
 			$config->setStationIcon($station, $channel->{icon});
 		    }
 		}
 		else {
-		    print STDERR "Noticed new station available ($station \#".$channel->{description}."), re-run --configure\n";
+		    print STDERR "Noticed new station available ($station), re-run --configure\n";
 		}
 	    }
 	    else {
-		print STDERR "Noticed new station available ($station \#".$channel->{description}."), re-run --configure\n";
+		print STDERR "Noticed new station available ($station), re-run --configure\n";
 	    }
 	}
 
@@ -868,8 +835,7 @@ sub grab
 		$config->removeStationTransientFlag($station, 'found');
 	    }
 	    else {
-		print STDERR "Noticed station unavailable ($station \#".
-		    $config->stationDescription($station)."), re-run --configure\n";
+		print STDERR "Noticed station unavailable ($station), re-run --configure\n";
 		$config->setStationTransientFlag($station, 'notavailable', 1);
 	    }
 	}
@@ -972,14 +938,19 @@ sub grab
 	    next if ( !$config->stationIncluded($station) );
 	    
 	    if ( defined($config->getStationTransientFlag($station, 'notavailable')) ) {
-		print STDERR "skipping unavailable channel ".$config->stationDescription($station)."\n";
+		print STDERR "skipping unavailable channel $station\n";
+		next;
+	    }
+
+	    if ( !defined($config->getStationTransientFlag($station, 'zap2it-id')) ) {
+		warn "ignoring channel without zap2it channel id $station\n";
 		next;
 	    }
 
 	    my ($Year,$month,$day,$hr,$min,$sec)=Date::Manip::Date_NthDayOfYear($year, $runNDayOfYear+$nday);
 	    
-	    if ( $lg->readSchedule($station, 
-				   $config->stationDescription($station),
+	    if ( $lg->readSchedule($config->getStationTransientFlag($station, 'zap2it-id'),
+				   $station,
 				   $day, $month, $Year) == -1 ) {
 		warn("readSchedule failed for $Year-$month-$day for station $station");
 		$failedCount++;
@@ -1254,7 +1225,7 @@ sub writeOutChannels($$)
 
 	$writer->startTag('channel', id=> $station);
 
-	$writer->dataElement('display-name', "Channel ".$config->stationDescription($station));
+	$writer->dataElement('display-name', "Channel $station");
 	if ( defined($config->stationIcon($station)) ) {
 	    # Write as empty tag because icon can never contain anything.
 	    $writer->emptyTag('icon', 'src'=>$config->stationIcon($station));

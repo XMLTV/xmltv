@@ -254,7 +254,7 @@ sub getChannelList($$$$)
 	    }
 
 	    if ( $ref=~m;listings_redirect.asp\?station_num=(\d+);o ) {
-		$nchannel->{station}=$1;
+		$nchannel->{stationid}=$1;
 	    }
 	    else {
 		print STDERR "row decode on item 6 href failed on '$desc'\n";
@@ -274,7 +274,7 @@ sub getChannelList($$$$)
 		return(undef);
 	    }
 	    if ( $ref=~m;listings_redirect.asp\?station_num=(\d+);o ) {
-		$nchannel->{station}=$1;
+		$nchannel->{stationid}=$1;
 	    }
 	    else {
 		print STDERR "row decode on item 4 href failed on '$desc'\n";
@@ -298,8 +298,6 @@ sub getChannelList($$$$)
     }
 
     foreach my $channel (@channels) {
-	my $station=$channel->{station};
-	    
 	# default is channel is in listing
 	if ( defined($channel->{number}) && defined($channel->{letters}) ) {
 	    $channel->{description}="$channel->{number} $channel->{letters}"; 
@@ -308,6 +306,7 @@ sub getChannelList($$$$)
 	    $channel->{description}.="$channel->{number}" if ( defined($channel->{number}) );
 	    $channel->{description}.="$channel->{letters}" if ( defined($channel->{letters}) );
 	}
+	$channel->{station}=$channel->{description};
     }
 
     return(@channels);
@@ -657,6 +656,7 @@ sub scrapehtml($$$)
 			  Japanese
 			  Korean
 			  Mandarin
+			  Oji-Cree
 			  Panjabi
 			  Polish
 			  Portuguese
@@ -995,9 +995,29 @@ sub scrapehtml($$$)
 		    # catch commonly imbedded categories
 		    elsif ( $i=~/^\(fiction\)$/io ) {
 			push(@{$prog->{category}}, "Fiction");
+			next;
 		    }
 		    elsif ( $i=~/^\(drama\)$/io || $i=~/^\(dramma\)$/io ) { # dramma is french :)
 			push(@{$prog->{category}}, "Drama");
+			next;
+		    }
+		    elsif ( $i=~/^\(Acción\)$/io ) { # action in french :)
+			push(@{$prog->{category}}, "Action");
+			next;
+		    }
+
+		    # ignore sports event descriptions that include team records
+		    # ex. (10-1)
+		    elsif ( $i=~/^\(\d+\-\d+\)$/o ) {
+			print STDERR "understood program detail, on ignore list: $i\n" if ( $self->{Debug} );
+			# ignored
+			next;
+		    }
+		    # ignore (Cont'd.) and (Cont'd)
+		    elsif ( $i=~/^\(Cont'd\.*\)$/io ) {
+			print STDERR "understood program detail, on ignore list: $i\n" if ( $self->{Debug} );
+			# ignored
+			next;
 		    }
 
 		    # example "French with English subtitles"
@@ -1154,13 +1174,13 @@ sub scrapehtml($$$)
 
 sub readSchedule($$$$$)
 {
-    my ($self, $station, $station_desc, $day, $month, $year)=@_;
+    my ($self, $stationid, $station_desc, $day, $month, $year)=@_;
 
     my $content;
 
-    if ( -f "urldata/$station/content-$month-$day-$year.html" &&
-	 open(FD, "< urldata/$station/content-$month-$day-$year.html") ) {
-	print STDERR "cache enabled, reading urldata/$station/content-$month-$day-$year.html..\n";
+    if ( -f "urldata/$stationid/content-$month-$day-$year.html" &&
+	 open(FD, "< urldata/$stationid/content-$month-$day-$year.html") ) {
+	print STDERR "cache enabled, reading urldata/$stationid/content-$month-$day-$year.html..\n";
 	my $s=$/;
 	undef($/);
 	$content=<FD>;
@@ -1182,7 +1202,7 @@ sub readSchedule($$$$$)
 		       startDay => "$month/$day/$year",
 		       startTime => "0",
 		       category => "0",
-		       station => "$station",
+		       station => "$stationid",
 		       goButton => "GO"
 		       ]);
 
@@ -1212,11 +1232,11 @@ sub readSchedule($$$$$)
 	   return(-1);
         }
 	if ( -d "urldata" ) {
-	    my $file="urldata/$station/content-$month-$day-$year.html";
+	    my $file="urldata/$stationid/content-$month-$day-$year.html";
 	    if ( ! -f $file ) {
 		print STDERR "cache enabled, writing $file..\n";
-		if ( ! -d "urldata/$station" ) {
-		    mkdir("urldata/$station", 0775) || warn "failed to create dir urldata/$station:$!";
+		if ( ! -d "urldata/$stationid" ) {
+		    mkdir("urldata/$stationid", 0775) || warn "failed to create dir urldata/$stationid:$!";
 		}
 		if ( open(FD, "> $file") ) {
 		    print FD $res->content();
@@ -1227,9 +1247,9 @@ sub readSchedule($$$$$)
     }
 
     if ( $self->{Debug} ) {
-	print STDERR "scraping html for $year-$month-$day on station $station\n";
+	print STDERR "scraping html for $year-$month-$day on station $stationid: $station_desc\n";
     }
-    @{$self->{Programs}}=$self->scrapehtml($content, "$year-$month-$day on station $station");
+    @{$self->{Programs}}=$self->scrapehtml($content, "$year-$month-$day on station $station_desc (id $stationid)");
 
     print STDERR "Day $year-$month-$day schedule for station $station_desc has:".
 	scalar(@{$self->{Programs}})." programs\n";
