@@ -99,8 +99,11 @@ sub add_ananova_id {
 	foreach (keys %{$idx_a{$id}}) {
 	    next if $_ eq $self;
 	    my $ov = $_->get_variant();
-	    next if defined $v and not defined $ov;
-	    next if not defined $v and defined $ov;
+
+	    # Er, I really don't remember what this is supposed to do.
+	    next if not defined $v;
+	    next if not defined $ov;
+
 	    next if $v ne $ov;
 
 	    if (defined $v) {
