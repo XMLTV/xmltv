@@ -237,12 +237,6 @@ my @opt_components
        grab_need_share => [ 'it' ],
      },
 
-#     { name => 'tv_grab_na',
-#       blurb => 'Grabber for North America',
-#       exes => [ 'grab/na/tv_grab_na' ],
-#       pm => { 'grab/na/ZapListings.pm' => '$(INST_LIBDIR)/XMLTV/ZapListings.pm' },
-#       prereqs => { 'HTML::Parser' => 3.34 } },
-
      { name     => 'tv_grab_na_dd',
        blurb => 'Grabber for North America using DataDirect',
        exes     => [ 'grab/na_dd/tv_grab_na_dd' ],
