@@ -138,6 +138,7 @@ use strict;
 
 use HTTP::Cookies;
 use HTTP::Request::Common;
+use URI;
 
 sub new
 {
@@ -432,8 +433,8 @@ sub getChannelList($$$)
 		return(undef);
 	    }
 	    else {
-		#main::errorMessage("got channel icon $ref\n");
-		$nchannel->{icon}=$ref;
+		my $icon=URI->new_abs($ref, "http://$self->{httpHost}/");
+		$nchannel->{icon}=$icon;
 	    }
 
 	    # <a> gives url that contains station_num
