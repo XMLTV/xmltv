@@ -8,6 +8,7 @@ package XMLTV::AskTerm;
 use strict;
 use base 'Exporter';
 our @EXPORT = qw(ask
+		 ask_password
                  ask_question               askQuestion
                  ask_boolean_question       askBooleanQuestion
                  ask_many_boolean_questions askManyBooleanQuestions
@@ -29,6 +30,7 @@ BEGIN {
 }
 
 sub ask( $ );
+sub ask_password( $ );
 sub ask_question( $$@ );              sub askQuestion( $$@ );
 sub ask_boolean_question( $$ );       sub askBooleanQuestion( $$ );
 sub ask_many_boolean_questions( $@ ); sub askManyBooleanQuestions( $@ );
@@ -232,5 +234,22 @@ sub say( $ )
     print STDERR "$question\n";
 }
 
+sub ask_password( $ ) {
+    my $prompt = shift;
+    chomp $prompt;
+    $prompt .= ' ' if $prompt !~ /\s$/;
+    require Term::ReadKey;
+    Term::ReadKey::ReadMode('noecho');
+    print STDERR $prompt;
+    my $r = <STDIN>;
+    print STDERR "\n";
+    Term::ReadKey::ReadMode('normal');
+    for ($r) {
+	return undef if not defined;
+	s/^\s+//;
+	s/\s+$//;
+	return $_;
+    }
+}
 
 1;

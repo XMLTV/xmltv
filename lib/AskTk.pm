@@ -7,6 +7,7 @@ package XMLTV::AskTk;
 use strict;
 use base 'Exporter';
 our @EXPORT = qw(ask
+		 ask_password
                  ask_question               askQuestion
                  ask_boolean_question       askBooleanQuestion
                  ask_many_boolean_questions askManyBooleanQuestions
@@ -34,15 +35,17 @@ my $middle_frame;
 my $bottom_frame;
 my $mid_bottom_frame;
 
-sub ask( $ );
+sub ask( $;$ );
+sub ask_password( $ );
 sub ask_question( $$@ );              sub askQuestion( $$@ );
 sub ask_boolean_question( $$ );       sub askBooleanQuestion( $$ );
 sub ask_many_boolean_questions( $@ ); sub askManyBooleanQuestions( $@ );
 sub ask_boolean_options( $$$@ );      sub askBooleanOptions( $$$@ );
 sub say( $ );
 
-sub ask( $ ) {
+sub ask( $;$ ) {
     my $question = shift;
+    my $show = shift; $show = 1 if not defined $show;
     my $textbox;
 	
     $main_window = MainWindow->new;
@@ -64,7 +67,7 @@ sub ask( $ ) {
 			  -width    => 10
 			 )->pack(-padx => 2, -pady => 4);
 								
-    $textbox = $middle_frame->Entry()->pack();
+    $textbox = $middle_frame->Entry(-show => $show)->pack();
     MainLoop();
 	
   answer_ok2:
@@ -72,7 +75,7 @@ sub ask( $ ) {
     $main_window->destroy;
     return $ans;
 }
-
+sub ask_password( $ ) { ask($_[0], 0) }
 
 # Ask a question where the answer is one of a set of alternatives.
 #
