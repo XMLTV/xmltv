@@ -2091,10 +2091,11 @@ sub readSchedule($$$$$)
 
     my $content;
     my $cacheFile;
+    my $cacheDir=$self->{CacheDir};
 
-    if ( -f "urldata/$stationid/content-$month-$day-$year.html" &&
-	 open(FD, "< urldata/$stationid/content-$month-$day-$year.html") ) {
-	main::statusMessage("cache enabled, reading urldata/$stationid/content-$month-$day-$year.html..\n");
+    if ( defined($cacheDir) && -f "$cacheDir/$stationid/content-$month-$day-$year.html" &&
+	 open(FD, "< $cacheDir/$stationid/content-$month-$day-$year.html") ) {
+	main::statusMessage("cache enabled, reading $cacheDir/$stationid/content-$month-$day-$year.html..\n");
 	my $s=$/;
 	undef($/);
 	$content=<FD>;
@@ -2122,8 +2123,8 @@ sub readSchedule($$$$$)
 	# looks like some requests require two identical calls since
 	# the zap2it server gives us a cookie that works with the second
 	# attempt after the first fails
-    warn "zap2it gave us a server error, but let's go for it anyway\n" if $res->code eq '500' and !$got500error++;
-    if ( !($res->is_success || $res->code eq '500') || $res->content()=~m/your session has timed out/i ) {
+	warn "zap2it gave us a server error, but let's go for it anyway\n" if $res->code eq '500' and !$got500error++;
+	if ( !($res->is_success || $res->code eq '500') || $res->content()=~m/your session has timed out/i ) {
 	    # again, but manditory sleep(5) between retries
 	    sleep(5);
 	    $res=&doRequest($self->{ua}, $req, $self->{Debug});
@@ -2146,10 +2147,10 @@ sub readSchedule($$$$$)
 	   warn("ERROR: $err\n");
 	   return(-1);
         }
-	if ( -d "urldata" ) {
-	    $cacheFile="urldata/$stationid/content-$month-$day-$year.html";
-	    if ( ! -d "urldata/$stationid" ) {
-		mkdir("urldata/$stationid", 0775) || warn "failed to create dir urldata/$stationid:$!";
+	if ( defined($cacheDir) && -d $cacheDir ) {
+	    $cacheFile="$cacheDir/$stationid/content-$month-$day-$year.html";
+	    if ( ! -d "$cacheDir/$stationid" ) {
+		mkdir("$cacheDir/$stationid", 0775) || warn "failed to create dir $cacheDir/$stationid:$!";
 	    }
 	    if ( open(FD, "> $cacheFile") ) {
 		print FD $content;
@@ -2188,8 +2189,8 @@ sub readSchedule($$$$$)
       main::statusMessage("cache enabled, writing $cacheFile..\n");
     }
 
-  main::statusMessage("Day $year-$month-$day schedule for station $station_desc has:".
-		      scalar(@{$self->{Programs}})." programs\n");
+    main::statusMessage("Day $year-$month-$day schedule for station $station_desc has:".
+			scalar(@{$self->{Programs}})." programs\n");
     
     return(scalar(@{$self->{Programs}}));
 }
