@@ -75,6 +75,7 @@ use LWP::Simple ();
 use HTML::TreeBuilder;
 use HTML::Entities; # parse entities
 use IO::File;
+use URI;
 
 use Date::Manip;
 # We do this so that the dates appearing in web pages can be parsed.
@@ -319,7 +320,7 @@ if (not $opt_slow) {
 	die if not defined $day;
 	my $url = 'http://www.tvgids.nl/zoekprogramma.php'
 	  . "?station=$ch_tvgids_id&interval=$day_offset";
-	do_summary_page($writer, $url, $day, $ch_xmltv_id);
+	do_summary_page($writer, $url, $day, $day, $ch_xmltv_id);
 	update $bar if Have_bar and not $opt_quiet;
     }
 }
@@ -379,7 +380,7 @@ sub detail_urls {
 	    push @r, "http://www.tvgids.nl/$_";
 	}
     }
-    $t->delete();
+    $t->delete(); undef $t;
     return @r;
 }
 
@@ -435,7 +436,7 @@ sub write_details {
 	    }
 	    push @info, [ $k->as_text(), $v->as_text() ];
 	}
-	$t->delete();
+	$t->delete(); undef $t;
 
 	# Process the list of [ heading, data ] pairs.
 	my ($van, $tot, # exactly one
@@ -794,7 +795,7 @@ sub get_channels {
 
 	}
     }	
-    $t->delete();
+    $t->delete(); undef $t;
     return %channels;
 }
 
@@ -805,11 +806,18 @@ sub get_channels {
 # Parameters:
 #   XMLTV::Writer object
 #   URL to fetch
-#   Date::Manip object giving day (at least for the start of the page)
+#   Date::Manip object giving day for programmes in page (at least
+#     until they cross midnight)
+#   Date::Manip object giving official 'date' of page (normally the
+#     same as the previous parameter)
 #   XMLTV id of channel
 #
 sub do_summary_page( $$$$ ) {
-    my ($writer, $url, $day, $ch_xmltv_id) = @_;
+    my ($writer, $url, $day, $official_day, $ch_xmltv_id) = @_;
+    die if not defined $writer;
+    die if not defined $url;
+    die if not defined $day;
+    die if not defined $ch_xmltv_id;
     local $SIG{__WARN__} = sub {
 	warn "$url: $_[0]";
     };
@@ -829,10 +837,19 @@ sub do_summary_page( $$$$ ) {
 	next;
     }
     my @bits;
-    foreach (@elems) {
-	my $class = $_->attr('class');
-	my @cont = $_->content_list();
+    foreach my $e (@elems) {
+	my $class = $e->attr('class');
+	t "looking at elem of class $class";
+	my $href;
       check_content:
+	my @cont = $e->content_list();
+	my $got_href = $e->attr('href');
+	if (defined $got_href) {
+	    t "got href: $got_href";
+	    warn "seen 'href's contained inside each other"
+	      if defined $href;
+	    $href = $got_href;
+	}
 	if (not @cont) {
 	    warn "found $class elem without content, ignoring"
 	      unless $class eq 'lijst_zender';
@@ -842,11 +859,11 @@ sub do_summary_page( $$$$ ) {
 	    for ($cont[0]) {
 		if (ref) {
 		    # Unpack this extra layer of element.
-		    @cont = $_->content_list();
+		    $e = $_;
 		    goto check_content;
 		}
 		s/^\s+//; s/\s+$//;
-		push @bits, [ $class, $_ ];
+		push @bits, [ $class, $href, $_ ];
 	    }
 	}
 	elsif (@cont > 1) {
@@ -855,17 +872,17 @@ sub do_summary_page( $$$$ ) {
 	    next;
 	}
     }
-    $t->delete();
+    $t->delete(); undef $t;
     if (not @bits) {
 	warn "did not see any content, skipping page";
 	next;
     }
     if ($bits[0]->[0] eq 'lijst_zender') {
-	my $date_str = $bits[0]->[1];
+	my $date_str = $bits[0]->[2];
 	my $d = ParseDate($date_str);
 	if (defined $d) {
-	    die "date in page $d ($date_str) doesn't match expected $day"
-	      if UnixDate($d, '%Q') ne UnixDate($day, '%Q');
+	    die "date in page $d ($date_str) doesn't match expected $official_day"
+	      if UnixDate($d, '%Q') ne UnixDate($official_day, '%Q');
 	    shift @bits;
 	}
 	# otherwise, leave it for later processing
@@ -880,7 +897,7 @@ sub do_summary_page( $$$$ ) {
 	    warn "bit expected to be channel name has class $ch_class not lijst_zender, skipping";
 	    next;
 	}
-	my $ch = $ch_bit->[1];
+	my $ch = $ch_bit->[2];
 	
 	my $times_bit = shift @bits;
 	my $times_class = $times_bit->[0];
@@ -888,7 +905,7 @@ sub do_summary_page( $$$$ ) {
 	    warn "bit expected to be times has class $times_class not lijst_tijd, skipping";
 	    next;
 	}
-	my $times = $times_bit->[1];
+	my $times = $times_bit->[2];
 	
 	my $title_bit = shift @bits;
 	my $title_class = $title_bit->[0];
@@ -896,7 +913,7 @@ sub do_summary_page( $$$$ ) {
 	    warn "bit expected to be title has class $title_class not details_programma, skipping";
 	    next;
 	}
-	my $title = $title_bit->[1];
+	my $title = $title_bit->[2];
 	
 	# Right, got channel name, times, and title.
 	# FIXME should check channel name (among other things).
@@ -925,9 +942,12 @@ sub do_summary_page( $$$$ ) {
 				   title => [ [ $title, $LANG ] ] });
     }
     foreach (@bits) {
-	my ($type, $text) = @$_;
+	my ($type, $href, $text) = @$_;
 	if ($type eq 'lijst_zender' and $text eq 'Volgende') {
-	    # To be expected.
+	    # Next page for this day.
+	    my $next_url = URI->new_abs($href, $url);
+	    do_summary_page($writer, $next_url, $day, $official_day,
+			    $ch_xmltv_id);
 	}
 	else {
 	    warn "discarding leftover $type: $text";
