@@ -340,6 +340,14 @@ my @opt_components
 		    'HTML::TreeBuilder' => 0 },
      },
 
+     { name => 'tv_grab_no',
+       blurb => 'Grabber for Norway',
+       exes => [ 'grab/no/tv_grab_no' ],
+       prereqs => { 'HTML::Entities' => 1.27,
+		    'HTML::TableExtract' => 0,
+		    'HTML::LinkExtractor' => 0 },
+     },
+
      { name => 'tv_check',
        blurb => 'Program to report exceptions and changes in a schedule',
        exes => [ 'choose/tv_check/tv_check' ],
