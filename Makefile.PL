@@ -62,6 +62,30 @@ my %prereqs
      'XML::Writer' => 0,
     );
 
+# There is something particularly broken about Date::Manip on Red Hat
+# 8.0, we check for that specially.
+#
+if ($^O =~ /linux/i) {
+    open(FH, 'perl -MDate::Manip -e 0 2>&1 |') or die "cannot open pipe from perl: $!";
+    while (<FH>) {
+	if (/^Malformed UTF-8 character/) {
+	    die
+	      "Your installed Date::Manip module is producing errors like: $_
+
+This is a known bug with Red Hat Linux 8.0, see
+<http://bugzilla.redhat.com/bugzilla/show_bug.cgi?id=74884>.
+
+Unless Red Hat have released a fixed version of their perl-DateManip
+package, you need to get the latest Date::Manip from CPAN and install
+it manually.
+
+If you're seeing this message but not running Red Hat Linux, please
+contact the xmltv maintainer.\n";
+	}
+    }
+    close FH;			# ignore exit status
+}
+
 # 'Recommended but not required'.  It isn't currently handled to have
 # the same module in both sets.
 #
