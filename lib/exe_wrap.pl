@@ -84,6 +84,8 @@ END
 if ($cmd eq 'tv_grab_uk_rt'
  or $cmd eq 'tv_grab_it'
  or $cmd eq 'tv_grab_nl'
+ or $cmd eq 'tv_grab_na_dd',
+ or $cmd eq 'tv_grab_na_icons',
  or $cmd eq 'tv_grab_de_tvtoday'
  )
 {
