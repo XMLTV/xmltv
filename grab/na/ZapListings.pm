@@ -1871,17 +1871,25 @@ sub scrapehtml($$$)
 
 	if ( !defined($prog->{end_hour}) ) {
 	    if ( $i+1 < $maxi ) {
+		# assume end times are the start times of the next program
 		my $nprog=$programs[$i+1];
-		#print "getting end from program ($i+1):$nprog->{title} $nprog->{start_hour}:$nprog->{start_min}\n";
 		$prog->{end_hour}=$nprog->{start_hour};
 		$prog->{end_min}=$nprog->{start_min};
 	    }
 	    else {
-		# todo - fix this
-		# last program of the day should end at midnight for now.
-		#print "ending at 12am\n";
-		$prog->{end_hour}=24;
-		$prog->{end_min}=0;
+		# todo - wait for zap2it to fix this somehow.
+		# only assume last program ends at midnight if we're
+		# instructed to via ASSUME_MIDNIGHT_END_TIMES set in
+		# in the environment.
+		if ( defined($ENV{"ASSUME_MIDNIGHT_END_TIMES"}) ) {
+		   $prog->{end_hour}=24;
+		   $prog->{end_min}=0;
+		   my $time=sprintf("%02d:%02d", $prog->{start_hour},$prog->{start_min});
+	         main::statusMessage("estimated program starting at $time ends at 24:00 on $htmlsource\n");
+		}
+		else {
+		   $lastProgram=undef;
+		}
 	    }
 	}
 
@@ -1934,11 +1942,15 @@ sub scrapehtml($$$)
 	}
 	
 	# track when the last program ended down to the second
-	$lastProgram->{end_hour}=$prog->{end_hour};
-	$lastProgram->{end_min}=$prog->{end_min};
+	if ( defined($prog->{end_hour}) ) {
+	   $lastProgram->{end_hour}=$prog->{end_hour};
+	   $lastProgram->{end_min}=$prog->{end_min};
+	}
     }
 	
-    $self->{lastProgramInfo}=$lastProgram;
+    if ( defined($lastProgram) ) {
+       $self->{lastProgramInfo}=$lastProgram;
+    }
 
     return(@newPrograms);
 }
