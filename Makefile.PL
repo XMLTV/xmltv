@@ -232,6 +232,11 @@ are present.",
        blurb => 'Tv_grab_nl is the listings grabber for the Netherlands.',
        exes => [ 'grab/nl/tv_grab_nl' ],
        prereqs => { 'HTML::TreeBuilder' => 0 } },
+
+     { name => 'tv_grab_nl_wolf',
+       blurb => 'Tv_grab_nl_wolf is an alternative listings grabber for the Netherlands.',
+       exes => [ 'grab/nl_wolf/tv_grab_nl_wolf' ],
+       prereqs => { 'HTML::TreeBuilder' => 0 } },
     );
 
 foreach my $info (@opt_components) {
