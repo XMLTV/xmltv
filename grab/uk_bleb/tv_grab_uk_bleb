@@ -1,0 +1,240 @@
+#!/usr/bin/perl -w
+
+=pod
+
+=head1 NAME
+
+tv_grab_uk_bleb - Grab TV listings for the United Kingdom, from bleb.org
+
+=head1 SYNOPSIS
+
+tv_grab_uk_bleb --help
+
+tv_grab_uk_bleb [--config-file FILE] --configure
+
+tv_grab_uk_bleb [--config-file FILE] [--output FILE] [--quiet]
+                [--days N] [--offset N]
+
+=head1 DESCRIPTION
+
+Output TV and radio listings in XMLTV format for many stations
+available in Britain.  The data comes from the bleb.org web site.
+
+=head1 USAGE
+
+First you must run B<tv_grab_uk_bleb --configure> to choose which
+stations you want to receive.  Then running B<tv_grab_uk_bleb> with no
+arguments will get about a week<39>s listings for the stations
+you chose.
+
+B<--configure> Prompt for which stations to download and write the
+configuration file.
+
+B<--config-file FILE> Set the name of the configuration file, the
+default is B<~/.xmltv/tv_grab_uk_bleb.conf>.  This is the file written by
+B<--configure> and read when grabbing.
+
+B<--output FILE> When grabbing, write output to FILE rather than
+standard output.
+
+B<--days N> When grabbing, grab N days rather than as many as
+possible.
+
+B<--offset N> Start grabbing at today + N.  N may be negative.
+
+B<--quiet> suppress the progress messages normally written to standard
+error.
+
+=head1 SEE ALSO
+
+L<xmltv(5)>, L<http://www.bleb.org/>
+
+=head1 AUTHOR
+
+Andy Balaam, axis3x3@users.sourceforge.net
+
+Based on tv_grab_nl_wolf by Ed Avis
+
+=cut
+
+use strict;
+
+use Archive::Zip;
+use IO::Scalar;
+
+# We work by inheriting from XMLTV::Grab_XML and overriding certain
+# methods.
+#
+use XMLTV::Grab_XML;
+
+package Grab_XML_uk_bleb;
+use base 'XMLTV::Grab_XML';
+
+use Date::Manip;
+use XMLTV::Europe_TZ;
+
+use XMLTV::Ask;
+use XMLTV::Config_file;
+use XMLTV::Date qw(parse_date);
+use XMLTV::Get_nice;
+use XMLTV::TZ   qw(tz_to_num);
+
+# Use Term::ProgressBar if installed.
+use constant Have_bar => eval { require Term::ProgressBar; 1 };
+
+# Memoize one routine if possible.
+eval { require Memoize };
+unless ($@) {
+    for ('tz_to_num') {
+        Memoize::memoize($_) or warn "cannot memoize $_";
+    }
+}
+
+sub country( $ ) {
+    my $pkg = shift;
+    return 'UK';
+}
+
+my $URL_HOST = 'http://www.bleb.org';
+my $URL_DIR                     = '/tv/data/listings';
+my $url_base     = "$URL_HOST$URL_DIR";
+my $url_channels = "$URL_HOST$URL_DIR";
+
+my $today = DateCalc(parse_date('today midnight'));
+my $now = parse_date('now');
+Date_Init('TZ=+0000');
+
+# Returns a hash mapping YYYMMDD to URL.
+sub urls_by_date( $$$ ) {
+    my $pkg = shift;
+    my $opt_config_file = shift;
+    my $opt_quiet = shift;
+    my $config_file = XMLTV::Config_file::filename($opt_config_file,
+        'tv_grab_uk_bleb', $opt_quiet);
+
+    my %ans; # This is a hash to return that is urls indexed by date
+
+    my @channels; # This holds the names of channels
+
+    # Do the channels from the config file
+    foreach my $line (XMLTV::Config_file::read_lines($config_file, 0)) {
+        next if not $line;
+
+        # Remove whitespace and trailing comments
+        if ($line =~ /\s*(.*?)#.*\s*/) {
+            $line = $1;
+        }
+        push @channels, $line;
+    }
+    my $channels_string = join(',', @channels);
+
+    # Do the dates
+    for (my $off = -1; $off < 7; ++$off) {
+        my $date = DateCalc($now, $off.' days');
+
+        if ($date =~ /^(\d{8})/) {
+            $date = $1;
+        }
+	else {
+            warn("Strange.  No date found at beginning of 'now' string.");
+        }
+
+        $ans{$date} = $url_base.'?format=XMLTV&file=zip&channels='
+            .$channels_string.'&days='.$off;
+    }
+    return %ans;
+}
+
+# Unzip the data and return it
+sub xml_from_data( $$ ) {
+    my $pkg = shift;
+    my $zipped_data = shift;
+
+    my $fake_filehandle = IO::Scalar->new(\$zipped_data);
+
+    my $zip = Archive::Zip->new();
+    $zip->readFromFileHandle($fake_filehandle);
+
+    my $data_file = $zip->memberNamed('data.xml');
+
+    my $xml = $data_file->contents();
+
+    $xml = correct_emptydescs($xml);
+    $xml = correct_timezones($xml);
+
+    return Grab_XML_uk_bleb->remove_early_stop_times($xml);
+}
+
+# Removes description tags which are empty.
+sub correct_emptydescs( $ ) {
+    my @lines = split /\n/, shift;
+    foreach my $line (@lines) {
+        if ($line =~ /<desc lang="en"><\/desc>/) {
+
+            # Just remove the line
+            $line =~ s/.*//;
+
+        }
+    }
+    return join("\n", @lines);
+}
+
+# Adds timezones which are guessed at by Europe_TZ
+sub correct_timezones( $ ) {
+    my @lines = split /\n/, shift;
+    foreach my $line (@lines) {
+        if ($line =~ /<programme/) {
+
+            # Check for times without timezones
+            $line =~ s/(start|stop)="(\d+)"/qq'$1="'.utc_offset($2, "+0000").qq'"'/eg;
+
+        }
+    }
+    return join("\n", @lines);
+}
+
+sub configure( $$$ ) {
+    my $pkg = shift;
+    my $opt_config_file = shift;
+    my $opt_quiet = shift;
+
+    my $config_file = XMLTV::Config_file::filename($opt_config_file,
+        'tv_grab_uk_bleb', $opt_quiet);
+
+    XMLTV::Config_file::check_no_overwrite($config_file);
+
+    open(CONF, ">$config_file") or die "cannot write to $config_file: $!";
+
+    my $bar = new Term::ProgressBar('getting available channels', 1)
+        if Have_bar && not $opt_quiet;
+
+    my $page = get_nice($url_channels);
+    $bar->update() if Have_bar && not $opt_quiet;
+    #$bar->finish();
+
+    if ($page =~ /Available channels are: <tt>(.*?)<\/tt>/) {
+        my @channels = split(', ', $1);
+        my @questions;
+
+        foreach my $chan (@channels) {
+            push @questions, "Add channel $chan? ";
+        }
+        my @answers = askManyBooleanQuestions(1, @questions);
+
+        my $i = 0;
+        for (my $i=0; $i < $#channels; $i++) {
+            if ($answers[$i]) {
+                print CONF $channels[$i]."\n";
+            }
+        }
+        say("Configuration complete.");
+    }
+    else {
+        say("Unable to download channels list from $url_channels.");
+        die;
+    }
+}
+
+Grab_XML_uk_bleb->go();
+
+

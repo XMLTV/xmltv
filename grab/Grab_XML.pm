@@ -74,8 +74,10 @@ Returns a hash mapping YYYYMMDD dates to a URL where listings for that
 date can be downloaded.  This method is abstract, you must override
 it.
 
+Arguments: the command line options for --config-file and --quiet.
+
 =cut
-sub urls_by_date( $ ) {
+sub urls_by_date( $$$ ) {
     my $pkg = shift;
     die 'abstract class method: override in subclass';
 }
@@ -94,6 +96,17 @@ sub xml_from_data( $$ ) {
     t 'Grab_XML::xml_from_data()';
     return shift; # leave unchanged
 }
+
+=pod
+
+=item XMLTV::Grab_XML->configure()
+
+Configure the grabber if needed.  Arguments are --config-file option
+(or undef) and --quiet flag (or undef).
+
+This method is not provided in the base class; if you don't provide it
+then attempts to --configure will give a message that configuration is
+not necessary.
 
 =item XMLTV::Grab_XML->nextday(day)
 
@@ -128,11 +141,23 @@ probably need to override only that method.
 sub usage_msg( $ ) {
     my $pkg = shift;
     my $country = $pkg->country();
-    return <<END
+    if ($pkg->can('configure')) {
+        return <<END
 $0: get $country television listings in XMLTV format
-usage: $0 [--help] [--output FILE] [--days N] [--offset N] [--quiet]
+usage: $0 --configure [--config-file FILE]
+       $0 [--output FILE] [--days N] [--offset N] [--quiet] [--config-file FILE]
+       $0 --help
 END
       ;
+    }
+    else {
+        return <<END
+$0: get $country television listings in XMLTV format
+usage: $0 [--output FILE] [--days N] [--offset N] [--quiet]
+       $0 --help
+END
+      ;
+    }
 }
 
 =item XMLTV::Grab_XML->get()
@@ -187,13 +212,21 @@ sub go( $ ) {
       if (defined $opt_days && $opt_days < 0);
     usage(1, $pkg->usage_msg()) if $opt_help;
     usage(0, $pkg->usage_msg()) if @ARGV;
+
+    my $has_config = $pkg->can('configure');
     if ($opt_configure) {
-	print STDERR "no configuration necessary\n";
-	exit();
+        if ($has_config) {
+            $pkg->configure($opt_config_file, $opt_quiet);
+        }
+        else {
+            print STDERR "no configuration necessary\n";
+        }
+        exit;
     }
+
     for ($opt_config_file) {
-	warn "this grabber has no configuration, so ignoring --config-file $_\n"
-	  if defined;
+        warn("this grabber has no configuration, so ignoring --config-file\n"), undef $_
+          if defined and not $has_config;
     }
 
     # Need to call parse_local_date() before any resetting of
@@ -204,7 +237,7 @@ sub go( $ ) {
     $pkg->date_init();
     my $today = UnixDate($now, '%Q');
 
-    my %urls = $pkg->urls_by_date();
+    my %urls = $pkg->urls_by_date($opt_config_file, $opt_quiet);
     t 'URLs by date: ' . d \%urls;
 
     my @to_get;
@@ -286,6 +319,46 @@ if it has its own way of fetching web pages.
 sub cachables( $ ) {
     my $pkg = shift;
     return ('XMLTV::Get_nice::get_nice_aux');
+}
+
+=pod
+
+=item XMLTV::Grab_XML->remove_early_stop_times()
+
+Checks each stop time and removes it if it's before the start time.
+
+Argument: the XML to correct
+Returns: the corrected XML
+
+=cut
+
+my $warned_bad_stop_time = 0;
+sub remove_early_stop_times( $$ ) {
+    my $pkg = shift;
+    my @lines = split /\n/, shift;
+    foreach (@lines) {
+	if (/<programme/) {
+	    # First change to numeric timezones.
+	    s{(start|stop)="(\d+) ([A-Z]+)"}
+	    {qq'$1="$2 ' . tz_to_num($3) . '"'}eg;
+	    
+	    # Now remove stop times before start.  Only worry about
+	    # cases where the timezone is the same - we hope the
+	    # upstream data will be fixed by the next TZ changeover.
+	    #
+	    /start="(\d+) (\S+)"/ or next;
+	    my ($start, $tz) = ($1, $2);
+	    /stop="(\d+) \Q$tz\E"/ or next;
+	    my $stop = $1;
+        
+	    if ($stop lt $start) {
+		warn "removing stop time before start time: $_"
+		  unless $warned_bad_stop_time++;
+		s/stop="[^""]+"\s*// or die;
+	    }
+	}
+    }
+    return join("\n", @lines);
 }
 
 =pod

@@ -245,6 +245,11 @@ my @opt_components
        prereqs => { 'HTML::Entities' => 1.27 } ,
      },
 
+     { name => 'tv_grab_uk_bleb',
+       blurb => 'Fast alternative grabber for the UK',
+       exes => [ 'grab/uk_bleb/tv_grab_uk_bleb' ],
+       prereqs => { 'IO::Scalar' => 0, 'Archive::Zip' => 0 } },
+     
      { name => 'tv_grab_it',
        blurb => 'Grabber for Italy',
        exes => [ 'grab/it/tv_grab_it' ],
