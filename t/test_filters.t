@@ -28,18 +28,19 @@ my @cmds = ([ 'tv_cat' ],
 	    [ 'tv_sort' ],
 	    [ 'tv_to_latex' ]);
 
-my $tests_dir = 't/data';           # directory test files live in
-my $cmds_dir = '../../blib/script'; # directory filter programs live in,
-                                    # relative to $tests_dir
+my $tests_dir = 't/data';     # directory test files live in
+die "no directory $tests_dir" if not -d $tests_dir;
+my $cmds_dir = 'blib/script'; # directory filter programs live in
+die "no directory $cmds_dir" if not -d $cmds_dir;
 my $verbose = 0;
 GetOptions('tests-dir=s' => \$tests_dir, 'cmds-dir=s' => \$cmds_dir,
 	   'verbose' => \$verbose);
-chdir $tests_dir or die "cannot chdir to $tests_dir: $!";
-my @tests = <*.xml>;
+my @tests = <$tests_dir/*.xml>;
 die "no test cases (*.xml) found in $tests_dir"
   if not @tests;
-die "no directory $cmds_dir relative to $tests_dir"
-  if not -d $cmds_dir;
+foreach (@tests) {
+    s!^\Q$tests_dir\E/!!o or die;
+}
 
 # Any other environment needed (relative to $tests_dir)
 $ENV{PERL5LIB} .= ":..";
@@ -49,16 +50,17 @@ my $num_tests = (scalar @cmds) * (scalar @tests);
 print "1..$num_tests\n";
 my $test_num = 0;
 foreach my $cmd (@cmds) {
-    foreach my $in (@tests) {
+    foreach my $test (@tests) {
 	++ $test_num;
-	my $test_name = join('_', @$cmd, $in);
+	my $test_name = join('_', @$cmd, $test);
 	$test_name =~ tr/A-Za-z0-9/_/sc;
 	die "two tests munge to $test_name"
 	  if $seen{$test_name}++;
 
-	my $expected = "$test_name.expected";
-	my $out = "$test_name.out";
-	my $diff = "$test_name.diff";
+	my $in = "$tests_dir/$test";
+	my $expected = "$tests_dir/$test_name.expected";
+	my $out = "$tests_dir/$test_name.out";
+	my $diff = "$tests_dir/$test_name.diff";
 
 	my @cmd = (@$cmd, $in, '--output', $out);
 	$cmd[0] = "$cmds_dir/$cmd[0]";
