@@ -306,7 +306,10 @@ foreach $ch_did (@channels) {
     $writer->write_channel({ id => $ch_xid,
 			     'display-name' => [ [ $ch_name ] ] });
     for (my $i = $opt_offset;$i<($opt_offset + $opt_days);$i++) {
-	push @to_get, [ $i, $ch_xid, $ch_did ];
+	my $url = 'http://www.tvgids.nl/zoekprogramma.php'
+	  . "?station=$ch_did&interval=$i";
+	my $day = UnixDate(DateCalc($today, "+ $i dagen"), '%Y-%m-%d');
+	push @to_get, [ $url, $day, $ch_xid, $ch_did ];
     }
 }
 
@@ -315,12 +318,19 @@ if (not $opt_slow) {
     my $bar = new Term::ProgressBar('downloading listings', scalar @to_get)
       if Have_bar && not $opt_quiet;
     foreach (@to_get) {
-	my ($day_offset, $ch_xmltv_id, $ch_tvgids_id) = @$_;
-	my $day = UnixDate(DateCalc($today, "+ $day_offset dagen"), '%Y-%m-%d');
+	my ($url, $day, $ch_xmltv_id, $ch_tvgids_id) = @$_;
 	die if not defined $day;
-	my $url = 'http://www.tvgids.nl/zoekprogramma.php'
-	  . "?station=$ch_tvgids_id&interval=$day_offset";
-	do_summary_page($writer, $url, $day, $day, $ch_xmltv_id);
+	foreach (process_summary_page($url, $day, $day)) {
+	    my ($start, $stop, $title, $url) = @$_;
+	    $writer->write_programme
+	      ({ start => UnixDate($start, '%q') . " $TZ",
+		 stop => UnixDate($stop, '%q') . " $TZ",
+		 channel => $ch_xmltv_id,
+		 title => [ [ $title, $LANG ] ],
+		 debug_more => $url,
+	       });
+	}
+
 	update $bar if Have_bar and not $opt_quiet;
     }
 }
@@ -333,11 +343,9 @@ else {
     my @to_get_detailed;
     my $num_detailed = 0;
     foreach (@to_get) {
-	my ($date, $ch_xmltv_id, $ch_tvgids_id) = @$_;
-	my $today = UnixDate($date, '%Y-%m-%d');
-	my $url = "http://www.tvgids.nl/zoekprogramma.php?station=$ch_tvgids_id&interval=$date";
-	my @detail_urls = detail_urls(get_courteous($url), $url);
-	push @to_get_detailed, [ $ch_xmltv_id, \@detail_urls ];
+	my ($url, $date, $ch_xmltv_id, $ch_tvgids_id) = @$_;
+	my @detail_urls = map { $_->[3] } process_summary_page($url, $date, $date);
+	push @to_get_detailed, [ $ch_xmltv_id, \@detail_urls, $url ];
 	$num_detailed += @detail_urls;
 	update $bar if Have_bar && not $opt_quiet;
     }
@@ -345,7 +353,7 @@ else {
       if Have_bar && not $opt_quiet;
     my @got_detailed;
     foreach (@to_get_detailed) {
-	write_details($writer, $_->[0], $_->[1], $bar);
+	write_details($writer, $_->[0], $_->[1], $_->[2], $bar);
     }
 }
 
@@ -388,19 +396,19 @@ sub detail_urls {
 #    XMLTV::Writer object to write to
 #    xmltv id of channel
 #    ref to list of URLs for programme detail pages
+#    URL this list was found from (for debugging)
 #    progress bar object to update (or undef)
 #
 # The list of URLs should correspond to a single page for one channel
 # (at the moment).
 #
 sub write_details {
-    my ($writer, $ch_xmltv_id, $urls, $bar) = @_;
+    my ($writer, $ch_xmltv_id, $urls, $master_url, $bar) = @_;
     my $next_day = 0;
-    my $last_van;
 
     foreach my $url (@$urls) {
 	local $SIG{__WARN__} = sub {
-	    warn "$url: $_[0]";
+	    warn "$url (from $master_url): $_[0]";
 	};
 
 	# We make an HTML::TreeBuilder object, get the information
@@ -494,8 +502,17 @@ sub write_details {
 		    $previously_shown = { start => "$yyyy$mm$dd" };
 		    $text =~ s/^\s+//; $text =~ s/\s+$//;
 		}
-		elsif ($text =~ s/\bherhaling\b//) {
-		    # Repeat, but no previous date given.
+		elsif ($text =~ s/herhaling\b//) {
+		    # Repeat, but no previous date given.  NB
+		    # sometimes we see 'herhaling' without a space
+		    # before it, as in the redundant
+		    #
+		    # 'Netwerk herhalingenherhaling'
+		    #
+		    # Hence no \b at the start of the regexp.  We just
+		    # have to hope there aren't too many compound
+		    # words ending in 'herhaling'.
+		    #
 		    $previously_shown = {};
 		    $text =~ s/^\s+//; $text =~ s/\s+$//;
 		}
@@ -654,27 +671,28 @@ sub write_details {
 	$van = DateCalc($van, '+ 1 dag') if $next_day;
 	$tot = DateCalc($tot, '+ 1 dag') if $next_day;
 	if (Date_Cmp($van, $tot) > 0) {
-	    # Programme appears to end after it began.  Must span
-	    # days. 
-	    #
+	    t "programme in $master_url seems to run from $van to $tot, must straddle midnight";
 	    if ($next_day++) {
 		warn "seeming to span more than one midnight, skipping rest of page";
 		return;
 	    }
 	    $tot = DateCalc($tot, '+ 1 dag');
 	}
-	if (defined $last_van and Date_Cmp($last_van, $van) > 0) {
-	    # Appear to have gone backwards since the last programme.
-	    # Again, must have crossed midnight.
-	    #
-	    if ($next_day++) {
-		warn "seeming to span more than one midnight, skipping rest of page";
-		return;
-	    }
-	    $van = DateCalc($van, '+ 1 dag');
-	    $tot = DateCalc($tot, '+ 1 dag');
-	}
-	$last_van = $van;
+
+	# Sometimes it happens that the start time of this programme
+	# is before the start time of the previously seen programme.
+	#
+	# Now this could mean that we have crossed midnight, if for
+	# example the last programme was 2300--2330 and this one is
+	# 0000--0030.  But that would require a gap in the listings,
+	# and doesn't seem to happen in practice.  Instead, these
+	# going-backwards seem to randomly occur in the middle of the
+	# day giving overlapping programmes.
+	#
+	# Rather than warning about this, we just include it
+	# faithfully in the XML output and let someone else worry
+	# about the problem when reading the file.
+	#
 
 	my %prog
 	  = (channel  => $ch_xmltv_id,
@@ -800,11 +818,9 @@ sub get_channels {
 }
 
 
-# Process a page containing the summary information and write
-# programmes to an XMLTV::Writer.
+# Process a page containing the summary information.
 #
 # Parameters:
-#   XMLTV::Writer object
 #   URL to fetch
 #   Date::Manip object giving day for programmes in page (at least
 #     until they cross midnight)
@@ -812,12 +828,15 @@ sub get_channels {
 #     same as the previous parameter)
 #   XMLTV id of channel
 #
-sub do_summary_page( $$$$ ) {
-    my ($writer, $url, $day, $official_day, $ch_xmltv_id) = @_;
-    die if not defined $writer;
+# Returns a list of tuples of the form [ start, stop, title, url ]
+# where start and stop are Date::Manip objects, title is a string, and 
+# url is the page to download if you want full details.
+#
+sub process_summary_page( $$ ) {
+    my ($url, $day, $official_day) = @_;
     die if not defined $url;
     die if not defined $day;
-    die if not defined $ch_xmltv_id;
+    die if not defined $official_day;
     local $SIG{__WARN__} = sub {
 	warn "$url: $_[0]";
     };
@@ -890,6 +909,7 @@ sub do_summary_page( $$$$ ) {
     #	use Log::TraceMessages qw(t d);
     #	$Log::TraceMessages::On = 1;
     #	t 'bits: ' . d \@bits;
+    my @r;
     while (@bits >= 3) {
 	my $ch_bit = shift @bits;
 	my $ch_class = $ch_bit->[0];
@@ -913,6 +933,7 @@ sub do_summary_page( $$$$ ) {
 	    warn "bit expected to be title has class $title_class not details_programma, skipping";
 	    next;
 	}
+	my $title_href = $title_bit->[1];
 	my $title = $title_bit->[2];
 	
 	# Right, got channel name, times, and title.
@@ -936,23 +957,24 @@ sub do_summary_page( $$$$ ) {
 	    die unless Date_Cmp($start, $stop) < 0;
 	}
 	
-	$writer->write_programme({ start => UnixDate($start, '%q') . " $TZ",
-				   stop => UnixDate($stop, '%q') . " $TZ",
-				   channel => $ch_xmltv_id,
-				   title => [ [ $title, $LANG ] ] });
+	my $title_url = URI->new_abs($title_href, $url);
+	push @r, [ $start, $stop, $title, $title_url ];
     }
     foreach (@bits) {
 	my ($type, $href, $text) = @$_;
 	if ($type eq 'lijst_zender' and $text eq 'Volgende') {
 	    # Next page for this day.
 	    my $next_url = URI->new_abs($href, $url);
-	    do_summary_page($writer, $next_url, $day, $official_day,
-			    $ch_xmltv_id);
+	    push @r, process_summary_page($next_url, $day, $official_day)
+	}
+	elsif ($type eq 'lijst_zender' and $text eq 'Vorige') {
+	    # Previous page for this day, assume already fetched.
 	}
 	else {
 	    warn "discarding leftover $type: $text";
 	}
     }
+    return @r;
 }
 
 sub get_courteous {
