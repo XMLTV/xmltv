@@ -62,9 +62,13 @@ tv_grab_se can currently fetch data for the following channels:
   SVT1, SVT2, Barnkanalen, SVT24,
   TV4, TV4+.
   TV3, TV8, ZTV
+  Kanal 5
   VIASAT SPORT 1/2/3
   EXPLORER, ACTION/NATURE
   TV1000, CINEMA
+  EuroSport
+  MTV Nordic
+  YLE TV Finland
 
 =head1 SEE ALSO
 
@@ -101,6 +105,8 @@ use Date::Manip;
 use Getopt::Long;
 use URI;
 
+use Encode qw(encode_utf8 decode_utf8 encode decode);
+
 # Use Term::ProgressBar if installed.
 use constant Have_bar => eval { require Term::ProgressBar; 1 };
 
@@ -132,8 +138,8 @@ my %channels = (
 
                  'barnkanalen.svt.se' =>
                  [ "Barnkanalen", \&get_data_svt,
-                   8762, "SgBARNKANALENBG",
-                   "SgBARNKANALENTitle"  ],
+                   8762, "SgBarnkanalenBG",
+                   "SgBarnkanalenTitle"  ],
                 
                  'tv4.se' =>
                  [ "TV4", \&get_data_tv4,
@@ -146,6 +152,12 @@ my %channels = (
                  'tv3.se' =>
                  [ "TV 3 Sverige", \&get_data_viasat,
                    "www.tv3.se", "sv" ],
+
+                 'kanal5.se' =>
+                 [ "Kanal 5", \&get_data_kanal5 ],
+
+                 'eurosport.com' =>
+                 [ "EuroSport", \&get_data_eurosport ],
 
                  'tv8.se' =>
                  [ "TV8", \&get_data_viasat,
@@ -202,6 +214,12 @@ my %channels = (
                  'explorer.viasat.se' =>
                  [ "Viasat Explorer Sverige", \&get_data_viasat,
                    "explorer.viasat.se", "sv" ],
+
+                 'nordic.mtve.com' =>
+                 [ "MTV Nordic", \&get_data_mtve ],
+
+                 'tvfinland.yle.fi' =>
+                 [ "YLE TV Finland", \&get_data_yle ],
 
                  #
                  # Danish channels
@@ -419,7 +437,7 @@ load_config( $config_file );
 my( $odoc, $root );
 my $warnings = 0;
 
-my %w_args = ( encoding => 'ISO-8859-1' );
+my %w_args = ( encoding => 'UTF-8' );
 
 if (defined $opt->{output})
 {
@@ -704,7 +722,7 @@ sub get_html_svt
     my $url = "http://svt.se/svt/jsp/polopoly.jsp?" .
               "d=$id\&selectedDate=$date\&shortVersion=false\&x=31\&y=8";
 
-    return ( URI->new( $url ), get_nice( $url ) );
+    return ( URI->new( $url ), decode( "ISO-8859-1", get_nice( $url ) ) );
 }
 
 ##########################################
@@ -722,7 +740,7 @@ sub get_html_tv4
     my $url = "http://www.tv4.se/program/tabla.aspx?date=$date";
     $url .= "\&ch=$id"; # unless $id==1;
 
-    return ( URI->new( $url ), get_nice( $url ) );
+    return ( URI->new( $url ), decode( "ISO-8859-1", get_nice( $url ) ) );
 }
 
 sub get_data_tv4
@@ -765,12 +783,16 @@ sub get_data_tv4
         $time =~ tr/\n\r //d;
 
         my $text = $node->findvalue( "td[2]" );
-        $text =~ tr/\n\r /   /s;
-        $text =~ s/^\s+//;
-        $text =~ s/\s+$//;
 
+        $text =~ tr/\n\r /   /s;
+        $text =~ s/^\s*//;
+        $text =~ s/\s*$//;
+    
         # Delete character that TV4 uses to signify a link.
         $text =~ tr/»//d;
+        # But Perl might see something else. UTF-8 stuff, I guess.
+	my @text = split(//, $text);
+	$text =~ s/\s*.$// if (@text and ord($text[-1]) == 194);
 
     
         if( $time =~ /^\s*\d\d:\d\d\s*$/ )
@@ -785,7 +807,7 @@ sub get_data_tv4
             
             $lasttime = $time;
             
-            if( ($text =~ /^\s*-S.ndningsuppeh.ll-\s*$/) 
+            if( ($text =~ /^\s*-S.*ndningsuppeh.*ll-\s*$/) 
                 and scalar(@programmes > 0) )
             {
                 # This entry signals that there is nothing on TV. 
@@ -826,6 +848,806 @@ sub get_data_tv4
 
 ##########################################
 #
+# kanal5.se
+#
+##########################################
+
+my $kanal5_html = {};
+my $kanal5_dates = {};
+my @kanal5_table_queue;
+my $kanal5_table_loaded = {};
+
+# Find the date of a page to see if it's the one we want.
+sub find_date_kanal5
+{
+    my ( $url ) = @_;
+
+    my $html = $kanal5_html->{$url};
+
+    my $doc = parse_xml( $html );
+    if( not defined( $doc ) )
+    {
+        return undef;
+    }
+
+    my $ns = $doc->find( "//span[\@class='Heading1']" );
+
+    if ($ns->size() != 1)
+    {
+	return undef;
+    }
+
+    my @nodes = $ns->get_nodelist;
+    my $date = $nodes[0]->textContent();
+
+    # example: "tisdag, 13 juli 2004"
+
+    $date =~ s/ januari / 01 /;
+    $date =~ s/ februari / 02 /;
+    $date =~ s/ mars / 03 /;
+    $date =~ s/ april / 04 /;
+    $date =~ s/ maj / 05 /;
+    $date =~ s/ juni / 06 /;
+    $date =~ s/ juli / 07 /;
+    $date =~ s/ augusti / 08 /;
+    $date =~ s/ september / 09 /;
+    $date =~ s/ oktober / 10 /;
+    $date =~ s/ november / 11 /;
+    $date =~ s/ december / 12 /;
+    $date =~ s/^.*, ([^ ]) ([^ ]*) ([^ ]*)/$3$20$1/;
+    $date =~ s/^.*, ([^ ][^ ]) ([^ ]*) ([^ ]*)/$3$2$1/;
+
+    if (defined $date) {
+	$kanal5_dates->{$date} = $url;
+    }
+}
+
+# Find links to other pages that we might want to look at.
+sub find_table_urls_kanal5
+{
+    my ( $url ) = @_;
+    
+    my $html = $kanal5_html->{$url};
+
+    my $doc = parse_xml( $html );
+    if( not defined( $doc ) )
+    {
+	# Hopefully not fatal.
+        return;
+    }
+
+    my $ns = $doc->find( "//a" );
+
+    # Skip using found URLs until this is reset;
+    my $old = 1;
+
+    # Find URL:s to pages with more programmes.
+    for my $node ($ns->get_nodelist) {
+	my $nstr = $node->textContent();
+
+	if ($nstr =~ /M.*ndag$/ ||
+	    $nstr =~ /Tisdag$/ ||
+	    $nstr =~ /Onsdag$/ ||
+	    $nstr =~ /Torsdag$/ ||
+	    $nstr =~ /Fredag$/ ||
+	    $nstr =~ /L.*rdag$/ ||
+	    $nstr =~ /S.*ndag$/ ||
+	    $nstr =~ /N.*sta veckas tabl/)
+	{
+	    if ($nstr =~ /^\S/) {
+		# If the string begins with &#183;&nbsp;
+		# then it's a link to the page itself.
+		# The rest of the links will be to later
+		# days.
+		$old = 0;
+	    }
+	    unless ($old) {
+		my $attributelist = $node->attributes;
+		my $href = $attributelist->getNamedItem("href");
+		if (defined $href) {
+		    my $nurl = $href->textContent;
+		    my $absurl = URI->new($nurl)->abs($url);
+		    push @kanal5_table_queue, $absurl;
+		}
+	    }
+	}
+    }
+}
+
+# Download and index a page.
+sub load_url_kanal5
+{
+    my( $url ) = @_;
+
+    $kanal5_html->{$url} =
+	( URI->new( $url ), decode( "ISO-8859-1", get_nice( $url ) ) );
+    
+    find_date_kanal5($url);
+    find_table_urls_kanal5($url);
+}
+
+# Work through queue of pages until we find the one we want.
+sub get_url_by_date_kanal5
+{
+    my( $date ) = @_;
+
+    while (@kanal5_table_queue and !defined($kanal5_dates->{$date})) {
+	my $tryurl = shift @kanal5_table_queue;
+	unless (defined ($kanal5_table_loaded->{$tryurl})) {
+	    get_html_kanal5($tryurl);
+	    $kanal5_table_loaded->{$tryurl} = 1;
+	}
+    }
+    
+    if (defined ($kanal5_dates->{$date})) {
+	return $kanal5_dates->{$date};
+    } else {
+	return undef;
+    }
+}
+
+# Download, index and return HTML.
+sub get_html_kanal5
+{
+    my( $url ) = @_;
+
+    unless (defined ($kanal5_html->{$url})) {
+	load_url_kanal5($url);
+    }
+
+    return $kanal5_html->{$url};
+}
+
+# The programme table parser.
+sub get_programmes_kanal5
+{
+    my( $channel, $date, $base, $html ) = @_;
+
+    my $doc = parse_xml( $html );
+    if( not defined( $doc ) )
+    {
+        return undef;
+    }
+    
+    my $ns = $doc->find(
+     "//span[\@class='Heading1']/parent::td/parent::tr/parent::table/tr/td[\@class='Content']/node()" );
+    
+    if( $ns->size() == 0 )
+    {
+        return undef;
+    }
+
+    my @programmes = ();
+
+    my $starttime = "";
+    my $title = "";
+    my $progdesc = "";
+    my $progurl = "";
+
+    my $progdate = $date;
+    my $nextdate = $progdate;
+
+    foreach my $node ($ns->get_nodelist)
+    {
+	my $nstr = $node->textContent;
+	if ($nstr =~ /^\s*([0-9][0-9]):([0-9][0-9])$/) {
+	    my $nextstart = "$1$2";
+	    if (($nextstart cmp $starttime) == -1) {
+		$nextdate = increase_date($nextdate, 1);
+	    }
+
+	    if ($title =~ /\S/) {
+		# Ok, we have a programme.
+		my %prog = (
+			    channel => $channel,
+			    start   => utc_offset( "$progdate$starttime", LOCAL_TZ ),
+			    stop    => utc_offset( "$nextdate$nextstart", LOCAL_TZ ),
+			    title   => [ [$title, LANG ] ],
+			    );
+		$prog{url} = [URI->new($progurl)->abs($base)] if $progurl =~ /\S/;
+		if ($progdesc =~ /\S/) {
+		    $progdesc =~ s/^\s*//;
+		    $progdesc =~ s/\s*$//;
+		    $prog{desc} = [ [ $progdesc, LANG ] ];
+		}
+		
+		push @programmes, \%prog;
+	    }
+	    
+	    $starttime = $nextstart;
+	    $progdate = $nextdate;
+	    $title = "";
+	    $progdesc = "";
+	    $progurl = "";
+	} elsif ($node->nodeName eq "b") {
+	    $title = $nstr;
+	    my $firstchild = $node->firstChild;
+	    if (defined $firstchild) {
+		if ($firstchild->nodeName eq "a") {
+		    my $attributelist = $firstchild->attributes;
+		    my $href = $attributelist->getNamedItem("href");
+		    if (defined $href) {
+			$progurl = $href->textContent;
+		    }
+		}
+	    }
+	} else {
+	    $progdesc .= $nstr . "\n";
+	}
+    }
+    # There's never an end time, so we'll just skip
+    # the last programme.
+
+    return \@programmes;
+}
+
+# Find the right page, parse the table on the page and output the
+# result.
+sub get_data_kanal5
+{
+    my( $w, $channel, $date ) = @_;
+    
+    # Initialize the URL queue if it hasn't been done yet.
+    get_html_kanal5("http://www.kanal5.se/Templates/TVListToday.aspx");
+    
+    my $html = get_html_kanal5(get_url_by_date_kanal5($date));
+    unless (defined $html) {
+        warning( "Failed to fetch html for $channel on $date." );
+	return;
+    }
+
+    my $programmes = get_programmes_kanal5($channel, $date, "http://www.kanal5.se/", $html);
+
+    unless (defined $programmes) {
+        warning( "Failed to parse html for $channel on $date." );
+	return;
+    }
+
+    foreach my $prog (@$programmes)
+    {
+        $w->write_programme( $prog );
+    }
+}
+
+##########################################
+#
+# eurosport.com
+#
+##########################################
+
+my $eurosport_html = {};
+my $eurosport_dates = {};
+my @eurosport_table_queue;
+my $eurosport_table_loaded = {};
+
+# Find the date of a page to see if it's the one we want.
+sub find_date_eurosport
+{
+    my ( $url ) = @_;
+
+    my $html = $eurosport_html->{$url};
+
+    my $doc = parse_xml( $html );
+    if( not defined( $doc ) )
+    {
+        return undef;
+    }
+
+    my $ns = $doc->find( "//td[\@class='tabletitre']/child::text()" );
+
+    if ($ns->size() != 1)
+    {
+	return undef;
+    }
+
+    my @nodes = $ns->get_nodelist;
+    my $date = $nodes[0]->textContent();
+
+    if (defined $date) {
+	$date =~ s/.*ON\s//;
+	$date =~ s/\///g;
+
+	$eurosport_dates->{$date} = $url;
+    }
+}
+
+# Find links to other pages that we might want to look at.
+sub find_table_urls_eurosport
+{
+    my ( $url ) = @_;
+    
+    my $html = $eurosport_html->{$url};
+
+    my $doc = parse_xml( $html );
+    if( not defined( $doc ) )
+    {
+	# Hopefully not fatal.
+        return;
+    }
+
+    my $ns = $doc->find( "//a[text()='TV Schedule']" );
+
+    if (defined $ns) {
+	my @nodes = $ns->get_nodelist;
+	my $scheduleurl = $nodes[0]->getAttribute("href");
+
+	if ($scheduleurl =~ /\S/) {
+	    $scheduleurl = URI->new($scheduleurl)->abs($url);
+	    push @eurosport_table_queue, $scheduleurl;
+	}
+    }
+
+    my $ns2 = $doc->find( "//a" );
+
+    if (defined $ns2) {
+	my @nodes = $ns2->get_nodelist;
+
+	for my $node (@nodes) {
+	    my $nstr = $node->textContent;
+
+	    if ($nstr =~ /^\s*..\s*([0-9][0-9])\/([0-9][0-9])$/) {
+		my $month = $1;
+		my $day = $2;
+		my $scheduleurl = $node->getAttribute("href");
+		$scheduleurl = URI->new($scheduleurl)->abs($url);
+		if ($scheduleurl =~ /\S/) {
+		    for my $tryday (0, 1, 2, 3, 4, 5, 6, 7, 8) {
+			my $trydate = increase_date( $today, $tryday );
+			if ($trydate =~ /$month$day$/) {
+			    $eurosport_dates->{$trydate} = $scheduleurl;
+			}
+		    }
+		}
+	    }
+	}
+    }
+}
+
+# Download and index a page.
+sub load_url_eurosport
+{
+    my( $url ) = @_;
+
+    $eurosport_html->{$url} =
+	( URI->new( $url ), decode_utf8( get_nice( $url ) ) );
+
+    find_date_eurosport($url);
+    find_table_urls_eurosport($url);
+}
+
+# Work through queue of pages until we find the one we want.
+sub get_url_by_date_eurosport
+{
+    my( $date ) = @_;
+
+    while (@eurosport_table_queue and !defined($eurosport_dates->{$date})) {
+	my $tryurl = shift @eurosport_table_queue;
+	unless (defined ($eurosport_table_loaded->{$tryurl})) {
+	    get_html_eurosport($tryurl);
+	    $eurosport_table_loaded->{$tryurl} = 1;
+	}
+    }
+    
+    if (defined ($eurosport_dates->{$date})) {
+	return $eurosport_dates->{$date};
+    } else {
+	# print "FAILED: $date\n";
+	return undef;
+    }
+}
+
+# Download, index and return HTML.
+sub get_html_eurosport
+{
+    my( $url ) = @_;
+
+    unless (defined ($eurosport_html->{$url})) {
+	load_url_eurosport($url);
+    }
+
+    return $eurosport_html->{$url};
+}
+
+# The programme table parser.
+sub get_programmes_eurosport
+{
+    my( $channel, $date, $base, $html ) = @_;
+
+    my $doc = parse_xml( $html );
+    if( not defined( $doc ) )
+    {
+        return undef;
+    }
+    
+    my $ns = $doc->find("//td[\@class='tvschtitre']/parent::tr/parent::table/parent::td/parent::tr/td/table/descendant::td[\@class='tvschtitre' or \@class='tvschtitrelive' or \@class='tvschtext']" );
+    
+    if( $ns->size() == 0 )
+    {
+        return undef;
+    }
+
+    my @programmes = ();
+
+    my $starttime = "";
+    my $title = "";
+    my $progdesc = "";
+    my $progurl = "";
+
+    my $progdate = $date;
+    my $nextdate = $progdate;
+
+    foreach my $node ($ns->get_nodelist)
+    {
+	my $nstr = $node->textContent;
+	if ($nstr =~ /^\s*([0-9][0-9]):([0-9][0-9])$/) {
+	    my $nextstart = "$1$2";
+	    if (($nextstart cmp $starttime) == -1) {
+		$nextdate = increase_date($nextdate, 1);
+	    }
+
+	    if ($title =~ /\S/) {
+		# Ok, we have a programme.
+		my %prog = (
+			    channel => $channel,
+			    start   => utc_offset( "$progdate$starttime", LOCAL_TZ ),
+			    stop    => utc_offset( "$nextdate$nextstart", LOCAL_TZ ),
+			    title   => [ [$title, LANG ] ],
+			    );
+		$prog{url} = [URI->new($progurl)->abs($base)] if $progurl =~ /\S/;
+		if ($progdesc =~ /\S/) {
+		    $progdesc =~ s/^\s*//;
+		    $progdesc =~ s/\s*$//;
+		    $prog{desc} = [ [ $progdesc, LANG ] ];
+		}
+		
+		push @programmes, \%prog;
+	    }
+	    
+	    $starttime = $nextstart;
+	    $progdate = $nextdate;
+	    $title = "";
+	    $progdesc = "";
+	    $progurl = "";
+	} elsif ($title eq "") {
+	    $title = $nstr;
+	    $title =~ s/^\s*//gs;
+	    $title =~ s/\s*$//gs;
+
+	    my $links = $doc->find("a");
+	    if( $links->size() > 0 )
+	    {
+		foreach my $linknode ($links->get_nodelist) {
+		    my $attributelist = $linknode->attributes;
+		    my $href = $attributelist->getNamedItem("href");
+		    if (defined $href) {
+			$progurl = $href->textContent;
+		    }
+		}
+	    }
+	} else {
+	    my $desc = $nstr;
+	    $desc =~ s/^\s*//gs;
+	    $desc =~ s/\s*$//gs;
+	    $progdesc .= $desc . "\n";
+	}
+    }
+    # There's never an end time, so we'll just skip
+    # the last programme.
+
+    return \@programmes;
+}
+
+# Find the right page, parse the table on the page and output the
+# result.
+sub get_data_eurosport
+{
+    my( $w, $channel, $date ) = @_;
+    
+    # Initialize the URL queue if it hasn't been done yet.
+    get_html_eurosport("http://www.eurosport.com/");
+    
+    my $url = get_url_by_date_eurosport($date);
+    unless (defined $url) {
+        warning( "Failed to find url for $channel on $date." );
+	return;
+    }
+    my $html = get_html_eurosport($url);
+    unless (defined $html) {
+        warning( "Failed to fetch html for $channel on $date." );
+	return;
+    }
+
+    my $programmes = get_programmes_eurosport($channel, $date, "http://www.eurosport.com/", $html);
+
+    unless (defined $programmes) {
+        warning( "Failed to parse html for $channel on $date." );
+	return;
+    }
+
+    foreach my $prog (@$programmes)
+    {
+        $w->write_programme( $prog );
+    }
+}
+
+##########################################
+#
+# mtve.com
+#
+##########################################
+
+# Return the URL of the page for the date.
+sub get_url_by_date_mtve
+{
+    my( $date ) = @_;
+
+    return "http://www.nordic.mtve.com/television/schedule.asp?date=".$today."&show_date=" . $date;
+}
+
+# Download and return HTML.
+sub get_html_mtve
+{
+    my( $url ) = @_;
+
+    return ( URI->new( $url ), decode( "ISO-8859-1", get_nice( $url ) ) );
+}
+
+# The programme table parser.
+sub get_programmes_mtve
+{
+    my( $channel, $date, $base, $html ) = @_;
+
+    my $doc = parse_xml( $html );
+    if( not defined( $doc ) )
+    {
+        return undef;
+    }
+    
+    my $ns = $doc->find("//tr[\@bgcolor='']/parent::table/tr/td/node()");
+    
+    if( $ns->size() == 0 )
+    {
+        return undef;
+    }
+
+    my @programmes = ();
+
+    my $starttime = "";
+    my $title = "";
+    my $progurl = "";
+
+    my $progdate = $date;
+    my $nextdate = $progdate;
+
+    foreach my $node ($ns->get_nodelist)
+    {
+	my $nstr = $node->textContent;
+	my $nodename = $node->nodeName;
+	if (defined $nodename and $nodename eq "div" and
+	    $nstr =~ /^([0-9][0-9]):([0-9][0-9])\s/)
+	{
+	    my $nextstart = "$1$2";
+	    if (($nextstart cmp $starttime) == -1) {
+		$nextdate = increase_date($nextdate, 1);
+	    }
+
+	    if ($title =~ /\S/) {
+		# Ok, we have a programme.
+		#  LOCAL_TZ should be alright for MTVE Nordic.
+		my %prog = (
+			    channel => $channel,
+			    start   => utc_offset( "$progdate$starttime", LOCAL_TZ ),
+			    stop    => utc_offset( "$nextdate$nextstart", LOCAL_TZ ),
+			    title   => [ [$title, "en" ] ],
+			    );
+		$prog{url} = [URI->new($progurl)->abs($base)] if $progurl =~ /\S/;
+		
+		push @programmes, \%prog;
+	    }
+	    
+	    $starttime = $nextstart;
+	    $progdate = $nextdate;
+	    $title = "";
+	    $progurl = "";
+	} else {
+	    $title = $nstr;
+	    $title =~ s/^\s*//;
+
+	    if ($nodename eq "a") {
+		my $attributelist = $node->attributes;
+		my $href = $attributelist->getNamedItem("href");
+		if (defined $href) {
+		    $progurl = $href->textContent;
+		}
+	    }
+	}
+    }
+    # The table seems to always end at midnight.
+    my $nextstart = "0000";
+    if (($nextstart cmp $starttime) == -1) {
+	$nextdate = increase_date($nextdate, 1);
+    }
+
+    if ($title =~ /\S/) {
+	# Ok, we have a programme.
+	my %prog = (
+		    channel => $channel,
+		    start   => utc_offset( "$progdate$starttime", LOCAL_TZ ),
+		    stop    => utc_offset( "$nextdate$nextstart", LOCAL_TZ ),
+		    title   => [ [$title, LANG ] ],
+		    );
+	$prog{url} = [URI->new($progurl)->abs($base)] if $progurl =~ /\S/;
+
+	push @programmes, \%prog;
+    }
+
+    return \@programmes;
+}
+
+# Find the right page, parse the table on the page and output the
+# result.
+sub get_data_mtve
+{
+    my( $w, $channel, $date ) = @_;
+    
+    my $html = get_html_mtve(get_url_by_date_mtve($date));
+    unless (defined $html) {
+        warning( "Failed to fetch html for $channel on $date." );
+	return;
+    }
+
+    my $programmes = get_programmes_mtve($channel, $date, "http://www.nordic.mtve.com/", $html);
+
+    unless (defined $programmes) {
+        warning( "Failed to parse html for $channel on $date." );
+	return;
+    }
+
+    foreach my $prog (@$programmes)
+    {
+        $w->write_programme( $prog );
+    }
+}
+
+##########################################
+#
+# yle.fi
+#
+##########################################
+
+# Could also use http://www.yle.fi/ohjelmaopas/data/stftoday.htm for
+# more details. Se also
+# http://www.yle.fi/tv1/myle/ohjelmakartta/frame_bottom_programs.php?focus_day=0
+
+# Return the URL of the page for the date.
+sub get_url_by_date_yle
+{
+    my( $channel, $date ) = @_;
+
+    if ($channel eq "tvfinland.yle.fi") {
+	return "http://www.yle.fi/ohjelmaopas/index.php?&co[]=tv1&co[]=tv2&co[]=mtv&co[]=nel&co[]=tvf&l=s&span=day&span=day&date=" . $date;
+    }
+
+    return undef;
+}
+
+# Download and return HTML.
+sub get_html_yle
+{
+    my( $url ) = @_;
+
+    return ( URI->new( $url ), decode( "windows-1252", get_nice( $url ) ) );
+}
+
+# The programme table parser.
+sub get_programmes_yle
+{
+    my( $channel, $date, $base, $html ) = @_;
+
+    my $doc = parse_xml( $html );
+    if( not defined( $doc ) )
+    {
+        return undef;
+    }
+
+    my $channelwebname;
+    if ($channel eq "tvfinland.yle.fi") {
+	$channelwebname = "TV Finland (CET)";
+    }
+    
+    my $ns = $doc->find("//b[text()='".$channelwebname."']/parent::td/parent::tr/parent::table/tr/td/table/tr/td/node()");
+    
+    if( $ns->size() == 0 )
+    {
+        return undef;
+    }
+
+    my @programmes = ();
+
+    my $starttime = "";
+    my $title = "";
+    my $progurl = "";
+
+    my $progdate = $date;
+    my $nextdate = $progdate;
+
+    foreach my $node ($ns->get_nodelist)
+    {
+	my $nstr = $node->textContent;
+	my $nodename = $node->nodeName;
+	if ($nstr =~ /^([0-9][0-9]).([0-9][0-9])$/) {
+	    my $nextstart = "$1$2";
+	    if (($nextstart cmp $starttime) == -1) {
+		$nextdate = increase_date($nextdate, 1);
+	    }
+
+	    if ($title =~ /\S/) {
+		# Ok, we have a programme.
+		#  TV Finland is CET, so LOCAL_TZ whould be ok,
+		#  but for the others it's not.
+		#  "sv" is usually correct for TVF.
+		my %prog = (
+			    channel => $channel,
+			    start   => utc_offset( "$progdate$starttime", LOCAL_TZ ),
+			    stop    => utc_offset( "$nextdate$nextstart", LOCAL_TZ ),
+			    title   => [ [$title, LANG ] ],
+			    );
+		$prog{url} = [URI->new($progurl)->abs($base)] if $progurl =~ /\S/;
+		
+		push @programmes, \%prog;
+	    }
+	    
+	    $starttime = $nextstart;
+	    $progdate = $nextdate;
+	    $title = "";
+	    $progurl = "";
+	} else {
+	    $title = $nstr;
+	    $title =~ s/^\s*//;
+
+	    if ($nodename eq "a") {
+		my $attributelist = $node->attributes;
+		my $href = $attributelist->getNamedItem("href");
+		if (defined $href) {
+		    $progurl = $href->textContent;
+		}
+	    }
+	}
+    }
+    # Skip the last programme. Sorry. Should probably check for early
+    # programs the next day.
+
+    return \@programmes;
+}
+
+# Find the right page, parse the table on the page and output the
+# result.
+sub get_data_yle
+{
+    my( $w, $channel, $date ) = @_;
+    
+    my $url = get_url_by_date_yle($channel, $date);
+    my $html = get_html_yle($url);
+    unless (defined $html) {
+        warning( "Failed to fetch html for $channel on $date." );
+	return;
+    }
+
+    my $programmes = get_programmes_yle($channel, $date, $url, $html);
+
+    unless (defined $programmes) {
+        warning( "Failed to parse html for $channel on $date." );
+	return;
+    }
+
+    foreach my $prog (@$programmes)
+    {
+        $w->write_programme( $prog );
+    }
+}
+
+##########################################
+#
 # viasat
 #
 ##########################################
@@ -839,7 +1661,7 @@ sub get_html_viasat
     my $url = "http://$site/index.phtml?page_type=tvchart$url_addon\&" .
               "start_year=$year\&start_month=$month\&start_day=$day";
 
-    return ( URI->new( $url ), get_nice( $url ) );
+    return ( URI->new( $url ), decode( "ISO-8859-1", get_nice( $url ) ) );
 }
 
 sub get_data_viasat
