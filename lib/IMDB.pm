@@ -14,7 +14,7 @@
 # FUTURE - common english->french vowel changes. For instance
 #          "Anna Karénin" (é->e)
 #
-# FUTURE - "Victoria and Albert" appears for imdb's "Victoria & Albert" (and -> &)
+# FIXED - "Victoria and Albert" appears for imdb's "Victoria & Albert" (and -> &)
 #
 # FUTURE - close hit could be just missing or extra
 #          punctuation:
@@ -22,9 +22,6 @@
 #       "Cherry, Harry and Raquel" for imdb's "Cherry, Harry and Raquel!"
 #       "Cat Women of the Moon" for imdb's "Cat-Women of the Moon"
 #       "Baywatch Hawaiian Wedding" for imdb's "Baywatch: Hawaiian Wedding" :)
-#
-# FUTURE - unless we go with case insensitive matches...
-#       "Cherry, Harry And Raquel!" won't match imdb's "Cherry, Harry and Raquel!"
 #
 # FUTURE "Columbo Cries Wolf" appears instead of "Columbo:Columbo Cries Wolf"
 #
@@ -59,6 +56,12 @@ sub new
     $self->{moviedbData}="$self->{imdbDir}/moviedb.dat";
     $self->{moviedbInfo}="$self->{imdbDir}/moviedb.info";
     $self->{moviedbOffline}="$self->{imdbDir}/moviedb.offline";
+    
+    # default is not to cache lookups
+    $self->{cacheLookups}=0 if ( !defined($self->{cacheLookups}) );
+    $self->{cacheLookupSize}=1000 if ( !defined($self->{cacheLookupSize}) );
+
+    $self->{cachedLookups}->{tv_series}->{_cacheSize_}=0;
 
     $self->{look_cmd}="look";
 
@@ -79,6 +82,9 @@ sub new
     $self->{stats}->{close}->{tv_movie}=0,
     $self->{stats}->{close}->{video_movie}=0,
     $self->{stats}->{close}->{video_game}=0,
+
+    $self->{stats}->{program}->{success}=0;
+    $self->{stats}->{program}->{failed}=0;
 
     $self->{stats}->{startTime}=time();
 
@@ -259,8 +265,10 @@ sub getStatsLines($$$$)
 		   $self->{stats}->{close}->{video_movie}+
 		   $self->{stats}->{close}->{video_game});
 
-    
     my $calcHitPercentage=($totalProgramsLookedUp!=0)?(($num_perfect+$num_close)*100)/$totalProgramsLookedUp:0;
+
+    my $tvshow_count=$self->{stats}->{program}->{success}+$self->{stats}->{program}->{failed};
+    my $tvshow_calcHitPercentage=($tvshow_count!=0)?($self->{stats}->{program}->{success}*100)/$tvshow_count:0;
 
     return(sprintf("Checked %d of the %d programs on %d channels in %d input files\n",
 		   $totalProgramsLookedUp, $totalProgramsParsed, $totalChannelsParsed, $totalFilesParsed).
@@ -268,7 +276,10 @@ sub getStatsLines($$$$)
 		   $totalProgramsLookedUp, $self->{stats}->{failed}, $num_perfect, $num_close).
 	   sprintf("  resulting in a %.2f%% hit percentage\n", $calcHitPercentage).
 	   sprintf("  parsed %.2f programs/sec and checked %.2f programs/sec\n",
-		   $calcProgramsPerSecondParsed, $calcProgramsPerSecondChecked));
+		   $calcProgramsPerSecondParsed, $calcProgramsPerSecondChecked).
+	   sprintf("Checked %d of the %d tv series, hot %.2f%% hit percentage for matches\n",
+		   $self->{stats}->{program}->{success}, $tvshow_count,
+		   $tvshow_calcHitPercentage));
 }
 
 # moviedbIndex file has the format:
@@ -440,253 +451,394 @@ sub getMovieIdDetails($$)
 #        <a name="poster"><img src="http://ia.imdb.com/media/imdb/01/I/60/69/80m.jpg" height="139" width="99" border="0"></a>
 #        and grabbin' out the img entry. (BTW ..../npa.jpg seems to line up with no poster available)
 #
-sub addMovieInfo($$$$)
+sub applyFound($$$)
 {
-    my ($self, $prog, $title, $year)=@_;
-    #my $prog=$$hash_ref;
+    my ($self, $prog, $idInfo)=@_;
 
-    # try an exact match first :)
-    my $idInfo;
+    my $title=$prog->{title}->[0]->[0];
 
-    my $res=$self->getMovieMatches($title, $year);
-    if ( defined($res) ) {
-	if ( defined($res->{exactMatch})) {
-	    $idInfo=$res->{exactMatch}[0];
-	    $self->status("perfect hit on \"$title ($year)\"");
-	    $self->{stats}->{perfect}->{$idInfo->{qualifier}}++;
-	}
-	elsif ( defined($res->{closeMatch}) ) {
-	    for my $info (@{$res->{closeMatch}}) {
-		next if ( !defined($info) );
-		print "test close \"$title\" eq \"$info->{title}\"\n";
-		if ( lc($title) eq lc($info->{title}) ) {
-		    if ( $info->{qualifier} eq "movie" ) {
-			$idInfo=$info;
-			$self->status("perfect hit on made-for-tv-movie \"$info->{key}\"");
-		    }
-		    elsif ( $info->{qualifier} eq "tv_movie" ) {
-			$idInfo=$info;
-			$self->status("perfect hit on made-for-tv-movie \"$info->{key}\"");
-		    }
-		    elsif ( $info->{qualifier} eq "video_movie" ) {
-			$idInfo=$info;
-			$self->status("perfect hit on made-for-video-movie \"$info->{key}\"");
-		    }
-		    elsif ( $info->{qualifier} eq "video_game" ) {
-			$self->status("ignoring perfect hit on video-game \"$info->{key}\"");
-			next;
-		    }
-		    elsif ( $info->{qualifier} eq "tv_series" ) {
-			$idInfo=$info;
-			$self->status("perfect hit on tv series \"$info->{key}\"");
-		    }
-		    elsif ( $info->{qualifier} eq "tv_mini_series" ) {
-			$idInfo=$info;
-			$self->status("perfect hit on tv mini-series \"$info->{key}\"");
-		    }
-		    else {
-			$self->error("$self->{moviedbIndex} responded with wierd entry for \"$info->{key}\"");
-			$self->error("weird trailing qualifier \"$info->{qualifier}\"");
-			$self->error("submit bug report to xmltv-devel\@lists.sf.net");
-		    }
-		    $self->{stats}->{perfect}->{$info->{qualifier}}++;
-		}
-	    }
+    if ( defined($prog->{date}) ) {
+	if ( $prog->{date} ne $idInfo->{year} ) {
+	    $self->status("updated 'date' field from \"$prog->{date}\" to be \"$idInfo->{year}\" on \"$title\"");
+	    $prog->{date}=int($idInfo->{year});
 	}
     }
-
-    if ( !defined($idInfo) ) {
-	$self->debug("no title/year hit on \"$title ($year)\"");
-    }
-
-    # try close hit if only one :)
-    if ( !defined($idInfo) ) {
-
-	my $cnt=0;
-	my @closeMatches=$self->getMovieCloseMatches("$title");
-	
-	# we traverse the hits twice, first looking for success,
-	# then again to produce warnings about missed close matches
-	for my $info (@closeMatches) {
-	    next if ( !defined($info) );
-	    $cnt++;
-
-	    # within one year with exact match good enough
-
-	    if ( lc($title) eq lc($info->{title}) ) {
-		my $yearsOff=abs(int($info->{year})-$year);
-		
-		if ( $yearsOff <= 2 ) {
-		    my $showYear=int($info->{year});
-
-		    if ( $info->{qualifier} eq "movie" ) {
-			$idInfo=$info; 
-			$self->status("close enough hit on movie \"$info->{key}\" (off by $yearsOff years)");
-		    }
-		    elsif ( $info->{qualifier} eq "tv_movie" ) {
-			$idInfo=$info; 
-			$self->status("close enough hit on made-for-tv-movie \"$info->{key}\" (off by $yearsOff years)");
-		    }
-		    elsif ( $info->{qualifier} eq "video_movie" ) {
-			$idInfo=$info;
-			$self->status("close enough hit on made-for-video-movie \"$info->{key}\" (off by $yearsOff years)");
-		    }
-		    elsif ( $info->{qualifier} eq "video_game" ) {
-			$self->status("ignoring perfect hit on video-game \"$info->{key}\"");
-			next;
-		    }
-		    elsif ( $info->{qualifier} eq "tv_series" ) {
-			$idInfo=$info;
-			$self->status("close enough hit on tv series \"$info->{key}\" (off by $yearsOff years)");
-		    }
-		    elsif ( $info->{qualifier} eq "tv_mini_series" ) {
-			$idInfo=$info;
-			$self->status("close enough hit on tv mini-series \"$info->{key}\" (off by $yearsOff years)");
-		    }
-		    else {
-			$self->error("$self->{moviedbIndex} responded with wierd entry for \"$info->{key}\"");
-			$self->error("weird trailing qualifier \"$info->{qualifier}\"");
-			$self->error("submit bug report to xmltv-devel\@lists.sf.net");
-		    }
-		    $self->{stats}->{close}->{$info->{qualifier}}++;
-		    last;
-		}
-	    }
-	}
-
-	# if we found at least something, but nothing matched
-	# produce warnings about missed, but close matches
-	if ( !defined($idInfo) && $cnt != 0 ) {
-	    for my $info (@closeMatches) {
-		next if ( !defined($info) );
-		$cnt++;
-
-		# within one year with exact match good enough
-		if ( lc($title) eq lc($info->{title}) ) {
-		    my $yearsOff=abs(int($info->{year})-$year);
-		    if ( $yearsOff <= 2 ) {
-			die "internal error: key \"$info->{key}\" failed to be processed properly";
-		    }
-		    elsif ( $yearsOff <= 5 ) {
-			# report these as status
-			$self->status("ignoring close, but not good enough hit on \"$info->{key}\" (off by $yearsOff years)");
-		    }
-		    else {
-			# report these as debug messages
-			$self->debug("ignoing close hit on \"$info->{key}\" (off by $yearsOff years)");
-		    }
-		}
-		else {
-		    $self->debug("ignoing close hit on \"$info->{key}\" (title did not match)");
-		}
-	    }
-	}
-
-	if ( $cnt == 0 ) {
-	    $self->debug("no close hits on \"$title\"");
-	}
-    }
-    
-    if ( defined($idInfo) ) {
-
-	if ( defined($prog->{date}) ) {
-	    if ( $prog->{date} ne $idInfo->{year} ) {
-		$self->status("updated 'date' field from \"$prog->{date}\" to be \"$idInfo->{year}\" on \"$title\"");
-		$prog->{date}=int($idInfo->{year});
-	    }
-	}
-	else {
+    else {
+	# don't add dates only fix them for tv_series
+	if ( $idInfo->{qualifier} ne "tv_series" ) {
 	    $self->status("added 'date' field (\"$idInfo->{year}\") on \"$title\"");
 	    $prog->{date}=int($idInfo->{year});
 	}
+    }
+    
+    if ( $idInfo->{title} ne $title ) {
+	$self->status("updated 'title' from \"$title\" to \"$idInfo->{title}\"");
+	$prog->{title}->[0]->[0]=$idInfo->{title};
+    }
 
-	my $title=$prog->{title}->[0]->[0];
-	if ( $idInfo->{title} ne $title ) {
-	    $self->status("updated 'title' from \"$title\" to \"$idInfo->{title}\"");
-	    $prog->{title}->[0]->[0]=$idInfo->{title};
-	}
+    my $categories={'movie'          =>'Movie',
+		    'tv_movie'       =>'TV Movie', # made for tv
+		    'video_movie'    =>'Video Movie', # went straight to video or was made for it
+		    'tv_series'      =>'TV Series',
+		    'tv_mini_series' =>'TV Mini Series'};
+    
+    my $mycategory=$categories->{$idInfo->{qualifier}};
+    die "how did we get here with an invalid qualifier '$idInfo->{qualifier}'" if (!defined($mycategory));
 
-	my $categories={'movie'          =>'Movie',
-			'tv_movie'       =>'TV Movie', # made for tv
-			'video_movie'    =>'Video Movie', # went straight to video or was made for it
-			'tv_series'      =>'TV Series',
-			'tv_mini_series' =>'TV Mini Series'};
+    # update/add category based on the type we matched from imdb.com
+    if ( defined($prog->{category}) ) {
 	
-	my $mycategory=$categories->{$idInfo->{qualifier}};
-	die "how did we get here with an invalid qualifier '$idInfo->{qualifier}'" if (!defined($mycategory));
-
-	# update/add category based on the type we matched from imdb.com
-	if ( defined($prog->{category}) ) {
-
-	    my $found=0;
-	    for my $value (@{$prog->{category}}) {
-		#print "checking category $value->[0] with $mycategory\n";
-		if ( $value->[0] eq $mycategory ) {
-		    $found=1;
-		}
-	    }
-	    if ( !$found ) {
-		push(@{$prog->{category}}, [$mycategory,undef]);
+	my $found=0;
+	for my $value (@{$prog->{category}}) {
+	    #print "checking category $value->[0] with $mycategory\n";
+	    if ( $value->[0] eq $mycategory ) {
+		$found=1;
 	    }
 	}
-	else {
+	if ( !$found ) {
 	    push(@{$prog->{category}}, [$mycategory,undef]);
 	}
-
-	my $details=$self->getMovieIdDetails($idInfo->{id});
-	if ( $details->{noDetails} ) {
-	    $self->{stats}->{success}++;
-	}
-	else {
-	    # add url to programme on www.imdb.com
-	    my $url=$title;
-	    $url=~s/([^a-zA-Z0-9_.-])/uc sprintf("%%%02x",ord($1))/oeg;
-	    $url="http://www.imdb.com/Title?".$url;
-	    if ( defined($prog->{url}) ) {
-		my @rep;
-		my $updated=0;
-		for (@{$prog->{url}}) {
-		    #print "checking existing url $_\n";
-		    if ( m;^http://www.imdb.com/Title;o ) {
-			if ( $_ ne $url && !$updated ) {
-			    $self->status("updated www.imdb.com url on movie \"$idInfo->{key}\"");
-			    $updated=1;
-			    push(@rep, $url);
-			}
-		    }
-		    else {
-			push(@rep, $_);
+    }
+    else {
+	push(@{$prog->{category}}, [$mycategory,undef]);
+    }
+    
+    my $details=$self->getMovieIdDetails($idInfo->{id});
+    if ( $details->{noDetails} ) {
+	# we don't have any details on this movie
+    }
+    else {
+	# add url to programme on www.imdb.com
+	my $url=$title;
+	$url=~s/([^a-zA-Z0-9_.-])/uc sprintf("%%%02x",ord($1))/oeg;
+	$url="http://www.imdb.com/Title?".$url;
+	if ( defined($prog->{url}) ) {
+	    my @rep;
+	    my $updated=0;
+	    for (@{$prog->{url}}) {
+		#print "checking existing url $_\n";
+		if ( m;^http://www.imdb.com/Title;o ) {
+		    if ( $_ ne $url && !$updated ) {
+			$self->status("updated www.imdb.com url on movie \"$idInfo->{key}\"");
+			$updated=1;
+			push(@rep, $url);
 		    }
 		}
-		push(@rep, $url) if ( $updated == 0 );
-		$prog->{url}=\@rep;
+		else {
+		    push(@rep, $_);
+		}
 	    }
-	    else {
-		push(@{$prog->{url}}, $url);
-	    }
+	    push(@rep, $url) if ( $updated == 0 );
+	    $prog->{url}=\@rep;
+	}
+	else {
+	    push(@{$prog->{url}}, $url);
+	}
 	    
-	    # add directors list form www.imdb.com
-	    if ( defined($details->{directors}) ) {
+	# add directors list form www.imdb.com
+	if ( defined($details->{directors}) ) {
+	    # don't add directors for tv_series unless we have EXACTLY ONE director
+	    if ( $idInfo->{qualifier} ne "tv_series" ||
+		 scalar(@{$details->{directors}}) == 1 ) {
 		delete($prog->{credits}->{director});
 		for my $name (@{$details->{directors}}) {
 		    push(@{$prog->{credits}->{director}}, $name);
 		}
 	    }
-	    # add top 3 billing actors list form www.imdb.com
-	    if ( defined($details->{actors}) ) {
-		delete($prog->{credits}->{actor});
-		for my $name (splice(@{$details->{actors}},0,3)) {
-		    push(@{$prog->{credits}->{actor}}, $name);
+	}
+	# add top 3 billing actors list form www.imdb.com
+	if ( defined($details->{actors}) ) {
+	    delete($prog->{credits}->{actor});
+	    for my $name (splice(@{$details->{actors}},0,3)) {
+		push(@{$prog->{credits}->{actor}}, $name);
+	    }
+	}
+    }
+    return($prog);
+}
+
+sub alternativeTitles($)
+{
+    my $title=shift;
+    my @titles;
+
+    push(@titles, $title);
+    if ( $title=~m/\&/o ) {
+	my $t=$title;
+	while ( $t=~s/(\s)\&(\s)/$1and$2/o ) {
+	    push(@titles, $t);
+	}
+    }
+    if ( $title=~m/\sand\s/io ) {
+	my $t=$title;
+	while ( $t=~s/(\s)and(\s)/$1\&$2/io ) {
+	    push(@titles, $t);
+	}
+    }
+    # common english to french e changes
+    # only going one way, french title of english movie :)
+    if ( $title=~m/é/io ) {
+	my $t=$title;
+	while ( $t=~s/é/e/io ) {
+	    push(@titles, $t);
+	}
+    }
+    return(\@titles);
+}
+
+sub addMovieInfo($$$$)
+{
+    my ($self, $prog, $title, $year)=@_;
+
+    my @titles=@{alternativeTitles($title)};
+	
+    # try an exact match first :)
+    my $idInfo;
+
+    for my $mytitle ( @titles ) {
+	my $res=$self->getMovieMatches($mytitle, $year);
+	if ( defined($res) ) {
+	    if ( defined($res->{exactMatch})) {
+		$idInfo=$res->{exactMatch}[0];
+		$self->status("perfect hit on \"$mytitle ($year)\"");
+		$self->{stats}->{perfect}->{$idInfo->{qualifier}}++;
+	    }
+	    elsif ( defined($res->{closeMatch}) ) {
+		for my $info (@{$res->{closeMatch}}) {
+		    next if ( !defined($info) );
+		    print "test close \"$mytitle\" eq \"$info->{title}\"\n";
+		    if ( lc($mytitle) eq lc($info->{title}) ) {
+			if ( $info->{qualifier} eq "movie" ) {
+			    $idInfo=$info;
+			    $self->status("perfect hit on made-for-tv-movie \"$info->{key}\"");
+			}
+			elsif ( $info->{qualifier} eq "tv_movie" ) {
+			    $idInfo=$info;
+			    $self->status("perfect hit on made-for-tv-movie \"$info->{key}\"");
+			}
+			elsif ( $info->{qualifier} eq "video_movie" ) {
+			    $idInfo=$info;
+			    $self->status("perfect hit on made-for-video-movie \"$info->{key}\"");
+			}
+			elsif ( $info->{qualifier} eq "video_game" ) {
+			    $self->status("ignoring perfect hit on video-game \"$info->{key}\"");
+			}
+			elsif ( $info->{qualifier} eq "tv_series" ) {
+			    $idInfo=$info;
+			    $self->status("perfect hit on tv series \"$info->{key}\"");
+			}
+			elsif ( $info->{qualifier} eq "tv_mini_series" ) {
+			    $idInfo=$info;
+			    $self->status("perfect hit on tv mini-series \"$info->{key}\"");
+			}
+			else {
+			    $self->error("$self->{moviedbIndex} responded with wierd entry for \"$info->{key}\"");
+			    $self->error("weird trailing qualifier \"$info->{qualifier}\"");
+			    $self->error("submit bug report to xmltv-devel\@lists.sf.net");
+			}
+			if ( defined($idInfo) ) {
+			    $self->{stats}->{perfect}->{$info->{qualifier}}++;
+			}
+		    }
 		}
 	    }
-	    $self->{stats}->{success}++;
 	}
-	return($prog);
+	
+	if ( !defined($idInfo) ) {
+	    $self->debug("no title/year hit on \"$mytitle ($year)\"");
+	}
+	
+	# try close hit if only one :)
+	if ( !defined($idInfo) ) {
+	    my $cnt=0;
+	    my @closeMatches=$self->getMovieCloseMatches("$mytitle");
+	    
+	    # we traverse the hits twice, first looking for success,
+	    # then again to produce warnings about missed close matches
+	    for my $info (@closeMatches) {
+		next if ( !defined($info) );
+		$cnt++;
+		
+		# within one year with exact match good enough
+		
+		if ( lc($mytitle) eq lc($info->{title}) ) {
+		    my $yearsOff=abs(int($info->{year})-$year);
+		    
+		    if ( $yearsOff <= 2 ) {
+			my $showYear=int($info->{year});
+			
+			if ( $info->{qualifier} eq "movie" ) {
+			    $idInfo=$info; 
+			    $self->status("close enough hit on movie \"$info->{key}\" (off by $yearsOff years)");
+			}
+			elsif ( $info->{qualifier} eq "tv_movie" ) {
+			    $idInfo=$info; 
+			    $self->status("close enough hit on made-for-tv-movie \"$info->{key}\" (off by $yearsOff years)");
+			}
+			elsif ( $info->{qualifier} eq "video_movie" ) {
+			    $idInfo=$info;
+			    $self->status("close enough hit on made-for-video-movie \"$info->{key}\" (off by $yearsOff years)");
+			}
+			elsif ( $info->{qualifier} eq "video_game" ) {
+			    $self->status("ignoring close hit on video-game \"$info->{key}\"");
+			}
+			elsif ( $info->{qualifier} eq "tv_series" ) {
+			    $idInfo=$info;
+			    $self->status("close enough hit on tv series \"$info->{key}\" (off by $yearsOff years)");
+			}
+			elsif ( $info->{qualifier} eq "tv_mini_series" ) {
+			    $idInfo=$info;
+			    $self->status("close enough hit on tv mini-series \"$info->{key}\" (off by $yearsOff years)");
+			}
+			else {
+			    $self->error("$self->{moviedbIndex} responded with wierd entry for \"$info->{key}\"");
+			    $self->error("weird trailing qualifier \"$info->{qualifier}\"");
+			    $self->error("submit bug report to xmltv-devel\@lists.sf.net");
+			}
+			if ( defined($idInfo) ) {
+			    $self->{stats}->{close}->{$info->{qualifier}}++;
+			    last;
+			}
+		    }
+		}
+	    }
+	    
+	    # if we found at least something, but nothing matched
+	    # produce warnings about missed, but close matches
+	    if ( !defined($idInfo) && $cnt != 0 ) {
+		for my $info (@closeMatches) {
+		    next if ( !defined($info) );
+		    $cnt++;
+		    
+		    # within one year with exact match good enough
+		    if ( lc($mytitle) eq lc($info->{title}) ) {
+			my $yearsOff=abs(int($info->{year})-$year);
+			if ( $yearsOff <= 2 ) {
+			    die "internal error: key \"$info->{key}\" failed to be processed properly";
+			}
+			elsif ( $yearsOff <= 5 ) {
+			    # report these as status
+			    $self->status("ignoring close, but not good enough hit on \"$info->{key}\" (off by $yearsOff years)");
+			}
+			else {
+			    # report these as debug messages
+			    $self->debug("ignoing close hit on \"$info->{key}\" (off by $yearsOff years)");
+			}
+		    }
+		    else {
+			$self->debug("ignoing close hit on \"$info->{key}\" (title did not match)");
+		    }
+		}
+	    }
+	    
+	    if ( $cnt == 0 ) {
+		$self->debug("no close hits on \"$mytitle\"");
+	    }
+	}
+	if ( defined($idInfo) ) {
+	    last;
+	}
+    }
+
+    if ( defined($idInfo) ) {
+	$self->{stats}->{success}++;
+	return($self->applyFound($prog, $idInfo));
     }
     $self->{stats}->{failed}++;
     $self->status("failed to lookup \"$title ($year)\"");
     
-    return($prog);
+    return(undef);
+}
+
+sub addTVSeriesInfo($$$)
+{
+    my ($self, $prog, $title)=@_;
+    #my $prog=$$hash_ref;
+
+    if ( $self->{cacheLookups} ) {
+	my $id=$self->{cachedLookups}->{tv_series}->{$title};
+
+	if ( defined($id) ) {
+	    #print STDERR "REF= (".ref($id).")\n";
+	    if ( $id ne '' ) {
+		$self->{stats}->{program}->{success}++;
+		return($self->applyFound($prog, $id));
+	    }
+	    $self->{stats}->{program}->{failure}++;
+	    return(undef);
+	}
+    }
+
+    my @titles=@{alternativeTitles($title)};
+
+    # try an exact match first :)
+    my $idInfo;
+
+    for my $mytitle ( @titles ) {
+	# try close hit if only one :)
+	my $cnt=0;
+	my @closeMatches=$self->getMovieCloseMatches("$mytitle");
+	
+	for my $info (@closeMatches) {
+	    next if ( !defined($info) );
+	    $cnt++;
+	    
+	    if ( lc($mytitle) eq lc($info->{title}) ) {
+		
+		if ( $info->{qualifier} eq "movie" ) {
+		    #$self->status("ignoring close hit on movie \"$info->{key}\"");
+		}
+		elsif ( $info->{qualifier} eq "tv_movie" ) {
+		    #$self->status("ignoring close hit on tv movie \"$info->{key}\"");
+		}
+		elsif ( $info->{qualifier} eq "video_movie" ) {
+		    #$self->status("ignoring close hit on made-for-video-movie \"$info->{key}\"");
+		}
+		elsif ( $info->{qualifier} eq "video_game" ) {
+		    #$self->status("ignoring close hit on made-for-video-movie \"$info->{key}\"");
+		}
+		elsif ( $info->{qualifier} eq "tv_series" ) {
+		    $idInfo=$info;
+		    $self->status("perfect hit on tv series \"$info->{key}\"");
+		}
+		elsif ( $info->{qualifier} eq "tv_mini_series" ) {
+		    #$self->status("ignoring close hit on tv mini-series \"$info->{key}\"");
+		}
+		else {
+		    $self->error("$self->{moviedbIndex} responded with wierd entry for \"$info->{key}\"");
+		    $self->error("weird trailing qualifier \"$info->{qualifier}\"");
+		    $self->error("submit bug report to xmltv-devel\@lists.sf.net");
+		}
+		last if ( defined($idInfo) );
+	    }
+	}
+	last if ( defined($idInfo) );
+    }
+	
+    if ( $self->{cacheLookups} ) {
+	# flush cache after this lookup if its gotten too big
+	if ( $self->{cachedLookups}->{tv_series}->{_cacheSize_} > 
+	     $self->{cacheLookupSize} ) {
+	    delete($self->{cachedLookups}->{tv_series});
+	    $self->{cachedLookups}->{tv_series}->{_cacheSize_}=0;
+	}
+	if ( defined($idInfo) ) {
+	    $self->{cachedLookups}->{tv_series}->{$title}=$idInfo;
+	}
+	else {
+	    $self->{cachedLookups}->{tv_series}->{$title}="";
+	}
+	$self->{cachedLookups}->{tv_series}->{_cacheSize_}++;
+    }
+    if ( defined($idInfo) ) {
+	$self->{stats}->{program}->{success}++;
+	return($self->applyFound($prog, $idInfo));
+    }
+    else {
+	$self->{stats}->{program}->{failed}++;
+	$self->status("failed to lookup tv series \"$title\"");
+	return(undef);
+    }
 }
 
 1;
