@@ -1,9 +1,6 @@
-#
-# $Id$
-#
 # Routines for reading and writing XMLTV files from Perl.
 #
-# See release notes and/or cvs logs entries for module history
+# $Id$
 #
 
 package XMLTV;
@@ -12,14 +9,14 @@ use XML::DOM;
 use XML::Writer;
 use Log::TraceMessages qw(t d);
 use Date::Manip;
-use UK_TZ;
+use XMLTV::UK_TZ;
 use Memoize;
 use Lingua::Preferred qw(which_lang);
 use Carp;
 
 use base 'Exporter'; use vars qw(@EXPORT @EXPORT_OK);
-@EXPORT = qw(read_data write_data);
-@EXPORT_OK = qw(best_name list_programme_keys);
+@EXPORT = ();
+@EXPORT_OK = qw(best_name list_programme_keys read_data write_data);
 
 # Handlers for different subelements of programme.  First value is the
 # name of the element, second is a subroutine which turns the DOM node
