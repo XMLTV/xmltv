@@ -534,6 +534,23 @@ sub dumpMe($)
     return $d;
 }
 
+sub setValue($$$$)
+{
+    my ($self, $hash_ref, $key, $value)=@_;
+    my $hash=$$hash_ref;
+    
+    if ( $self->{Debug} ) {
+	if ( defined($hash->{$key}) ) {
+	    print STDERR "replaced value '$key' from '$hash->{$key}' to '$value'\n";
+	}
+	else {
+	    print STDERR "set value '$key' to '$value'\n";
+	}
+    }
+    $hash->{$key}=$value;
+    return($hash)
+}
+
 #
 # scraping html, here's the theory behind this madness.
 # 
@@ -572,6 +589,23 @@ sub dumpMe($)
 sub scrapehtml($$$)
 {
     my ($self, $html, $htmlsource)=@_;
+
+    # declare known languages here so we can more precisely identify
+    # them in program details
+    my @knownLanguages=( 
+			 "Arabic",
+			 "Chinese",
+			 "Cree",
+			 "English",
+			 "French",
+			 "Greek",
+			 "Hindi",
+			 "Inuktitut",
+			 "Inuvialuktun",
+			 "Japanese",
+			 "Korean",
+			 "Ukrainian",
+			 );
 
     my $rowNumber=0;
     $html=~s/<TR/<tr/og;
@@ -623,25 +657,30 @@ sub scrapehtml($$$)
 	my $prog;
 	print STDERR "ROW: $rowNumber: $desc\n" if ( $self->{Debug} );
 	if ( $desc=~s;^<td><b><text>([0-9]+):([0-9][0-9]) ([AP]M)</text></b></td><td></td>;;io ) {
-	    my $posted_start_hour=$1;
-	    $prog->{start_hour}=$1;
-	    $prog->{start_min}=$2;
+	    my $posted_start_hour=scalar($1);
+	    my $posted_start_min=scalar($2);
 	    my $pm=($3=~m/^p/io); #PM
 
+	    $prog=$self->setValue(\$prog, "start_hour", $posted_start_hour);
+	    $prog=$self->setValue(\$prog, "start_min", $posted_start_min);
+
 	    if ( $pm && $prog->{start_hour} != 12 ) {
-		$prog->{start_hour}+=12;
+		$self->setValue(\$prog, "start_hour", $prog->{start_hour}+12);
 	    }
 	    elsif ( !$pm && $prog->{start_hour} == 12 ) {
 		# convert 24 hour clock ( 12:??AM to 0:??AM )
-		$prog->{start_hour}=0;
+		$self->setValue(\$prog, "start_hour", 0);
 	    }
 
 	    if ( $desc=~s;<font><text>(.*?)\s*\(ends at ([0-9]+):([0-9][0-9])\)(.*?)</text></td>$;;io ||
 		 $desc=~s;<font><text>(.*?)\s*\(ends at ([0-9]+):([0-9][0-9])\)\&nbsp\;(.*?)</text><br><a><img></a></td>$;;io){
-		$prog->{end_hour}=scalar($2);
-		$prog->{end_min}=$3;
 		my $preRest=$1;
+		my $posted_end_hour=$2;
+		my $posted_end_min=$3;
 		my $postRest=$4;
+
+		$self->setValue(\$prog, "end_hour", scalar($2));
+		$self->setValue(\$prog, "end_min", $3);
 
 		if ( defined($postRest) && length($postRest) ) {
 		    $postRest=~s/^\&nbsp\;//o;
@@ -651,11 +690,21 @@ sub scrapehtml($$$)
 		}
 
 		if ( defined($preRest) && length($preRest) ) {
+		    #if ( $self->{Debug} ) {
+			#print STDERR "prereset: $preRest\n";
+		    #}
 		    if ( $preRest=~s;\s*(\*+)\s*$;; ) {
-			$prog->{prog_stars_rating}=sprintf("%d.0", length($preRest));
+			$self->setValue(\$prog, "star_rating", sprintf("%d/4", length($1)));
 		    }
-		    if ( $preRest=~s;\s*(\*+) 1/2\s*$;; ) {
-			$prog->{prog_stars_rating}=sprintf("%d.5", length($preRest));
+		    elsif ( $preRest=~s;\s*(\*+)\s*1/2\s*$;; ) {
+			$self->setValue(\$prog, "star_rating", sprintf("%d.5/4", length($1)));
+		    }
+		    else {
+			if ( $self->{Debug} ) {
+		           print STDERR "FAILED to decode what we think should be star ratings\n";
+		           print STDERR "\tsource: $htmlsource\n";
+		           print STDERR "\tdecode failed on:'$preRest'\n"
+			}
 		    }
 		}
 		if ( length($preRest) || length($postRest) ) {
@@ -671,6 +720,9 @@ sub scrapehtml($$$)
 		    }
 		    # put back reset of the text since sometime the (ends at xx:xx) is tacked on
 		    $desc.="</text></td>";
+		    if ( $self->{Debug} ) {
+			print STDERR "put back details, now have '$desc'\n";
+		    }
 		}
 	    }
 	    else {
@@ -683,24 +735,24 @@ sub scrapehtml($$$)
 		# anytime end hour is < start hour, end hour is next morning
 		# posted start time is 12 am and end hour is also 12 then adjust
 		if ( $prog->{start_hour} == 0 && $prog->{end_hour}==12 ) {
-		    $prog->{end_hour}=0;
+		    $self->setValue(\$prog, "end_hour", 0);
 		}
 		# prog starting after 6 with posted start > end hour
 		elsif ( $prog->{start_hour} > 18 && $posted_start_hour > $prog->{end_hour} ) {
-		    $prog->{end_hour}=$prog->{end_hour}+24;
+		    $self->setValue(\$prog, "end_hour", $prog->{end_hour}+24);
 		}
 		# prog started in pm and ended at 12 (assume am)
 		elsif ( $pm && $prog->{end_hour} == 12 ) {
-		    $prog->{end_hour}+=12;
+		    $self->setValue(\$prog, "end_hour", $prog->{end_hour}+12);
 		}
 		# if started in pm, then assume end hour needs adjustment to 24 hr clock
 		elsif ( $pm ) {
-		    $prog->{end_hour}+=12;
+		    $self->setValue(\$prog, "end_hour", $prog->{end_hour}+12);
 		}
 	    }
 
 	    if ( $desc=~s;<b><a><text>\s*(.*?)\s*</text></a></b>;;io ) {
-		$prog->{title}=massageText($1);
+		$self->setValue(\$prog, "title", massageText($1));
 	    }
 	    else {
 		if ( $self->{Debug} ) {
@@ -711,7 +763,7 @@ sub scrapehtml($$$)
 	    }
 	    # <i><text>&quot;</text><a><text>Past Imperfect</text></a><text>&quot;</text></i>
 	    if ( $desc=~s;<text> </text><i><text>&quot\;</text><a><text>\s*(.*?)\s*</text></a><text>&quot\;</text></i>;;io ) {
-		$prog->{subtitle}=massageText($1);
+		$self->setValue(\$prog, "subtitle", massageText($1));
 	    }
 	    else {
 		if ( $self->{Debug} ) {
@@ -742,15 +794,44 @@ sub scrapehtml($$$)
 	    while ($desc=~s;<text>\s*(.*?)\s*</text>;;io ) {
 		push(@extras, massageText($1)); #if ( length($1) );
 	    }
-
-	    for (my $e=0 ; $e<scalar(@extras) ; $e++) {
-		my $extra=$extras[$e];
+	    if ( $self->{Debug} ) {
+		print STDERR "POSTEXTRA: $desc\n";
+	    }
+	    my @leftExtras;
+	    for my $extra (reverse(@extras)) {
+		my $original_extra=$extra;
 
 		my $result;
+		my $resultSure;
 		my $success=1;
 		my @okay;
-		my @failed;
-		for my $i (split(/\s+/, $extra)) {
+		my @sure;
+		my @backup;
+		print STDERR "splitting details '$extra'..\n" if ( $self->{Debug} );
+		my @values;
+		while ( 1 ) {
+		    my $i;
+		    if ( defined($extra) ) {
+			if ( $extra=~m/\)$/o ) {
+			    $extra=~s/\s*(\([^\)]+\))\s*//o;
+			    $i=$1;
+			}
+			else {
+			    @values=reverse(split(/\s+/, $extra));
+			    $extra=undef;
+			    $i=pop(@values);
+			}
+		    }
+		    else {
+			if ( scalar(@values) == 0 ) {
+			    last;
+			}
+			$i=pop(@values);
+		    }
+		    last if ( !defined($i) );
+
+		    print STDERR "checking detail $i..\n" if ( $self->{Debug} );
+
 		    #
 		    # www.tvguidelines.org and http://www.fcc.gov/vchip/
 		    if ( $i=~m/^TV(Y)$/oi ||
@@ -760,8 +841,8 @@ sub scrapehtml($$$)
 			 $i=~m/^TV(14)$/oi ||
 			 $i=~m/^TV(M)$/oi ||
 			 $i=~m/^TV(MA)$/oi ) {
-			$result->{prog_ratings_VCHIP}="$1";
-			push(@okay, $i);
+			$resultSure->{ratings_VCHIP}="$1";
+			push(@sure, $i);
 			next;
 		    }
 		    # www.filmratings.com
@@ -777,60 +858,151 @@ sub scrapehtml($$$)
 			    $i=~m/^Rated (R)$/oi ||
 			    $i=~m/^Rated (NC-17)$/oi ||
 			    $i=~m/^Rated (NR)$/oi ) {
-			$result->{prog_ratings_MPAA}="$1";
-			push(@okay, $i);
+			$resultSure->{ratings_MPAA}="$1";
+			push(@sure, $i);
 			next;
 		    }
-		    elsif ( $i=~/^AO$/io ) {
-			# don't understand what this is, but it sometimes appears
-			print STDERR "acknowledging unknown detail: $i\n" if ( $self->{Debug}) ;
-			push(@okay, $i);
+		    # ESRB ratings http://www.esrb.org/esrb_about.asp
+		    elsif ( $i=~/^(AO)$/io || #adults only
+			    $i=~/^(EC)$/io || #early childhood
+			    $i=~/^(K-A)$/io || # kids to adults
+			    $i=~/^(KA)$/io || # kids to adults
+			    $i=~/^(E)$/io || #everyone
+			    $i=~/^(T)$/io || #teens
+			    $i=~/^(M)$/io  #mature
+			    ) {
+			$resultSure->{ratings_ESRB}="$1";
+			# remove dashes :)
+			$resultSure->{ratings_ESRB}=~s/\-//o;
+			push(@sure, $i);
 			next;
 		    }
 		    elsif ( $i=~/^\d\d\d\d$/io ) {
-			$result->{prog_year}=$i;
+			$result->{year}=$i;
 			push(@okay, $i);
+			push(@backup, $i);
 			next;
 		    }
 		    elsif ( $i=~/^CC$/io ) {
-			$result->{prog_qualifiers}->{ClosedCaptioned}++;
-			push(@okay, $i);
+			$resultSure->{qualifiers}->{ClosedCaptioned}++;
+			push(@sure, $i);
 			next;
 		    }
 		    elsif ( $i=~/^Stereo$/io ) {
-			$result->{prog_qualifiers}->{InStereo}++;
-			push(@okay, $i);
+			$resultSure->{qualifiers}->{InStereo}++;
+			push(@sure, $i);
 			next;
 		    }
 		    elsif ( $i=~/^\(Repeat\)$/io ) {
-			$result->{prog_qualifiers}->{PreviouslyShown}++;
-			push(@okay, $i);
+			$resultSure->{qualifiers}->{PreviouslyShown}++;
+			push(@sure, $i);
 			next;
 		    }
 		    elsif ( $i=~/^\(Taped\)$/io ) {
-			$result->{prog_qualifiers}->{Taped}++;
-			push(@okay, $i);
+			$resultSure->{qualifiers}->{Taped}++;
+			push(@sure, $i);
 			next;
 		    }
 		    elsif ( $i=~/^\(Live\)$/io ) {
-			$result->{prog_qualifiers}->{Live}++;
-			push(@okay, $i);
+			$resultSure->{qualifiers}->{Live}++;
+			push(@sure, $i);
 			next;
 		    }
+		    elsif ( $i=~/^\(Call-in\)$/io ) {
+			$resultSure->{qualifiers}->{CallIn}++;
+			push(@sure, $i);
+			next;
+		    }
+		    # French with English subtitles
+		    elsif ( $i=~/^\(([a-zA-Z]+) with ([a-zA-Z]+) subtitles\)$/io ) {
+			my $lang=$1;
+			my $sub=$2;
+
+			my $found1=0;
+			my $found2=0;
+			for my $k (@knownLanguages) {
+			    $found1++ if ( $k eq $lang );
+			    $found2++ if ( $k eq $sub );
+			}
+
+			if ( ! $found1 ) {
+			    print STDERR "identified possible canidate for new language $lang in ($lang with $sub subtitles)\n";
+			}
+			if ( ! $found2 ) {
+			    print STDERR "identified possible canidate for new language $sub in ($lang with $sub subtitles)\n";
+			}
+			$resultSure->{qualifiers}->{Language}=$lang;
+			$resultSure->{qualifiers}->{Subtitles}->{Language}=$sub;
+		    }
+		    #
+		    # lanuages added as we see them.
+		    #
 		    else {
-			$success=0;
-			push(@failed, $i);
+			my $localmatch=0;
+			# English/French
+			if ( $i=~/^\(([a-zA-Z]+)\/([a-zA-Z]+)\)$/io ) {
+			    my $lang=$1;
+			    my $sub=$2;
+			    
+			    my $found1=0;
+			    my $found2=0;
+			    for my $k (@knownLanguages) {
+				$found1++ if ( $k eq $lang );
+				$found2++ if ( $k eq $sub );
+			    }
+			    
+			    if ( ! $found1 ) {
+				print STDERR "identified possible canidate for new language $lang in ($lang/$sub)\n";
+			    }
+			    if ( ! $found2 ) {
+				print STDERR "identified possible canidate for new language $sub in ($lang/$sub)\n";
+			    }
+			    if ( $found1 && $found2 ) {
+				$resultSure->{qualifiers}->{Language}=$lang;
+				$resultSure->{qualifiers}->{Subtitles}->{Language}=$sub;
+				$localmatch++;
+			    }
+			}
+			if ( ! $localmatch ) {
+			    # check for known languages 
+			    my $found;
+			    for my $k (@knownLanguages) {
+				if ( $i=~/^\($k\)$/i ) {
+				    $found=$k;
+				    last;
+				}
+			    }
+			    if ( defined($found) ) {
+				$resultSure->{qualifiers}->{Language}=$found;
+				push(@sure, $i);
+				next;
+			    }
+			    
+			    if ( $i=~/^\(/o && $i=~/\)$/o ) {
+				print STDERR "possible canidate for program detail we didn't identify $i\n";
+			    }
+			    
+			    $success=0;
+			    push(@backup, $i);
+			}
 		    }
 		}
+		
+		# always copy the ones we're sure about
+		for (keys %$resultSure) {
+		    $self->setValue(\$prog, $_, $resultSure->{$_});
+		}
 		if ( !$success ) {
-		    if ( scalar(@okay) > 0 ) {
+		    if ( @okay || @sure ) {
 			print STDERR "\thtml:'$desc'\n";
-			print STDERR "\tpartial match on details '$extra'\n";
-			print STDERR "\tmatched  :". join(',', @okay)."\n";
-			print STDERR "\tunmatched:". join(',', @failed)."\n";
+			print STDERR "\tpartial match on details '$original_extra'\n";
+			print STDERR "\tsure about:". join(',', @sure)."\n" if ( @sure );
+			print STDERR "\tmatched   :". join(',', @okay)."\n" if ( @okay );
+			push(@leftExtras, join(' ', @backup));
 		    }
 		    else {
-			print STDERR "\tno match on details '$extra'\n" if ( $self->{Debug} );
+			print STDERR "\tno match on details '$original_extra'\n" if ( $self->{Debug} );
+			push(@leftExtras, $original_extra);;
 		    }
 		}
 		else {
@@ -838,22 +1010,22 @@ sub scrapehtml($$$)
 		    # incorporate the results, partial results are dismissed
 		    # then entire thing must parse into known qualifiers
 		    for (keys %$result) {
-			$prog->{$_}=$result->{$_};
+			$self->setValue(\$prog, $_, $result->{$_});
 		    }
-		    splice(@extras, $e,1);
 		}
 	    }
 
 	    # what ever is left is only allowed to be the description
 	    # but there must be only one.
-	    if ( @extras ) {
-		if ( scalar(@extras) != 1 ) {
-		    for (@extras) {
+	    if ( @leftExtras ) {
+		if ( scalar(@leftExtras) != 1 ) {
+		    for (@leftExtras) {
 			print STDERR "scraper failed with left over details: $_\n";
 		    }
 		}
 		else {
-		    $prog->{desc}=pop(@extras);
+		    $self->setValue(\$prog, "desc", pop(@leftExtras));
+		    print STDERR "assuming description '$prog->{desc}'\n" if ( $self->{Debug} );
 		}
 	    }
 

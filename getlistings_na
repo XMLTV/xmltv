@@ -122,9 +122,6 @@ sub load($$)
 		return(-1);
 	    }
 	}
-	elsif ( m/^#/o ) {
-	    next;
-	}
 	elsif ( m/^postal code:\s*([^\s]+)$/o ) {
 	    $self->setValue("option_postalcode", $1);
 	}
@@ -135,13 +132,16 @@ sub load($$)
 	    $self->setValue("option_provider", $1);
 	    $self->setValue("option_provider_desc", $2);
 	}
-	elsif ( m/^\#channel:\s*([^\s]+)\s+\#\s+(.*)$/o ) {
+	elsif ( m/^\#+channel:\s*([^\s]+)\s+\#\s+(.*)$/o ) {
 	    $self->{channels}->{$1}->{in}=0;
 	    $self->{channels}->{$1}->{description}=$2;
 	}
 	elsif ( m/^channel:\s*([^\s]+)\s+\#\s+(.*)$/o ) {
 	    $self->{channels}->{$1}->{in}=1;
 	    $self->{channels}->{$1}->{description}=$2;
+	}
+	elsif ( m/^#/o ) {
+	    next;
 	}
 	elsif ( m/^\s*$/o ) {
 	    # ignore empty lines
@@ -165,6 +165,8 @@ sub load($$)
 
 package main;
 
+use strict;
+use diagnostics;
 use Fcntl qw(:DEFAULT);
 use XML::Writer;
 use IO;
@@ -271,6 +273,7 @@ my $configure=0;
 if ( @ARGV ) {
     foreach my $arg (@ARGV) {
 	$configure=1 if ( $arg=~m/^--configure/o );
+        if ( $arg=~m/^--debug/o ) { $SIG{__WARN__} = sub { die $_[0] }; }
     }
 }
 
@@ -668,7 +671,7 @@ sub grab
 	foreach my $channel (@channels) {
 	    my $station=$channel->{station};
 	    if ( defined($config->{channels}) ) {
-		if ( $config->{channels}->{$station} ) {
+		if ( defined($config->{channels}->{$station}) ) {
 		    $config->{channels}->{$station}->{found}=1;
 		    
 		    # update description
@@ -683,11 +686,11 @@ sub grab
 		    }
 		}
 		else {
-		    print STDERR "Noticed new station available ($station \#".$channel->{description}."), re-run --configure:\n";
+		    print STDERR "Noticed new station available ($station \#".$channel->{description}."), re-run --configure\n";
 		}
 	    }
 	    else {
-		print STDERR "Noticed new station available ($station \#".$channel->{description}."), re-run --configure:\n";
+		print STDERR "Noticed new station available ($station \#".$channel->{description}."), re-run --configure\n";
 	    }
 	}
 
@@ -698,6 +701,7 @@ sub grab
 	    }
 	    else {
 		print STDERR "Noticed station unavailable ($station \#".$config->{channels}->{$station}->{description}."), re-run --configure:\n";
+		$config->{channels}->{$station}->{notavailable}=1;
 	    }
 	}
     }
@@ -798,6 +802,11 @@ sub grab
 	    
 	    next if ( !$config->{channels}->{$station}->{in} );
 	    
+	    if ( defined($config->{channels}->{$station}->{notavailable}) ) {
+		print STDERR "skipping unavailable channel ".$config->{channels}->{$station}->{description}."\n";
+		next;
+	    }
+
 	    my ($year,$month,$day,$hr,$min,$sec)=Date::Manip::Date_NthDayOfYear($y, $startNDay+$nday);
 	    
 	    if ( $lg->readSchedule($station, 
@@ -974,6 +983,9 @@ sub writeOutPrograms($$$$$$)
 	    if ( defined($prog->{qualifiers}->{Live}) ) {
 		# nowhere to put this
 	    }
+	    if ( defined($prog->{qualifiers}->{CallIn}) ) {
+		# nowhere to put this
+	    }
 	    if ( defined($prog->{qualifiers}->{Animated}) ) {
 		# nowhere to put this 
 	    }
@@ -991,7 +1003,7 @@ sub writeOutPrograms($$$$$$)
 		$writer->endTag('audio');
 	    }
 	    if ( defined($prog->{qualifiers}->{PreviouslyShown}) ) {
-		$writer->dataElement('previously-shown');
+		$writer->dataElement('previously-shown','');
 	    }
 	    if ( defined($prog->{qualifiers}->{PremiereShowing}) ) {
 		$writer->dataElement('premiere',$prog->{qualifiers}->{PremiereShowing});
@@ -1001,7 +1013,14 @@ sub writeOutPrograms($$$$$$)
 	    }
 	    
 	    if ( defined($prog->{qualifiers}->{Subtitles}) ) {
-		$writer->dataElement('subtitles', '', 'type' => "onscreen");
+		if ( defined($prog->{qualifiers}->{Subtitles}->{Language}) ) {
+		    $writer->startTag('subtitles');
+		    $writer->dataElement('language', $prog->{qualifiers}->{Subtitles}->{Language});
+		    $writer->endTag('subtitles');
+		}
+		else {
+		    $writer->dataElement('subtitles', '', 'type' => "onscreen");
+		}
 	    }
 	    elsif ( defined($prog->{qualifiers}->{ClosedCaptioned}) ) {
 		$writer->dataElement('subtitles', '', 'type' => "teletext");
@@ -1016,6 +1035,7 @@ sub writeOutPrograms($$$$$$)
 	    }
 	}
 	$writer->dataElement('rating', "$prog->{ratings_MPAA}", 'system' =>'MPAA') if ( defined($prog->{ratings_MPAA}) );
+	$writer->dataElement('rating', "$prog->{ratings_ESRB}", 'system' =>'ESRB') if ( defined($prog->{ratings_ESRB}) );
 
 	if ( defined($prog->{ratings_Warnings}) ) {
 	    my %hash;
@@ -1026,9 +1046,9 @@ sub writeOutPrograms($$$$$$)
 		$writer->dataElement('rating', "$k", 'system' =>'General Warning');
 	    }
 	}
-	if ( defined($prog->{stars_rating}) ) {
-	    # nowhere to put this yet.
-	    # comes in the form of a rating out fraction out of 4
+	if ( defined($prog->{star_rating}) ) {
+	    # comes in the form of a rating out fraction X/Y (X out of Y)
+	    $writer->dataElement('star_rating',$prog->{star_rating});
 	}
 	$writer->endTag('programme');
     }
@@ -1055,8 +1075,10 @@ sub writeOutChannels($$)
 			  'generator-info-url'  =>'http://www.sourceforge.net/projects/xmltv');
     }
 
+    my $count=0;
     foreach my $station (keys %{$config->{channels}}) {
 	
+	next if ( defined($config->{channels}->{$station}->{notavailable}) );
 	next if ( !$config->{channels}->{$station}->{in} );
 
 	$writer->startTag('channel', id=> $station);
@@ -1069,9 +1091,10 @@ sub writeOutChannels($$)
 	# not supported as of yet
 	#$writer->dataElement('url', $channel->{url}) if ( defined($channel->{url}) );
 	$writer->endTag('channel');
+	$count++;
     }
 
-    return(scalar(keys %{$config->{channels}}));;
+    return($count);
 }
 
 1;
