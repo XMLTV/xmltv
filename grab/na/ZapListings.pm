@@ -574,7 +574,9 @@ sub massageText
     my ($text) = @_;
 
     $text=~s/&nbsp;/ /og;
+    $text=~s/&nbsp$/ /og;
     $text=decode_entities($text);
+    $text=~s/\240$/ /og;
     $text=~s/^\s+//o;
     $text=~s/\s+$//o;
     $text=~s/\s+/ /o;
@@ -868,7 +870,7 @@ sub scrapehtml($$$)
 	    }
 
 	    # categories may be " / " separated
-	    if ( $desc=~s;<text>\(</text><a><text>\s*(.*?)\s*</text></a><text>\)\s+;<text>;io ) {
+	    if ( $desc=~s;<text>\(</text><a><text>\s*(.*?)\s*</text></a><text>\)\s*;<text>;io ) {
 		for (split(/\s+\/\s/, $1) ) {
 		    push(@{$prog->{category}}, massageText($_));
 		}
@@ -886,7 +888,11 @@ sub scrapehtml($$$)
 	    }
 	    my @extras;
 	    while ($desc=~s;<text>\s*(.*?)\s*</text>;;io ) {
-		push(@extras, massageText($1)); #if ( length($1) );
+		my $val=massageText($1);
+		if ( $self->{Debug} && $val ne $1 ) {
+		    print STDERR "massage changed '$1' to '$val'\n";
+		}
+		push(@extras, $val); #if ( length($1) );
 	    }
 	    if ( $self->{Debug} ) {
 		print STDERR "POSTEXTRA: $desc\n";
@@ -909,9 +915,17 @@ sub scrapehtml($$$)
 			    $i=$1;
 			}
 			else {
-			    @values=reverse(split(/\s+/, $extra));
-			    $extra=undef;
-			    $i=pop(@values);
+			    # catch some cases where they didn't put a space after )
+			    # ex. (Repeat)HDTV
+			    #
+			    if ( $extra=~s/\)([A-Z-a-z]+)$/\)/o ) {
+				$i=$1;
+			    }
+			    else {
+				@values=reverse(split(/\s+/, $extra));
+				$extra=undef;
+				$i=pop(@values);
+			    }
 			}
 		    }
 		    else {
@@ -997,6 +1011,11 @@ sub scrapehtml($$$)
 		    }
 		    elsif ( $i=~/^Stereo$/io ) {
 			$prog->{qualifiers}->{InStereo}++;
+			push(@sure, $i);
+			next;
+		    }
+		    elsif ( $i=~/^HDTV$/io ) {
+			$prog->{qualifiers}->{HDTV}++;
 			push(@sure, $i);
 			next;
 		    }
@@ -1224,7 +1243,7 @@ sub scrapehtml($$$)
 			push(@leftExtras, join(' ', @backup));
 		    }
 		    else {
-			print STDERR "\tno match on details '$original_extra'\n" if ( $self->{Debug} );
+			print STDERR "\tno match on details '".join(',', @backup)."'\n" if ( $self->{Debug} );
 			push(@leftExtras, $original_extra);;
 		    }
 		}
