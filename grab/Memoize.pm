@@ -30,13 +30,18 @@ sub check_argv( @ ) {
 	if ($_ eq '--cache') {
 	    t 'found arg --cache';
 	    $yes = 1;
-	    t 'next arg: ' . d $ARGV[0];
-	    if ($ARGV[0] !~ /^-/) {
-		$filename = shift @ARGV;
-		t "set cache filename to $filename";
+	    if (defined $ARGV[0]) {
+		t 'next arg: ' . d $ARGV[0];
+		if ($ARGV[0] !~ /^-/) {
+		    $filename = shift @ARGV;
+		    t "set cache filename to $filename";
+		}
+		else {
+		    t "not a filename, it's the next option";
+		}
 	    }
 	    else {
-		t "not a filename, it's the next option";
+		t 'no further options, so no filename given';
 	    }
 	    last;
 	}
