@@ -35,9 +35,6 @@
 #       returned close enough match instead of trying the closest date match of
 #       the approx hits.
 #
-# FUTURE - could use Term::ProgressBar to be more consistant with other
-#       xmltv tools.
-#
 
 use strict;
 
@@ -899,6 +896,8 @@ sub getStatsLines($)
 
 package XMLTV::IMDB::Crunch;
 
+use Term::ProgressBar 2.00;
+
 #
 # This package parses and manages to index imdb plain text files from
 # ftp.imdb.com/interfaces. (see http://www.imdb.com/interfaces for
@@ -953,15 +952,42 @@ sub new
     return($self);
 }
 
+sub redirect($$)
+{
+    my ($self, $file)=@_;
+    
+    if ( defined($file) ) {
+	if ( !open($self->{logfd}, "> $file") ) {
+	    print STDERR "$file:$!\n";
+	    return(0);
+	}
+	$self->{errorCountInLog}=0;
+    }
+    else {
+	close($self->{logfd});
+	$self->{logfd}=undef;
+    }
+    return(1);
+}
+
 sub error($$)
 {
-    print STDERR $_[1]."\n";
+    my $self=shift;
+    if ( defined($self->{logfd}) ) {
+	print {$self->{logfd}} $_[0]."\n";
+	$self->{errorCountInLog}++;
+    }
+    else {
+	print STDERR $_[0]."\n";
+    }
 }
 
 sub status($$)
 {
-    if ( $_[0]->{verbose} ) {
-	print STDERR $_[1]."\n";
+    my $self=shift;
+
+    if ( $self->{verbose} ) {
+	print STDERR $_[0]."\n";
     }
 }
 
@@ -994,8 +1020,14 @@ sub readMovies($$$)
 	}
     }
 
+    my $progress=Term::ProgressBar->new({name  => 'parsing Movies',
+					 count => $countEstimate,
+					 ETA   => 'linear'});
+    $progress->minor(0);
+    $progress->max_update_rate(1);
+    my $next_update=0;
+
     my $count=0;
-    my $percentDone=0;
     while(<FD>) {
 	my $line=$_;
 	#print "read line $.:$line";
@@ -1008,28 +1040,25 @@ sub readMovies($$$)
 	my $tab=index($line, "\t");
 	if ( $tab != -1 ) {
 	    $line=substr($line, 0, $tab);
-	    #print "$line\n";
-	    #if ( defined($self->{movies}{$line}) ) {
-	    #warn "movie ($line) appeared more than once: 2rd appearance at line $.";
-	    #}
+
 	    push(@{$self->{movies}}, $line);
 	    $count++;
-
-	    my $p=int(($count*100)/$countEstimate);
-	    if ( $p ne $percentDone ) {
-		$percentDone=$p;
-		if ( $percentDone%5 == 0 ) {
-		    my $sec=((((time()-$startTime)*100)/$percentDone)*(100-$percentDone))/100;
-		    $sec=1 if ($sec < 1);
-		    $self->status(sprintf("%d%% done, finished in approx %d seconds ($count titles so far)..",
-					  $p, $sec));
-		}
+	    
+	    # re-adjust target so progress bar doesn't seem too wonky
+	    if ( $count > $countEstimate ) {
+		$countEstimate = $progress->target($count+1000);
+		$next_update=$progress->update($count);
+	    }
+	    elsif ( $count > $next_update ) {
+		$next_update=$progress->update($count);
 	    }
 	}
 	else {
-	    $self->error("no tab in line $.: $line");
+	    $self->error("$file:$.: unrecognized format (missing tab)");
+	    $next_update=$progress->update($count);
 	}
     }
+    $progress->update($countEstimate);
     close(FD);
     $self->status(sprintf("Parsed $count titles in %d seconds",time()-$startTime));
     return($count);
@@ -1043,15 +1072,15 @@ sub readCastOrDirectors($$$)
     my $header;
     my $whatAreWeParsing;
 
-    if ( $whichCastOrDirector eq "actors" ) {
+    if ( $whichCastOrDirector eq "Actors" ) {
 	$header="THE ACTORS LIST";
 	$whatAreWeParsing=1;
     }
-    elsif ( $whichCastOrDirector eq "actresses" ) {
+    elsif ( $whichCastOrDirector eq "Actresses" ) {
 	$header="THE ACTRESSES LIST";
 	$whatAreWeParsing=2;
     }
-    elsif ( $whichCastOrDirector eq "directors" ) {
+    elsif ( $whichCastOrDirector eq "Directors" ) {
 	$header="THE DIRECTORS LIST";
 	$whatAreWeParsing=3;
     }
@@ -1065,6 +1094,12 @@ sub readCastOrDirectors($$$)
     else {
 	open(FD, "< $file") || return(-2);
     }
+    my $progress=Term::ProgressBar->new({name  => "parsing $whichCastOrDirector",
+					 count => $castCountEstimate,
+					 ETA   => 'linear'});
+    $progress->minor(0);
+    $progress->max_update_rate(1);
+    my $next_update=0;
     while(<FD>) {
 	if ( m/^$header/ ) {
 	    if ( !($_=<FD>) || !m/^===========/o ) {
@@ -1092,9 +1127,8 @@ sub readCastOrDirectors($$$)
     }
 
     my $cur_name;
-    my $entryCount=0;
+    my $count=0;
     my $castNames=0;
-    my $percentDone=0;
     while(<FD>) {
 	my $line=$_;
 	$line=~s/\n$//o;
@@ -1109,15 +1143,13 @@ sub readCastOrDirectors($$$)
 	    $cur_name=$1;
 	    $castNames++;
 
-	    my $p=int(($castNames*100)/$castCountEstimate);
-	    if ( $p ne $percentDone ) {
-		$percentDone=$p;
-		if ( $percentDone%5 == 0 ) {
-		    my $sec=((((time()-$startTime)*100)/$percentDone)*(100-$percentDone))/100;
-		    $sec=1 if ($sec < 1);
-		    $self->status(sprintf("%d%% done, finished in approx %d seconds ($castNames $whichCastOrDirector in $entryCount titles)..",
-					  $p, $sec));
-		}
+	    # re-adjust target so progress bar doesn't seem too wonky
+	    if ( $castNames > $castCountEstimate ) {
+		$castCountEstimate = $progress->target($castNames+100);
+		$next_update=$progress->update($castNames);
+	    }
+	    elsif ( $castNames > $next_update ) {
+		$next_update=$progress->update($castNames);
 	    }
 	}
 	
@@ -1172,10 +1204,11 @@ sub readCastOrDirectors($$$)
 		$self->{movies}{$line}=$cur_name;
 	    }
 	}
-	$entryCount++;
+	$count++;
     }
+    $progress->update($castCountEstimate);
     close(FD);
-    $self->status(sprintf("Parsed $castNames $whichCastOrDirector in $entryCount titles in %d seconds",time()-$startTime));
+    $self->status(sprintf("Parsed $castNames $whichCastOrDirector in $count titles in %d seconds",time()-$startTime));
     return($castNames);
 }
 
@@ -1207,6 +1240,12 @@ sub dbinfoAdd($$$)
     $self->{dbinfo}->{$key}=$value;
 }
 
+sub dbinfoGet($$$)
+{
+    my ($self, $key, $value)=@_;
+    return($self->{dbinfo}->{$key});
+}
+
 sub dbinfoSave($)
 {
     my $self=shift;
@@ -1219,26 +1258,9 @@ sub dbinfoSave($)
 }
 
 
-sub crunchStage($)
+sub invokeStage($$)
 {
     my ($self, $stage)=@_;
-
-    for (my $st=1 ; $st < $stage ; $st++ ) {
-	if ( !$self->stageComplete($st) ) {
-	    $self->error("prep stages must be run in sequence..");
-	    $self->error("prepStage $st either has never been run or failed");
-	    $self->error("rerun tv_imdb with --prepStage=$st");
-	    return(1);
-	}
-    }
-
-    if ( -f "$self->{moviedbInfo}" ) {
-	my $ret=$self->dbinfoLoad();
-	if ( $ret ) {
-	    $self->error($ret);
-	    return(1);
-	}
-    }
 
     my $startTime=time();
     if ( $stage == 1 ) {
@@ -1249,7 +1271,6 @@ sub crunchStage($)
 	    if ( $num == -2 ) {
 		$self->error("you need to download $self->{imdbListFiles}->{movies} from ftp.imdb.com");
 	    }
-	    $self->status("prep stage $stage failed");
 	    return(1);
 	}
 	elsif ( abs($num - $countEstimate) > $countEstimate*.05 ) {
@@ -1257,23 +1278,44 @@ sub crunchStage($)
 	}
 	$self->dbinfoAdd("db_stat_movie_count", "$num");
 
-	open(OUT, "> $self->{imdbDir}/stage$stage.data") || die "$self->{imdbDir}/stage$stage.data:$!";
-	for my $movie (@{$self->{movies}}) {
-	    print OUT "$movie\n";
+	$self->status("writing stage1 data ..");
+	{
+	    my $countEstimate=$self->dbinfoGet("db_stat_movie_count");
+	    my $progress=Term::ProgressBar->new({name  => "writing titles",
+						 count => $countEstimate,
+						 ETA   => 'linear'});
+	    $progress->minor(0);
+	    $progress->max_update_rate(1);
+	    my $next_update=0;
+	    
+	    open(OUT, "> $self->{imdbDir}/stage$stage.data") || die "$self->{imdbDir}/stage$stage.data:$!";
+	    my $count=0;
+	    for my $movie (@{$self->{movies}}) {
+		print OUT "$movie\n";
+		
+		$count++;
+		# re-adjust target so progress bar doesn't seem too wonky
+		if ( $count > $countEstimate ) {
+		    $countEstimate = $progress->target($count+100);
+		    $next_update=$progress->update($count);
+		}
+		elsif ( $count > $next_update ) {
+		    $next_update=$progress->update($count);
+		}
+	    }
+	    $progress->update($countEstimate);
+	    close(OUT);
 	}
-	close(OUT);
     }
     elsif ( $stage == 2 ) {
 	$self->status("starting prep stage $stage (parsing directors.list)..");
 
-	$self->status("merging in directors data..");
 	my $countEstimate=69000;
-	my $num=$self->readCastOrDirectors("directors", $countEstimate, "$self->{imdbListFiles}->{directors}");
+	my $num=$self->readCastOrDirectors("Directors", $countEstimate, "$self->{imdbListFiles}->{directors}");
 	if ( $num < 0 ) {
 	    if ( $num == -2 ) {
 		$self->error("you need to download $self->{imdbListFiles}->{directors} from ftp.imdb.com (see http://www.imdb.com/interfaces)");
 	    }
-	    $self->status("prep stage $stage failed");
 	    return(1);
 	}
 	elsif ( abs($num - $countEstimate) > $countEstimate*.05 ) {
@@ -1281,38 +1323,60 @@ sub crunchStage($)
 	}
 	$self->dbinfoAdd("db_stat_director_count", "$num");
 
-	open(OUT, "> $self->{imdbDir}/stage$stage.data") || die "$self->{imdbDir}/stage$stage.data:$!";
-	for my $key (keys %{$self->{movies}}) {
-	    my %dir;
-	    for (split('\|', $self->{movies}{$key})) {
-		$dir{$_}++;
+	$self->status("writing stage2 data ..");
+	{
+	    my $countEstimate=$self->dbinfoGet("db_stat_movie_count");
+	    my $progress=Term::ProgressBar->new({name  => "writing directors",
+						 count => $countEstimate,
+						 ETA   => 'linear'});
+	    $progress->minor(0);
+	    $progress->max_update_rate(1);
+	    my $next_update=0;
+	    
+	    my $count=0;
+	    open(OUT, "> $self->{imdbDir}/stage$stage.data") || die "$self->{imdbDir}/stage$stage.data:$!";
+	    for my $key (keys %{$self->{movies}}) {
+		my %dir;
+		for (split('\|', $self->{movies}{$key})) {
+		    $dir{$_}++;
+		}
+		my @list;
+		for (keys %dir) {
+		    push(@list, sprintf("%03d:%s", $dir{$_}, $_));
+		}
+		my $value="";
+		for my $c (reverse sort {$a cmp $b} @list) {
+		    my ($num, $name)=split(':', $c);
+		    $value.=$name."|";
+		}
+		$value=~s/\|$//o;
+		print OUT "$key\t$value\n";
+		
+		$count++;
+		# re-adjust target so progress bar doesn't seem too wonky
+		if ( $count > $countEstimate ) {
+		    $countEstimate = $progress->target($count+100);
+		    $next_update=$progress->update($count);
+		}
+		elsif ( $count > $next_update ) {
+		    $next_update=$progress->update($count);
+		}
 	    }
-	    my @list;
-	    for (keys %dir) {
-		push(@list, sprintf("%03d:%s", $dir{$_}, $_));
-	    }
-	    my $value="";
-	    for my $c (reverse sort {$a cmp $b} @list) {
-		my ($num, $name)=split(':', $c);
-		$value.=$name."|";
-	    }
-	    $value=~s/\|$//o;
-	    print OUT "$key\t$value\n";
+	    $progress->update($countEstimate);
+	    close(OUT);
 	}
-	close(OUT);
-	#unlink("$self->{imdbDir}/stage2.data");
+	#unlink("$self->{imdbDir}/stage1.data");
     }
     elsif ( $stage == 3 ) {
 	$self->status("starting prep stage $stage (parsing actors.list)..");
 
 	#print "re-reading movies into memory for reverse lookup..\n";
 	my $countEstimate=430000;
-	my $num=$self->readCastOrDirectors("actors", $countEstimate, "$self->{imdbListFiles}->{actors}");
+	my $num=$self->readCastOrDirectors("Actors", $countEstimate, "$self->{imdbListFiles}->{actors}");
 	if ( $num < 0 ) {
 	    if ( $num == -2 ) {
 		$self->error("you need to download $self->{imdbListFiles}->{actors} from ftp.imdb.com (see http://www.imdb.com/interfaces)");
 	    }
-	    $self->status("prep stage $stage failed");
 	    return(1);
 	}
 	elsif ( abs($num - $countEstimate) > $countEstimate*.05 ) {
@@ -1320,22 +1384,44 @@ sub crunchStage($)
 	}
 	$self->dbinfoAdd("db_stat_actor_count", "$num");
 
-	open(OUT, "> $self->{imdbDir}/stage$stage.data") || die "$self->{imdbDir}/stage$stage.data:$!";
-	for my $key (keys %{$self->{movies}}) {
-	    print OUT "$key\t$self->{movies}{$key}\n";
+	$self->status("writing stage3 data ..");
+	{
+	    my $countEstimate=$self->dbinfoGet("db_stat_movie_count");
+	    my $progress=Term::ProgressBar->new({name  => "writing actors",
+						 count => $countEstimate,
+						 ETA   => 'linear'});
+	    $progress->minor(0);
+	    $progress->max_update_rate(1);
+	    my $next_update=0;
+	    
+	    my $count=0;
+	    open(OUT, "> $self->{imdbDir}/stage$stage.data") || die "$self->{imdbDir}/stage$stage.data:$!";
+	    for my $key (keys %{$self->{movies}}) {
+		print OUT "$key\t$self->{movies}{$key}\n";
+		
+		$count++;
+		# re-adjust target so progress bar doesn't seem too wonky
+		if ( $count > $countEstimate ) {
+		    $countEstimate = $progress->target($count+100);
+		    $next_update=$progress->update($count);
+		}
+		elsif ( $count > $next_update ) {
+		    $next_update=$progress->update($count);
+		}
+	    }
+	    $progress->update($countEstimate);
+	    close(OUT);
 	}
-	close(OUT);
     }
     elsif ( $stage == 4 ) {
 	$self->status("starting prep stage $stage (parsing actresses.list)..");
 
 	my $countEstimate=260000;
-	my $num=$self->readCastOrDirectors("actresses", $countEstimate, "$self->{imdbListFiles}->{actresses}");
+	my $num=$self->readCastOrDirectors("Actresses", $countEstimate, "$self->{imdbListFiles}->{actresses}");
 	if ( $num < 0 ) {
 	    if ( $num == -2 ) {
 		$self->error("you need to download $self->{imdbListFiles}->{actresses} from ftp.imdb.com (see http://www.imdb.com/interfaces)");
 	    }
-	    $self->status("prep stage $stage failed");
 	    return(1);
 	}
 	elsif ( abs($num - $countEstimate) > $countEstimate*.05 ) {
@@ -1343,11 +1429,33 @@ sub crunchStage($)
 	}
 	$self->dbinfoAdd("db_stat_actress_count", "$num");
 
-	open(OUT, "> $self->{imdbDir}/stage$stage.data") || die "$self->{imdbDir}/stage$stage.data:$!";
-	for my $key (keys %{$self->{movies}}) {
-	    print OUT "$key\t$self->{movies}{$key}\n";
+	$self->status("writing stage4 data ..");
+	{
+	    my $countEstimate=$self->dbinfoGet("db_stat_movie_count");
+	    my $progress=Term::ProgressBar->new({name  => "writing actresses",
+						 count => $countEstimate,
+						 ETA   => 'linear'});
+	    $progress->minor(0);
+	    $progress->max_update_rate(1);
+	    my $next_update=0;
+	    
+	    my $count=0;
+	    open(OUT, "> $self->{imdbDir}/stage$stage.data") || die "$self->{imdbDir}/stage$stage.data:$!";
+	    for my $key (keys %{$self->{movies}}) {
+		print OUT "$key\t$self->{movies}{$key}\n";
+		$count++;
+		# re-adjust target so progress bar doesn't seem too wonky
+		if ( $count > $countEstimate ) {
+		    $countEstimate = $progress->target($count+100);
+		    $next_update=$progress->update($count);
+		}
+		elsif ( $count > $next_update ) {
+		    $next_update=$progress->update($count);
+		}
+	    }
+	    $progress->update($countEstimate);
+	    close(OUT);
 	}
-	close(OUT);
 	#unlink("$self->{imdbDir}/stage3.data");
     }
     elsif ( $stage == 5 ) {
@@ -1356,27 +1464,69 @@ sub crunchStage($)
 	$self->status("starting prep stage $stage (creating indexes..)..");
 
 	$self->status("parsing stage 1 data (movie list)..");
+
 	my %movies;
-	open(IN, "< $self->{imdbDir}/stage1.data") || die "$self->{imdbDir}/stage1.data:$!";
-	while(<IN>) {
-	    chop();
-	    $movies{$_}="";
+
+	{
+	    my $countEstimate=$self->dbinfoGet("db_stat_movie_count");
+	    my $progress=Term::ProgressBar->new({name  => "reading titles",
+						 count => $countEstimate,
+						 ETA   => 'linear'});
+	    $progress->minor(0);
+	    $progress->max_update_rate(1);
+	    my $next_update=0;
+	    
+	    open(IN, "< $self->{imdbDir}/stage1.data") || die "$self->{imdbDir}/stage1.data:$!";
+	    while(<IN>) {
+		chop();
+		$movies{$_}="";
+		
+		# re-adjust target so progress bar doesn't seem too wonky
+		if ( $. > $countEstimate ) {
+		    $countEstimate = $progress->target($.+100);
+		    $next_update=$progress->update($.);
+		}
+		elsif ( $. > $next_update ) {
+		    $next_update=$progress->update($.);
+		}
+	    }
+	    close(IN);
+	    $progress->update($countEstimate);
 	}
-	close(IN);
 
 	$self->status("merging in stage 2 data (directors)..");
-	open(IN, "< $self->{imdbDir}/stage2.data") || die "$self->{imdbDir}/stage2.data:$!";
-	while(<IN>) {
-	    chop();
-	    s/^([^\t]+)\t//o;
-	    if ( !defined($movies{$1}) ) {
-	        $self->error("directors list references unidentified title '$1'");
-	        next;
+	{
+	    my $countEstimate=$self->dbinfoGet("db_stat_movie_count");
+	    my $progress=Term::ProgressBar->new({name  => "reading directors",
+						 count => $countEstimate,
+						 ETA   => 'linear'});
+	    $progress->minor(0);
+	    $progress->max_update_rate(1);
+	    my $next_update=0;
+
+	    open(IN, "< $self->{imdbDir}/stage2.data") || die "$self->{imdbDir}/stage2.data:$!";
+	    while(<IN>) {
+		chop();
+		s/^([^\t]+)\t//o;
+		if ( !defined($movies{$1}) ) {
+		    $self->error("directors list references unidentified title '$1'");
+		    next;
+		}
+		$movies{$1}=$_;
+
+		# re-adjust target so progress bar doesn't seem too wonky
+		if ( $. > $countEstimate ) {
+		    $countEstimate = $progress->target($.+100);
+		    $next_update=$progress->update($.);
+		}
+		elsif ( $. > $next_update ) {
+		    $next_update=$progress->update($.);
+		}
 	    }
-	    $movies{$1}=$_;
+	    $progress->update($countEstimate);
+	    close(IN);
 	}
-	close(IN);
-	
+	    
 	# fill in default for movies we didn't have a director for
 	for my $key (keys %movies) {
 	    if ( !length($movies{$key})) {
@@ -1385,44 +1535,82 @@ sub crunchStage($)
 	}
 
 	$self->status("merging in stage 3 data (actors)..");
-	open(IN, "< $self->{imdbDir}/stage3.data") || die "$self->{imdbDir}/stage3.data:$!";
-	while(<IN>) {
-	    chop();
-	    s/^([^\t]+)\t//o;
-	    my $title=$1;
-	    my $val=$movies{$title};
-	    if ( !defined($val) ) {
-	        $self->error("actors list references unidentified title '$title'");
-	        next;
-	    }
-	    if ( $val=~m/$tab/o ) {
-		$movies{$title}=$val."|".$_;
-	    }
-	    else {
-		$movies{$title}=$val.$tab.$_;
-	    }
-	}
-	close(IN);
+	{
+	    my $countEstimate=$self->dbinfoGet("db_stat_movie_count");
+	    my $progress=Term::ProgressBar->new({name  => "reading actors",
+						 count => $countEstimate,
+						 ETA   => 'linear'});
+	    $progress->minor(0);
+	    $progress->max_update_rate(1);
+	    my $next_update=0;
 
-	$self->status("merging in stage 4 data (actresses)..");
-	open(IN, "< $self->{imdbDir}/stage4.data") || die "$self->{imdbDir}/stage4.data:$!";
-	while(<IN>) {
-	    chop();
-	    s/^([^\t]+)\t//o;
-	    my $title=$1;
-	    my $val=$movies{$title};
-	    if ( !defined($val) ) {
-	        $self->error("actresses list references unidentified title '$title'");
-	        next;
+	    open(IN, "< $self->{imdbDir}/stage3.data") || die "$self->{imdbDir}/stage3.data:$!";
+	    while(<IN>) {
+		chop();
+		s/^([^\t]+)\t//o;
+		my $title=$1;
+		my $val=$movies{$title};
+		if ( !defined($val) ) {
+		    $self->error("actors list references unidentified title '$title'");
+		    next;
+		}
+		if ( $val=~m/$tab/o ) {
+		    $movies{$title}=$val."|".$_;
+		}
+		else {
+		    $movies{$title}=$val.$tab.$_;
+		}
+		# re-adjust target so progress bar doesn't seem too wonky
+		if ( $. > $countEstimate ) {
+		    $countEstimate = $progress->target($.+100);
+		    $next_update=$progress->update($.);
+		}
+		elsif ( $. > $next_update ) {
+		    $next_update=$progress->update($.);
+		}
 	    }
-	    if ( $val=~m/$tab/o ) {
-		$movies{$title}=$val."|".$_;
-	    }
-	    else {
-		$movies{$title}=$val.$tab.$_;
-	    }
+	    $progress->update($countEstimate);
+	    close(IN);
 	}
-	close(IN);
+	    
+	$self->status("merging in stage 4 data (actresses)..");
+	{
+	    my $countEstimate=$self->dbinfoGet("db_stat_movie_count");
+	    my $progress=Term::ProgressBar->new({name  => "reading actresses",
+						 count => $countEstimate,
+						 ETA   => 'linear'});
+	    $progress->minor(0);
+	    $progress->max_update_rate(1);
+	    my $next_update=0;
+
+	    open(IN, "< $self->{imdbDir}/stage4.data") || die "$self->{imdbDir}/stage4.data:$!";
+	    while(<IN>) {
+		chop();
+		s/^([^\t]+)\t//o;
+		my $title=$1;
+		my $val=$movies{$title};
+		if ( !defined($val) ) {
+		    $self->error("actresses list references unidentified title '$title'");
+		    next;
+		}
+		if ( $val=~m/$tab/o ) {
+		    $movies{$title}=$val."|".$_;
+		}
+		else {
+		    $movies{$title}=$val.$tab.$_;
+		}
+		# re-adjust target so progress bar doesn't seem too wonky
+		if ( $. > $countEstimate ) {
+		    $countEstimate = $progress->target($.+100);
+		    $next_update=$progress->update($.);
+		}
+		elsif ( $. > $next_update ) {
+		    $next_update=$progress->update($.);
+		}
+	    }
+	    $progress->update($countEstimate);
+	    close(IN);
+	}
 
 	#unlink("$self->{imdbDir}/stage1.data");
 	#unlink("$self->{imdbDir}/stage2.data");
@@ -1434,141 +1622,178 @@ sub crunchStage($)
 	
 	$self->status("computing indexes..");
 	my %nmovies;
-	for my $key (keys %movies) {
-	    my $nkey=$key;
-
-	    # todo - this would make things easier
-	    # change double-quotes around title to be (made-for-tv) suffix instead 
-	    if ( $nkey=~m/^\"/o && #"
-		 $nkey=~m/\"\s*\(/o ) { #"
-		$nkey=~s/^\"//o; # "
-		$nkey=~s/\"(\s*\()/$1/o; #"
-		$nkey.=" (tv_series)";
-	    }
-
-	    $nkey=~s/\(mini\) \(tv_series\)$/(tv_mini_series)/o;
-	    $nkey=~s/\(mini\)$/(tv-mini-series)/o;
-	    $nkey=~s/\(TV\)$/(tv_movie)/o;
-	    $nkey=~s/\(V\)$/(video_movie)/o;
-	    $nkey=~s/\(VG\)$/(video_game)/o;
-
-	    my $title=$nkey;
-	    my $qualifier="movie";
-	    if ( $title=~s/\s+\((tv_series|tv_mini_series|tv_movie|video_movie|video_game)\)$//o ) {
-		$qualifier=$1;
-	    }
-	    my $year;
-	    if ( $title=~s/\s+\((\d\d\d\d|\?\?\?\?)\)$//o ) {
-		$year=$1;
-	    }
-	    elsif ( $title=~s/\s+\((\d\d\d\d|\?\?\?\?)\)$//o ) {
-		$year=$1;
-	    }
-	    elsif ( $title=~s/\s+\((\d\d\d\d|\?\?\?\?)\/[IVX]+\)$//o ) {
-		$year=$1;
-	    }
-	    else {
-		die "unable to decode year from title key \"$title\", report to xmltv-devel\@lists.sf.net";
-	    }
-	    $year="0000" if ( $year eq "????" );
-	    $title=~s/(.*),\s*(The|A|Une|Les|L\'|Le|La|El|Das)$/$2 $1/og;
-
-	    $nkey=lc("$title ($year)");
-	    $nkey=~s/([^a-zA-Z0-9_.-])/uc sprintf("%%%02x",ord($1))/oeg;
-
-	    if ( defined($movies{$nkey}) ) {
-		die "unable to place moviedb key for $key, report to xmltv-devel\@lists.sf.net";
-	    }
-	    die "title \"$title\" contains a tab" if ( $title=~m/\t/o );
-	    #print "key:$nkey\n\ttitle=$title\n\tyear=$year\n\tqualifier=$qualifier\n";
-	    #print "key $key: value=\"$movies{$key}\"\n";
-	    my ($directors, $actors)=split('\t', delete($movies{$key}));
-
-	    $directors="<unknown>" if ( !defined($directors) || $directors eq "nodir");
-	    $actors="<unknown>" if ( !defined($actors) );
-
-	    #die ("no 1") if ( !defined($title));
-	    #die ("no 2") if ( !defined($year));
-	    #die ("no 3") if ( !defined($qualifier));
-	    #die ("no 4") if ( !defined($directors));
-	    #die ("no 5") if ( !defined($actors));
+	{
+	    my $countEstimate=$self->dbinfoGet("db_stat_movie_count");
+	    my $progress=Term::ProgressBar->new({name  => "indexing by title",
+						 count => $countEstimate,
+						 ETA   => 'linear'});
+	    $progress->minor(0);
+	    $progress->max_update_rate(1);
+	    my $next_update=0;
 	    
-	    $nmovies{$nkey}=$title.$tab.$year.$tab.$qualifier.$tab.$directors.$tab.$actors;
-	    #$nmovies{$nkey}=[$title,$year,$qualifier,$directors,$actors];
+	    my $count=0;
+	    for my $key (keys %movies) {
+		my $nkey=$key;
+		
+		# todo - this would make things easier
+		# change double-quotes around title to be (made-for-tv) suffix instead 
+		if ( $nkey=~m/^\"/o && #"
+		     $nkey=~m/\"\s*\(/o ) { #"
+		    $nkey=~s/^\"//o; # "
+		    $nkey=~s/\"(\s*\()/$1/o; #"
+		    $nkey.=" (tv_series)";
+		}
+		
+		$nkey=~s/\(mini\) \(tv_series\)$/(tv_mini_series)/o;
+		$nkey=~s/\(mini\)$/(tv-mini-series)/o;
+		$nkey=~s/\(TV\)$/(tv_movie)/o;
+		$nkey=~s/\(V\)$/(video_movie)/o;
+		$nkey=~s/\(VG\)$/(video_game)/o;
+		
+		my $title=$nkey;
+		my $qualifier="movie";
+		if ( $title=~s/\s+\((tv_series|tv_mini_series|tv_movie|video_movie|video_game)\)$//o ) {
+		    $qualifier=$1;
+		}
+		my $year;
+		if ( $title=~s/\s+\((\d\d\d\d|\?\?\?\?)\)$//o ) {
+		    $year=$1;
+		}
+		elsif ( $title=~s/\s+\((\d\d\d\d|\?\?\?\?)\)$//o ) {
+		    $year=$1;
+		}
+		elsif ( $title=~s/\s+\((\d\d\d\d|\?\?\?\?)\/[IVX]+\)$//o ) {
+		    $year=$1;
+		}
+		else {
+		    die "unable to decode year from title key \"$title\", report to xmltv-devel\@lists.sf.net";
+		}
+		$year="0000" if ( $year eq "????" );
+		$title=~s/(.*),\s*(The|A|Une|Les|L\'|Le|La|El|Das)$/$2 $1/og;
+		
+		$nkey=lc("$title ($year)");
+		$nkey=~s/([^a-zA-Z0-9_.-])/uc sprintf("%%%02x",ord($1))/oeg;
+		
+		if ( defined($movies{$nkey}) ) {
+		    die "unable to place moviedb key for $key, report to xmltv-devel\@lists.sf.net";
+		}
+		die "title \"$title\" contains a tab" if ( $title=~m/\t/o );
+		#print "key:$nkey\n\ttitle=$title\n\tyear=$year\n\tqualifier=$qualifier\n";
+		#print "key $key: value=\"$movies{$key}\"\n";
+		my ($directors, $actors)=split('\t', delete($movies{$key}));
+		
+		$directors="<unknown>" if ( !defined($directors) || $directors eq "nodir");
+		$actors="<unknown>" if ( !defined($actors) );
+
+		$nmovies{$nkey}=$title.$tab.$year.$tab.$qualifier.$tab.$directors.$tab.$actors;
+
+		$count++;
+
+		# re-adjust target so progress bar doesn't seem too wonky
+		if ( $count > $countEstimate ) {
+		    $countEstimate = $progress->target($count+100);
+		    $next_update=$progress->update($count);
+		}
+		elsif ( $count > $next_update ) {
+		    $next_update=$progress->update($count);
+		}
+	    }
+	    $progress->update($countEstimate);
+
+	    if ( scalar(keys %movies) != 0 ) {
+		die "what happened, we have keys left ?";
+	    }
+	    undef(%movies);
 	}
-	if ( scalar(keys %movies) != 0 ) {
-	    die "what happened, we have keys left ?";
-	}
-	undef(%movies);
 
 	$self->status("writing out indexes..");
-	open(OUT, "> $self->{moviedbIndex}") || die "$self->{moviedbIndex}:$!";
-	open(ACT, "> $self->{moviedbData}") || die "$self->{moviedbData}:$!";
-	my $num=1;
-	for my $key (sort {$a cmp $b} keys %nmovies) {
-	    my $val=delete($nmovies{$key});
-	    #print "movie $key: $val\n";
-	    #$val=~s/^([^\t]+)\t([^\t]+)\t([^\t]+)\t//o || die "internal failure ($key:$val)";
-	    my ($title, $year, $qualifier,$directors,$actors)=split('\t', $val);
-	    #die ("no 1") if ( !defined($title));
-	    #die ("no 2") if ( !defined($year));
-	    #die ("no 3") if ( !defined($qualifier));
-	    #die ("no 4") if ( !defined($directors));
-	    #die ("no 5") if ( !defined($actors));
-	    #print "key:$key\n\ttitle=$title\n\tyear=$year\n\tqualifier=$qualifier\n";
-
-	    #my ($directors, $actors)=split('\t', $val);
+	{
+	    my $countEstimate=$self->dbinfoGet("db_stat_movie_count");
+	    my $progress=Term::ProgressBar->new({name  => "writing index",
+						 count => $countEstimate,
+						 ETA   => 'linear'});
+	    $progress->minor(0);
+	    $progress->max_update_rate(1);
+	    my $next_update=0;
 	    
-	    my $details="";
-
-	    if ( $directors eq "<unknown>" ) {
-		$details.="<unknown>";
-	    }
-	    else {
-		# sort directors by last name
-		for my $name (sort {$a cmp $b} split('\|', $directors)) {
-		    $details.="$name|";
+	    open(OUT, "> $self->{moviedbIndex}") || die "$self->{moviedbIndex}:$!";
+	    open(ACT, "> $self->{moviedbData}") || die "$self->{moviedbData}:$!";
+	    my $count=0;
+	    for my $key (sort {$a cmp $b} keys %nmovies) {
+		my $val=delete($nmovies{$key});
+		#print "movie $key: $val\n";
+		#$val=~s/^([^\t]+)\t([^\t]+)\t([^\t]+)\t//o || die "internal failure ($key:$val)";
+		my ($title, $year, $qualifier,$directors,$actors)=split('\t', $val);
+		#die ("no 1") if ( !defined($title));
+		#die ("no 2") if ( !defined($year));
+		#die ("no 3") if ( !defined($qualifier));
+		#die ("no 4") if ( !defined($directors));
+		#die ("no 5") if ( !defined($actors));
+		#print "key:$key\n\ttitle=$title\n\tyear=$year\n\tqualifier=$qualifier\n";
+		
+		#my ($directors, $actors)=split('\t', $val);
+		
+		my $details="";
+		
+		if ( $directors eq "<unknown>" ) {
+		    $details.="<unknown>";
 		}
-		$details=~s/\|$//o;
-	    }
-	    $details.=$tab;
-	    #print "      $title: $val\n";
-	    if ( $actors eq "<unknown>" ) {
-		$details.="<unknown>";
-	    }
-	    else {
-		my %order;
-		# sort actors by billing
-		for my $c (sort {$a cmp $b} split('\|', $actors)) {
-		    my ($billing, $name)=split(':', $c);
-		    if ( $billing != 9999 && defined($order{$billing}) ) {
-			# this occurs, most of the time so we don't check it  :<
-			#$self->error("title \"$title\" has two actors at billing level $billing ($order{$billing} and $name)");
+		else {
+		    # sort directors by last name
+		    for my $name (sort {$a cmp $b} split('\|', $directors)) {
+			$details.="$name|";
 		    }
-		    $order{$billing}=$name;
-		    #if ( !defined($billing) || ! defined($name) ) {
+		    $details=~s/\|$//o;
+		}
+		$details.=$tab;
+		#print "      $title: $val\n";
+		if ( $actors eq "<unknown>" ) {
+		    $details.="<unknown>";
+		}
+		else {
+		    my %order;
+		    # sort actors by billing
+		    for my $c (sort {$a cmp $b} split('\|', $actors)) {
+			my ($billing, $name)=split(':', $c);
+			if ( $billing != 9999 && defined($order{$billing}) ) {
+			    # this occurs, most of the time so we don't check it  :<
+			    #$self->error("title \"$title\" has two actors at billing level $billing ($order{$billing} and $name)");
+			}
+			$order{$billing}=$name;
+			#if ( !defined($billing) || ! defined($name) ) {
 			#warn "no billing or name in $c from movie $title";
 			#warn "y=$year";
 			#warn "q=$qualifier";
 			#warn "d=$directors";
 			#warn "a=$actors";
-		    #}
-		    #
-		    # BUG - should remove (I)'s from actors/actresses names when details are generated
-		    $name=~s/\s\([IVX]+\)$//o;
-		    
-		    $details.="$name|";
-		    #print "      $c: split gives'$billing' and '$name'\n";
+			#}
+			#
+			# BUG - should remove (I)'s from actors/actresses names when details are generated
+			$name=~s/\s\([IVX]+\)$//o;
+			
+			$details.="$name|";
+			#print "      $c: split gives'$billing' and '$name'\n";
+		    }
+		}
+		$details=~s/\|$//o;
+		$count++;
+		my $lineno=sprintf("%07d", $count);
+		print OUT "$key\t$title\t$year\t$qualifier\t$lineno\n";
+		print ACT "$lineno:$details\n";
+
+		# re-adjust target so progress bar doesn't seem too wonky
+		if ( $count > $countEstimate ) {
+		    $countEstimate = $progress->target($count+100);
+		    $next_update=$progress->update($count);
+		}
+		elsif ( $count > $next_update ) {
+		    $next_update=$progress->update($count);
 		}
 	    }
-	    $details=~s/\|$//o;
-	    my $lineno=sprintf("%07d", $num);
-	    print OUT "$key\t$title\t$year\t$qualifier\t$lineno\n";
-	    print ACT "$lineno:$details\n";
-	    $num++;
+	    $progress->update($countEstimate);
+	    close(ACT);
+	    close(OUT);
 	}
-	close(ACT);
-	close(OUT);
 
 	$self->dbinfoAdd("db_version", $XMLTV::IMDB::VERSION);
 
@@ -1610,8 +1835,7 @@ sub crunchStage($)
 	$self->status("sanity intact :)");
     }
     else {
-	$self->error("tv_imdb: invalid stage $stage: only 1-4 are valid");
-	$self->status("prep stage $stage failed");
+	$self->error("tv_imdb: invalid stage $stage: only 1-5 are valid");
 	return(1);
     }
 
@@ -1620,8 +1844,42 @@ sub crunchStage($)
 	$self->error("$self->{moviedbInfo}:$!");
 	return(1);
     }
-    $self->status("prep stage $stage success");
     return(0);
+}
+
+sub crunchStage($$)
+{
+    my ($self, $stage)=@_;
+
+    for (my $st=1 ; $st < $stage ; $st++ ) {
+	if ( !$self->stageComplete($st) ) {
+	    $self->error("prep stages must be run in sequence..");
+	    $self->error("prepStage $st either has never been run or failed");
+	    $self->error("rerun tv_imdb with --prepStage=$st");
+	    return(1);
+	}
+    }
+
+    if ( -f "$self->{moviedbInfo}" ) {
+	my $ret=$self->dbinfoLoad();
+	if ( $ret ) {
+	    $self->error($ret);
+	    return(1);
+	}
+    }
+
+    $self->redirect("$self->{imdbDir}/stage$stage.log") || return(1);
+    my $ret=$self->invokeStage($stage);
+    $self->redirect(undef);
+
+    if ( $ret == 0 ) {
+	$self->status("prep stage $stage success");
+    }
+    else {
+	$self->status("prep stage $stage failed");
+    }
+    $self->status("stage $stage produced $self->{errorCountInLog} errors in $self->{imdbDir}/stage$stage.log");
+    return($ret);
 }
 
 1;
