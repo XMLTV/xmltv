@@ -91,6 +91,7 @@ my %prereqs
      'XML::Twig' => 3.09,
      'Date::Manip' => 5.4,
      'XML::Writer' => 0,
+     'Memoize' => 0,
     );
 
 # There is something particularly broken about Date::Manip on Red Hat
@@ -134,7 +135,6 @@ my %recommended
   = (
      'Lingua::EN::Numbers::Ordinate' => 0,
      'Lingua::Preferred' => 0,
-     'Memoize' => 0,
      'Term::ProgressBar' => 2.03,
      'Compress::Zlib' => 0,
      'Unicode::String' => 0,
