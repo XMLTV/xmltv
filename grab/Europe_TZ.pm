@@ -94,16 +94,17 @@ sub parse_eur_date($$) {
     # The local time when the clocks go back
     my $end_dst_backfrom = DateCalc($end_dst, "+ $clock_shift");
 
+    my $summer;
     if (Date_Cmp($dp, $start_dst) < 0) {
 	# Before the start of summer time.
-	return $dp;
+	$summer = 0;
     }
     elsif (Date_Cmp($dp, $start_dst) == 0) {
 	# Exactly _at_ the start of summer time.  Really such a date
 	# should not exist since the clocks skip forward an hour at
 	# that point.  But we tolerate this fencepost error.
 	#
-	return $dp;
+	$summer = 0;
     }
     elsif (Date_Cmp($dp, $start_dst_skipto) < 0) {
 	# Date is impossible (time goes from from $start_dst UTC to
@@ -113,18 +114,25 @@ sub parse_eur_date($$) {
     }
     elsif (Date_Cmp($dp, $end_dst) < 0) {
 	# During summer time.
-	return Date_ConvTZ($dp, $summer_tz, 'UTC');
+	$summer = 1;
     }
     elsif (Date_Cmp($dp, $end_dst_backfrom) <= 0) {
 #	warn("$date is ambiguous "
 #	     . "(clocks go back from $end_dst_backfrom $summer_tz to $end_dst $winter_tz), "
 #	     . "assuming $summer_tz" );
 
-	return Date_ConvTZ($dp, $summer_tz, 'UTC');
+	$summer = 1;
     }
     else {
 	# Definitely after the end of summer time.
-	return $dp;
+	$summer = 0;
+    }
+
+    if ($summer) {
+	return Date_ConvTZ($dp, $summer_tz, 'UTC');
+    }
+    else {
+	return Date_ConvTZ($dp, $winter_tz, 'UTC');
     }
 }
 
