@@ -185,7 +185,10 @@ foreach (keys %chan) {
     # moved into a separate tv_semantic_check or whatever.
     #
     foreach (@progs) {
-	next if not defined $_->{stop};
+	if (not defined $_->{stop}) {
+	    delete $_->{stop}; # sometimes gets set undef, don't know why
+	    next;
+	}
 	if (Date_Cmp(pd($_->{start}), pd($_->{stop})) > 0) {
 	    warn <<END
 programme on channel $_->{channel} stops before it starts: $_->{start}, $_->{stop}
@@ -201,19 +204,12 @@ END
 	t 'testing consecutive programmes to see if the same';
 	t 'first: ' . d $first;
 	t 'second: ' . d $second;
-	if (overlap($first, $second)) {
-	    t 'they overlap, are they really identical?';
-	    if (programme_eq($first, $second)) {
-		# Quietly drop the duplicate.  We could have done the
-		# programme_eq() step first but I thought (perhaps
-		# wrongly) that it would be expensive, and best called
-		# only when we know there is an overlap.  No overlap
-		# implies not equal.
-		#
-		t 'programme_eq() says the same, drop the duplicate';
-		next;
-	    }
-	    else {
+	if (programme_eq($first, $second)) {
+	    # Quietly drop the duplicate.
+	    next;
+	}
+	else {
+	    if (overlap($first, $second)) {
 		local $^W = 0;
 		warn <<END
 overlapping programmes on channel $_:
@@ -344,57 +340,78 @@ sub overlap( $$ ) {
     my ($xa, $xb) = @_;
 
     my ($xa_start, $xb_start) = (pd($xa->{start}), pd($xb->{start}));
-    my ($xa_stop, $xb_stop);	
-    for ($xa->{stop}) {
-	if (defined) {
-	    $xa_stop = pd($_);
-	}
-    }
-    for ($xb->{stop}) {
-	if (defined) {
-	    $xb_stop = pd($_);
-	}
-    }
+    my $xa_stop = pd($xa->{stop}) if exists $xa->{stop};
+    my $xb_stop = pd($xb->{stop}) if exists $xb->{stop};
+    die if exists $xa->{stop} and not defined $xa->{stop};
+    die if exists $xb->{stop} and not defined $xb->{stop};
 
     # If we don't know the stop times we can't do an overlap test; if
     # we know only one stop time we can do only one half of the
     # test.  We assume no overlap if we can't prove otherwise.
     #
     # However, obviously two _identical_ start times on the same
-    # channel must overlap, if we make the sensible assumption of
-    # nonzero length.
+    # channel must overlap, except for zero length.
     #
-    { local $^W = 0;
-      t "xa: $xa_start -| $xa_stop"; t "xb: $xb_start -| $xb_stop" }
-    if ((
-	 # XB starts while XA on
-	 defined $xa_stop and Date_Cmp($xa_start, $xb_start) <= 0
-	 and Date_Cmp($xb_start, $xa_stop) < 0
-	)
-	or (
-	    # XA starts while XB on
-	    defined $xb_stop and Date_Cmp($xb_start, $xa_start) <= 0
-	    and Date_Cmp($xa_start, $xb_stop) < 0
-	   )
-	or (
-	    # XB starts while XA on - because it starts at the same time
-	    Date_Cmp($xa_start, $xb_start) == 0
-	   )
-       ) {
-	my $cmp = clumpidx_cmp($xa->{clumpidx}, $xb->{clumpidx});
-	if (not defined $cmp) {
-	    # No clumpidxes, so must overlap.  (Also happens if
-	    # the two indexes were not comparable - but that will
-	    # have been warned about already.)
-	    #
-	    t 'no clumpidxes, overlap';
+    {
+	local $^W = 0;
+	t "xa: $xa_start -| $xa_stop"; t "xb: $xb_start -| $xb_stop"
+    }
+
+    if (not defined $xa_stop and not defined $xb_stop) {
+	# Cannot prove overlap, even if they start at the same time.
+	return 0;
+    }
+    elsif (not defined $xa_stop and defined $xb_stop) {
+	return (Date_Cmp($xa_start, $xb_start) > 0
+		and Date_Cmp($xa_start, $xb_stop) < 0);
+	# (Cannot prove overlap if A and B start at same time,
+	# or A starts before B.)
+	#
+    }
+    elsif (defined $xa_stop and not defined $xb_stop) {
+	return (Date_Cmp($xb_start, $xa_start) > 0
+		and Date_Cmp($xb_start, $xa_stop) < 0);
+	# (Cannot prove overlap if A and B start at same time,
+	# or A starts before B.)
+	#
+    }
+    elsif (defined $xa_stop and defined $xb_stop) {
+	if (Date_Cmp($xa_stop, $xb_start) <= 0) {
+	    # A finishes before B starts.
+	    return 0;
+	}
+	elsif (Date_Cmp($xa_start, $xb_start) < 0
+	       and Date_Cmp($xa_stop, $xb_start) > 0) {
+	    # A starts before B starts, finishes after.
 	    return 1;
 	}
-	t 'compared clumpidxes: same? ' . not $cmp;
-	return not $cmp;
+	elsif (Date_Cmp($xa_start, $xb_start) == 0
+	       and Date_Cmp($xa_start, $xa_stop) < 0
+	       and Date_Cmp($xb_start, $xb_stop) < 0) {
+	    # They start at the same time and neither is zero length.
+	    my $cmp = clumpidx_cmp($xa->{clumpidx}, $xb->{clumpidx});
+	    if (not defined $cmp) {
+		# No clumpidxes, so must overlap.  (Also happens if
+		# the two indexes were not comparable - but that will
+		# have been warned about already.)
+		#
+		t 'no clumpidxes, overlap';
+		return 1;
+	    }
+	    t 'compared clumpidxes: same? ' . not $cmp;
+	    return not $cmp;
+	}
+	elsif (Date_Cmp($xa_start, $xb_start) > 0
+	       and Date_Cmp($xa_start, $xb_stop) < 0) {
+	    # B starts before A starts, finishes after.
+	    return 1;
+	}
+	elsif (Date_Cmp($xa_start, $xb_stop) >= 0) {
+	    # B finishes before A starts.
+	    return 0;
+	}
+	else { die }
     }
-    t 'no time overlap, returning 0';
-    return 0;
 }
 
 
@@ -471,6 +488,7 @@ sub add_stop( $ ) {
 }
 
 sub programme_eq( $$ ) {
+#    local $Log::TraceMessages::On = 1;
     t 'comparing programmes ' . d($_[0]) . ' and ' . d($_[1]);
     return freeze($_[0]) eq freeze($_[1]);
 }
