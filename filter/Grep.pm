@@ -35,6 +35,7 @@ sub get_matcher( $$ ) {
 	    return [ 'regexp', sub {
 			 my $regexp = shift;
 			 return 0 if not exists $_->{$key};
+			 return 1 if $regexp eq '';
 			 if ($ignore_case) {
 			     return $_->{$key} =~ /$regexp/i;
 			 }
@@ -47,6 +48,7 @@ sub get_matcher( $$ ) {
 	    return [ 'regexp', sub {
 			 my $regexp = shift;
 			 die if not exists $_->{$key};
+			 return 1 if $regexp eq '';
 			 if ($ignore_case) {
 			     return $_->{$key} =~ /$regexp/i;
 			 }
@@ -58,7 +60,11 @@ sub get_matcher( $$ ) {
 	elsif ($mult eq '*') {
 	    return [ 'regexp', sub {
 			 my $regexp = shift;
-			 return 0 if not exists $_->{$key};
+			 # It is possible (though unusual) for the key
+			 # to exist but be an empty list.
+			 #
+			 return 0 if not exists $_->{$key} or not @{$_->{$key}};
+			 return 1 if $regexp eq '';
 			 foreach (@{$_->{$key}}) {
 			     return 1 if ($ignore_case ? /$regexp/i : /$regexp/);
 			 }
@@ -69,6 +75,7 @@ sub get_matcher( $$ ) {
 	    return [ 'regexp', sub {
 			 my $regexp = shift;
 			 die if not @{$_->{$key}};
+			 return 1 if $regexp eq '';
 			 foreach (@{$_->{$key}}) {
 			     return 1 if ($ignore_case ? /$regexp/i : /$regexp/);
 			 }
@@ -100,7 +107,10 @@ sub get_matcher( $$ ) {
 			 die if not exists $_->{$key};
 			 return 1 if $regexp eq '';
 			 for ($_->{$key}->[0]) {
-			     return 0 if not defined;
+			     if (not defined) {
+				 warn "undef text for $key";
+				 return 0;
+			     }
 			     if ($ignore_case) {
 				 return /$regexp/i;
 			     }
@@ -113,10 +123,13 @@ sub get_matcher( $$ ) {
 	elsif ($mult eq '*') {
 	    return [ 'regexp', sub {
 			 my $regexp = shift;
-			 return 0 if not exists $_->{$key};
+			 return 0 if not exists $_->{$key} or not @{$_->{$key}};
+			 return 1 if $regexp eq '';
 			 foreach (map { $_->[0] } @{$_->{$key}}) {
-			     return 1 if $regexp eq '';
-			     next if not defined;
+			     if (not defined) {
+				 warn "undef text for $key";
+				 next;
+			     }
 			     return 1 if ($ignore_case ? /$regexp/i : /$regexp/);
 			 }
 			 return 0;
@@ -126,9 +139,12 @@ sub get_matcher( $$ ) {
 	    return [ 'regexp', sub {
 			 my $regexp = shift;
 			 die if not @{$_->{$key}};
+			 return 1 if $regexp eq '';
 			 foreach (map { $_->[0] } @{$_->{$key}}) {
-			     return 1 if $regexp eq '';
-			     next if not defined;
+			     if (not defined) {
+				 warn "undef text for $key";
+				 next;
+			     }
 			     return 1 if ($ignore_case ? /$regexp/i : /$regexp/);
 			 }
 			 return 0;
