@@ -44,6 +44,7 @@ sub new
 	die "invalid usage - no $_" if ( !defined($self->{$_}));
     }
     #$self->{verbose}=2;
+    $self->{replaceDates}=0        if ( !defined($self->{replaceDates}));
     $self->{replaceTitles}=0       if ( !defined($self->{replaceTitles}));
     $self->{replaceCategories}=0   if ( !defined($self->{replaceCategories}));
     $self->{replaceURLs}=0         if ( !defined($self->{replaceURLs}));
@@ -51,8 +52,9 @@ sub new
     $self->{replaceActors}=0       if ( !defined($self->{replaceActors}));
     $self->{replacePresentors}=1   if ( !defined($self->{replacePresentors}));
     $self->{replaceCommentators}=1 if ( !defined($self->{replaceCommentators}));
-    $self->{replaceStarRatings}=1  if ( !defined($self->{replaceStarRatings}));
+    $self->{replaceStarRatings}=0  if ( !defined($self->{replaceStarRatings}));
 
+    $self->{updateDates}=1        if ( !defined($self->{updateDates}));
     $self->{updateTitles}=1       if ( !defined($self->{updateTitles}));
     $self->{updateCategories}=1   if ( !defined($self->{updateCategories}));
     $self->{updateCategoriesWithGenres}=1 if ( !defined($self->{updateCategoriesWithGenres}));
@@ -843,22 +845,33 @@ sub applyFound($$$)
 
     my $title=$prog->{title}->[0]->[0];
 
-    if ( defined($prog->{date}) ) {
-	if ( $prog->{date} ne $idInfo->{year} ) {
-	    $self->debug("replacing 'date' field from \"$prog->{date}\" to be \"$idInfo->{year}\" on \"$title\"");
-	    $prog->{date}=int($idInfo->{year});
-	}
-    }
-    else {
+    if ( $self->{updateDates} ) {
+	my $date;
+
 	# don't add dates only fix them for tv_series
 	if ( $idInfo->{qualifier} eq "movie" ||
 	     $idInfo->{qualifier} eq "video_movie" ||
 	     $idInfo->{qualifier} eq "tv_movie" ) {
-	    $self->debug("adding 'date' field (\"$idInfo->{year}\") on \"$title\"");
-	    $prog->{date}=int($idInfo->{year});
+	    #$self->debug("adding 'date' field (\"$idInfo->{year}\") on \"$title\"");
+	    $date=int($idInfo->{year});
 	}
 	else {
-	    $self->debug("not adding 'date' field to $idInfo->{qualifier} \"$title\"");
+	    #$self->debug("not adding 'date' field to $idInfo->{qualifier} \"$title\"");
+	    $date=undef;
+	}
+	
+	if ( $self->{replaceDates} ) {
+	    if ( defined($prog->{date}) && defined($date) ) {
+		$self->debug("replacing 'date' field");
+		delete($prog->{date});
+		$prog->{date}=$date;
+	    }
+	}
+	else {
+	    # only set date if not already defined
+	    if ( !defined($prog->{date}) && defined($date) ) {
+		$prog->{date}=$date;
+	    }
 	}
     }
     
@@ -889,13 +902,6 @@ sub applyFound($$$)
 	}
     }
 
-    my @categories;
-
-    my $mycategory=$self->{categories}->{$idInfo->{qualifier}};
-    die "how did we get here with an invalid qualifier '$idInfo->{qualifier}'" if (!defined($mycategory));
-
-    push(@categories, [$mycategory,'en']);
-
     if ( $self->{updateURLs} ) {
 	if ( $self->{replaceURLs} ) {
 	    if ( defined($prog->{url}) ) {
@@ -915,7 +921,7 @@ sub applyFound($$$)
 	    push(@rep, $url);
 	    for (@{$prog->{url}}) {
 		# skip urls for imdb.com that we're probably safe to replace
-		if ( !m;^http://www.imdb.com/M/title-exact;o ) {
+		if ( !m;^http://us.imdb.com/M/title-exact;o ) {
 		    push(@rep, $_);
 		}
 	    }
@@ -926,70 +932,43 @@ sub applyFound($$$)
 	}
     }
 
+    # squirrel away movie qualifier so its first on the list of replacements
+    my @categories;
+    push(@categories, [$self->{categories}->{$idInfo->{qualifier}}, 'en']);
+    if ( !defined($self->{categories}->{$idInfo->{qualifier}}) ) {
+	die "how did we get here with an invalid qualifier '$idInfo->{qualifier}'";
+    }
+
     my $details=$self->getMovieIdDetails($idInfo->{id});
     if ( $details->{noDetails} ) {
 	# we don't have any details on this movie
     }
     else {
-	# add directors list form www.imdb.com
-	if ( $self->{updateDirectors} ) {
-	    if ( defined($details->{directors}) ) {
-		# don't add directors for movie or (if tv show) we have EXACTLY ONE director
-		if ( scalar(@{$details->{directors}}) == 1 ||
-		     $idInfo->{qualifier} eq "movie" ||
-		     $idInfo->{qualifier} eq "video_movie" ||
-		     $idInfo->{qualifier} eq "tv_movie" ) {
+	# add directors list
+	if ( $self->{updateDirectors} && defined($details->{directors}) ) {
+	    # only update directors if we have exactly one or if
+	    # its a movie of some kind, add more than one.
+	    if ( scalar(@{$details->{directors}}) == 1 ||
+		 $idInfo->{qualifier} eq "movie" ||
+		 $idInfo->{qualifier} eq "video_movie" ||
+		 $idInfo->{qualifier} eq "tv_movie" ) {
 
-		    if ( $self->{replaceDirectors} ) {
-			if ( defined($prog->{credits}->{director}) ) {
-			    $self->debug("replacing director(s)");
-			    delete($prog->{credits}->{director});
-			}
-		    }
-
-		    my @list;
-		    # add top 3 billing directors list form www.imdb.com
-		    for my $name (splice(@{$details->{directors}},0,3)) {
-			push(@list, $name);
-		    }
-		    # preserve all existing directors listed if we did't already have them.
+		if ( $self->{replaceDirectors} ) {
 		    if ( defined($prog->{credits}->{director}) ) {
-			for my $name (@{$prog->{credits}->{director}}) {
-			    my $found=0;
-			    for(@list) {
-				if ( m/^$name$/i ) {
-				    $found=1;
-				}
-			    }
-			    if ( !$found ) {
-				push(@list, $name);
-			    }
-			}
-		    }
-		    $prog->{credits}->{director}=\@list;
-		}
-		else {
-		    $self->debug("not adding 'director' field to $idInfo->{qualifier} \"$title\"");
-		}
-	    }
-	}
-	if ( $self->{updateActors} ) {
-	    if ( defined($details->{actors}) ) {
-		if ( $self->{replaceActors} ) {
-		    if ( defined($prog->{credits}->{actor}) ) {
-			$self->debug("replacing actor(s) on $idInfo->{qualifier} \"$idInfo->{key}\"");
-			delete($prog->{credits}->{actor});
+			$self->debug("replacing director(s)");
+			delete($prog->{credits}->{director});
 		    }
 		}
-
+		
 		my @list;
-		# add top 3 billing actors list form www.imdb.com
-		for my $name (splice(@{$details->{actors}},0,3)) {
+		# add top 3 billing directors list form www.imdb.com
+		for my $name (splice(@{$details->{directors}},0,3)) {
 		    push(@list, $name);
 		}
-		# preserve all existing actors listed if we did't already have them.
-		if ( defined($prog->{credits}->{actor}) ) {
-		    for my $name (@{$prog->{credits}->{actor}}) {
+
+		# preserve all existing directors listed if we did't already have them.
+		if ( defined($prog->{credits}->{director}) ) {
+		    for my $name (@{$prog->{credits}->{director}}) {
 			my $found=0;
 			for(@list) {
 			    if ( m/^$name$/i ) {
@@ -1001,32 +980,63 @@ sub applyFound($$$)
 			}
 		    }
 		}
-		$prog->{credits}->{actor}=\@list;
+		$prog->{credits}->{director}=\@list;
 	    }
-	}
-	if ( $self->{updatePresentors} ) {
-	    if ( defined($details->{presenter}) ) {
-		if ( $self->{replacePresentors} ) {
-		    if ( defined($prog->{credits}->{presenter}) ) {
-			$self->debug("replacing presentor");
-			delete($prog->{credits}->{presenter});
-		    }
-		}
-		$prog->{credits}->{presenter}=$details->{presenter};
-	    }
-	}
-	if ( $self->{updateCommentators} ) {
-	    if ( defined($details->{commentator}) ) {
-		if ( $self->{replaceCommentators} ) {
-		    if ( defined($prog->{credits}->{commentator}) ) {
-			$self->debug("replacing commentator");
-			delete($prog->{credits}->{commentator});
-		    }
-		}
-		$prog->{credits}->{commentator}=$details->{commentator};
+	    else {
+		$self->debug("not adding 'director' field to $idInfo->{qualifier} \"$title\"");
 	    }
 	}
 
+	if ( $self->{updateActors} && defined($details->{actors}) ) {
+	    if ( $self->{replaceActors} ) {
+		if ( defined($prog->{credits}->{actor}) ) {
+		    $self->debug("replacing actor(s) on $idInfo->{qualifier} \"$idInfo->{key}\"");
+		    delete($prog->{credits}->{actor});
+		}
+	    }
+	    
+	    my @list;
+	    # add top 3 billing actors list form www.imdb.com
+	    for my $name (splice(@{$details->{actors}},0,3)) {
+		push(@list, $name);
+	    }
+	    # preserve all existing actors listed if we did't already have them.
+	    if ( defined($prog->{credits}->{actor}) ) {
+		for my $name (@{$prog->{credits}->{actor}}) {
+		    my $found=0;
+		    for(@list) {
+			if ( m/^$name$/i ) {
+			    $found=1;
+			}
+		    }
+		    if ( !$found ) {
+			push(@list, $name);
+		    }
+		}
+	    }
+	    $prog->{credits}->{actor}=\@list;
+	}
+
+	if ( $self->{updatePresentors} && defined($details->{presenter}) ) {
+	    if ( $self->{replacePresentors} ) {
+		if ( defined($prog->{credits}->{presenter}) ) {
+		    $self->debug("replacing presentor");
+		    delete($prog->{credits}->{presenter});
+		}
+	    }
+	    $prog->{credits}->{presenter}=$details->{presenter};
+	}
+	if ( $self->{updateCommentators} && defined($details->{commentator}) ) {
+	    if ( $self->{replaceCommentators} ) {
+		if ( defined($prog->{credits}->{commentator}) ) {
+		    $self->debug("replacing commentator");
+		    delete($prog->{credits}->{commentator});
+		}
+	    }
+	    $prog->{credits}->{commentator}=$details->{commentator};
+	}
+
+	# push genres as categories
 	if ( $self->{updateCategoriesWithGenres} ) {
 	    if ( defined($details->{genres}) ) {
 		for (@{$details->{genres}}) {
@@ -1034,7 +1044,26 @@ sub applyFound($$$)
 		}
 	    }
 	}
+
+	# current xmltv 0.5 doens't support more than one star rating,
+	# so we deal with this slightly different
+	if ( $self->{updateStarRatings} && defined($details->{ratingRank}) ) {
+	    if ( $self->{replaceStarRatings} ) {
+		if ( defined($prog->{'star-rating'}) ) {
+		    $self->debug("replacing 'star-rating'");
+		    delete($prog->{'star-rating'});
+		}
+		$prog->{'star-rating'}=["$details->{ratingRank}/10", undef];
+	    }
+	    else {
+		# if a star rating exists, then we leave it in place
+		if ( !defined($prog->{'star-rating'}) ) {
+		    $prog->{'star-rating'}=["$details->{ratingRank}/10", undef];
+		}
+	    }
+	}
     }
+
     if ( $self->{updateCategories} ) {
 	if ( $self->{replaceCategories} ) {
 	    if ( defined($prog->{category}) ) {
@@ -1057,23 +1086,9 @@ sub applyFound($$$)
 		}
 	    }
 	}
-	else {
-	    push(@{$prog->{category}}, @categories);
-	}
+	$prog->{category}=\@categories;
     }
 
-    if ( $self->{updateStarRatings} ) {
-	if ( defined($details->{ratingRank}) ) {
-	    if ( $self->{replaceStarRatings} ) {
-		if ( defined($prog->{'star-rating'}) ) {
-		    $self->debug("replacing (all) 'star-rating'");
-		    delete($prog->{'star-rating'});
-		}
-	    }
-	    $prog->{'star-rating'}=["$details->{ratingRank}/10", undef]
-	}
-    }
-    
     return($prog);
 }
 
