@@ -21,16 +21,23 @@
 # and ends at the same time throughout the EU it wouldn't be hard to
 # make it work for some other countries.
 # 
-# Parameters: unparsed date from the UK (or other places using UT/BST)
-# Returns:    parsed date
+# Parameters:
+#   unparsed date from the UK (or other places using UT/BST)
+# 
+#   (optional) timezone to assume if ambiguous (defaults to BST if not
+#   given or 'false')
+# 
+# Returns: parsed date
 # 
 # There's a one hour window where dates are ambigous; we assume UT
 # for these and print a warning.  Similarly there's a one hour window
 # where dates without a timezone are impossible; we die on those.
 # 
-sub parse_uk_date($) {
-    die 'usage: parse_uk_date(unparsed date)' if @_ != 1;
+sub parse_uk_date($;$) {
+    die 'usage: parse_uk_date(unparsed date [, default tz])'
+      unless (1 <= @_ and @_ < 3);
     my $date = shift;
+    my $default_tz = $_[0] || 'BST';
 
     if (defined gettz($date)) {
 	# An explicit timezone, no need for any funny business
@@ -41,15 +48,17 @@ sub parse_uk_date($) {
     my $dp = ParseDate($date);
     die "bad date $date" if not defined $dp or $dp eq '';
 
-    # Start and end of summer time in that year
+    # Start and end of summer time in that year, in UT
     my ($start_bst, $end_bst) = @{bst_dates(UnixDate($dp, '%Y'))};
 
     # The clocks shift backwards and forwards by one hour.
     my $clock_shift = "1 hour";
 
-    # The times that the clocks go forward to / back to.
+    # The times that the clocks go forward to in spring (local time)
     my $start_bst_skipto = DateCalc($start_bst, "+ $clock_shift");
-    my $end_bst_backto = DateCalc($end_bst, "- $clock_shift");
+
+    # The local time when the clocks go back
+    my $end_bst_backfrom = DateCalc($end_bst, "+ $clock_shift");
 
     if (Date_Cmp($dp, $start_bst) < 0) {
 	# Before the start of summer time.
@@ -64,18 +73,18 @@ sub parse_uk_date($) {
     }
     elsif (Date_Cmp($dp, $start_bst_skipto) < 0) {
 	die("$date is impossible "
-	    . "(summer time skips from $start_bst to $start_bst_skipto)" );
+	    . "(time goes from from $start_bst UT to $start_bst_skipto BST)" );
     }
-    elsif (Date_Cmp($dp, $end_bst_backto) < 0) {
+    elsif (Date_Cmp($dp, $end_bst) < 0) {
 	# During summer time.
 	return Date_ConvTZ($dp, 'BST', 'UT');
     }
-    elsif (Date_Cmp($dp, $end_bst) <= 0) {
-	warn("$date is ambiguous "
-	     . "(clocks go back from $end_bst to $end_bst_backto), "
-	     . "assuming not summer time" );
+    elsif (Date_Cmp($dp, $end_bst_backfrom) <= 0) {
+#	warn("$date is ambiguous "
+#	     . "(clocks go back from $end_bst_backfrom BST to $end_bst UT), "
+#	     . "assuming $default_tz" );
 
-	return $dp;
+	return Date_ConvTZ($dp, $default_tz, 'UT');
     }
     else {
 	# Definitely after the end of summer time.
@@ -133,11 +142,11 @@ sub date_to_uk($) {
 # Return the dates (in UT) when British Summer Time starts and ends in
 # a given year.
 # 
-# According to
-# <http://www.rog.nmm.ac.uk/leaflets/summer/summer.html>, summer
-# time starts at 01:00 on the last Sunday in March, and ends at
-# 01:00 on the last Sunday in October.  This has been the case
-# since 1998 - earlier dates are not handled.
+# According to <http://www.rog.nmm.ac.uk/leaflets/summer/summer.html>,
+# summer time starts at 01:00 on the last Sunday in March, and ends at
+# 01:00 on the last Sunday in October.  (That's 01:00 UT in both
+# cases, BTW.)  This has been the case since 1998 - earlier dates are
+# not handled.
 # 
 # Parameters: year (only 1998 or later works)
 # 
@@ -156,10 +165,10 @@ sub bst_dates($) {
 	my $mar_d = ParseDate($mar) or die "cannot parse $mar";
 	$start_bst = $mar_d if UnixDate($mar_d, "%A") =~ /Sunday/;
 
-	# N.B. 01:00 UT == 00:00 BST.  A time between '23:00' and
-	# '00:00' just before the last Sunday in October is ambiguous.
+	# A time between '00:00' and '01:00' just before the last
+	# Sunday in October is ambiguous.
 	# 
-	my $oct = "$year-10-$_" . ' 00:00';
+	my $oct = "$year-10-$_" . ' 01:00';
 	my $oct_d = ParseDate($oct) or die "cannot parse $oct";
 	$end_bst = $oct_d if UnixDate($oct_d, "%A") =~ /Sunday/;
     }

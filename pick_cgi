@@ -71,6 +71,17 @@
 # -- Ed Avis, epa98@doc.ic.ac.uk, 2000-06-30
 #  
 
+# Since this program runs with taint mode on, it won't pick up changes
+# in PERL5LIB.  So if you have installed modules somewhere
+# non-standard (such as your home directory), you have to add the
+# paths here explicitly.
+# 
+# For example, the following lines :-)
+# 
+use lib '/homes/epa98/lib/perl5/5.00503';
+use lib '/homes/epa98/lib/perl5/site_perl';
+use lib '/homes/epa98/lib/perl5/site_perl/5.005';
+
 use strict;
 use CGI qw<:standard -newstyle_urls>;
 use CGI::Carp qw<fatalsToBrowser carpout>; BEGIN { carpout(\*STDOUT) }
@@ -78,7 +89,8 @@ use XML::Simple;
 use Fcntl ':flock';
 use Date::Manip;
 use File::Copy;
-#use Dbg; $Dbg::On = 0; $Dbg::As_HTML = 1;
+use Log::TraceMessages qw<t d>; Log::TraceMessages::check_argv();
+$Log::TraceMessages::CGI = 1;
 
 ########
 # Configuration
@@ -95,6 +107,24 @@ my $TOWATCH = 'towatch';
 # Input file containing preferences (killfiled programmes, etc)
 my $PREFS_FILE = 'tvprefs';
 
+# Preferred languages - if information is available in several
+# languages, the ones in this list are used if possible.  List in
+# order of preference.  Devious things happen with different dialects
+# of the same language, eg 'en' vs 'en_GB', 'en_CA' and so on - see
+# which_lang() for details. 
+# 
+my @PREF_LANGS;
+
+# Hopefully the environment variable $LANG will be set
+my $el = $ENV{LANG};
+if (defined $el and $el =~ /\S/) {
+    $el =~ s/\..+$//; # remove character set
+    @PREF_LANGS = ($el);
+}
+else {
+    @PREF_LANGS = ('en'); # change for your language - or just set $LANG
+}
+
 ########
 # End of configuration
 
@@ -102,17 +132,33 @@ my $PREFS_FILE = 'tvprefs';
 sub store_prefs($$);
 sub display_form($);
 sub print_date_for($;$);                                                 
+sub which_lang($$);
+sub get_text($);
 
 # Keep the taint checking happy (the Cwd module runs pwd(1))
 $ENV{PATH} = '/bin:/usr/bin';
 
-print header(-expires => 'now');
-print start_html("TV listings");
+# Newer versions of CGI.pm have support for <meta http-equiv> stuff.
+# But for the moment, we'll keep compatibility with older ones.
+# 
+print header({ expires => 'now',
+	       'Content-Type' => 'text/html; charset=UTF-8' });
+
+print <<END
+<!DOCTYPE HTML PUBLIC "-//IETF//DTD HTML//EN">
+<html>
+  <head>
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+    <title>TV listings</title>
+  </head>
+END
+;
 
 # FIXME: what if we read one XML file to display the form, and then it
 # has changed by the time the user submits the form?
 # 
-my $xml = XMLin($LISTINGS);
+my $xml = XMLin($LISTINGS, forcearray => 1);
+t 'read xml: ' . d($xml);
 my @programmes = @{$xml->{programme}};
 
 # %wanted
@@ -226,7 +272,7 @@ sub store_prefs($$) {
 	    die "bad programme number $i for skip $skip, next $next"
 	      unless $skip <= $i and $i < $next;
 	    
-	    my $title = $programmes[$i]->{title}->{content};
+	    my $title = get_text($programmes[$i]->{title});
 	    print "$title: $val<br>\n";
 
 	    my $found = 0;
@@ -284,7 +330,7 @@ END
     flock(TOWATCH, LOCK_EX);
     for (my $i = $skip; $i < $next; $i++) {
 	my $val = param("prog$i");
-	my $title = $programmes[$i]->{title}->{content};
+	my $title = get_text($programmes[$i]->{title});
 	if ((defined $wanted{$title} and $wanted{$title} eq 'always')
             or (defined $val and $val eq 'yes') )
         {
@@ -323,7 +369,7 @@ sub display_form($) {
 	 $i++ )
     {
 	my $prog = $programmes[$i];
-	my $title = $prog->{title}->{content};
+	my $title = get_text($prog->{title});
 	for ($wanted{$title}) {
 	    if (not defined or $_ eq 'no' or $_ eq 'yes') {
 		push @nums_to_show, $i;
@@ -347,9 +393,9 @@ sub display_form($) {
 	my %h = %{$programmes[$n]};
 	my ($start, $stop, $channel) = @h{qw(start stop channel)};
 	$stop = '' if not defined $stop;
-	my $title = $h{title}->{content};
-	my $sub_title = $h{sub_title}->{content};
-	my $desc      = $h{desc}->{content};
+	my $title     = get_text($h{title});
+	my $sub_title = get_text($h{sub_title}) if $h{sub_title};
+	my $desc      = get_text($h{desc})      if $h{desc};
 	
 	if (defined $prev) {
 	    print_date_for(\%h, $prev);
@@ -415,23 +461,173 @@ sub display_form($) {
 # and begins a new one after the date.
 # 
 sub print_date_for($;$) {
-#    local $Dbg::On = 0;
+    local $Log::TraceMessages::On = 0;
     die 'usage: print_date_for(programme, [prev programme])'
       unless 1 <= @_ and @_ < 3;
     my ($prog, $prev) = @_;
-#    t('$prog=' . d($prog));
-#    t('$prev=' . d($prev));
+    t('$prog=' . d($prog));
+    t('$prev=' . d($prev));
 
     my $DAY_FMT = '%A'; # roughly as for date(1)
 
     my $day = UnixDate($prog->{start}, $DAY_FMT);
     my $prev_day = defined $prev ? UnixDate($prev->{start}, $DAY_FMT) : undef;
-#    t('$day=' . d($day));
-#    t('$prev_day=' . d($prev_day));
+    t('$day=' . d($day));
+    t('$prev_day=' . d($prev_day));
 
     if ((not defined $prev_day) or ($day ne $prev_day)) {
 	print "</table>\n";
 	print h1($day);
 	print '<table border="1">', "\n";
     }
+}
+
+
+# which_lang()
+# 
+# Parameters:
+#   reference to list of preferred languages (first is
+#     best).  Here, a language is a string like 'en' or 'fr_CA', or
+#     'fr_*' which is any dialect of French except plain 'fr'.
+# 
+#   reference to non-empty list of available languages.  Here, a
+#     language can be like 'en', 'en_CA', or '' meaning 'unknown'.
+# 
+# Returns: which language to use.  Can be 'en', 'fr_CA' or ''.
+# 
+# So for example:
+#   You know English and prefer US English:
+#     [ 'en_US' ]
+# 
+#   You know English and German, German/Germany is preferred:
+#     [ 'en', 'de_DE' ]
+# 
+#   You know English and German, but preferably not Swiss German:
+#     [ 'en', 'de', 'de_*', 'de_CH' ]
+#   Here any dialect of German (eg de_DE, de_AT) is preferable to de_CH.
+# 
+sub which_lang($$) {
+    die 'usage: which_lang(listref of preferred langs, listref of available)'
+      if @_ != 2;
+    my ($pref, $avail) = @_;
+
+    my (%explicit, %implicit);
+    my $pos = 0;
+    my $add_explicit = sub {
+	die "preferred language $_ listed twice"
+	  if defined $explicit{$_[0]};
+	delete $implicit{$_[0]};
+	$explicit{$_[0]} = $pos++;
+    };
+    my $add_implicit = sub {
+	$implicit{$_[0]} = $pos++ unless defined $explicit{$_[0]};
+    };
+    
+    foreach (@$pref) {
+	$add_explicit->($_);
+
+	if (/^[a-z][a-z]$/) {
+	    $add_implicit->($_ . '_*');
+	}
+	elsif (/^([a-z][a-z])_([A-Z][A-Z])$/) {
+	    $add_implicit->($1);
+	    $add_implicit->($1 . '_*');
+	}
+	elsif (/^([a-z][a-z])_\*$/) {
+	    $add_implicit->($1);
+	}
+	else { die "bad language '$_'" } # FIXME support 'English' etc
+    }
+
+    my %ranking = (reverse(%explicit), reverse(%implicit));
+    my @langs = @ranking{sort { $a <=> $b } keys %ranking};
+    my %avail;
+    foreach (@$avail) {
+	$avail{$_}++ && die "available language $_ listed twice";
+    }
+
+    while (defined (my $lang = shift @langs)) {
+	if ($lang =~ /^([a-z][a-z])_\*$/) {
+	    # Any dialect of $1 (but not standard).  Work through all
+	    # of @$avail in order trying to find a match.  (So there
+	    # is a slight bias towards languages appearing earlier in
+	    # @$avail.)
+	    # 
+	    my $base_lang = $1;
+	    AVAIL: foreach (@$avail) {
+		if (/^\Q$base_lang\E_/) {
+		    # Well, it matched... but maybe this dialect was
+		    # explicitly specified with a lower priority.
+		    # 
+		    foreach my $lower_lang (@langs) {
+			next AVAIL if (/^\Q$lower_lang\E$/);
+		    }
+			
+		    return $_;
+		}
+	    }
+	}
+	else {
+	    # Exact match
+	    return $lang if $avail{$lang};
+	}
+    }
+    
+    # Couldn't find anything - pick first available language.
+    return $avail->[0];
+}
+
+
+# get_text()
+# 
+# This is specific to XML::Simple and the file format we use.  Given a
+# reference to a list of XML elements (maybe with just one element)
+# each of which is a hash with 'content' and maybe 'lang', pick the
+# correct text based on the user's preferred language.
+# 
+sub get_text($) {
+    die 'usage: get_text(gunk from XML::Simple)' if @_ != 1;
+    die if not $_[0];
+    my @bits = @{$_[0]};
+    t 'get_text(), bits are: ' . d(\@bits);
+    my @langs;
+    my %seen;
+    foreach (@bits) {
+	my $lang = $_->{lang};
+	if (defined $lang) {
+	    die "two bits of text both with lang '$lang'"
+	      if $seen{$lang}++;
+	    push @langs, $lang;
+	}
+	else {
+	    die "two bits of text both with no language"
+	      if $seen{''}++;
+	    push @langs, '';
+	}
+    }
+    my $which = which_lang(\@PREF_LANGS, \@langs);
+    foreach (@bits) {
+	if ($_->{lang} eq $which) {
+	    t 'found bit with lang ' . d($which) . ': ' . d($_);
+	    my $content = $_->{content};
+
+	    # XML::Simple 1.04 and below had a bug with the
+	    # 'forcearray' option making text content into an array
+	    # (with one element, I think).
+	    # 
+	    my $type = ref($content);
+	    if ($type eq 'ARRAY') {
+		die 'expected exactly one element in text content array'
+		  if @$content != 1;
+		return $content->[0];
+	    }
+	    elsif (not $type) {
+		return $content;
+	    }
+	    else {
+		die "unexpected structure $type for text content";
+	    }
+	}
+    }
+    die;
 }

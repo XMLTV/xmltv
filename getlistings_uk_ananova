@@ -53,13 +53,9 @@ require 'uk_tz.pl';
 use LWP::Simple;
 use XML::Writer;
 use Fcntl;
+use Tie::RefHash;
 
-# I have a module I use for trace messages; you can get it at
-# <http://www.doc.ic.ac.uk/~epa98/lib/perl5/site_perl/Dbg.pm>.  That's
-# what all the t('hello') type statements are.  But you can probably
-# just leave them commented out.
-# 
-#use Dbg; $Dbg::On = 0;
+use Log::TraceMessages qw(t d); Log::TraceMessages::check_argv();
 
 # Memoize some subroutines if possible (25x speedup)
 eval { require Memoize };
@@ -103,19 +99,48 @@ my %CHANNELS = (bbc1    => 'bbc1.bbc.co.uk',
 # Day 8 is the same as day 1, etc.  So num. days should be < 8.
 my $NUMDAYS = 7;
 
+# Quicker version for testing
+#%CHANNELS = (ch4 => 'channel4.com'); $NUMDAYS = 7;
+
 # A list of channels available for me on Sky Digital - all the free
-# ones, plus Sky One.  FIXME: make up DNS-style names for all of
-# these. 
+# ones, plus Sky One and some music channels.
 # 
-#                 bbc1 bbc2 ch4 ch5 radio1 radio2 radio3 radio4
-#		  radio5mw worldsvc atlantic252 classicfm talkradiouk
-#                 virgin bbcchoice bbcknowledge bbcnews24
-#		  bbcparliament bloomberg cnn musicchoiceblues
-#		  musicchoiceclassical musicchoicecountry
-#		  musicchoicedance musicchoiceeasy musicchoicegold
-#		  musicchoicehits musicchoicejazz musicchoicelove
-#		  musicchoicerock qvc sky_news sky_channel tcm
-#		  tvasia
+%CHANNELS = (bbc1               => 'bbc1.bbc.co.uk',
+	     bbc2               => 'bbc2.bbc.co.uk',
+	     carlton            => 'carlton.com',
+	     ch4                => 'channel4.com',
+	     ch5                => 'channel5.co.uk',
+	     radio1             => 'radio-1.bbc.co.uk',
+	     radio2             => 'radio-2.bbc.co.uk',
+	     radio3             => 'radio-3.bbc.co.uk',
+	     radio4             => 'radio-4.bbc.co.uk',
+	     radio5mw           => 'radio-5-mw.bbc.co.uk',
+	     worldsvc           => 'world-svc.bbc.com',
+#	     atlantic252        => 'atlantic252.com', # seems not to work
+	     classicfm          => 'classicfm.com',
+	     talkradiouk        => 'talk-radio.co.uk',
+	     virgin             => 'virginradio.co.uk',
+	     bbcchoice          => 'bbc-choice.bbc.co.uk',
+	     bbcknowledge       => 'bbc-knowledge.bbc.co.uk',
+	     bbcnews24          => 'bbc-news-24.bbc.co.uk',
+	     bbcparliament      => 'bbc-parliament.bbc.co.uk',
+	     bloomberg          => 'bloomberg.com',
+	     cnn                => 'europe.cnn.com',
+	     musicchoiceblues   => 'blues.musicchoice.sky.com',
+	     musicchoicecountry => 'country.musicchoice.sky.com',
+	     musicchoicedance   => 'dance.musicchoice.sky.com',
+	     musicchoiceeasy    => 'easy.musicchoice.sky.com',
+	     musicchoicegold    => 'gold.musicchoice.sky.com',
+	     musicchoicehits    => 'hits.musicchoice.sky.com',
+	     musicchoicejazz    => 'jazz.musicchoice.sky.com',
+	     musicchoicelove    => 'love.musicchoice.sky.com',
+	     musicchoicerock    => 'rock.musicchoice.sky.com',
+	     qvc                => 'qvc.co.uk',
+	     sky_news           => 'sky-news.sky.com',
+	     sky_channel        => 'sky-one.sky.com',
+	     tcm                => 'tcm.turner.com',
+	     tvasia             => 'tvasia.com' # maybe not right
+	    );
 
 # What language the pages are in.  This has no real effect :-)
 my $LANG = 'en';
@@ -150,6 +175,15 @@ sub special_presenter($);
 sub special_actor($);
 sub special_radio4($);
 sub special_film($);                                                     
+sub add_clumpidx($$);
+sub new_relation();
+sub related($$$);
+sub relate($$$);
+sub unrelate($$$);
+sub nuke_from_rel($$);
+sub relatives($$);
+sub fix_clumps($$$);
+sub check_page_dates($);
 
 # Special-case mungers for various programme types.  Each of these
 # should take a single programme and return: a reference to a list of
@@ -179,39 +213,49 @@ my @thelot;
 foreach my $channel (sort keys %CHANNELS) {
     my $internal_name = $CHANNELS{$channel};
 
-    foreach (@{pages_for_channel($channel)}) {
-	foreach (@{programmes_from_html($_)}) {
-	    $_->{channel} = $internal_name;
+    my @pages = @{pages_for_channel($channel)};
+    @pages = @{check_page_dates(\@pages)};
 
-	    # Apply all special-case handlers.  We just haphazardly
-	    # run one after the other; when a programme has been run
-	    # through all of them in sequence without any changes, we
-	    # move it to @progs_done.
-	    # 
-	    # The reason for using _lists_ is that some handlers turn
-	    # a single programme into several.
-	    # 
-	    my @progs = ($_);
-	    my @progs_done = ();
-	    PROG: while (@progs) {
-		my $prog = shift @progs;
-#		t('running handlers for prog: ' . d($prog));
-		foreach (@special_handlers) {
-#		    t('running handler: ' . d($_));
-		    my $out = $_->($prog);
-		    if (defined $out) {
-#			t('gave new list of progs: ' . d($out));
-			push @progs, @$out;
-			next PROG;
-		    }
-#		    t('gave undef');
+    foreach (@pages) {
+	my @progs = @{programmes_from_html($_)};
+	$_->{channel} = $internal_name foreach @progs;
+
+	# Programmes sharing a clump - when one is updated, the other
+	# may need updating too.
+	# 
+	my $rel = new_relation();
+	add_clumpidx(\@progs, $rel);
+	t 'related programmes: ' . d($rel);
+	
+	# Apply all special-case handlers.  We just haphazardly
+	# run one after the other; when a programme has been run
+	# through all of them in sequence without any changes, we
+	# move it to @progs_done.
+	# 
+	# The reason for using _lists_ is that some handlers turn
+	# a single programme into several.
+	# 
+	my @progs_done = ();
+        PROG: while (@progs) {
+	    my $prog = shift @progs;
+	    t('running handlers for prog: ' . d($prog));
+	    foreach (@special_handlers) {
+		t('running handler: ' . d($_));
+		my $out = $_->($prog);
+		if (defined $out) {
+		    t('gave new list of progs: ' . d($out));
+		    fix_clumps($prog, $out, $rel);
+		    push @progs, @$out;
+		    next PROG;
 		}
-		push @progs_done, $prog;
+		t('gave undef');
 	    }
-
-#	    t('writing programme: ' . d($_));
-	    write_programme($writer, $_) foreach @progs_done;
+	    t 'none of the handlers fired, finished with this prog';
+	    push @progs_done, $prog;
 	}
+
+	t 'processed all of them for this page, writing';
+	write_programme($writer, $_) foreach @progs_done;
     }
 }
 
@@ -230,6 +274,7 @@ exit();
 #   the Ananova site 
 # 
 sub pages_for_channel($) {
+    local $Log::TraceMessages::On = 0;
     die 'usage: html_for_channel(channel name)' if @_ != 1;
     my $ch = shift;
     my @r;
@@ -238,8 +283,10 @@ sub pages_for_channel($) {
     foreach my $day (1 .. $NUMDAYS) {
 	print STDERR "channel $ch, day $day\n";
 	my $url = "$BASE/day$day/$ch.html";
+	t 'getting url: ' . d($url);
 	my $page = get($url);
 	die "cannot get $url" if not defined $page;
+	t 'got page: ' . d($page);
 	push @r, $page;
     }
 
@@ -319,6 +366,7 @@ sub programmes_from_html($) {
 # {'time'} but has {'start'} instead.
 # 
 sub date_programmes($$) {
+#    local $Log::TraceMessages::On = 1;
     die 'usage: date_programmes(ref to list of programmes, date)'
       if @_ != 2;
     my ($progs, $base_day) = @_;
@@ -327,15 +375,22 @@ sub date_programmes($$) {
     
     my $prev_date;
     my $day_later = ParseDateDelta('+1 day') or die;
+    my $current_tz = 0; # not undef, because of Memoize complaining
   
     foreach (@$progs) {
-#	t('adding date to programme ' . d($_));
+	t('adding date to programme ' . d($_));
 	my $t = time12to24($_->{'time'});
 	
 	# $t should be hours and minutes, add seconds
 	$t =~ s/\b(\d\d):(\d\d)\b/$1:$2:00/ or die "bad hh:mm $t";
 
-	my $prog_date = parse_uk_date("$base_day $t");
+	if (defined gettz($t)) {
+#	    local $Log::TraceMessages::On = 1;
+	    t "found explicit timezone $t, using for future progs";
+	    $current_tz = gettz($t);
+	}
+
+	my $prog_date = parse_uk_date("$base_day $t", $current_tz);
 	die "bad base day + time '$t'"
 	  if (not defined $prog_date) or ($prog_date !~ /\S/);
 
@@ -345,16 +400,38 @@ sub date_programmes($$) {
 	    # Seem to have jumped backwards in time.  Must be the next
 	    # day.
 	    # 
-	    my $err;
-	    $base_day = UnixDate DateCalc($base_day, $day_later, \$err), '%Q';
-	    die "error from DateCalc(): $err" if defined $err;
-	    $prog_date = parse_uk_date("$base_day $t");
-	    die "bad base day + time '$t'"
-	      if (not defined $prog_date) or ($prog_date !~ /\S/);
+	    t 'time is lower than before';
+	    my $prev_day = UnixDate $prev_date, '%Q';
+	    t 'previous programme was at ' . d($prev_date);
+	    my $threshold = ParseDate("$prev_day 12:00:00");
+	    t 'threshold is ' . d($threshold);
+	    if (Date_Cmp($prev_date, $threshold) < 0) {
+		# I can't believe that one programme would last from
+		# before 12:00 until after midnight on any day.  So
+		# this seeming jump to the next day is bogus - it's
+		# the same day but the time is a little bit earlier
+		# for some reason.  (Probably UT/BST switching)
+		# 
+		t 'previous programme started before threshold, ' .
+		  'cannot be next day';
+	    }
+	    else {
+		t 'must be next day';
+		my $err;
+		$base_day = UnixDate
+		  DateCalc($base_day, $day_later, \$err),
+		  '%Q';
+		die "error from DateCalc(): $err" if defined $err;
+		$prog_date = parse_uk_date("$base_day $t", $current_tz);
+		die "bad base day + time '$t'"
+		  if (not defined $prog_date) or ($prog_date !~ /\S/);
+		t 'new base day: ' . d($base_day);
+	    }
 	}
-    
+
 	delete $_->{'time'};
 	$_->{'start'} = $prog_date;
+	t 'new start time: ' . d($_->{start});
 	$prev_date = $prog_date;
     }
 }
@@ -365,15 +442,7 @@ sub date_programmes($$) {
 # Given a programme or clump of programmes as a ref to a list of bits
 # of text, each with 'bold' and 'italic' flags, return a ref to a list
 # where each element is a hashref of time, title, sub_title,
-# and desc for one programme.
-# 
-# Normally the bits passed in will be one programme with its own start
-# time.  However it often happens that two programmes share a
-# timeslot, for example 'News' and 'Weather'.  In this case the
-# listref returned will have two elements, with the same start time.
-# But there will be an extra key 'clumpidx' which distinguishes the
-# two; the first programme has clumpidx 0/N, the second 1/N and so on,
-# where there are N programmes in the clump.
+# and desc for one programme.  (But see add_clumpidx())
 # 
 sub extract_progs($) {
     die 'usage: extract_progs(list of bits of text)' if @_ != 1;
@@ -425,6 +494,8 @@ sub extract_progs($) {
 	$t =~ s/\s*\Q&\E\s*/ and /g;
 
 	if ($b and not $i and istime($t)) {
+#	    local $Log::TraceMessages::On = 1;
+	    t 'found time: ' . d($t);
 	    die "time already set to $p->{time} but $t found"
 	      if defined $p->{time};
 	    $p->{time} = $t;
@@ -434,6 +505,24 @@ sub extract_progs($) {
 	    # But (Film) ends up as sub-title, fixed by specials
 	}
 	elsif ($b and not $i) {
+#	    local $Log::TraceMessages::On = 1;
+	    t 'found bold and not italic: ' . d($t);
+	    if ($t =~ s/^\( ( BST | UT | GMT ) \) \s*//x) {
+		my $tz = $1;
+		t 'found timezone: ' . d($tz);
+		if (not defined $p->{time}) {
+		    warn "timezone $tz found in description, but no time";
+		}
+		elsif (defined gettz($p->{time})) {
+		    warn("timezone $tz found in description, " .
+			 "but time $p->{time} already has timezone");
+		}
+		else {
+		    $p->{time} .= " $tz";
+		    t 'added timezone to $p->{time}, now ' . d($p->{time});
+		}
+	    }
+
 	    $t =~ s!/! / !g;
 	    if (not defined $p->{title}) {
 		$p->{title} = $t;
@@ -483,24 +572,14 @@ sub extract_progs($) {
 	}
 	else { die }
     }
-
+		
     if (check_p($p)) {
 	push @r, $p;
-#	t('\@r now ' . d(\@r));
     }
     else {
 	# check_p() gives its own error
 	warn "ignoring programme"; 
-#	t('\@r remains ' . d(\@r));
     }
-
-    my $num_in_clump = @r;
-    if ($num_in_clump > 1) {
-	foreach (0 .. $#r) {
-	    $r[$_]->{clumpidx} = "$_/$num_in_clump";
-	}
-    }
-
     return \@r;
 }
 
@@ -606,7 +685,8 @@ sub istime($) {
 
 # time12to24()
 # 
-# Convert a 12 hour time to 24 hour.
+# Convert a 12 hour time string to a 24 hour one, without anything too
+# fancy.  In particular the timezone is passed through unchanged.
 # 
 sub time12to24($) {
     die 'usage: time12to24(12 hour time string)' if @_ != 1;
@@ -706,7 +786,7 @@ sub write_programme($$) {
     $w->dataElement('sub-title', $sub_title, lang => $LANG)
       if defined $sub_title;
 
-    if (defined $desc) {
+    if (defined $desc and $desc =~ /\S/) {
 	$desc =~ s/^\s+//; $desc =~ s/\s+$//;
 	$w->dataElement('desc', $desc, lang => $LANG);
 
@@ -1016,11 +1096,340 @@ sub special_film($) {
     $p->{category} = 'film';
     undef $p->{sub_title};
 
-    if ($p->{desc} =~ s/^(\d{4})\s+//) {
+    if (defined $p->{desc} and $p->{desc} =~ s/^(\d{4})\s+//) {
 	warn "found year $1 in description, replacing date $p->{date}"
 	  if defined $p->{date};
 	$p->{date} = $1;
     }
 
     return [ $p ];
+}
+
+
+# add_clumpidx()
+# 
+# Sometimes two programmes on a channel are given the same
+# start time in the listings.  This seems to happen when the
+# first is a 'mothership' containing several smaller things,
+# for example '11:00 The Core, 11:00 Core News'.
+# 
+# We add a 'clumpidx' attribute to distinguish these
+# programmes.  Eg 'The Core' has clumpidx '0/2' and 'Core
+# News' has '1/2'.
+# 
+# Parameters:
+#   a reference to a list of programmes for one channel, which will
+#   be modified
+# 
+#   a reference to a 'relation' scalar.  Programmes sharing a clump are
+#   in this relation together.  This scalar will be modified.
+# 
+sub add_clumpidx($$) {
+    die "usage: add_clumpidx(ref to list of programmes, 'related' hashref)"
+      if @_ != 2;
+    my ($progs, $related) = @_;
+    t('add_clumpidx() ENTRY');
+
+    my $last_start;
+    my %num_in_clump; # Maps start time to num. progs at that time
+    foreach (@$progs) {
+	t 'looking at programme: ' . d($_);
+	my $start = $_->{start};
+	t '$start=' . d($start);
+	$_->{clumpidx} = $num_in_clump{$start}++;
+	t 'clumpidx now ' . d($_->{clumpidx});
+
+	if ($num_in_clump{$start} > 1) {
+	    if (not defined $last_start or $last_start ne $start) {
+		warn <<END
+more than one programme at $start on same channel, \
+but not consecutive in listings (this is $_->{title})
+END
+				 ;
+	    }
+	}
+	$last_start = $start;
+    }
+    
+    # Okay, we've got clumpidx of '0', '1' where needed, but even
+    # better would be '0/2', '1/2'.  We look at how many programmes
+    # are in each clump: if only one, remove the clumpidx entirely.
+    # If more than one, put the full 'x/y' clumpidx and additionally
+    # make a note to updated the %{$related} hash.
+    # 
+    t "refine clumpidx's and build todo list";
+    my %todo;
+    foreach (@$progs) {
+	t 'looking at programme: ' . d($_);
+	my $start = $_->{start};
+	my $num = $num_in_clump{$start};
+	die if not defined $_->{clumpidx};
+	if ($num == 1) {
+	    # Ordinary, sane programme not sharing its slot.  This
+	    # would have a clumpidx of '0/1', which isn't worth
+	    # putting in the output.
+	    # 
+	    t 'only programme in slot';
+	    die if $_->{clumpidx} ne '0';
+	    delete $_->{clumpidx};
+	}
+	elsif ($num > 1) {
+	    t 'shares a slot';
+	    $_->{clumpidx} .= "/$num";
+	    t 'new clumpidx: ' . d($_->{clumpidx});
+	    push @{$todo{$start}}, $_;
+	    t "\$todo{$start} now " . d($todo{$start});
+	}
+	else { die }
+    }
+
+    # Update $related
+    t 'updating $related from todo list';
+    foreach (keys %todo) {
+	t 'todo list for ' . d($_);
+	my @l = @{$todo{$_}};
+	t 'list of programmes: ' . d(\@l);
+	foreach my $ai (0 .. $#l) {
+	    foreach my $bi ($ai+1 .. $#l) {
+		my $a = $l[$ai]; my $b = $l[$bi];
+		t "$a and $b related";
+		die if "$a" eq "$b";
+		warn "$a, $b over-related" if related($related, $a, $b);
+		relate($related, $a, $b);
+	    }
+	}
+    }
+
+    t 'add_clumpidx() EXIT';
+}
+
+
+# Routines to handle a symmmetric 'relation'.  This is used to keep
+# track of which programmes are sharing a clump so that fix_clumps()
+# can sort them out if needed.
+# 
+sub new_relation() {
+    die 'usage: new_relation()' if @_;
+    my %h; tie %h, 'Tie::RefHash';
+    return \%h;
+}
+sub related($$$) {
+    die 'usage: related(relation, a, b)' if @_ != 3;
+    my ($rel, $a, $b) = @_;
+    my $list = $rel->{$a};
+    return 0 if not defined $list;
+    foreach (@$list) {
+	return 1 if "$_" eq "$b";
+    }
+    return 0;
+}
+sub relate($$$) {
+    die 'usage: related(relation, a, b)' if @_ != 3;
+    my ($rel, $a, $b) = @_;
+    unless (related($rel, $a, $b)) {
+	push @{$rel->{$a}}, $b;
+	push @{$rel->{$b}}, $a;
+    }
+}
+sub unrelate($$$) {
+    die 'usage: related(relation, a, b)' if @_ != 3;
+    my ($rel, $a, $b) = @_;
+    die unless related($rel, $a, $b) and related($rel, $b, $a);
+    @{$rel->{$a}} = grep { "$_" ne "$b" } @{$rel->{$a}};
+    @{$rel->{$b}} = grep { "$_" ne "$a" } @{$rel->{$b}};
+}    
+sub nuke_from_rel($$) {
+    die 'usage: nuke_from_rel(relation, a)' if @_ != 2;
+    my ($rel, $a) = @_;
+    die unless ref($rel) eq 'HASH';
+    foreach (@{relatives($rel, $a)}) {
+	die unless related($rel, $a, $_);
+	unrelate($rel, $a, $_);
+    }
+
+    # Tidy up by removing from hash
+    die if defined $rel->{$a} and @{$rel->{$a}};
+    delete $rel->{$a};
+}
+sub relatives($$) {
+    die 'usage: relatives(relation, a)' if @_ != 2;
+    my ($rel, $a) = @_;
+    die unless ref($rel) eq 'HASH';
+    if ($rel->{$a}) {
+	return [ @{$rel->{$a}} ]; # make a copy
+    }
+    else {
+	return [];
+    }
+}
+
+
+# fix_clumps()
+# 
+# When a programme sharing a clump has been modified by one of the
+# 'special handler' kludges, patch things up so that other things in
+# the clump are consistent.
+# 
+# This is to handle one particular problem - a compound '4Learning'
+# programme followed (without giving a new time) by 'Driven'.  Ugh.
+# But it should do something sensible most of the time, or moan that
+# it cannot.  You can just ignore this whole subroutine.
+# 
+sub fix_clumps($$$) {
+    die 'usage: fix_clumps(old programme, listref of replacements, clump relation)' if @_ != 3;
+    my ($orig, $new, $rel) = @_;
+
+    sub bydate { Date_Cmp($a->{start}, $b->{start}) }
+
+    my @relatives = sort bydate @{relatives($rel, $orig)};
+    my @new = sort bydate @$new;
+
+    t 'how many programmes has $prog been split into?';
+    if (@new == 0) {
+	t 'deleted programme entirely!';
+	if (@relatives) {
+	    warn 'programme sharing a clump was deleted, '
+	      . "this isn't handled";
+	    
+	    nuke_from_rel($rel, $orig);
+	}
+    }
+    elsif (@new == 1) {
+	t 'still exactly one programme';
+	if (@relatives and "$new[0]" ne "$orig") {
+	    t "programme sharing a clump was replaced, this isn't handled";
+	    nuke_from_rel($rel, $orig);
+	}
+	else {
+	    # Was _altered_ rather than replaced.  Keep in relation.
+	}
+    }
+    elsif (@new >= 2) {
+	t 'split into multiple programmes';
+	nuke_from_rel($rel, $orig);
+	
+	foreach (@new) {
+	    my $c = $_->{clumpidx};
+	    if (defined $c and $c ne '0') {
+		warn 'special gave several programmes '
+		  . "some with clumpidx; not handled";
+	    }
+	}
+
+	if (@relatives) {
+	    # Any programmes sharing the clump will need their
+	    # clumpidx's and possibly start times updated, now that
+	    # one of the occupants has split into several bits.
+	    # 
+	    my ($first_new, $last_new) = @new[0, $#new];
+	    my ($first_rel, $last_rel) = @relatives[0, $#relatives];
+	    
+	    if ($orig->{clumpidx} =~ m!^0/!) {
+		# New programmes are before all the relatives.  Update
+		# clumpidx's and start times so the relatives follow
+		# on from the last of the new programmes.
+		# 
+		
+		$last_new->{clumpidx} = $orig->{clumpidx};
+		# and the clump is the same size
+		# as before.
+		# 
+		
+		foreach (@relatives) {
+		    $_->{start} = $last_new->{start};
+		    relate($rel, $_, $last_new);
+		}
+	    }
+	    elsif ($orig->{clumpidx} =~ m!(\d+)/(\d+)$! and ($1 + 1 == $2) ) {
+		# New programmes are after all the
+		# relatives.
+		# 
+		$first_rel->{clumpidx} =~ m!^\d+/(\d+)$!
+		  or warn "bad clumpidx";
+		warn "bad clumpidx [1]"
+		  if $1 ne (scalar @relatives);
+		my $nclumps = $1;
+		
+		my @all = (@new, @relatives);
+		my $curr_idx = 0;
+		foreach (@all) {
+		    $_->{clumpidx} =
+		      $curr_idx++ . "/$nclumps";
+		}
+		warn if $curr_idx + 1 != $nclumps;
+
+		foreach my $a (@all) {
+		    foreach my $b (@all) {
+			next if "$a" eq "$b" or related($rel, $a, $b);
+			relate($rel, $a, $b);
+		    }
+		}
+	    }
+	    else {
+		warn "special split programme in " .
+		  "middle of a clump; not handled";
+	    }
+	}
+    }
+}
+
+
+# check_page_dates()
+# 
+# Sometimes the site leaves out pages for a particular day, or gets
+# them in the wrong order.  Attempt to work around this, and if that's
+# not possible at least warn the user.
+# 
+# Parameters: ref to list of HTML pages for a single channel.
+# 
+# Returns: ref to list of surviving pages, after removing duplicates
+# 
+sub check_page_dates($) {
+    die 'usage: check_page_dates(ref to list of HTML pages)'
+      if @_ != 1;
+    my @pages = @{shift()};
+    my @r;
+    my $last_date;
+    my $day_later = ParseDateDelta('+1 day') or die;
+    my (%seen, %missing);
+    foreach (@pages) {
+	my $date_str = get_date_from_page($_);
+	if (not defined $date_str) {
+	    warn 'cannot find date in page, skipping page';
+	    next;
+	}
+	my $date = ParseDate($date_str);
+	if (not defined $date) {
+	    die "got bad date from page: $date_str";
+	}
+	my $date_p = UnixDate $date, '%Q';
+
+	if (defined $last_date) {
+	    my $err;
+	    my $expected_date = DateCalc($last_date, $day_later, \$err);
+	    my $expected_date_p = UnixDate $expected_date, '%Q';
+
+	    die "error from DateCalc(): $err" if defined $err;
+	    if (Date_Cmp($expected_date, $date) != 0) {
+#		warn "page expected to be $expected_date_p is $date_p";
+		$missing{$expected_date}++;
+	    }
+	    if ($seen{$date}++) {
+#		warn "found page for $date_p, but already done - skipping";
+		next;
+	    }
+	}
+	
+	push @r, $_;
+	$last_date = $date;
+    }
+
+    foreach (keys %missing) {
+	unless ($seen{$_}) {
+	    my $p = UnixDate $_, '%Q';
+	    warn "page for $p on this channel seems to be missing";
+	}
+    }
+
+    return \@r;
 }
