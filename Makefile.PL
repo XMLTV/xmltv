@@ -257,7 +257,7 @@ my @opt_components
        prereqs => { 'HTML::TreeBuilder' => 0 } },
 
      { name => 'tv_check',
-       blurb => 'Graphical front-end to listings data',
+       blurb => 'Program to report exceptions and changes in a schedule',
        exes => [ 'choose/tv_check/tv_check' ],
        docs => [ qw(choose/tv_check/README.tv_check
 		    choose/tv_check/tv_check_doc.html
