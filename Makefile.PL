@@ -799,8 +799,9 @@ sub MY::makefile {
 	# Add an extra dependency: the contents of tv_grab_uk's
 	# packages directory.
 	#
-	$inherited =~ s{^(Makefile\s+:)}{$1 grab/uk/channel_pkgs}m
-	  or die "no Makefile dependencies line in: $inherited";
+	$inherited =~ s{^((?:Makefile|\$\(FIRST_MAKEFILE\))\s+:)}
+	  {$1 grab/uk/channel_pkgs}m
+	    or die "no Makefile dependencies line in: $inherited";
     }
     return $inherited;
 }
