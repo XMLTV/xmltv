@@ -939,6 +939,7 @@ sub getStatsLines($)
 1;
 
 package XMLTV::IMDB::Crunch;
+use LWP::Simple;
 
 # Use Term::ProgressBar if installed.
 use constant Have_bar => eval {
@@ -954,17 +955,21 @@ use constant Have_bar => eval {
 # I might, given time build a download manager that:
 #    - downloads the latest plain text files
 #    - understands how to download each week's diffs and apply them
+# Currently, the 'downloadMissingFiles' flag in the hash of attributes
+# passed triggers a simple-minded downloader.
 #
 # I may also roll this project into a xmltv-free imdb-specific
 # perl interface that just supports callbacks and understands more of
 # the imdb file formats.
-#  - jerry@matilda.com
 #
 
 sub new
 {
     my ($type) = shift;
     my $self={ @_ };            # remaining args become attributes
+    for ($self->{downloadMissingFiles}) {
+	$_=0 if not defined; # default
+    }
 
     for ('imdbDir', 'verbose') {
 	die "invalid usage - no $_" if ( !defined($self->{$_}));
@@ -972,20 +977,71 @@ sub new
     if ( ! -d "$self->{imdbDir}" ) {
 	die "$self->{imdbDir}:does not exist" ;
     }
-    my $missingListFiles=0;
-    for ('movies', 'actors', 'actresses', 'directors') {
-	$self->{imdbListFiles}->{$_}="$self->{imdbDir}/lists/$_.list";
-	if ( ! -f $self->{imdbListFiles}->{$_} ) {
-	    if ( -f "$self->{imdbListFiles}->{$_}.gz" ) {
-		$self->{imdbListFiles}->{$_}.=".gz";
-	    }
-	    else {
-		print STDERR "$self->{imdbListFiles}->{$_}.gz: does not exist\n";
-		$missingListFiles++;
-	    }
-	}
+    my $listsDir = "$self->{imdbDir}/lists";
+    if ( ! -d $listsDir ) {
+	mkdir $listsDir, 0777 or die "cannot mkdir $listsDir: $!";
     }
-    if ( $missingListFiles ) {
+  CHECK_FILES:
+    my %missingListFiles; # maps 'movies' to filename ...movies.gz
+    for ('movies', 'actors', 'actresses', 'directors') {
+	my $filename="$listsDir/$_.list";
+	my $filenameGz="$filename.gz";
+	my $filenameExists = -f $filename;
+	my $filenameSize = -s _;
+	my $filenameGzExists = -f $filenameGz;
+	my $filenameGzSize = -s _;
+
+	if ( $filenameExists and not $filenameSize ) {
+	    warn "removing zero-length $filename\n";
+	    unlink $filename or die "cannot unlink $filename: $!";
+	    $filenameExists = 0;
+	}
+	if ( $filenameGzExists and not $filenameGzSize ) {
+	    warn "removing zero-length $filenameGz\n";
+	    unlink $filenameGz or die "cannot unlink $filenameGz: $!";
+	    $filenameGzExists = 0;
+	}
+
+	if ( not $filenameExists and not $filenameGzExists ) {
+	    # Just report one of the filenames, keep the message simple.
+	    warn "$filenameGz does not exist\n";
+	    $missingListFiles{$_}=$filenameGz;
+	}
+	elsif ( not $filenameExists and $filenameGzExists ) {
+	    $self->{imdbListFiles}->{$_}=$filenameGz;
+	}
+	elsif ( $filenameExists and not $filenameGzExists ) {
+	    $self->{imdbListFiles}->{$_}=$filename;
+	}
+	elsif ( $filenameExists and $filenameGzExists ) {
+	    die "both $filename and $filenameGz exist, remove one of them\n";
+	}
+	else { die }
+    }
+    if ( $self->{downloadMissingFiles} ) {
+	my $baseUrl = 'ftp://ftp.fu-berlin.de/pub/misc/movies/database/';
+	foreach ( sort keys %missingListFiles ) {
+	    my $url = "$baseUrl/$_.list.gz";
+	    my $filename = $missingListFiles{$_};
+	    print STDERR <<END
+Trying to download <$url>.
+With a slow network link this could fail; it might be better to
+download the file by hand and save it as
+$filename.
+END
+  ;
+	    open(OUT, ">$filename") or die "cannot write to $filename: $!";
+	    my $content = get($url);
+	    die "could not get <$url>\n" if not defined $content;
+	    print OUT $content or die "could not write to $filename: $!";
+	    close OUT or die "could not close $filename: $!";
+	    print STDERR "<$url> -> $filename, success\n\n";
+	}
+	$self->{downloadMissingFiles} = 0;
+	goto CHECK_FILES;
+    }
+
+    if ( %missingListFiles ) {
 	print STDERR "tv_imdb: requires you to download the above files from ftp.imdb.com\n";
 	print STDERR "         see http://www.imdb.com/interfaces for details\n";
 	return(undef);
