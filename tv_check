@@ -42,8 +42,11 @@ my $G_ON     = ""; # used for HTML output
 my $OFF      = "";
 
 #    COL_TYPE  1:List 2:Entry 3:checkbox
-my @COL       = qw(day channel hhmm len title chanonly dayonly timeonly neartime );
-my @COL_TYPE  = qw(1         1    2   2     1       3       3         3        3 );
+my @COL       = qw(device day channel hhmm len title chanonly dayonly timeonly neartime );
+my %COL;
+   $COL{$COL[$_]}=$_ foreach (0..$#COL);  # populate $COL reverse hash
+   
+my @COL_TYPE  = qw(1      1         1    2   2     1       3       3         3        3 );
 
 my $CONFIGURE= 0;
 my $HTML     = 0;
@@ -72,7 +75,10 @@ my %GUIDE     = ();    # episode indexes
 my @CHAN      = ();    # channel list (sorted)
 my %CHAN      = ();    # channel list ( channel-id key )
 
-my @SELECT    = ();    # array of selector widgits
+my %SELECT    = ();    # array of selector widgits
+
+my %RECORD    = ();    # hash of shows to record (conflict check)
+my %DEVICE    = ();    # list of recording devices ( hash to avoid dupes )
 
 my $ADD_BUTTON;
 my $DELETE_BUTTON;
@@ -290,20 +296,20 @@ my $selframe = $TOP->Frame->pack(-side => 'bottom');
                                     $SHOW_TABLE->selectionClear('all');
         				            $UPDATE_BUTTON -> configure ( -state => "disabled" );
         				            $DELETE_BUTTON -> configure ( -state => "disabled" );
-        		                    return unless $COL_VALUE[4];
+        		                    return unless $COL_VALUE[$COL{title}];
                                     my $row = $#SHOWS+1;
                                     validate_col_value();
                                     $SHOWS[$row]{$COL[$_]}=$COL_VALUE[$_] foreach (0..$#COL);
                                     load_show_table();
                                     $SHOW_CHANGED=1;                                    
-                				    $COL_VALUE[4]='';
+                				    $COL_VALUE[$COL{title}]='';
                                    }) -> pack(-fill => 'x');
     $UPDATE_BUTTON =
     $frame->Button( -text    => "Update Show",
                     -state   => "disabled",
                     -command => sub{
                                     return unless $SHOW_ROW;
-                                    return unless $COL_VALUE[4];
+                                    return unless $COL_VALUE[$COL{title}];
                                     validate_col_value();
                                     $SHOW_DATA[$SHOW_ROW]->{$COL[$_]}=$COL_VALUE[$_] foreach (0..$#COL);
                                     $SHOW_CHANGED=1;
@@ -315,7 +321,7 @@ my $selframe = $TOP->Frame->pack(-side => 'bottom');
 		    -state   => "disabled",
                     -command => sub{
                                     return unless $SHOW_ROW;
-                                    $SHOW_DATA[$SHOW_ROW]{title}=undef;
+                                    $SHOW_DATA[$SHOW_ROW]{title}='';
                                     load_show_table();
                                     $SHOW_CHANGED=1;
                                     }) -> pack(-fill => 'x');
@@ -342,19 +348,18 @@ for my $col (0..$#COL)
     $list -> {SubWidget} -> {scrolled} -> privateData('Entry') -> {Col} = $col;
     $list -> pack(qw/-side left -expand yes -fill both/);
     $list -> bind('<ButtonRelease 1>' => sub  {
-                            my $w = shift;
-                            my $entry = $w->privateData('Entry') -> {Entry};
-                            my $col   = $w->privateData('Entry') -> {Col};
-			    my $val   = $w->get('active');
-print STDERR "Storing ($val) into $col\n";
-		     $COL_VALUE[$col]=$val;
-             load_selection_items();
-             },
-          );
-    $SELECT[$col]= { frame => $frame,
-                     label => $label,
-                     entry => $entry,
-                     list  => $list };
+                                            my $w = shift;
+                                            my $entry = $w->privateData('Entry') -> {Entry};
+                                            my $col   = $w->privateData('Entry') -> {Col};
+                            			    my $val   = $w->get('active');
+#print STDERR "Storing ($val) into $col\n";
+                                            $COL_VALUE[$col]=$val;
+                                            load_selection_items();
+                                            });
+    $SELECT{$COL[$col]}= { frame => $frame,
+                           label => $label,
+                           entry => $entry,
+                           list  => $list };
 } # type 1 selectors 
 
 #
@@ -372,10 +377,10 @@ for my $col (0..$#COL)
     my $entry =$frame->Entry(-textvariable => \$COL_VALUE[$col])->pack();
     $frame->Label(-text => " ")->pack();
 
-    $SELECT[$col]= { frame => $frame,
-                     label => $label,
-                     entry => $entry,
-                   };
+    $SELECT{$COL[$col]}= { frame => $frame,
+                           label => $label,
+                           entry => $entry,
+                         };
 } # type 2 selectors
 
 #
@@ -392,9 +397,9 @@ for my $col (0..$#COL)
                                      -variable => \$COL_VALUE[$col],
                                    ) -> pack();
 
-    $SELECT[$col]= { frame => $frame,
-                     check => $check,
-                   };
+    $SELECT{$COL[$col]}= { frame => $frame,
+                           check => $check,
+                         };
 } # type 3 selectors 
 
 load_selection_items();
@@ -443,7 +448,7 @@ for my $show (@SHOW_DATA)
 {
     my $start;
     
-    if ($show->{day})  # deal with shows without a specific day ( phase 2 only )
+    if ($show->{day})  # phase 1 should only deal with shows with a specific day 
     {
         $show->{day} = $WEEKDAY[$show->{day}] if ($show->{day} =~ /\d/);
         if ($TODAY eq $show->{day})
@@ -505,6 +510,11 @@ for my $start (sort keys %SHOW_TIME)
             $ep->{displayed}=$show;
             print ep_summary($ep),opt_summary($show),"\n";
 
+#
+# add to record list if needed
+#
+            push @{$RECORD{$show->{device}}},$ep if length($show->{device});
+
             if ( $show->{hhmm} ne $ep->{hhmm} )
             {
                 print "${R_ON}     ***** Start Time Alert ***** Expected $show->{hhmm} got $ep->{hhmm}${OFF}\n";
@@ -556,11 +566,62 @@ for my $start (sort keys %SHOW_TIME)
 # ok, guess we're interested in it, print it
 #
         print " "x5,$G_ON,ep_summary($ep,1),"$OFF\n";
+
+#
+# special hack to for ReplayTV's "smart" record
+#
+        if ($show->{device} =~ /replay/i)
+        {
+          next unless length($show->{day} ); # don't record title-only scans
+          next unless length($show->{hhmm}); # this should never happen
+          next unless $ep->{channel} eq $show->{channel}; # Replay is channel specific
+          my $slot=0;
+          my $sh_slot = undef;
+          my $ep_slot = undef;
+          for my $key ( sort keys %{$GUIDE{$ep->{channel}}{$ep->{mmdd}}} )
+          {
+#print "$key/$slot\n";
+            $sh_slot = $slot unless $key gt $show->{hhmm};
+            $ep_slot = $slot unless $key gt $ep->{hhmm};
+            $slot++;
+          }
+#print "Got ep_slot=$ep_slot sh_slot=$sh_slot\n";
+           push @{$RECORD{$show->{device}}},$ep if (abs( $ep_slot - $sh_slot ) < 2 );
+        }
     } # extra episode scan
 
   print "\n";
   } # show chan loop
 } # show time loop
+
+#
+# Now check for recording conflicts
+#
+for my $dev_name (sort keys %RECORD)
+{
+    my @shows = @{$RECORD{$dev_name}};
+    for my $ep1 ( 0..($#shows-1) )
+    {
+#print "scanning: ",ep_summary($shows[$ep1]),"\n";
+        my $start = $shows[$ep1] -> {start};
+        my $stop  = $shows[$ep1] -> {stop};
+        my $header = 0;
+        for my $ep2 ( ($ep1+1)..$#shows )
+        {
+#print "          ",ep_summary($shows[$ep2]),"\n";
+            next if ( $shows[$ep2]->{stop}  le $start);
+            next if ( $shows[$ep2]->{start} ge $stop);
+            unless ($header)
+            {
+                print "${R_ON}**** recording conflict for device $dev_name\n";
+                print " "x5,ep_summary($shows[$ep1]),"\n";
+                $header=1;
+            }
+            print " "x5,ep_summary($shows[$ep2]),"\n";
+        } # show2 loop
+        print "$OFF\n" if $header;
+    } # show1 loop
+} # recording device loop
 
 if ($HTML)
 {
@@ -681,10 +742,8 @@ sub find_episode
     my $hhmm = $show->{hhmm};
 
     my $a;
-#print "scanning GUIDE{$chan}{$mmdd}\n";
     for my $key ( sort keys %{$GUIDE{$chan}{$mmdd}} )
     {
-#print "Checking $key,$hhmm\n";
         last if $key gt $hhmm;
         $a=$key;
     }
@@ -737,13 +796,13 @@ for my $col (0..$#COL)
 my %sort_keys=();
 for my $show (@SHOWS)
 {
-    next unless defined $show -> {title}; # skip deleted records
+    next unless length($show->{title}); # skip deleted records
     my $key = $show->{$COL[abs($SHOW_SORT)]} || 0;
 
 #
 # special sort... by day
 #
-    if ( $SHOW_SORT == 0 )
+    if ( $COL[abs($SHOW_SORT)] eq 'day' )
     {
         $key=index($WEEKDAY,$key)/3;
         $key=9 if $key < 0;
@@ -752,7 +811,7 @@ for my $show (@SHOWS)
 #
 # special sort.. channel 
 #
-    elsif ( abs($SHOW_SORT) == 1 )
+    elsif ( $COL[abs($SHOW_SORT)] eq 'chan' )
     {
         $key=sprintf("%03d",$1) if $key =~ /^(\d+)/;
     }
@@ -776,9 +835,14 @@ for my $key (@keys)
       $SHOW_DATA[$row]=$show;
       for my $col (0..$#COL)
       {
-        next unless $show->{$COL[$col]};
-        $SHOW_DATA{"$row,$col"}= $show->{$COL[$col]};
-        $SHOW_WIDTH{$col}      = length($show->{$COL[$col]}) if ($SHOW_WIDTH{$col}<length($show->{$COL[$col]}));
+        my $val = $show->{$COL[$col]};
+        $val="" unless defined $val;
+        next unless length($val);
+
+        $DEVICE{$val}=1 if ($COL[$col] eq 'device');  # help build device list
+        
+        $SHOW_DATA{"$row,$col"}= $val;
+        $SHOW_WIDTH{$col}      = length($val) if ($SHOW_WIDTH{$col}<length($val));
       }
    }
 }
@@ -796,6 +860,8 @@ if ($SHOW_TABLE)
     $UPDATE_BUTTON -> configure ( -state => "disabled" );
     $DELETE_BUTTON -> configure ( -state => "disabled" );
 }
+
+load_selection_items() if $SELECT{day}; # in case device list has changed.
 } # load_show_table
 
 #
@@ -805,26 +871,32 @@ sub load_selection_items
 {
 
 #
+# load Device list
+#
+    $SELECT{device}{list} -> delete(0,"end");
+    $SELECT{device}{list} -> insert(0,"",sort keys %DEVICE);
+
+#
 # load Day list
 #
-    $SELECT[0]{list} -> delete(0,"end");
-    $SELECT[0]{list} -> insert(0,"",@WEEKDAY);
+    $SELECT{day}{list} -> delete(0,"end");
+    $SELECT{day}{list} -> insert(0,"",@WEEKDAY);
 
 #
 # load Channel list
 #
-    $SELECT[1]{list} -> delete(0,"end");
-    $SELECT[1]{list} -> insert(0,"",@CHAN);
+    $SELECT{channel}{list} -> delete(0,"end");
+    $SELECT{channel}{list} -> insert(0,"",@CHAN);
 
-    my $day   = $COL_VALUE[0];
-    my $chan  = $COL_VALUE[1];
-    my $title = $COL_VALUE[4];
+    my $day   = $COL_VALUE[$COL{day}    ];
+    my $chan  = $COL_VALUE[$COL{channel}];
+    my $title = $COL_VALUE[$COL{title}  ];
 
     my $match = undef;
 
-    $day   = "" unless defined $day;
-    $chan  = "" unless defined $chan;
-    $title = "" unless defined $title;
+#    $day   = "" unless defined $day;
+#    $chan  = "" unless defined $chan;
+#    $title = "" unless defined $title;
 
     $day   =~ s/^\s+|\s+$//g;
     $chan  =~ s/^\s+|\s+$//g;
@@ -833,25 +905,25 @@ sub load_selection_items
 #
 # load Title list ( also fill hhmm and day if known )
 #
-    $SELECT[4]{list} -> delete(0,"end");
+    $SELECT{title}{list} -> delete(0,"end");
     if (length($day) && length($chan))
     {
-        $SELECT[4]{list} -> insert(0,"",sort keys %{$GUIDE{$day}{$chan}});
+        $SELECT{title}{list} -> insert(0,"",sort keys %{$GUIDE{$day}{$chan}});
         $match = $GUIDE{$day}{$chan}{$title};
     }
     elsif (length($day))
     {
-        $SELECT[4]{list} -> insert(0,"",sort keys %{$GUIDE{day}{$day}} );
+        $SELECT{title}{list} -> insert(0,"",sort keys %{$GUIDE{day}{$day}} );
         $match=$GUIDE{day}{$day}{$title};
     }
     elsif (length($chan))
     {
-        $SELECT[4]{list} -> insert(0,"",sort keys %{$GUIDE{chan}{$chan}} );
+        $SELECT{title}{list} -> insert(0,"",sort keys %{$GUIDE{chan}{$chan}} );
         $match=$GUIDE{chan}{$chan}{$title};
     }
     else
     {
-        $SELECT[4]{list} -> insert(0,"",sort keys %{$GUIDE{all}} );
+        $SELECT{title}{list} -> insert(0,"",sort keys %{$GUIDE{all}} );
         $match=$GUIDE{all}{$title};
     }
 
@@ -860,10 +932,10 @@ sub load_selection_items
 #
     if ($match)
         {
-	     $COL_VALUE[0] = $match->[0]->[0];
-	     $COL_VALUE[1] = $match->[0]->[1];
-	     $COL_VALUE[2] = $match->[0]->[2];
-	     $COL_VALUE[3] = $match->[0]->[3];
+	     $COL_VALUE[$COL{day}    ] = $match->[0]->[0];
+	     $COL_VALUE[$COL{channel}] = $match->[0]->[1];
+	     $COL_VALUE[$COL{hhmm}   ] = $match->[0]->[2];
+	     $COL_VALUE[$COL{len}    ] = $match->[0]->[3];
         }
 
 } #load_selection_items
@@ -955,11 +1027,22 @@ sub load_shows
     printf STDERR "Loaded  xml show file ($SHOW_XML) (%d/%d)\n",$#SHOWS+1,$#LANG+1;
 
 #
-# fix numeric weekday in old shows file
+# fix show entry 
 #
     for my $show (@SHOWS)
     {
-        next unless $show->{day};
+#
+# ensure no null values
+#
+        for my $col ( keys %COL )
+        {
+            $show->{$col} = '' unless defined $show->{$col};
+        }
+
+#
+# convert numeric date if needed.
+#
+        next unless length($show->{day});
         $show->{day}=$WEEKDAY[$1] if $show->{day} =~ /^(\d+)/;
     }
     
@@ -1058,7 +1141,7 @@ sub load_guide
     print STDERR " $c recs / ",time()-$st,"secs \n";
   error_popup("guide file $GUIDE_XML does not appear to be valid") unless @GUIDE;
 
-  load_selection_items() if $SELECT[0];  
+  load_selection_items() if $SELECT{day};  
 } #load_guide
 
 
@@ -1146,7 +1229,8 @@ sub validate_col_value
     for my $col (0..$#COL)
     {
         $_ = $COL_VALUE[$col];
-        next unless defined $_ ;
+        $_ = '' unless defined $_;
+        next unless length($_) ;
 
         s/^\s+|\s+$//g;
         if ($COL[$col] eq 'len')
