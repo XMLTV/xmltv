@@ -6,6 +6,7 @@ use Date::Manip;
 use XMLTV;
 use XMLTV::Usage;
 use XMLTV::Memoize;
+use XMLTV::Ask;
 use XMLTV::TZ qw(parse_local_date);
 use XMLTV::Get_nice qw();
 use XMLTV::Date;
@@ -193,6 +194,7 @@ sub go( $ ) {
 	$opt_help,
 	$opt_output,
     $opt_share,
+    $opt_gui,
 	$opt_offset,
 	$opt_quiet,
 	$opt_configure,
@@ -204,6 +206,7 @@ sub go( $ ) {
 	       'help'          => \$opt_help,
 	       'output=s'      => \$opt_output,
            'share=s'       => \$opt_share, # undocumented
+           'gui:s'         => \$opt_gui,
 	       'offset=i'      => \$opt_offset,
 	       'quiet'         => \$opt_quiet,
 	       'configure'     => \$opt_configure,
@@ -215,6 +218,7 @@ sub go( $ ) {
     usage(1, $pkg->usage_msg()) if $opt_help;
     usage(0, $pkg->usage_msg()) if @ARGV;
 
+    XMLTV::Ask::init($opt_gui);
     if ($opt_share) {
         if ($pkg->can('set_share_dir')) {
             $pkg->set_share_dir($opt_share);

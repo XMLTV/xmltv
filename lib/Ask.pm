@@ -7,35 +7,62 @@
 
 package XMLTV::Ask;
 use strict;
-use Carp qw(croak carp);
+use XMLTV::GUI;
 
-# Use Log::TraceMessages if installed, and choose graphical or not.
+use vars qw(@ISA @EXPORT);
+use Exporter;
+@ISA = qw(Exporter);
+@EXPORT = qw(ask
+             ask_password
+             ask_choice
+             ask_boolean
+             ask_many_boolean
+             say
+             );
+
+# Use Log::TraceMessages if installed.
 BEGIN {
-    eval { require Log::TraceMessages };
-    if ($@) {
-	*t = sub {};
-	*d = sub { '' };
-    }
-    else {
-	*t = \&Log::TraceMessages::t;
-	*d = \&Log::TraceMessages::d;
-    }
+        eval { require Log::TraceMessages };
+        if ($@) {
+                *t = sub {};
+                *d = sub { '' };
+        }
+        else {
+                *t = \&Log::TraceMessages::t;
+                *d = \&Log::TraceMessages::d;
+        }
+}
 
-    # For now we do graphical configuration only if the undocumented
-    # XMLTV_TK environment variable is set to a true value.
-    #
-    if ($ENV{XMLTV_TK}
-	and (defined($ENV{DISPLAY}) || $^O eq 'MSWin32')
-	and eval { require Tk }) {
-	require XMLTV::Ask::Tk; XMLTV::Ask::Tk->import;
-	*XMLTV::Ask:: = *XMLTV::Ask::Tk::;
-    }
-    else {
-	require XMLTV::Ask::Term; XMLTV::Ask::Term->import;
-	*XMLTV::Ask:: = *XMLTV::Ask::Term::;
-    }
+my $real_class = 'XMLTV::Ask::Term';
+
+sub AUTOLOAD {
+        use vars qw($AUTOLOAD);
+        (my $method_name = $AUTOLOAD) =~ s/.*::(.*?)/$1/;
+        (my $real_class_path = $real_class.".pm") =~ s/::/\//g;
+        
+        require $real_class_path;
+        import $real_class_path;
+        
+        $real_class->$method_name(@_);       
 }
 
 
+# Must be called before we use this module if we want to use a gui.
+sub init( $ ) {
+        my $opt_gui = shift;
+        
+        # Ask the XMLTV::GUI module for the graphics type we will use  
+        my $gui_type = XMLTV::GUI::get_gui_type($opt_gui);
+        
+        if($gui_type =~ /^term/) {        
+                $real_class = 'XMLTV::Ask::Term';
+        } elsif($gui_type eq 'tk') {
+                $real_class = 'XMLTV::Ask::Tk';
+        } elsif($gui_type eq 'gdialog') {
+                $real_class = 'XMLTV::Ask::GDialog';
+        } else {
+                die "Unknown gui type: '$gui_type'.";
+        }
+}
 
 1;

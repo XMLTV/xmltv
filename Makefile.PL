@@ -130,8 +130,9 @@ my %pm
      'lib/Date.pm'                => '$(INST_LIBDIR)/XMLTV/Date.pm',
      'lib/Version.pm'             => '$(INST_LIBDIR)/XMLTV/Version.pm',
      'lib/Ask.pm'                 => '$(INST_LIBDIR)/XMLTV/Ask.pm',
-     'lib/Ask/Tk.pm'               => '$(INST_LIBDIR)/XMLTV/Ask/Tk.pm',
-     'lib/Ask/Term.pm'             => '$(INST_LIBDIR)/XMLTV/Ask/Term.pm',
+     'lib/Ask/Tk.pm'              => '$(INST_LIBDIR)/XMLTV/Ask/Tk.pm',
+     'lib/Ask/Term.pm'            => '$(INST_LIBDIR)/XMLTV/Ask/Term.pm',
+     'lib/GUI.pm'                 => '$(INST_LIBDIR)/XMLTV/GUI.pm',
      'lib/Summarize.pm'           => '$(INST_LIBDIR)/XMLTV/Summarize.pm',
      'lib/IMDB.pm'                => '$(INST_LIBDIR)/XMLTV/IMDB.pm',
      'lib/Gunzip.pm'              => '$(INST_LIBDIR)/XMLTV/Gunzip.pm',
@@ -202,7 +203,7 @@ if ($opt_yes) {
 }
 else {
     do 'lib/Ask/Term.pm' or die 'could not load lib/Ask/Term.pm, aborting';
-    *ask = \&XMLTV::Ask::Term::askBooleanQuestion;
+    *ask = \&XMLTV::Ask::Term::ask_boolean;
 }
 
 # Weird shit happens when you change things like PREFIX without
@@ -216,7 +217,7 @@ before generating a new Makefile.
 
 END
   ;
-    if (! ask("Do you wish to continue anyway?", 0)) {
+    if (! ask(0, "Do you wish to continue anyway?", 0)) {
 	exit(1);
     }
 }
@@ -476,7 +477,7 @@ END
 		      "\n");
     }
     print STDERR "\n";
-    if (not ask('Do you want to proceed with this configuration?', 1)) {
+    if (not ask(0, 'Do you want to proceed with this configuration?', 1)) {
 	# Need to set {install} for each component by prompting.
 	foreach my $info (@opt_components) {
 	    my $missing = $info->{missing};
@@ -506,7 +507,7 @@ END
 	    }
 	
 	    $info->{install} =
-	      ask($msg, not $missing);
+	      ask(0, $msg, not $missing);
 	}
     }
 }
