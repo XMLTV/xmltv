@@ -27,6 +27,7 @@ WriteMakefile
 			'filter/tv_sort',
 			'filter/tv_to_latex',
 			'filter/tv_cat',
+			'choose/tv_check/tv_check',
 		      ],
    'PL_FILES' => { 'filter/tv_grep.PL' => 'filter/tv_grep',
 		   'grab/uk/tv_grab_uk.PL' => 'grab/uk/tv_grab_uk',

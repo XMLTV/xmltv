@@ -11,7 +11,11 @@
 
 use strict;
 use Getopt::Long;
-sub usage( ;$ );
+use XMLTV::Usage <<END
+$0: test suite for filter programs
+usage: $0 [--tests-dir DIR] [--cmds-dir DIR] [--verbose]
+END
+;
 
 my @cmds
   = (
@@ -128,22 +132,3 @@ foreach my $cmd (@cmds) {
     }
 }
 die if $test_num != $num_tests;
-
-
-# If optional parameter true, is 'help message'.
-sub usage( ;$ ) {
-    my $is_help = shift;
-    my $msg = <<END
-$0: test suite for filter programs
-usage: $0 [--tests-dir DIR] [--cmds-dir DIR] [--verbose]
-END
-;
-    if ($is_help) {
-	print $msg;
-	exit(0);
-    }
-    else {
-	print STDERR $msg;
-	exit(1);
-    }
-}
