@@ -1,5 +1,6 @@
 package XMLTV::Config_file;
 use strict;
+use XMLTV::Ask;
 
 # First argument is an explicit config filename or undef.  The second
 # argument is the name of the current program (probably best not to
@@ -28,6 +29,27 @@ sub filename( $$ ) {
     }
 
     return $new;
+}
+
+# If the given file exists, ask for confirmation of overwriting it;
+# exit if no.
+#
+sub check_no_overwrite( $ ) {
+    my $f = shift;
+    if (-e $f) {
+	print <<END
+The configuration file $f already exists.  There is
+currently no support for altering an existing configuration, you have
+to reconfigure from scratch.
+
+END
+  ;
+	if (not askBooleanQuestion
+	    ('Do you wish to overwrite the old configuration?', 0)) {
+	    print "Exiting.\n";
+	    exit 0;
+	}
+    }
 }
 
 1;
