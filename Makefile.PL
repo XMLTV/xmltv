@@ -162,12 +162,12 @@ END
 #
 my @opt_components
   = ({ name => 'tv_grab_de',
-       blurb => 'Tv_grab_de is the listings grabber for Germany and Austria.',
+       blurb => 'Grabber for Germany and Austria',
        exes => [ 'grab/de/tv_grab_de' ],
      },       
 
      { name => 'tv_grab_uk',
-       blurb => 'Tv_grab_uk is the listings grabber for Britain.',
+       blurb => 'Grabber for Britain',
        exes => [ 'grab/uk/tv_grab_uk' ],
        pl_files => { 'grab/uk/tv_grab_uk.PL' => 'grab/uk/tv_grab_uk' },
        share_files => { 'grab/uk/channel_ids' => 'tv_grab_uk/channel_ids' },
@@ -178,7 +178,7 @@ my @opt_components
      },
 
      { name => 'tv_grab_uk_rt',
-       blurb => 'Tv_grab_uk_rt is an alternative listings grabber for Britain.',
+       blurb => 'Alternative grabber for Britain',
        exes => [ 'grab/uk_rt/tv_grab_uk_rt' ],
        pl_files => { 'grab/uk_rt/tv_grab_uk_rt.PL' => 'grab/uk_rt/tv_grab_uk_rt' },
        share_files => { 'grab/uk_rt/channel_ids' => 'tv_grab_uk_rt/channel_ids' },
@@ -188,7 +188,7 @@ my @opt_components
      },
 
      { name => 'tv_grab_it',
-       blurb => 'Tv_grab_it is the listings grabber for Italy.',
+       blurb => 'Grabber for Italy',
        exes => [ 'grab/it/tv_grab_it' ],
        pl_files => { 'grab/it/tv_grab_it.PL' => 'grab/it/tv_grab_it' },
        share_files => { 'grab/it/dud_channels' => 'tv_grab_it/dud_channels' },
@@ -198,19 +198,19 @@ my @opt_components
      },
 
      { name => 'tv_grab_na',
-       blurb => 'Tv_grab_na is the listings grabber for North America.',
+       blurb => 'Grabber for North America',
        exes => [ 'grab/na/tv_grab_na' ],
        pm => { 'grab/na/ZapListings.pm' =>
 	       '$(INST_LIBDIR)/XMLTV/ZapListings.pm' },
        prereqs => { 'HTML::Parser' => 0 } },
 
      { name => 'tv_grab_sn',
-       blurb => 'Tv_grab_sn is the listings grabber for Sweden and Norway.',
+       blurb => 'Grabber for Sweden and Norway',
        exes => [ 'grab/sn/tv_grab_sn' ],
        prereqs => { 'HTML::TableExtract' => '1.08' } },
 
      { name => 'tv_grab_nz',
-       blurb => 'Tv_grab_nz is the listings grabber for New Zealand.',
+       blurb => 'Grabber for New Zealand',
        exes => [ 'grab/nz/tv_grab_nz' ],
        pl_files => { 'grab/nz/tv_grab_nz.PL' => 'grab/nz/tv_grab_nz' },
        share_files => { 'grab/nz/episode_names' => 'tv_grab_nz/episode_names' },
@@ -227,40 +227,37 @@ my @opt_components
 	   'Python', '17105648', '1.5.2' ] ] },
 
      { name => 'tv_grab_fi',
-       blurb => 'Tv_grab_fi is the listings grabber for Finland.',
+       blurb => 'Grabber for Finland',
        exes => [ 'grab/fi/tv_grab_fi' ],
        prereqs => { 'HTML::TreeBuilder' => 0 } },
 
      { name => 'tv_grab_es',
-       blurb => 'Tv_grab_es is the listings grabber for Spain.',
+       blurb => 'Grabber for Spain',
        exes => [ 'grab/es/tv_grab_es' ],
        prereqs => { 'HTML::TreeBuilder' => 0 } },
 
      { name => 'tv_grab_nl',
-       blurb => 'Tv_grab_nl is the listings grabber for the Netherlands.',
+       blurb => 'Grabber for the Netherlands',
        exes => [ 'grab/nl/tv_grab_nl' ],
        prereqs => { 'HTML::TreeBuilder' => 0 } },
 
      { name => 'tv_grab_nl_wolf',
-       blurb => 'Tv_grab_nl_wolf is an alternative listings grabber for the Netherlands.',
+       blurb => 'Alternative grabber for the Netherlands',
        exes => [ 'grab/nl_wolf/tv_grab_nl_wolf' ],
        prereqs => { 'HTML::TreeBuilder' => 0 } },
 
      { name => 'tv_grab_hu',
-       blurb => 'Tv_grab_hu is the listings grabber for Hungary.',
+       blurb => 'Grabber for Hungary',
        exes => [ 'grab/hu/tv_grab_hu' ],
        prereqs => { 'HTML::TreeBuilder' => 0 } },
 
      { name => 'tv_grab_dk',
-       blurb => 'Tv_grab_dk is the listings grabber for Denmark.',
+       blurb => 'Grabber for Denmark',
        exes => [ 'grab/dk/tv_grab_dk' ],
        prereqs => { 'HTML::TreeBuilder' => 0 } },
 
      { name => 'tv_check',
-       blurb =>
-       'Tv_check is a graphical front-end to listings data.  You pick the
-shows you are interested in, and then tv_check alerts you to
-unexpected extra episodes or schedule changes.',
+       blurb => 'Graphical front-end to listings data',
        exes => [ 'choose/tv_check/tv_check' ],
        docs => [ qw(choose/tv_check/README.tv_check
 		    choose/tv_check/tv_check_doc.html
@@ -272,26 +269,23 @@ unexpected extra episodes or schedule changes.',
 		  } },
 
      { name => 'tv_pick_cgi',
-       blurb =>
-       "Tv_pick_cgi is a front-end to choose your TV viewing.  It presents all
-programmes in the listings and asks you about each one.  But you can
-killfile programmes by answering 'never', in which case you won't be
-asked again about that show.
-
-It is a CGI program which runs through a web server and web browser, or
-with the lynxcgi mode of the lynx web browser.  You need to install it
-by hand; this Makefile.PL will only check that the necessary libraries
-are present.",
+       blurb => 'CGI program to filter listings (to install manually)',
        prereqs => { 'CGI' => 0 },
        type => 'run',
-       default => 0,
      },
     );
 
+# Now we need to prompt about each optional component.  The style of
+# prompting, though not the code, is based on SOAP::Lite.  I would
+# like to add '--noprompt' and '--with tv_grab_nl' options to help
+# automated package building, but I haven't implemented that yet.
+#
+
+# For each component work out whether its prereqs are installed and
+# store the result in {missing} - either false, or a hashref.
+#
 foreach my $info (@opt_components) {
     my $name = $info->{name};
-    print STDERR "* $info->{blurb}\n\n";
-
     my %modules_missing;
     use vars '%module_prereqs';
     local *module_prereqs = $info->{prereqs} || {};
@@ -315,60 +309,95 @@ foreach my $info (@opt_components) {
     }
 	
     my %missing = (%modules_missing, %special_missing);
-    my $default;
     if (not keys %missing) {
-	# Everything already installed.
-	$default = $info->{default};
-	$default = 1 if not defined $default;
+	$info->{missing} = 0;
     }
     else {
-	print STDERR "To install $name, you will need the following packages:\n\n";
-	foreach (sort keys %missing) {
-	    print STDERR "$_";
-	    my $min_ver = $missing{$_};
-	    if ($min_ver) {
-		print STDERR " (version $min_ver or higher)";
+	$info->{missing} = \%missing;
+    }
+}
+
+# Generate a default configuration that installs as much as possible.
+print STDERR <<END
+
+Choose which optional components of xmltv you want to install.  The
+XMLTV.pm library and the filter programs such as tv_grep and tv_sort
+are installed by default; here you choose grabbers for different
+countries and front-ends for managing listings.
+
+END
+  ;
+
+my $width = 0;
+foreach my $info (@opt_components) {
+    my $w = length("$info->{blurb} ($info->{name})");
+    $width = $w if $w > $width;
+}
+foreach my $info (@opt_components) {
+    my $missing = $info->{missing};
+    my $s = "$info->{blurb} ($info->{name})";
+    print STDERR ($s, ' ' x (1 + $width - length $s),
+		  $missing ? '[no]' : '[yes]',
+		  "\n");
+}
+print STDERR "\n";
+if (XMLTV::Ask::askBooleanQuestion('Do you want to proceed with this configuration?', 1)) {
+    foreach (@opt_components) {
+	$_->{install} = not $_->{missing};
+    }
+}
+else {
+    foreach my $info (@opt_components) {
+	my $missing = $info->{missing};
+	my $name = $info->{name};
+	print STDERR "\n* $info->{blurb} ($name)\n\n";
+	if ($missing) {
+	    print STDERR "These dependencies are missing for $name:\n\n";
+	    foreach (sort keys %$missing) {
+		print STDERR "$_";
+		my $min_ver = $missing->{$_};
+		if ($min_ver) {
+		    print STDERR " (version $min_ver or higher)";
+		}
+		print STDERR "\n";
 	    }
 	    print STDERR "\n";
 	}
-	print STDERR "\n";
-	$default = 0;
-    }
 
-    my $type = $info->{type};
-    $type = 'install' if not defined $type;
-    my $msg;
-    if ($type eq 'install') {
-	$msg = "Do you wish to install $name?";
+	my $msg;
+	my $type = $info->{type};
+	if (not defined $type or $type eq 'install') {
+	    $msg = "Do you wish to install $name?";
+	}
+	elsif ($type eq 'run') {
+	    $msg = "Do you plan to run $name?";
+	}
+	else { die }
+	
+	$info->{install} =
+	  XMLTV::Ask::askBooleanQuestion($msg, not $missing);
     }
-    elsif ($type eq 'run') {
-	$msg = "Do you plan to run $name?";
-    }
-    else {
-	warn "bad optional component 'type' $type";
-	$msg = "Use $name?";
-    }
+}
 
-    if (XMLTV::Ask::askBooleanQuestion($msg, $default)) {
-	push @exes, @{$info->{exes}}                  if $info->{exes};
-	push @docs, @{$info->{docs}}                  if $info->{docs};
-	%pm = (%pm, %{$info->{pm}})                   if $info->{pm};
-	%prereqs = (%prereqs, %{$info->{prereqs}})    if $info->{prereqs};
-	%pl_files = (%pl_files, %{$info->{pl_files}}) if $info->{pl_files};
-	%share_files = (%share_files, %{$info->{share_files}})
-	  if $info->{share_files};
-	push @to_clean, @{$info->{to_clean}}          if $info->{to_clean};
-	push @deps, @{$info->{deps}}                  if $info->{deps};
-	push @grab_need_share, @{$info->{grab_need_share}}
-	if $info->{grab_need_share};
-	for ($info->{do_uk_channel_pkgs}) {
-	    if (defined) {
-		die 'turn on, but not off' if not $_;
-		$do_uk_channel_pkgs = 1;
-	    }
+foreach my $info (@opt_components) {
+    next if not $info->{install};
+    push @exes, @{$info->{exes}}                  if $info->{exes};
+    push @docs, @{$info->{docs}}                  if $info->{docs};
+    %pm = (%pm, %{$info->{pm}})                   if $info->{pm};
+    %prereqs = (%prereqs, %{$info->{prereqs}})    if $info->{prereqs};
+    %pl_files = (%pl_files, %{$info->{pl_files}}) if $info->{pl_files};
+    %share_files = (%share_files, %{$info->{share_files}})
+      if $info->{share_files};
+    push @to_clean, @{$info->{to_clean}}          if $info->{to_clean};
+    push @deps, @{$info->{deps}}                  if $info->{deps};
+    push @grab_need_share, @{$info->{grab_need_share}}
+    if $info->{grab_need_share};
+    for ($info->{do_uk_channel_pkgs}) {
+	if (defined) {
+	    die 'turn on, but not off' if not $_;
+	    $do_uk_channel_pkgs = 1;
 	}
     }
-    print STDERR "\n";
 }
 
 my $warned_uninstall_broken = 1;
