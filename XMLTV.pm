@@ -86,9 +86,33 @@ sub node_to_programme( $ ) {
 	}
     }
 
-    t 'going through each child of programme';
+    call_handlers_read($node, \@Handlers, \%programme);
+    return \%programme;
+}
 
-    # Current position in Handlers.  We expect to read the subelements
+
+# Private.
+#
+# call_handlers_read()
+#
+# Read the subelements of a DOM node according to a list giving a
+# handler subroutine for each subelement.
+#
+# Parameters:
+#   DOM node
+#   Reference to list of handlers: tuples of
+#     [element-name, reader, writer, multiplicity]
+#   Reference to hash for storing results
+#
+# Warns if errors, but attempts to contine.
+#
+sub call_handlers_read( $$$ ) {
+    my ($node, $handlers, $r) = @_;
+    die unless ref($r) eq 'HASH';
+    use vars '%r'; local *r = $r;
+    t 'going through each child of node';
+
+    # Current position in handlers.  We expect to read the subelements
     # in the correct order as specified by the DTD.
     #
     my $handler_pos = 0;
@@ -103,21 +127,21 @@ sub node_to_programme( $ ) {
 	# the wrong place (trying to go backwards in the list).
 	my $found_pos;
 	foreach my $i (0 .. $handler_pos - 1) {
-	    if ($name eq $Handlers[$i]->[0]) {
+	    if ($name eq $handlers->[$i]->[0]) {
 		warn "element $name not expected here";
 		next SUBELEMENT;
 	    }
 	}
-	for (my $i = $handler_pos; $i < @Handlers; $i++) {
-	    if ($Handlers[$i]->[0] eq $name) {
+	for (my $i = $handler_pos; $i < @$handlers; $i++) {
+	    if ($handlers->[$i]->[0] eq $name) {
 		t 'found handler';
 		$found_pos = $i;
 		last;
 	    }
 	    else {
-		t "doesn't match name $Handlers[$i]->[0]";
+		t "doesn't match name $handlers->[$i]->[0]";
 		my ($handler_name, $r, $w, $multiplicity)
-		  = @{$Handlers[$i]};
+		  = @{$handlers->[$i]};
 		die if not defined $handler_name;
 		die if $handler_name eq '';
 
@@ -128,7 +152,7 @@ sub node_to_programme( $ ) {
 		    # Don't need to check whether this set.
 		}
 		elsif ($multiplicity eq '') {
-		    if (not defined $programme{$handler_name}) {
+		    if (not defined $r{$handler_name}) {
 			warn "no element $handler_name found";
 		    }
 		}
@@ -137,10 +161,10 @@ sub node_to_programme( $ ) {
 		    # insist on putting in an empty list.
 		}
 		elsif ($multiplicity eq '+') {
-		    if (not defined $programme{$handler_name}) {
+		    if (not defined $r{$handler_name}) {
 			warn "no element $handler_name found";
 		    }
-		    elsif (not @{$programme{$handler_name}}) {
+		    elsif (not @{$r{$handler_name}}) {
 			warn "strangely, empty list for $handler_name";
 		    }
 		}
@@ -159,7 +183,7 @@ sub node_to_programme( $ ) {
 	# Call the handler.
 	t 'calling handler';
 	my ($handler_name, $reader, $writer, $multiplicity)
-	  = @{$Handlers[$found_pos]};
+	  = @{$handlers->[$found_pos]};
 	die if $handler_name ne $name;
 	my $result = $reader->($_);
 	t 'result: ' . d $result;
@@ -170,18 +194,16 @@ sub node_to_programme( $ ) {
 	#
 	if ($multiplicity eq '?' or $multiplicity eq '') {
 	    warn "seen $name twice"
-	      if defined $programme{$name};
-	    $programme{$name} = $result;
+	      if defined $r{$name};
+	    $r{$name} = $result;
 	}
 	elsif ($multiplicity eq '*' or $multiplicity eq '+') {
-	    push @{$programme{$name}}, $result;
+	    push @{$r{$name}}, $result;
 	}
 	else {
 	    warn "bad multiplicity: $multiplicity";
 	}
     }
-
-    return \%programme;
 }
 
 
