@@ -8,7 +8,7 @@ REM
 REM It is meant as a template, tweak as necessary
 REM
 REM Note:  You must first run tv_grab_na.exe --configure to build a grabber config file
-REM        If you're not using myrelaytv.com, you'll need to run tv_check.exe --configure too
+REM        If you're not using myreplaytv.com, you'll need to run tv_check.exe --configure too
 REM
 REM
 REM Run without parameters, tv_grab_na is run.
