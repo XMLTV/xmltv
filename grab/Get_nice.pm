@@ -29,8 +29,21 @@ sub get_nice( $ ) {
     #
     return scalar get_nice_aux($_[0]);
 }
+
+my $last_get_time;
 sub get_nice_aux( $ ) {
     my $url = shift;
+
+    if (defined $last_get_time) {
+        # A page has already been retrieved recently.  See if we need
+        # to sleep for a while before getting the next page - being
+        # nice to the server.
+	#
+        my $next_get_time = $last_get_time + (rand $Delay);
+        my $sleep_time = $next_get_time - time();
+        sleep $sleep_time if $sleep_time > 0;
+    }
+
     my $r = LWP::Simple::get($url);
 
     # At the moment download failures seem rare, so the script dies if
@@ -40,11 +53,14 @@ sub get_nice_aux( $ ) {
     #
     die "could not fetch $url, aborting\n" if not defined $r;
 
-    # Be nice to the server.  Technically we don't need to do this
-    # after the very last fetch, but sleeping every time is simpler.
+    # Then start the delay from this time on the next fetch - so we
+    # make the gap _between_ requests rather than from the start of
+    # one request to the start of the next.  This punishes modem users
+    # whose individual requests take longer, but it also punishes
+    # downloads that take a long time for other reasons (large file,
+    # slow server) so it's about right.
     #
-    sleep(rand $Delay);
-
+    $last_get_time = time();
     return $r;
 }
 1;
