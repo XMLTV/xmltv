@@ -29,6 +29,9 @@ my @cmds = ([ 'tv_cat' ],
 
 my $tests_dir = 'test_data';
 chdir $tests_dir or die "cannot chdir to $tests_dir: $!";
+my @tests = <*.xml>;
+die "no test cases (*.xml) found in $tests_dir"
+  if not @tests;
 
 # Directory commands live in relative to $tests_dir.
 my $cmds_dir = '..';
@@ -39,13 +42,16 @@ die "no directory $cmds_dir relative to $tests_dir"
 $ENV{PERL5LIB} .= ":..";
 
 my %seen;
+my $num_tests = (scalar @cmds) * (scalar @tests);
+print "1..$num_tests\n";
+my $test_num = 0;
 foreach my $cmd (@cmds) {
-    foreach my $in (<*.xml>) {
+    foreach my $in (@tests) {
+	++ $test_num;
 	my $test_name = join('_', @$cmd, $in);
 	$test_name =~ tr/A-Za-z0-9/_/sc;
 	die "two tests munge to $test_name"
 	  if $seen{$test_name}++;
-	print STDERR "test $test_name\n";
 
 	my $expected = "$test_name.expected";
 	my $out = "$test_name.out";
@@ -53,29 +59,43 @@ foreach my $cmd (@cmds) {
 
 	my @cmd = (@$cmd, $in, '--output', $out);
 	$cmd[0] = "$cmds_dir/$cmd[0]";
-	system(@cmd)
-	  && die "system @cmd failed: $?";
+	if (system(@cmd)) {
+	    my ($status, $sig, $core) = ($? >> 8, $? & 127, $? & 128);
+
+	    if ($core) {
+		warn "@cmd dumped core\n";
+		print "not ok $test_num\n";
+		next;
+	    }
+	    elsif ($sig) {
+		die "@cmd killed by signal $sig, aborting";
+	    }
+	    elsif ($status) {
+		warn "@cmd returned error code $status\n";
+		print "not ok $test_num\n";
+		next;
+	    }
+	    else { die }
+	}
 
 	if (-e $expected) {
 	    if (system("diff -u $expected $out >$diff")) {
-		print STDERR "diff found differences: \n";
-		open(DIFF, $diff) or die;
-		while (<DIFF>) {
-		    if ($. > 1000) {
-			print "...\n";
-			last;
-		    }
-		    print;
-		}
-		exit 1;
+		warn "failure for @cmd, see $diff\n";
+		print "not ok $test_num\n";
+	    }
+	    else {
+		print "ok $test_num\n";
+		unlink $diff or warn "cannot unlink $diff: $!";
 	    }
 	}
 	else {
+	    # This should happen after adding a new test case, never
+	    # when just running the tests.
+	    #
 	    warn "creating $expected\n";
 	    rename($out, $expected)
 	      or die "cannot rename $out to $expected: $!";
 	}
     }
 }
-
-
+die if $test_num != $num_tests;
