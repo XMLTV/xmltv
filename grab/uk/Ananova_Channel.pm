@@ -277,11 +277,12 @@ sub all {
 #
 sub clone {
     my $obj = shift;
-    my %new = %$obj;
-    delete $new{xmltv_id};
-    delete $new{ananova_ids};
-    delete $new{first_ananova_id};
-    return \%new;
+    my $new = { %$obj };
+    bless $new, ref($obj);
+    delete $new->{xmltv_id};
+    delete $new->{ananova_ids};
+    delete $new->{first_ananova_id};
+    return $new;
 }
 
 sub stringify {
