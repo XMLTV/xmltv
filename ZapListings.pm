@@ -1,4 +1,6 @@
 #
+# $Id$
+#
 # ----------------------------------------------------------------------------
 # "THE BEER-WARE LICENSE" (Revision 42):
 # <jerry@matilda.com> wrote this file.  As long as you retain this notice you
@@ -12,6 +14,18 @@
 #
 #
 # $Log$
+# Revision 1.6  2001/11/11 22:29:36  jveldhuis
+# messages go to stderr, both status and debugging.
+# error messages or warnings try and include html that caused
+# failure.
+#
+# acknowledges program detail 'AO' although I don't know what it
+# means exactly. Maybe adults only, but not part of any standard,
+# so we scrape and ignore.
+#
+# how print STDERR message for each station page scraped to
+# get more feed back to user something is happening.
+#
 # Revision 1.5  2001/11/11 17:49:22  epaepa
 # Fixed a couple of syntax errors (don't know whether I caused them last
 # time).
@@ -45,45 +59,45 @@ sub doRequest($$$$)
     my ($ua, $req, $cookie_jar, $debug)=@_;
     
     if ( $debug ) {
-	print "==== req ====\n", $req->as_string();
+	print STDERR "==== req ====\n", $req->as_string();
     }
     
     if ( defined($cookie_jar) ) {
 	if ( $debug ) {
-	    print "==== request cookies ====\n", $cookie_jar->as_string(), "\n";
-	    print "==== sending request ====\n";
+	    print STDERR "==== request cookies ====\n", $cookie_jar->as_string(), "\n";
+	    print STDERR "==== sending request ====\n";
 	}
 	$cookie_jar->add_cookie_header($req);
     }
     
     my $res = $ua->request($req);
     if ( $debug ) {
-	print "==== got response ====\n";
+	print STDERR "==== got response ====\n";
     }
 
     if ( defined($cookie_jar) ) {
 	$cookie_jar->extract_cookies($res);
 	if ( $debug ) {
-	    print "==== response cookies ====\n", $cookie_jar->as_string(), "\n";
+	    print STDERR "==== response cookies ====\n", $cookie_jar->as_string(), "\n";
 	}
     }
 
     if ( $debug ) {
-	print "==== status: ", $res->status_line, " ====\n";
+	print STDERR "==== status: ", $res->status_line, " ====\n";
     }
     
     if ( $debug ) {
 	if ($res->is_success) {
-	    print "==== success ====\n";
+	    print STDERR "==== success ====\n";
 	}
 	elsif ($res->is_info) {
-	    print "==== what's an info response? ====\n";
+	    print STDERR "==== what's an info response? ====\n";
 	}
 	else {
-	    print "==== bad ====\n";
+	    print STDERR "==== bad ====\n";
 	}
-	#print $res->headers->as_string(), "\n";
-	#print $res->content(), "\n";
+	#print STDERR $res->headers->as_string(), "\n";
+	#print STDERR $res->content(), "\n";
     }
     return($res);
 }
@@ -156,7 +170,7 @@ sub getProviders($$$)
         my $options=$1;
         while ( $options=~s/<OPTION value="(\d+)">([^<]+)<\/OPTION>//os ) {
 	    $providers->{$2}=$1;
-            #print "provider $2 ($1)\n";
+            #print STDERR "provider $2 ($1)\n";
         }
     }
     if ( !defined($providers) ) {
@@ -533,9 +547,9 @@ sub dumpMe($)
 #    we emit an error since it means either the format has
 #    changed or it contains info we didn't scrape properly.
 #    
-sub scrapehtml($$)
+sub scrapehtml($$$)
 {
-    my ($self, $html)=@_;
+    my ($self, $html, $htmlsource)=@_;
 
     my $rowNumber=0;
     $html=~s/<TR/<tr/og;
@@ -550,7 +564,7 @@ sub scrapehtml($$)
 	# skipif the split didn't end with a row end </tr>
 	#next if ( !($row=~s/[\n\r\s]*<\/tr>[\n\r\s]*$//iso));
 	$row=~s/<\/tr>.*//so;
-	#print "working on: $row\n";
+	#print STDERR "working on: $row\n";
 	#next if ( !($row=~s/<\/tr>[\n\r\s]*$//iso));
 
 	# ignore if more than one ending </tr> because they signal
@@ -572,7 +586,7 @@ sub scrapehtml($$)
 	#     CC Stereo  </FONT><FONT face="Helvetica,Arial" size="-2">  (ends at 01:20)
 	#</TD>
 
-	#print "IN: $rowNumber: $row\n";
+	#print STDERR "IN: $rowNumber: $row\n";
 
 	# run it through our row scaper that separates out the html
 	my $result=new ZapListings::ScrapeRow()->parse($row);
@@ -585,7 +599,7 @@ sub scrapehtml($$)
 	# <td><b><text>....</text></b><td> etc.
 	# 
 	my $prog;
-	#print "ROW: $rowNumber: $desc\n";
+	print STDERR "ROW: $rowNumber: $desc\n" if ( $self->{Debug} );
 	if ( $desc=~s;^<td><b><text>([0-9]+):([0-9][0-9]) ([AP]M)</text></b></td><td></td>;;io ) {
 	    my $posted_start_hour=$1;
 	    $prog->{start_hour}=$1;
@@ -600,27 +614,47 @@ sub scrapehtml($$)
 		$prog->{start_hour}=0;
 	    }
 
-	    if ( $desc=~s;<font><text>(.*?)\s*\(ends at ([0-9]+):([0-9][0-9])\)</text></td>$;;io ||
-		 $desc=~s;<font><text>(.*?)\s*\(ends at ([0-9]+):([0-9][0-9])\)\&nbsp\;</text><br><a><img></a></td>$;;io ) {
+	    if ( $desc=~s;<font><text>(.*?)\s*\(ends at ([0-9]+):([0-9][0-9])\)(.*?)</text></td>$;;io ||
+		 $desc=~s;<font><text>(.*?)\s*\(ends at ([0-9]+):([0-9][0-9])\)\&nbsp\;(.*?)</text><br><a><img></a></td>$;;io){
 		$prog->{end_hour}=scalar($2);
 		$prog->{end_min}=$3;
+		my $preRest=$1;
+		my $postRest=$4;
 
-		if ( length($1) ) {
-		    my $text=$1;
-		    if ( $text=~s;\s*(\*+)\s*$;; ) {
-			$prog->{prog_stars_rating}=sprintf("%d.0", length($1));
+		if ( defined($postRest) && length($postRest) ) {
+		    $postRest=~s/^\&nbsp\;//o;
+		}
+		if ( !defined($postRest) || !length($postRest) ) {
+		    $postRest="";
+		}
+
+		if ( defined($preRest) && length($preRest) ) {
+		    if ( $preRest=~s;\s*(\*+)\s*$;; ) {
+			$prog->{prog_stars_rating}=sprintf("%d.0", length($preRest));
 		    }
-		    if ( $text=~s;\s*(\*+) 1/2\s*$;; ) {
-			$prog->{prog_stars_rating}=sprintf("%d.5", length($1));
+		    if ( $preRest=~s;\s*(\*+) 1/2\s*$;; ) {
+			$prog->{prog_stars_rating}=sprintf("%d.5", length($preRest));
 		    }
-		    if ( length($text) ) {
-			# put back reset of the text since sometime the (ends at xx:xx) is tacked on
-			$desc.="<font><text>$text</text></td>";
+		}
+		if ( length($preRest) || length($postRest) ) {
+		    $desc.="<font><text>";
+		    if ( length($preRest) && length($postRest) ) {
+			$desc.="$preRest&nbsp;$postRest";
 		    }
+		    elsif ( length($preRest) ) {
+			$desc.="$preRest";
+		    }
+		    else {
+			$desc.="$postRest";
+		    }
+		    # put back reset of the text since sometime the (ends at xx:xx) is tacked on
+		    $desc.="</text></td>";
 		}
 	    }
 	    else {
-		print "FAILED to find endtime\n";
+		print STDERR "FAILED to find endtime\n";
+		print STDERR "\tsource: $htmlsource\n";
+		print STDERR "\thtml:'$desc'\n"
 	    }
 
 	    if ( defined($prog->{end_hour}) ) {
@@ -647,14 +681,22 @@ sub scrapehtml($$)
 		$prog->{title}=massageText($1);
 	    }
 	    else {
-		print "FAILED to find title\n";
+		if ( $self->{Debug} ) {
+		    print STDERR "FAILED to find title\n";
+		    print STDERR "\tsource: $htmlsource\n";
+		    print STDERR "\thtml:'$desc'\n";
+		}
 	    }
 	    # <i><text>&quot;</text><a><text>Past Imperfect</text></a><text>&quot;</text></i>
 	    if ( $desc=~s;<text> </text><i><text>&quot\;</text><a><text>\s*(.*?)\s*</text></a><text>&quot\;</text></i>;;io ) {
 		$prog->{subtitle}=massageText($1);
 	    }
 	    else {
-		print "FAILED to find subtitle\n" if ( $self->{Debug} );
+		if ( $self->{Debug} ) {
+		    print STDERR "FAILED to find subtitle\n";
+		    print STDERR "\tsource: $htmlsource\n";
+		    print STDERR "\thtml:'$desc'\n";
+		}
 	    }
 
 	    # categories may be " / " separated
@@ -664,10 +706,16 @@ sub scrapehtml($$)
 		}
 	    }
 	    else {
-		print "FAILED to find category\n" if ( $self->{Debug} );
+		if ( $self->{Debug} ) {
+		    print STDERR "FAILED to find category\n";
+		    print STDERR "\tsource: $htmlsource\n";
+		    print STDERR "\thtml:'$desc'\n";
+		}
 	    }
 
-	    #print "PREEXTRA: $desc\n";
+	    if ( $self->{Debug} ) {
+		print STDERR "PREEXTRA: $desc\n";
+	    }
 	    my @extras;
 	    while ($desc=~s;<text>\s*(.*?)\s*</text>;;io ) {
 		push(@extras, massageText($1)); #if ( length($1) );
@@ -678,6 +726,8 @@ sub scrapehtml($$)
 
 		my $result;
 		my $success=1;
+		my @okay;
+		my @failed;
 		for my $i (split(/\s+/, $extra)) {
 		    #
 		    # www.tvguidelines.org and http://www.fcc.gov/vchip/
@@ -689,6 +739,7 @@ sub scrapehtml($$)
 			 $i=~m/^TV(M)$/oi ||
 			 $i=~m/^TV(MA)$/oi ) {
 			$result->{prog_ratings_VCHIP}="$1";
+			push(@okay, $i);
 			next;
 		    }
 		    # www.filmratings.com
@@ -705,41 +756,65 @@ sub scrapehtml($$)
 			    $i=~m/^Rated (NC-17)$/oi ||
 			    $i=~m/^Rated (NR)$/oi ) {
 			$result->{prog_ratings_MPAA}="$1";
+			push(@okay, $i);
+			next;
+		    }
+		    elsif ( $i=~/^AO$/io ) {
+			# don't understand what this is, but it sometimes appears
+			print STDERR "acknowledging unknown detail: $i\n" if ( $self->{Debug}) ;
+			push(@okay, $i);
 			next;
 		    }
 		    elsif ( $i=~/^\d\d\d\d$/io ) {
 			$result->{prog_year}=$i;
+			push(@okay, $i);
 			next;
 		    }
 		    elsif ( $i=~/^CC$/io ) {
 			$result->{prog_qualifiers}->{ClosedCaptioned}++;
+			push(@okay, $i);
 			next;
 		    }
 		    elsif ( $i=~/^Stereo$/io ) {
 			$result->{prog_qualifiers}->{InStereo}++;
+			push(@okay, $i);
 			next;
 		    }
 		    elsif ( $i=~/^\(Repeat\)$/io ) {
 			# understand, but ignore
+			push(@okay, $i);
 			next;
 		    }
 		    elsif ( $i=~/^\(Taped\)$/io ) {
 			$result->{prog_qualifiers}->{Taped}++;
+			push(@okay, $i);
 			next;
 		    }
 		    elsif ( $i=~/^\(Live\)$/io ) {
 			$result->{prog_qualifiers}->{Live}++;
+			push(@okay, $i);
 			next;
 		    }
 		    else {
 			$success=0;
-			last;
+			push(@failed, $i);
 		    }
 		}
-		# if everything in this piece parsed as a qualifier, then
-		# incorporate the results, partial results are dismissed
-		# then entire thing must parse into known qualifiers
-		if ( $success ) {
+		if ( !$success ) {
+		    if ( scalar(@okay) > 0 ) {
+			print STDERR "\thtml:'$desc'\n";
+			print STDERR "\tpartial match on details '$extra'\n";
+			print STDERR "\tmatched  :". join(',', @okay)."\n";
+			print STDERR "\tunmatched:". join(',', @failed)."\n";
+		    }
+		    else {
+			print STDERR "\tno match on details '$extra'\n" if ( $self->{Debug} );
+		    }
+		}
+		else {
+		    # if everything in this piece parsed as a qualifier, then
+		    # incorporate the results, partial results are dismissed
+		    # then entire thing must parse into known qualifiers
 		    for (keys %$result) {
 			$prog->{$_}=$result->{$_};
 		    }
@@ -762,7 +837,7 @@ sub scrapehtml($$)
 
 	    #for my $key (keys (%$prog)) {
 		#if ( defined($prog->{$key}) ) {
-		#    print "KEY $key: $prog->{$key}\n";
+		#    print STDERR "KEY $key: $prog->{$key}\n";
 		#}
 	    #}
 
@@ -771,7 +846,7 @@ sub scrapehtml($$)
 		print STDERR "scraper failed with left overs: $desc\n";
 	    }
 	    #$desc=~s/<text>(.*?)<\/text>/<text>/og;
-	    #print "\t$desc\n";
+	    #print STDERR "\t$desc\n";
 	    
 	    push(@programs, $prog);
 	}
@@ -781,9 +856,10 @@ sub scrapehtml($$)
 
 sub readSchedule($$$$$$$)
 {
-    my ($self, $station, $startHour, $endHour, $day, $month, $year)=@_;
+    my ($self, $station, $station_desc, $startHour, $endHour, $day, $month, $year)=@_;
 
     my $content;
+
     if ( -f "urldata/content-$station-$month-$day-$year.html" &&
 	 open(FD, "< urldata/content-$station-$month-$day-$year.html") ) {
 	my $s=$/;
@@ -818,7 +894,7 @@ sub readSchedule($$$$$$$)
 	if ( !$res->is_success ) {
 	    print STDERR "zap2it failed to give us a page\n";
 	    print STDERR "check postal/zip code or www site (maybe their down)\n";
-	    return(0);
+	    return(-1);
 	}
 	if ( -d "urldata" ) {
 	    open(FD, "> urldata/content-$station-$month-$day-$year.html");
@@ -827,7 +903,14 @@ sub readSchedule($$$$$$$)
 	}
 	$content=$res->content();
     }
-    @{$self->{Programs}}=$self->scrapehtml($content);
+    if ( $self->{Debug} ) {
+	print STDERR "scraping html for $month/$day/$year on station $station\n";
+    }
+    @{$self->{Programs}}=$self->scrapehtml($content, "$month/$day/$year on station $station");
+
+    print STDERR "One Day Schedule for Station $station_desc has:".
+	scalar(@{$self->{Programs}})." programs\n";
+	    
     return(scalar(@{$self->{Programs}}));
 }
 
