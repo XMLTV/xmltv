@@ -122,9 +122,9 @@ my $tz_offset;
 my $start_time=time();
 my $prog_count=0;        # record count;
 
-my $dd_user="";         # dd username
-my $dd_pass="";         # dd password
-my $dd_lineup="";       # dd lineup (empty all lineups)
+my $dd_user;            # dd username
+my $dd_pass;            # dd password
+my $dd_lineup;          # dd lineup (empty all lineups)
 my $dd_data;            # temp file handle to store DD data
 my $dd_data_name;       # filename for above
 my $dd_data_size;       # amount of data returned 
@@ -138,11 +138,11 @@ my $opt_output;         # output name
 my $opt_days       =10; # days to fetch
 my $opt_offset     =0;  # day to start
 my $opt_quiet      =0;  # supress messages
-my $opt_lineup     =''; # limit results to one lineup
+my $opt_lineup;         # limit results to one lineup
 my $opt_old_chan_id=0;  # use tv_grab_na style chan ids
 my $opt_low_mem    =0;  # use as little memory as you can
-my $opt_dd_data    =''; # save dd data
-my $opt_reprocess  =''; # reprocess dd data
+my $opt_dd_data;        # save dd data
+my $opt_reprocess  =0;  # reprocess dd data
 
 #
 # Process command line
@@ -171,7 +171,8 @@ usage(1) if $opt_help;
 
 die 'number of days must not be negative' if ($opt_days < 0);
 
-die "must specify --dd-data during reprocess\n" if $opt_reprocess and not $opt_dd_data;
+die "must specify --dd-data during reprocess\n"
+  if $opt_reprocess and not defined $opt_dd_data;
 
 $config_file = XMLTV::Config_file::filename($opt_config_file, 'tv_grab_na_dd', $opt_quiet);
 
@@ -189,8 +190,10 @@ You can get an ID at http://labs.zap2it.com
 Specify certificate code: TGYM-ZKOC-BUTV
 
 ");
-    $dd_user=ask("Username:") || die "DataDirect Username Required\n";
-    $dd_pass=ask("Password:") || die "DataDirect Password Required\n";
+    $dd_user=ask("Username:");
+    die "DataDirect Username Required\n" if not defined $dd_user;
+    $dd_pass=ask("Password:");
+    die "DataDirect Password Required\n" if not defined $dd_pass;
     print CONF "username: $dd_user\n";
     print CONF "password: $dd_pass\n";
     close CONF;
@@ -214,14 +217,14 @@ foreach (XMLTV::Config_file::read_lines($config_file))
     $dd_user=$1 if /^username\: (.+)/;
     $dd_pass=$1 if /^password\: (.+)/;
 }
+die "You must specify a username/password.\n"
+  unless ((defined $dd_user) && (defined $dd_pass));
 
-
-die "You must specify a username/password.\n" unless $dd_user && $dd_pass;
 
 #
 # hack to display lineups
 #
-$opt_days=0 if $opt_lineup eq 'list';
+$opt_days=0 if defined $opt_lineup and $opt_lineup eq 'list';
 
 #
 # compute start/stop time
@@ -257,6 +260,7 @@ $opt_days=0 if $opt_lineup eq 'list';
 #
 if ($opt_reprocess)
 {
+    die if not defined $opt_dd_data; # checked earlier
     die "$opt_dd_data file not found\n" unless -e $opt_dd_data;
     $dd_data_name = $opt_dd_data;
     $dd_data      = new IO::File("<$dd_data_name");
@@ -270,7 +274,7 @@ else
     #
     # open file to store DD XML
     #
-    if ($opt_dd_data)
+    if (defined $opt_dd_data)
     {
         $dd_data_name = $opt_dd_data;
         $dd_data      = new IO::File("+>$dd_data_name");
@@ -283,7 +287,8 @@ else
                                              UNLINK=>($DEBUG ? 0 : 1));
     }
     print STDERR "Fetching from DataDirect\n";
-    print STDERR "dd data is in $dd_data_name\n" if $DEBUG || $opt_dd_data;
+    print STDERR "dd data is in $dd_data_name\n"
+      if $DEBUG || defined $opt_dd_data;
 
     sub SOAP::Transport::HTTP::Client::get_basic_credentials
     {
@@ -408,8 +413,9 @@ $twig=undef;  # destroy twig (just in case)
 #
 # Hack to display lineups
 #
-if ($opt_lineup eq 'list')  # kludge to display lineups.. select --days 0 --lineup none
+if (defined $opt_lineup and $opt_lineup eq 'list')
 {
+    # kludge to display lineups.. select --days 0 --lineup none
     print STDERR "available lineups:\n";
     map { print "        $_\n" } sort keys %lineups;
     exit 0;
@@ -418,13 +424,13 @@ if ($opt_lineup eq 'list')  # kludge to display lineups.. select --days 0 --line
 #
 # store lineup information with stations
 #
-print STDERR "Processing only lineup '$opt_lineup'\n" if $opt_lineup;
+print STDERR "Processing only lineup '$opt_lineup'\n" if defined $opt_lineup;
 {
     my $id;
     my $count=0;
     while ( ($id,$_)=each %lineups )
     {
-        next if $opt_lineup && $opt_lineup ne $id;
+        next if defined $opt_lineup && $opt_lineup ne $id;
         $count++;
         foreach (@{$_->{map}})
         {
@@ -459,6 +465,7 @@ $writer->start( { 'date'             => scalar localtime(),
 # write stations
 #
 my $id;
+my %warned_unknown_role;
 while ( ($id,$_)=each %station)
 {
     my @names;
@@ -654,24 +661,40 @@ $twig=XML::Twig->new( twig_roots => { schedule => 1 }, twig_handlers => {
                         $ptr->{member}=[$ptr->{member}] if (ref $ptr->{member} eq 'HASH');
                         foreach (@{$ptr->{member}})
                         {
-                            my $name="";
-                            $name.=$_->{givenname}." " unless ref $_->{givenname};
-                            $name.=$_->{surname}       unless ref $_->{surname};
-                            push @actor     ,$name if $_->{role} eq 'Actor';
-                            push @guest     ,$name if $_->{role} eq 'Guest Star';
-                            push @presenter ,$name if $_->{role} eq 'Host';
-                            push @director  ,$name if $_->{role} eq 'Director';
-                            push @producer  ,$name if $_->{role} eq 'Executive Producter';
-                            push @producer  ,$name if $_->{role} eq 'Producter';
-                            push @writer    ,$name if $_->{role} eq 'Writer';
+			    my @name_bits;
+			    foreach my $k (qw(givenname surname)) {
+				push @name_bits, $_->{$k} if not ref $_->{$k};
+			    }
+			    if (not @name_bits) {
+				warn "strange, didn't see either givenname or surname";
+				next;
+			    }
+			    my $name = join ' ', @name_bits;
+
+			    my %role = (Actor                 => \@actor,
+					'Guest Star'          => \@guest,
+					Host                  => \@presenter,
+					Director              => \@director,
+					'Executive Producer'  => \@producer,
+					Producer              => \@producer,
+					Writer                => \@writer,
+				       );
+			    my $role = $_->{role};
+			    my $ref = $role{$role};
+			    if (not $ref) {
+				warn "ignoring unrecognized role $role\n"
+				  unless $warned_unknown_role{$role}++;
+				next;
+			    }
+			    push @$ref, $name;
                         }
 
-                        $prog{credits}{actor    }=\@actor     if @actor   ;
-                        $prog{credits}{director }=\@director  if @director;
-                        $prog{credits}{guest    }=\@guest     if @guest;
+                        $prog{credits}{actor}=\@actor         if @actor;
+                        $prog{credits}{director}=\@director   if @director;
+                        $prog{credits}{guest}=\@guest         if @guest;
                         $prog{credits}{presenter}=\@presenter if @presenter;
-                        $prog{credits}{producer }=\@producer  if @producer;
-                        $prog{credits}{writer   }=\@writer    if @writer;
+                        $prog{credits}{producer}=\@producer   if @producer;
+                        $prog{credits}{writer}=\@writer       if @writer;
                      } #crew items
 
 #
@@ -690,8 +713,9 @@ $twig=XML::Twig->new( twig_roots => { schedule => 1 }, twig_handlers => {
 seek($dd_data,0,0);  #rewind
 unless ($opt_quiet)
 {
-    if (Have_bar) { $bar = new Term::ProgressBar('Writing schedule',$dd_data_size+1) }
-    else          { print STDERR "Writing schedule"; }
+    my $msg = 'writing schedule';
+    if (Have_bar) { $bar = new Term::ProgressBar($msg,$dd_data_size+1) }
+    else          { print STDERR $msg; }
 }
 my $time=time();
 $twig->parse( $dd_data );
