@@ -673,12 +673,10 @@ sub MY::clean {
     package MY;
     my $inherited = shift->SUPER::clean(@_);
     $inherited =~ s/\s+$//;
-    $inherited .= "\n\t-rm -f filter/tv_grep\n";
-    $inherited .= "\n\t-rm -f grab/uk/tv_grab_uk\n";
-    $inherited .= "\n\t-rm -f grab/uk_rt/tv_grab_uk_rt\n";
-    $inherited .= "\n\t-rm -f grab/it/tv_grab_it\n";
-    $inherited .= "\n\t-rm -f grab/nz/tv_grab_nz\n";
-    $inherited .= "\n\t-rm -f lib/XMLTV.pm\n";
+    my @to_clean = ('filter/tv_grep',
+		    (map { "grab/$_/tv_grab_$_" } qw(uk uk_rt it nz)),
+		    'lib/XMLTV.pm');
+    $inherited .= "\n\t-rm -f $_\n" foreach @to_clean;
     return $inherited;
 }
 
