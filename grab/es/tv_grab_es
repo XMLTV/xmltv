@@ -1,0 +1,543 @@
+#!/usr/bin/perl -w
+
+=head1 NAME
+
+tv_grab_es - Grab TV listings for Spain.
+
+=head1 SYNOPSIS
+
+tv_grab_es --help
+
+tv_grab_es [--config-file FILE] --configure
+
+tv_grab_es [--config-file FILE] [--output FILE] [--days N]
+           [--offset N] [--quiet]
+
+tv_grab_es --list_channels
+
+=head1 DESCRIPTION
+
+Output TV listings for several channels available in Spain.
+Now supports the terrestrial analog tv listings, which is the most common tv 
+viewed in Spain that currently has no EPG information. I have plans to add
+Satelite listings (now the Spanish platforms are in a merger process between 
+providers and also cable (the listings has to be grabbed from different sites).
+The tv listings comes from www.elpais.es 
+The grabber relies on parsing HTML so it might stop working at any time.
+
+First run B<tv_grab_es --configure> to choose, which channels you want
+to download. Then running B<tv_grab_es> with no arguments will output
+listings in XML format to standard output.
+
+B<--configure> Prompt for which channels,
+and write the configuration file.
+
+B<--config-file FILE> Set the name of the configuration file, the
+default is B<~/.xmltv/tv_grab_es.conf>.  This is the file written by
+B<--configure> and read when grabbing.
+
+B<--output FILE> write to FILE rather than standard output.
+
+B<--days N> grab N days.  The default is 3.
+
+B<--offset N> start N days in the future.  The default is to start
+from today.
+
+B<--quiet> suppress the progress messages normally written to standard
+error.
+
+=head1 SEE ALSO
+
+L<xmltv(5)>.
+
+=head1 AUTHOR
+
+Ramon Roca, Ramon.Roca@XCombo.com, based on tv_grab_fi, from Matti Airas.
+
+=head1 BUGS
+
+=cut
+
+# Author's TODOs & thoughts
+#
+# get the idons of each grabbed channel from the website
+#
+# findout how to setup properly the language, (catalan, basque, galician, vo)
+#
+# implement a "retry" and "timeout" when fetching data, I've been noted that
+#	during certain hours of the day sometimes the fetch fails, it happens
+# 	more likely when fetching a full week listing. That could be done in
+#	the same way that tv_grab_na does.
+#
+# get channel ids in RFC2838 format (I don't, actually the Id comes directly
+# 	web site, i don't know where to go for getting th id's for spanish
+#	tv broadcasters.
+#
+# do the listings from another site, just in case this one breaks, the most
+#	similar sites to this grabber are television.ya.com.
+#	we should consider also getting them from www.terra.es or 
+#	www.tvinteligente.com, they provide also some more local tv listings
+#	however the grabber gets a lot more complex and needs many more urls
+#	to collect the info, although it can be a little bit more complete
+#       (i.e. credits, program duration...)
+#
+# do the listings for satelite TV in an accurate manner. Currently Via Digital
+# 	and Canal Satelite are in a merge so big changes are expected to occur 
+#	on their listings... maybe we should wait? Not sure in how patient
+#	I'm going a be... anyway is also a matter of time.
+#
+# get the listings for local cable broadcasters, they might come from 
+#	www.aunatv.com
+# 
+#
+
+
+######################################################################
+# initializations
+
+use strict;
+use Getopt::Long;
+use Date::Manip;
+use LWP::Simple;
+use HTML::TreeBuilder;
+use HTML::Entities; # parse entities
+use IO::File;
+
+use XMLTV;
+use XMLTV::Memoize;
+use XMLTV::Ask;
+# Todo: perhaps we should internationalize messages and docs?
+use XMLTV::Usage <<END
+$0: get Spanish television listings in XMLTV format
+To configure: $0 --configure [--config-file FILE]
+To grab listings: $0 [--config-file FILE] [--output FILE] [--days N]
+        [--offset N] [--quiet] [--fast]
+To list channels: $0 --list-channels
+END
+  ;
+
+# Use Term::ProgressBar if installed.
+my $have_bar;
+BEGIN {
+    eval { require Term::ProgressBar };
+    $have_bar = not $@;
+}
+
+# Attributes of the root element in output.
+my $HEAD = { 'source-info-url'     => 'http://www.elpais.com/parrillatv/portada.html',
+		'source-data-url'     => "http://www.elpais.es/parrillatv/resultados.html",
+		'generator-info-name' => 'XMLTV',
+		'generator-info-url'  => 'http://membled.com/work/apps/xmltv/'
+	};
+
+# Whether zero-length programmes should be included in the output.
+my $WRITE_ZERO_LENGTH = 0;
+
+# default timezone (shouldn't be needed??)
+#my $TZ="CET";
+my $TZ="";
+
+# default language
+my $LANG="es";
+
+# Global channel_data
+use vars '@ch_all';
+
+######################################################################
+# get options
+
+# Get options, including undocumented --cache option.
+XMLTV::Memoize::check_argv('get');
+my ($opt_days, $opt_offset, $opt_help, $opt_output,
+    $opt_configure, $opt_config_file, $opt_quiet, $opt_fast,
+    $opt_list_channels);
+$opt_days  = 3; # default
+$opt_offset = 0; # default
+$opt_quiet  = 0; # default
+$opt_fast = 0; # default
+GetOptions('days=i'        => \$opt_days,
+	   'offset=i'      => \$opt_offset,
+	   'help'          => \$opt_help,
+	   'configure'     => \$opt_configure,
+	   'config-file=s' => \$opt_config_file,
+	   'output=s'      => \$opt_output,
+	   'quiet'         => \$opt_quiet,
+	   'fast'	   => \$opt_fast,
+	   'list-channels' => \$opt_list_channels
+	  )
+  or usage(0);
+die 'number of days must not be negative'
+  if (defined $opt_days && $opt_days < 0);
+usage(1) if $opt_help;
+$have_bar = 0 if $opt_quiet;
+if ($opt_configure and $opt_list_channels) {
+	warn 'cannot noth configure and list channels, assuming --list-channels only','\n';
+	$opt_configure = 0;
+}
+
+# File that stores which channels to download.
+my $CONFIG_FILE = $opt_config_file;
+if (not defined $CONFIG_FILE) {
+    if (defined($ENV{HOME})) {
+	my $conf_dir = "$ENV{HOME}/.xmltv";
+	(-d $conf_dir) or mkdir($conf_dir, 0777)
+	  or die "cannot mkdir $conf_dir: $!";
+	$CONFIG_FILE = "$conf_dir/tv_grab_es.conf";
+    }
+    else {
+	# $HOME not set, use current directory.
+	$CONFIG_FILE = 'tv_grab_es.conf';
+    }
+}
+
+# FIXME commonize this configuration stuff within the XMLTV project.
+if ($opt_configure) {
+    if (-e $CONFIG_FILE) {
+	print <<END
+The configuration file $CONFIG_FILE already exists.
+There is currently no support for altering an existing configuration,
+you have to reconfigure from scratch.
+
+END
+  ;
+	if (not askBooleanQuestion
+	    ('Do you wish to overwrite the old configuration?', 0)) {
+	    print "Exiting.\n";
+	    exit 0;
+	}
+    }
+}
+else {
+    if (-e $CONFIG_FILE) {
+	print STDERR "using config file $CONFIG_FILE\n" unless $opt_quiet;
+    }
+    else {
+	die "config file $CONFIG_FILE does not exist, run me with --configure\n";
+    }
+}
+
+# Whatever we are doing, we need the channels data.
+my %channels = get_channels(); # sets @ch_all
+my @channels;
+
+######################################################################
+# write configuration
+
+if ($opt_configure) {
+    open(CONF, ">$CONFIG_FILE") or die "cannot write to $CONFIG_FILE: $!";
+    my $answer;
+    my $answer_all;
+
+    foreach my $ch_did (sort(keys %channels)) {
+	my $ch_name = $channels{$ch_did};
+	if ($answer_all) {
+	    print($answer eq 'yes' ? 'adding' : 'ignoring',
+		  " new channel $ch_name\n");
+	} else {
+	    $answer=askQuestion("add channel $ch_name?", 'yes',
+				'yes', 'no', 'all', 'none');
+	    if ( $answer eq 'all' ) {
+		$answer_all=1;
+		$answer='yes';
+	    }
+	    elsif ( $answer eq 'none' ) {
+		$answer_all=1;
+		$answer='no';
+	    }
+	}
+
+	if ($answer eq 'yes') {
+	    print CONF "channel $ch_did $ch_name\n";
+	} else {
+	    print CONF "# channel $ch_did $ch_name\n";
+	}
+    }
+    close CONF or warn "cannot close $CONFIG_FILE: $!";
+    print "All done, run with no arguments to grab listings.\n";
+
+    exit();
+}
+
+
+# Not configuration, we must be writing something, either full
+# listings or just channels.
+#
+# Options to be used for XMLTV::Writer.
+my %w_args;
+if (defined $opt_output) {
+    my $fh = new IO::File(">$opt_output");
+    die "cannot write to $opt_output: $!" if not defined $fh;
+    $w_args{OUTPUT} = $fh;
+}
+$w_args{encoding} = 'ISO-8859-1';
+my $writer = new XMLTV::Writer(%w_args);
+$writer->start($HEAD);
+
+if ($opt_list_channels) {
+    # Write channels mode.
+    $writer->write_channel($_) foreach @ch_all;
+    $writer->end();
+    exit();
+}
+
+######################################################################
+# We are producing full listings. Read configuration
+
+open(CONF, $CONFIG_FILE) or die "cannot read $CONFIG_FILE: $!\n";
+while (<CONF>) {
+    s/\#.*//; s/^\s+//; s/\s+$//;
+    next if not length;
+    if (/^channel:?\s+(\S+)\s+([^\#]+)/) {
+	my $ch_did = $1;
+	my $ch_name = $2;
+	$ch_name =~ s/\s*$//;
+	push @channels, $ch_did;
+	$channels{$ch_did} = $ch_name;
+    }
+    else {
+	warn "$CONFIG_FILE:$.: bad line\n";
+    }
+}
+close(CONF) or warn "could not close $CONFIG_FILE: $!\n";
+
+######################################################################
+# begin main program
+
+# Assume the listings source uses CET (see BUGS above).
+# Date_Init("TZ=$TZ");
+my $now = DateCalc(ParseDate('now'), "$opt_offset days");
+die "No channels specified, run me with --configure\n"
+  if not keys %channels;
+my @to_get;
+
+
+# the order in which we fetch the channels matters
+foreach my $ch_did (@channels) {
+    my $ch_name=$channels{$ch_did};
+    my $ch_xid="$ch_did.elpais.es";
+    $writer->write_channel({ id => $ch_xid,
+		    		'display-name' => [ [ $ch_name ] ] });
+    my $day=UnixDate($now,'%Q');
+    for (my $i=0;$i<$opt_days;$i++) {
+        push @to_get, [ $day, $ch_xid, $ch_did ];
+        #for each day
+        $day=nextday($day); die if not defined $day;
+    }
+}
+
+# This progress bar is for both downloading and parsing.  Maybe
+# they could be separate.
+#
+my $bar = new Term::ProgressBar('getting listings', scalar @to_get)
+if $have_bar;
+foreach (@to_get) {
+	foreach (process_table($_->[0], $_->[1], $_->[2])) {
+		$writer->write_programme($_);
+	}
+	# be courteous to the servers
+	sleep(rand(5)) unless $opt_fast;
+	update $bar if $have_bar;
+}
+$writer->end();
+
+######################################################################
+# subroutine definitions
+
+# Use Log::TraceMessages if installed.
+BEGIN {
+    eval { require Log::TraceMessages };
+    if ($@) {
+	*t = sub {};
+	*d = sub { '' };
+    }
+    else {
+	*t = \&Log::TraceMessages::t;
+	*d = \&Log::TraceMessages::d;
+	Log::TraceMessages::check_argv();
+    }
+}
+
+####
+# process_table: fetch a URL and process it
+#
+# arguments:
+#    Date::Manip object giving the day to grab
+#    xmltv id of channel
+#    elpais.es id of channel
+#
+# returns: list of the programme hashes to write
+#
+sub process_table {
+    my ($date, $ch_xmltv_id, $ch_es_id) = @_;
+
+    my $today = UnixDate($date, '%Y%m%d');
+    my $url = "http://www.elpais.es/parrillatv/resultados.html?franja=0&tipo=&canal=$ch_es_id&day=$today";
+    my $data=get($url);
+    if (not defined $data) {
+	die "could not fetch $url, aborting\n";
+    }
+    local $SIG{__WARN__} = sub {
+	warn "$url: $_[0]";
+    };
+
+    # parse the page to a document object
+    my $tree = HTML::TreeBuilder->new();
+    $tree->parse($data);
+    my @program_data = get_program_data($tree);
+    my $bump_start_day=0;
+
+    my @r;
+    while (@program_data) {
+	my $cur = shift @program_data;
+	my $next = shift @program_data;
+	unshift @program_data,$next if $next;
+	
+	push @r, make_programme_hash($date, $ch_xmltv_id, $ch_es_id, $cur, $next);
+	if (!$bump_start_day && bump_start_day($cur,$next)) {
+	    $bump_start_day=1;
+	    $date = UnixDate(DateCalc($date,"+ 1 day"),'%Q');
+	}
+    }
+    return @r;
+}
+
+sub make_programme_hash {
+    my ($date, $ch_xmltv_id, $ch_es_id, $cur, $next) = @_;
+
+    my %prog;
+
+#
+# The program still guess for a stop time depending on the next program,
+#	if does not find it, it sets +3 hours. That's not correct because
+#	stop only should be included if it comes directly from the grab
+#	however i'm still doing this because if is not there some frontends
+#	like freevo doesn't recognize the listing although it gets filtered 
+#	through tv_sort, in the meantime I'm maintaning this while I'm figuring
+#	out what to do.
+#
+    $prog{channel}=$ch_xmltv_id;
+    $prog{title}=[ [ $cur->{title}, $LANG ] ];
+    $prog{category}=[ [ $cur->{category}, $LANG ] ];
+
+    my $start=ParseDate("$date $cur->{time} $TZ");
+    $prog{start}=UnixDate($start,'%q %z');
+
+    # FIXME: parse description field further
+
+    $prog{desc}=[ [ $cur->{desc}, $LANG ] ] if defined $cur->{desc};
+
+    return \%prog;
+}
+sub bump_start_day {
+    my ($cur,$next) = @_;
+    if (!defined($next)) {
+	return undef;
+    }
+    my $start = UnixDate($cur->{time},'%H:%M');
+    my $stop = UnixDate($next->{time},'%H:%M');
+    if (Date_Cmp($start,$stop)>0) {
+	return 1;
+    } else {
+	return 0;
+    }
+}
+
+
+#
+# program data is split as follows:
+# - data is contained within many tag nodes, in a complicated hierarchy that
+#   includes several tables...,
+#   however each tv program listing has also a fixed head (HORA, TIPO, 
+#   CANAL...) and the data follows this header in a fixed order, so...
+sub get_program_data {
+    my ($tree) = @_;
+    my @data;
+
+    my @txt_elems = get_txt_elems($tree);
+
+    # Actually time and title are required, but we don't check that.
+
+    my $index = 0;
+    while (defined $txt_elems[$index]) {
+	if (       ($txt_elems[$index] eq "HORA")
+		&& ($txt_elems[$index + 1] eq "TIPO")
+		&& ($txt_elems[$index + 2] eq "CANAL")
+		&& ($txt_elems[$index + 3] eq "PROGRAMA") ) {
+	   my %h = (    time =>$txt_elems[$index + 4],
+			category=>$txt_elems[$index + 5],
+			title=>$txt_elems[$index + 7],
+			desc =>$txt_elems[$index + 8]
+		);
+    	   $index = $index + 8;
+	   push @data, \%h;
+        }
+	$index = $index + 1;
+    }
+    return @data;
+}
+sub get_txt_elems {
+    my ($tree) = @_;
+
+    my @txt_elem;
+    my @txt_cont = $tree->look_down(
+                        sub { ($_[0]->descendants() eq 0  ) },       
+			sub { defined($_[0]->attr ("_content") ) } );
+	foreach my $txt (@txt_cont) {
+        	my @children=$txt->content_list;
+		for (my $tmp=$children[0]) {
+			s/^\s+//;s/\s+$//;
+			push @txt_elem, $_;
+		}
+	}
+    return @txt_elem;
+}
+
+# get channel listing
+sub get_channels {
+    my $bar = new Term::ProgressBar('getting list of channels', 1)
+	if $have_bar;
+    my %channels;
+    my $url="http://www.elpais.es/parrillatv/portada.html";
+    my $local_data=get($url);
+    die "could not get channel listing $url, aborting\n"
+      if not defined $local_data;
+
+    my $tree = HTML::TreeBuilder->new();
+    $tree->parse($local_data);
+    my @menus = $tree->find_by_tag_name("_tag"=>"select");
+    
+    foreach my $elem (@menus) {
+	my $cname = $elem->attr('name');
+	if ($cname eq "canal") {
+	    my @ocanals = $elem->find_by_tag_name("_tag"=>"option");
+	    @ocanals = sort @ocanals;
+	    foreach my $opt (@ocanals) {
+		if (not $opt->attr('value') eq "") {
+		    my @str = split (/-/,$opt->attr('value'));
+		    my $channel_id = $str[0];
+		    my $channel_name=$str[1];
+		    if (length $channel_id eq 1) {
+			$channel_id = "0" . $channel_id
+		    }
+		    $channels{$channel_id}=$channel_name;
+		    push @ch_all, { 'display-name' => [ [ $str[1],
+							  $LANG ] ],
+				    'id'=> "$channel_id.elpais.es" };
+		}
+	    }
+	}
+    }
+    die "no channels could be found" if not keys %channels;
+    update $bar if $have_bar;
+    return %channels;
+}
+
+
+# Bump a YYYYMMDD date by one.
+sub nextday {
+    my $d = shift;
+    my $p = ParseDate($d);
+    my $n = DateCalc($p, '+ 1 day');
+    return UnixDate($n, '%Q');
+}
+
