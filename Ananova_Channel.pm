@@ -258,8 +258,9 @@ sub write {
 	    push @out, [ $_, $lang ];
 	}
     }
-    t 'to output: ' . d \@out;
-    $writer->write_channel($id, \@out);
+    my %ch = ( id => $id, 'display-name' => \@out );
+    t 'writing channel hash: ' . d \%ch;
+    $writer->write_channel(\%ch);
 }
 
 sub croak {

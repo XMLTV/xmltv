@@ -33,29 +33,39 @@ use base 'Exporter'; use vars qw(@EXPORT @EXPORT_OK);
 # must appear in the DTD.  In fact, this just duplicates information
 # in the DTD and adds details of what handlers to call.
 #
-my @Handlers = ([ 'title',            \&read_with_lang,   \&write_with_lang,   '+' ],
-		[ 'sub-title',        \&read_with_lang,   \&write_with_lang,   '*' ],
-		[ 'desc',             \&read_with_lang,   \&write_with_lang,   '*' ],
-		[ 'credits',          \&read_credits,     \&write_credits,     '?' ],
-		[ 'date',             \&read_date,        \&write_date,        '?' ],
-		[ 'category',         \&read_with_lang,   \&write_with_lang,   '*' ],
-		[ 'language',         \&read_with_lang,   \&write_with_lang,   '?' ],
-		[ 'orig-language',    \&read_with_lang,   \&write_with_lang,   '?' ],
-		[ 'length',           \&read_length,      \&write_length,      '?' ],
-		[ 'icon',             \&read_icon,        \&write_icon,        '*' ],
-		[ 'url',              \&read_url,         \&write_url,         '*' ],
-		[ 'country',          \&read_with_lang,   \&write_with_lang,   '*' ],
-		[ 'episode-num',      \&read_episode_num, \&write_episode_num, '?' ],
-		[ 'video',            \&read_video,       \&write_video,       '?' ],
-		[ 'audio',            \&read_audio,       \&write_audio,       '?' ],
-		[ 'previously-shown', \&read_prev_shown,  \&write_prev_shown,  '?' ],
-		[ 'premiere',         \&read_with_lang,   \&write_with_lang,   '?' ],
-		[ 'last-chance',      \&read_with_lang,   \&write_with_lang,   '?' ],
-		[ 'new',              \&read_new,         \&write_new,         '?' ],
-		[ 'subtitles',        \&read_subtitles,   \&write_subtitles,   '*' ],
-		[ 'rating',           \&read_rating,      \&write_rating,      '*' ],
-		[ 'star-rating',      \&read_star_rating, \&write_star_rating, '?' ]);
-sub Handlers { @Handlers }
+my @Handlers =
+  (
+   [ 'title',            \&read_with_lang,   \&write_with_lang,   '+' ],
+   [ 'sub-title',        \&read_with_lang,   \&write_with_lang,   '*' ],
+   [ 'desc',             \&read_with_lang,   \&write_with_lang,   '*' ],
+   [ 'credits',          \&read_credits,     \&write_credits,     '?' ],
+   [ 'date',             \&read_date,        \&write_date,        '?' ],
+   [ 'category',         \&read_with_lang,   \&write_with_lang,   '*' ],
+   [ 'language',         \&read_with_lang,   \&write_with_lang,   '?' ],
+   [ 'orig-language',    \&read_with_lang,   \&write_with_lang,   '?' ],
+   [ 'length',           \&read_length,      \&write_length,      '?' ],
+   [ 'icon',             \&read_icon,        \&write_icon,        '*' ],
+   [ 'url',              \&read_url,         \&write_url,         '*' ],
+   [ 'country',          \&read_with_lang,   \&write_with_lang,   '*' ],
+   [ 'episode-num',      \&read_episode_num, \&write_episode_num, '?' ],
+   [ 'video',            \&read_video,       \&write_video,       '?' ],
+   [ 'audio',            \&read_audio,       \&write_audio,       '?' ],
+   [ 'previously-shown', \&read_prev_shown,  \&write_prev_shown,  '?' ],
+   [ 'premiere',         \&read_with_lang,   \&write_with_lang,   '?' ],
+   [ 'last-chance',      \&read_with_lang,   \&write_with_lang,   '?' ],
+   [ 'new',              \&read_new,         \&write_new,         '?' ],
+   [ 'subtitles',        \&read_subtitles,   \&write_subtitles,   '*' ],
+   [ 'rating',           \&read_rating,      \&write_rating,      '*' ],
+   [ 'star-rating',      \&read_star_rating, \&write_star_rating, '?' ],
+  );
+
+# Same for <channel> elements.
+my @Channel_handlers =
+  (
+   [ 'display-name', \&read_with_lang, \&write_with_lang, '+' ],
+   [ 'icon',         \&read_icon,      \&write_icon,      '*' ],
+   [ 'url',          \&read_url,       \&write_url,       '*' ],
+  );
 
 # Private.
 sub node_to_programme( $ ) {
@@ -63,7 +73,7 @@ sub node_to_programme( $ ) {
     my %programme;
 #    local $Log::TraceMessages::On = 1;
 
-    # Attributes of programme element.  No checking done.
+    # Attributes of programme element.
     %programme = %{dom_attrs($node)};
     t 'attributes: ' . d \%programme;
 
@@ -80,7 +90,7 @@ sub node_to_programme( $ ) {
 			 videoplus channel clumpidx);
     my %ka; ++$ka{$_} foreach @known_attrs;
     foreach (keys %programme) {
-	unless (/^_/ or $ka{$_}) {
+	unless ($ka{$_}) {
 	    warn "deleting unknown attribute '$_'";
 	    delete $programme{$_};
 	}
@@ -89,6 +99,29 @@ sub node_to_programme( $ ) {
     call_handlers_read($node, \@Handlers, \%programme);
     return \%programme;
 }
+
+
+# Private.
+sub node_to_channel( $ ) {
+    my $node = shift;
+    my %channel;
+
+    %channel = %{dom_attrs($node)};
+    t 'attributes: ' . d \%channel;
+    if (not defined $channel{id}) {
+	warn "channel missing 'id' attribute\n";
+    }
+    foreach (keys %channel) {
+	unless (/^_/ or $_ eq 'id') {
+	    warn "deleting unknown attribute '$_'";
+	    delete $channel{$_};
+	}
+    }
+		
+    call_handlers_read($node, \@Channel_handlers, \%channel);
+    return \%channel;
+}
+
 
 
 # Private.
@@ -256,21 +289,13 @@ sub read_data( $ ) {
     $nodes = $doc->getElementsByTagName('channel');
     my $n = $nodes->getLength();
     my %channels;
-    my %known_channel_id;
     for (my $i = 0; $i < $n; $i++) {
 	my $node = $nodes->item($i);
-	my $attrs = dom_attrs($node);
-	my $id = $attrs->{id};
-	my @display_names = ();
-	foreach ($node->getElementsByTagName('display-name', 0)) {
-	    my $lang = $_->getAttribute('lang');
-	    undef $lang if $lang eq '';
-	    my $name = dom_text($_);
-	    push @display_names, [ $name, $lang ];
-	}
+	my $channel = node_to_channel($node);
+	my $id = $channel->{id};
 	warn "channel with id $id seen twice"
 	  if defined $channels{$id};
-	$channels{$id} = \@display_names;
+	$channels{$id} = $channel;
     }
 
     # Finally the programmes themselves.
@@ -436,7 +461,7 @@ sub read_credits( $ ) {
     my %r;
     foreach (dom_subelements($node)) {
 	my $role = $_->getNodeName();
-	unless ($role =~ /^_/ or $known_role{$role}++) {
+	unless ($known_role{$role}++) {
 	    warn "unknown thing in credits: $role";
 	    next;
 	}
@@ -655,7 +680,7 @@ sub read_prev_shown( $ ) {
 	$r->{$_} = $v if defined $v;
     }
     foreach (keys %attrs) {
-	warn "unknown attribute $_ in previously-shown" unless /^_/;
+	warn "unknown attribute $_ in previously-shown";
     }
     return $r;
 }
@@ -725,7 +750,7 @@ sub read_rating( $ ) {
     my %attrs = %{dom_attrs($node)};
     my $system = delete $attrs{system} if exists $attrs{system};
     foreach (keys %attrs) {
-	warn "unknown attribute in rating: $_" unless /^_/;
+	warn "unknown attribute in rating: $_";
     }
     my @children = dom_subelements($node);
 
@@ -1022,10 +1047,9 @@ sub write_channels {
     my ($w, $channels) = @_;
     t('write_channels(' . d($w) . ', ' . d($channels) . ') ENTRY');
     foreach (sort keys %$channels) {
-	my $id = $_;
-	t "writing channel with id $id";
-	my $names = $channels->{$_};
-	write_channel($w, $id, $names);
+	t "writing channel with id $_";
+	my $ch = $channels->{$_};
+	write_channel($w, $ch);
     }
     t('write_channels() EXIT');
 }
@@ -1039,29 +1063,21 @@ sub write_channels {
 # points to.  Accordingly the parameters are:
 #
 # XMLTV::Writer object
-# id of channel
-# channel data (at present, a list of display names)
+# channel data
 #
 # You can call this routine if you want, but most of the time
 # write_channels() is a better interface.
 #
-# FIXME extend this module for icons and stuff.
-# In fact for all recent changes to the DTD.
-#
 sub write_channel {
-    my ($w, $id, $names) = @_;
-    if (not @$names) {
-	warn "channel $id has no display names, not writing";
-	return;
-    }
+    my ($w, $ch) = @_;
+    die if ref $ch ne 'HASH';
+    my %ch = %$ch; # make a copy
+    my $id = delete $ch{id};
+    die "no 'id' attribute in channel" if not defined $id;
     $w->startTag('channel', id => $id);
-    foreach (@$names) {
-	my ($text, $lang) = @$_;
-	my %attrs;
-	$attrs{lang} = $lang if defined $lang;
-	warn "writing undefined channel name for channel $id"
-	  if not defined $text;
-	$w->dataElement('display-name', $text, %attrs);
+    call_handlers_write($w, \@Channel_handlers, \%ch);
+    foreach (keys %ch) {
+	warn "unknown key in channel: $_" unless /^_/;
     }
     $w->endTag('channel');
 }
@@ -1115,18 +1131,81 @@ sub write_programme {
 	$self->comment("source: $val");
     }
 
-    # Now do the subelements.
-    t 'doing each Handler in turn';
-    foreach (XMLTV::Handlers()) {
+    call_handlers_write($self, \@Handlers, \%p);
+    foreach (keys %p) {
+	warn "unknown key $_ in programme hash" unless /^_/;
+    }
+    t "ending 'programme' element";
+    $self->endTag('programme');
+}
+
+
+# end(): say you've finished writing programmes.
+sub end {
+    my $self = shift;
+    $self->endTag('tv');
+    $self->SUPER::end(@_);
+}
+
+
+# Private.
+# order_attrs()
+#
+# In XML the order of attributes is not significant.  But to make
+# things look nice we try to output them in the same order as given in
+# the DTD.
+#
+# Takes a list of (key, value, key, value, ...) and returns one with
+# keys in a nice-looking order.
+#
+sub order_attrs {
+    die "expected even number of elements, from a hash"
+      if @_ % 2;
+    # This is copied from the ATTRLISTs for programme and tv.
+    my @a = (qw(start stop pdc-start vps-start showview videoplus
+		channel clumpidx),
+	     qw(date source-info-url source-info-name source-data-url
+		generator-info-name generator-info-url));
+
+    my @r;
+    my %in = @_;
+    foreach (@a) {
+	if (exists $in{$_}) {
+	    my $v = delete $in{$_};
+	    push @r, $_, $v;
+	}
+    }
+
+    foreach (sort keys %in) {
+	warn "unknown attribute $_" unless /^_/;
+	push @r, $_, $in{$_};
+    }
+
+    return @r;
+}
+
+
+# Private.
+#
+# Writes the elements of a hash to an XMLTV::Writer using a list of
+# handlers.  Deletes keys (modifying the hash passed in) as they are
+# written.
+#
+sub call_handlers_write( $$$ ) {
+    my ($self, $handlers, $input) = @_;
+    t 'writing input hash: ' . d $input;
+    die if not defined $input;
+    foreach (@$handlers) {
 	my ($name, $reader, $writer, $multiplicity) = @$_;
 	t "doing handler for $name$multiplicity";
 	t "do we need to write any $name elements?";
-	if (not defined $p{$name}) {
+	if (not defined $input->{$name}) {
 	    t "nope, not defined";
 	    next;
 	}
 
-	my $val = delete $p{$name};
+	my $val = delete $input->{$name};
+	t 'yes, got value(s): ' . d $val;
 	if ($multiplicity eq '') {
 	    t 'exactly one element';
 	    if (not defined $val) {
@@ -1179,58 +1258,7 @@ sub write_programme {
 	    warn "bad multiplicity specifier: $multiplicity";
 	}
     }
-
-    foreach (keys %p) {
-	warn "unknown key $_ in programme hash" unless /^_/;
-    }
-
-    t "ending 'programme' element";
-    $self->endTag('programme');
-}
-
-
-# end(): say you've finished writing programmes.
-sub end {
-    my $self = shift;
-    $self->endTag('tv');
-    $self->SUPER::end(@_);
-}
-
-
-# Private.
-# order_attrs()
-#
-# In XML the order of attributes is not significant.  But to make
-# things look nice we try to output them in the same order as given in
-# the DTD.
-#
-# Takes a list of (key, value, key, value, ...) and returns one with
-# keys in a nice-looking order.
-#
-sub order_attrs {
-    die "expected even number of elements, from a hash"
-      if @_ % 2;
-    # This is copied from the ATTRLISTs for programme and tv.
-    my @a = (qw(start stop pdc-start vps-start showview videoplus
-		channel clumpidx),
-	     qw(date source-info-url source-info-name source-data-url
-		generator-info-name generator-info-url));
-
-    my @r;
-    my %in = @_;
-    foreach (@a) {
-	if (exists $in{$_}) {
-	    my $v = delete $in{$_};
-	    push @r, $_, $v;
-	}
-    }
-
-    foreach (sort keys %in) {
-	warn "unknown attribute $_" unless /^_/;
-	push @r, $_, $in{$_};
-    }
-
-    return @r;
+    t 'leftover keys: ' . d([ sort keys %$input ]);
 }
 
 
