@@ -167,7 +167,7 @@ use vars '@Programme_Handlers'; @Programme_Handlers =
   (
    [ 'title',            'with-lang',          '+' ],
    [ 'sub-title',        'with-lang',          '*' ],
-   [ 'desc',             'with-lang',          '*' ],
+   [ 'desc',             'with-lang/m',        '*' ],
    [ 'credits',          'credits',            '?' ],
    [ 'date',             'scalar',             '?' ],
    [ 'category',         'with-lang',          '*' ],
@@ -181,8 +181,8 @@ use vars '@Programme_Handlers'; @Programme_Handlers =
    [ 'video',            'video',              '?' ],
    [ 'audio',            'audio',              '?' ],
    [ 'previously-shown', 'previously-shown',   '?' ],
-   [ 'premiere',         'with-lang-or-empty', '?' ],
-   [ 'last-chance',      'with-lang-or-empty', '?' ],
+   [ 'premiere',         'with-lang/em',       '?' ],
+   [ 'last-chance',      'with-lang/em',       '?' ],
    [ 'new',              'presence',           '?' ],
    [ 'subtitles',        'subtitles',          '*' ],
    [ 'rating',           'rating',             '*' ],
@@ -643,8 +643,11 @@ sub get_attrs( $ ) {
 # either side stripped).  If the node has no children (as in
 # <foo></foo> or <foo />), this is considered to be the empty string.
 #
-sub get_text( $ ) {
+# Parameter: whether newlines are allowed (defaults to false)
+#
+sub get_text( $;$ ) {
     my $node = shift;
+    my $allow_nl = shift; $allow_nl = 0 if not defined $allow_nl;
     my @children = get_subelements($node);
     if (@children == 0) {
 	return '';
@@ -657,6 +660,11 @@ sub get_text( $ ) {
 	    warn "node $name expected to contain text has other stuff\n";
 	}
 	else {
+	    # Just hope that the encoding we got uses \n...
+	    if (not $allow_nl and $v =~ tr/\n//d) {
+		my $name = get_name($node);
+		warn "removing newlines from content of node $name\n";
+	    }
 	    tidy(\$v);
 	}
 	t 'returning: ' . d $v;
@@ -1006,6 +1014,10 @@ same type of data.  The handlers defined are as follows; note that
 many of them will silently strip leading and trailing whitespace in
 element content.  Look at the DTD itself for an explanation of the
 whole file format.
+
+Unless specified otherwise, it is not allowed for an element expected
+to contain text to have empty content, nor for the text to contain
+newline characters.
 
 =over
 
@@ -1521,97 +1533,103 @@ or <title lang="en">Foo</title>.  In Perl these are stored as
 [ 'Foo' ] and [ 'Foo', 'en' ].  For the former [ 'Foo', undef ]
 would also be okay.
 
+This handler also has two modifiers which may be added to the name
+after '/'.  I</e> means that empty text is allowed, and will be
+returned as the empty tuple [], to mean that the element is present
+but has no text.  When writing with I</e>, undef will also be
+understood as present-but-empty.  You cannot however specify a
+language if the text is empty.
+
+The modifier I</m> means that the text is allowed to span multiple
+lines.
+
+So for example I<with-lang/em> is a handler for text with language,
+where the text may be empty and may contain newlines.  Note that the
+I<with-lang-or-empty> of earlier releases has been replaced by
+I<with-lang/e>.
+
 =cut
-$Handlers{'with-lang'}->[0] = sub( $ ) {
-    my $node = shift; die if not defined $node;
-    my $value = get_text($node);
-    if (not length $value) {
-	warn 'empty string for with-lang value';
-	return undef;
-    }
+sub read_with_lang( $$$ ) {
+    my ($node, $allow_empty, $allow_nl) = @_;
+    die if not defined $node;
     my %attrs = %{get_attrs($node)};
     my $lang = $attrs{lang} if exists $attrs{lang};
+    my $value = get_text($node, $allow_nl);
+    if (not length $value) {
+	if (not $allow_empty) {
+	    warn 'empty string for with-lang value';
+	    return undef;
+	}
+	warn 'empty string may not have language' if defined $lang;
+	return [];
+    }
     if (defined $lang) {
 	return [ $value, $lang ];
     }
     else {
 	return [ $value ];
     }
-};
-$Handlers{'with-lang'}->[1] = sub( $$$ ) {
-    my ($w, $e, $v) = @_;
+}
+$Handlers{'with-lang'}->[0]    = sub( $ ) { read_with_lang($_[0], 0, 0) };
+$Handlers{'with-lang/'}->[0]   = sub( $ ) { read_with_lang($_[0], 0, 0) };
+$Handlers{'with-lang/e'}->[0]  = sub( $ ) { read_with_lang($_[0], 1, 0) };
+$Handlers{'with-lang/m'}->[0]  = sub( $ ) { read_with_lang($_[0], 0, 1) };
+$Handlers{'with-lang/em'}->[0] = sub( $ ) { read_with_lang($_[0], 1, 1) };
+$Handlers{'with-lang/me'}->[0] = sub( $ ) { read_with_lang($_[0], 1, 1) };
+
+sub write_with_lang( $$$$$ ) {
+    my ($w, $e, $v, $allow_empty, $allow_nl) = @_;
     if (not ref $v or ref $v ne 'ARRAY') {
 	warn "not writing with-lang whose content is not an array";
 	return;
     }
+
+    if (not @$v) {
+	if (not $allow_empty) {
+	    warn "not writing no content for $e";
+	    return;
+	}
+	$v = [ '' ];
+    }
+
     my ($text, $lang) = @$v;
     t 'writing character data: ' . d $text;
     if (not defined $text) {
 	warn "not writing undefined value for $e";
 	return;
     }
+
     if (not length $text) {
-	warn "not writing empty content for $e";
-	return;
-    }
-
-    if (defined $lang) {
-	$w->dataElement($e, $text, lang => $lang);
-    }
-    else {
-	$w->dataElement($e, $text);
-    }
-};
-
-=pod
-
-=item I<with-lang-or-empty>
-
-Either text with language, or the empty string.  This is used for
-things which can have an optional human-readable 'explanation'.  The
-Perl representation is [ 'Foo', language ] for text with known
-language, [ 'Foo' ] or [ 'Foo', undef ] if the language is unknown,
-and just [] for 'present but no text'.
-
-=cut
-$Handlers{'with-lang-or-empty'}->[0] = sub( $ ) {
-    my $node = shift; die if not defined $node;
-    my $value = get_text($node);
-    my %attrs = %{get_attrs($node)};
-    my $lang = $attrs{lang} if exists $attrs{lang};
-    if (not length $value) {
-	warn 'empty string may not have language' if defined $lang;
-	return [];
-    }
-
-    if (defined $lang) {
-	return [ $value, $lang ];
-    }
-    else {
-	return [ $value ];
-    }
-};
-$Handlers{'with-lang-or-empty'}->[1] = sub( $$$ ) {
-    my ($w, $e, $v) = @_;
-
-    if (not @$v) {
+	if (not $allow_empty) {
+	    warn "not writing empty content for $e";
+	    return;
+	}
+	if (defined $lang) {
+	    warn "not writing empty content with language for $e";
+	    return;
+	}
 	$w->emptyTag($e);
 	return;
     }
 
-    if (not ref $v or ref $v ne 'ARRAY') {
-	warn "not writing with-lang-or-empty whose content is not either an array or undef";
+    if (not $allow_nl and $text =~ tr/\n//) {
+	warn "not writing text containing newlines for $e";
 	return;
     }
-    my ($text, $lang) = @$v;
-    t 'writing character data: ' . d $text;
+
     if (defined $lang) {
 	$w->dataElement($e, $text, lang => $lang);
     }
     else {
 	$w->dataElement($e, $text);
     }
-};
+}
+$Handlers{'with-lang'}->[1]    = sub( $$$ ) { write_with_lang($_[0], $_[1], $_[2], 0, 0) };
+$Handlers{'with-lang/'}->[1]   = sub( $$$ ) { write_with_lang($_[0], $_[1], $_[2], 0, 0) };
+$Handlers{'with-lang/e'}->[1]  = sub( $$$ ) { write_with_lang($_[0], $_[1], $_[2], 1, 0) };
+$Handlers{'with-lang/m'}->[1]  = sub( $$$ ) { write_with_lang($_[0], $_[1], $_[2], 0, 1) };
+$Handlers{'with-lang/em'}->[1] = sub( $$$ ) { write_with_lang($_[0], $_[1], $_[2], 1, 1) };
+$Handlers{'with-lang/me'}->[1] = sub( $$$ ) { write_with_lang($_[0], $_[1], $_[2], 1, 1) };
 
 # Sanity check.
 foreach (keys %Handlers) {
