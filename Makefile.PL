@@ -70,8 +70,9 @@ WriteMakefile
 			'filter/tv_cat',
 			'choose/tv_check/tv_check',
 		      ],
-   'PL_FILES' => { 'filter/tv_grep.PL' => 'filter/tv_grep',
+   'PL_FILES' => { 'filter/tv_grep.PL'     => 'filter/tv_grep',
 		   'grab/uk/tv_grab_uk.PL' => 'grab/uk/tv_grab_uk',
+		   'lib/XMLTV.pm.PL'       => 'lib/XMLTV.pm',
 		 },
    'PM'            => { 'lib/XMLTV.pm'               => '$(INST_LIBDIR)/XMLTV.pm',
 			'lib/TZ.pm'                  => '$(INST_LIBDIR)/XMLTV/TZ.pm',
@@ -254,6 +255,7 @@ sub MY::clean {
     $inherited =~ s/\s+$//;
     $inherited .= "\n\t-rm -f filter/tv_grep\n";
     $inherited .= "\n\t-rm -f grab/uk/tv_grab_uk\n";
+    $inherited .= "\n\t-rm -f lib/XMLTV.pm\n";
     return $inherited;
 }
 
@@ -263,11 +265,14 @@ sub MY::processPL {
 
     # Creating tv_grep depends on tv_grep.in and XMLTV.pm (as well as
     # tv_grep.PL).  Creating tv_grab_uk depends on tv_grab_uk.in.
+    # Creating XMLTV.pm depends on XMLTV.pm.in.
     #
     $inherited =~ s!^(\s*filter/tv_grep\s+::\s.+)!$1 filter/tv_grep.in pm_to_blib!m
       or die "no filter/tv_grep in: $inherited";
     $inherited =~ s!^(\s*grab/uk/tv_grab_uk\s+::\s.+)!$1 grab/uk/tv_grab_uk.in!m
       or die "no grab/uk/tv_grab_uk in: $inherited";
+    $inherited =~ s!^(\s*lib/XMLTV\.pm\s+::\s.+)!$1 lib/XMLTV.pm.in!m
+      or die "no lib/XMLTV.pm in: $inherited";
 
     # And tv_grab_uk.in needs the share/ directory passed as an extra argument.
     $inherited =~ s{(grab/uk/tv_grab_uk.PL grab/uk/tv_grab_uk)\s*$}

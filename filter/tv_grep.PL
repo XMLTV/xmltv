@@ -25,16 +25,23 @@ while (<$in_fh>) {
 	#
 	my %key_type = %{XMLTV::list_programme_keys()};
  	foreach (sort keys %key_type) {
- 	    my $kt = $key_type{$_};
- 	    if ($kt eq 'boolean') {
+	    my ($h_name, $mult) = @{$key_type{$_}};
+	    die if $mult !~ /^[?1*+]$/;
+
+ 	    if ($h_name eq 'presence') {
+		# Boolean element, can query with a single flag.  Makes
+		# no sense to have more than one of these in a
+		# programme.
+		#
+		die if $mult eq '*' or $mult eq '+';
  		print $out_fh "B<--$_>\n\n";
- 	    } elsif ($kt eq 'scalar' or $kt eq 'with_lang'
- 		     or $kt eq 'many' or $kt eq 'many_with_lang') {
+ 	    }
+	    elsif ($h_name eq 'scalar' or $h_name eq 'with-lang') {
+		# Some text, we can query it (whether one or several).
  		print $out_fh "B<--$_ REGEXP>\n\n";
- 	    } elsif ($kt eq 'other') {
+ 	    }
+	    else {
  		# Cannot query on this.
- 	    } else {
- 		die;
  	    }
  	}
     }
