@@ -261,6 +261,19 @@ sub all {
     return @all;
 }
 
+# Cloning does not copy the ids since they are meant to be unique (for
+# XMLTV ids) or at least not shared between channel objects (for
+# Ananova ids).
+#
+sub clone {
+    my $obj = shift;
+    my %new = %$obj;
+    delete $new{xmltv_id};
+    delete $new{ananova_ids};
+    delete $new{first_ananova_id};
+    return \%new;
+}
+
 sub stringify {
     my $self = shift;
     my @r;
