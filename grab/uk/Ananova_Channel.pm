@@ -187,10 +187,6 @@ sub set_main_display_name {
     my $self = shift;
     my $new_name = shift;
     die if @_;
-    for ($self->{main_display_name}) {
-	$self->carp("cannot set main display name to $new_name, already set to $_")
-	  if defined and $_ ne $new_name;
-    }
     $self->{main_display_name} = $new_name;
     return $self;
 }
