@@ -158,7 +158,7 @@ my $do_uk_channel_pkgs = 0;
 my %recommended
   = (
      'Lingua::EN::Numbers::Ordinate' => 0,
-     'Lingua::Preferred' => 0,
+     'Lingua::Preferred' => '0.2.4',
      'Term::ProgressBar' => 2.03,
      'Compress::Zlib' => 0,
      'Unicode::String' => 0,
