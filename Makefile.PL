@@ -13,18 +13,38 @@ use vars '%extra_constants';
      INSTALLSHARE    => '$(PREFIX)/share/xmltv',
     );
 
+# The following lists of dependencies and files to be installed may
+# get modified later depending on what the user chooses.
+#
+
+# Documentation files to be installed.  This is a global variable
+# because it is accessed by some code we add to MakeMaker.
+#
+use vars '@docs';
+@docs = qw(doc/COPYING doc/QuickStart README);
+
+# Executables to be installed.
+my @exes = qw(grab/de/tv_grab_de
+	   grab/na/tv_grab_na
+	   grab/uk/tv_grab_uk
+	   filter/tv_extractinfo_en
+	   filter/tv_grep
+	   filter/tv_sort
+	   filter/tv_to_latex
+	   filter/tv_cat
+	  );
+
+# Modules required to install.
 my %prereqs
   = (
-     'LWP' => 0,
-     'XML::DOM' => 0,
-     'Date::Manip' => 5.4,
-     'XML::Writer' => 0,
-     'XML::Simple' => 0,
-     'Unicode::String' => 0,
-     'Compress::Zlib' => 0,
-     'CGI' => 0,
-     'Tk' => 0,
-     'Tk::TableMatrix' => 0,
+     LWP => 0,
+     XML::DOM => 0,
+     Date::Manip => 5.4,
+     XML::Writer => 0,
+     XML::Simple => 0,
+     Unicode::String => 0,
+     Compress::Zlib => 0,
+     CGI => 0,
     );
 
 # 'Recommended but not required'.  It isn't currently handled to have
@@ -39,6 +59,34 @@ my %recommended
     );
 
 # And Log::TraceMessages is 'suggested' but we don't warn about that.
+
+# First prompt about how much to install.  This is really only to
+# reduce dependencies.  In the long run things like tv_check can be
+# spun off into separate projects.
+#
+do 'lib/Ask.pm' or die 'could not load lib/Ask.pm, aborting';
+
+# tv_check
+my @tv_check_docs = qw(choose/tv_check/README.tv_check
+		       choose/tv_check/tv_check_doc.html
+		       choose/tv_check/tv_check_doc.jpg);
+my @tv_check_exes = ('choose/tv_check/tv_check');
+my %tv_check_prereqs = (Tk => 0, Tk::TableMatrix => 0);
+print <<END
+Tv_check is a graphical front-end to listings data.  You pick the
+shows you are interested in, and then tv_check alerts you to
+unexpected extra episodes or schedule changes.
+
+To install tv_check, you require the Tk and Tk::TableMatrix modules.
+
+END
+  ;
+if (XMLTV::Ask::askBooleanQuestion('Do you wish to install tv_check?')) {
+    push @docs, @tv_check_docs;
+    push @exes, @tv_check_exes;
+    %prereqs = (%prereqs, %tv_check_prereqs);
+}
+print STDERR "\n";
 
 my $warned_uninstall_broken = 1;
 
@@ -76,16 +124,7 @@ WriteMakefile
   (
    'NAME'          => 'XMLTV',
    # No VERSION_FROM, it's set in this file
-   'EXE_FILES'     => [ 'grab/de/tv_grab_de',
-		        'grab/na/tv_grab_na',
-			'grab/uk/tv_grab_uk',
-			'filter/tv_extractinfo_en',
-			'filter/tv_grep',
-			'filter/tv_sort',
-			'filter/tv_to_latex',
-			'filter/tv_cat',
-			'choose/tv_check/tv_check',
-		      ],
+   'EXE_FILES'     => \@exes,
    'PL_FILES' => { 'filter/tv_grep.PL'     => 'filter/tv_grep',
 		   'grab/uk/tv_grab_uk.PL' => 'grab/uk/tv_grab_uk',
 		   'lib/XMLTV.pm.PL'       => 'lib/XMLTV.pm',
@@ -94,7 +133,7 @@ WriteMakefile
 			'lib/TZ.pm'                  => '$(INST_LIBDIR)/XMLTV/TZ.pm',
 			'lib/Clumps.pm'              => '$(INST_LIBDIR)/XMLTV/Clumps.pm',
 			'lib/Usage.pm'               => '$(INST_LIBDIR)/XMLTV/Usage.pm',
-			'grab/Ask.pm'                => '$(INST_LIBDIR)/XMLTV/Ask.pm',
+			'lib/Ask.pm'                 => '$(INST_LIBDIR)/XMLTV/Ask.pm',
 			'grab/Memoize.pm'            => '$(INST_LIBDIR)/XMLTV/Memoize.pm',
 			'grab/na/ZapListings.pm'     => '$(INST_LIBDIR)/XMLTV/ZapListings.pm',
 			'grab/uk/Ananova_Channel.pm' => '$(INST_LIBDIR)/XMLTV/Ananova_Channel.pm',
@@ -189,15 +228,9 @@ sub MY::installbin {
     package MY;
     my $inherited = shift->SUPER::installbin(@_);
 
-    # Add a target for each documentation file.  NB this means the
-    # list of docs is stored here.
-    #
-    my @docs = qw(doc/COPYING doc/QuickStart README
-		  choose/tv_check/README.tv_check
-		  choose/tv_check/tv_check_doc.html
-		  choose/tv_check/tv_check_doc.jpg);
+    # Add a target for each documentation file.
     my %doc_files;
-    foreach (@docs) {
+    foreach (@::docs) {
 	$doc_files{$_} = File::Basename::basename($_);
     }
     my %share_files = ('grab/uk/channel_ids' => 'tv_grab_uk/channel_ids');
