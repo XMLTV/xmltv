@@ -439,9 +439,8 @@ sub process_table( $$$$ ) {
 	return;
     }
 
-    $today =~ tr/-//d;
-    my $crossed_midnight = 0;
     my %program;
+    my @programs;
     foreach my $row ($best_ts->rows()) {
 	t 'doing row of table: ' . d $row;
 
@@ -451,29 +450,9 @@ sub process_table( $$$$ ) {
 	t '...and: ' . d $third;
 
 	if ($first=~m/(\d\d:\d\d)/) {
-	    my $next_start = utc_offset("$today $1", $BASE_TZ);
-
-	    if (%program) {
-		# Write out the previous program.
-		die if not defined $program{start};
-		die if not defined $program{title};
-		my $time = $program{stop};
-		$time = $program{start} if not defined $time;
-
-		if (likely_midnight_crossing($time, $next_start, $today)
-		    and not $crossed_midnight++) {
-		    $today = nextday($today);
-		    $next_start = utc_offset("$today $1", $BASE_TZ);
-		}
-
-		if ($WRITE_ZERO_LENGTH
-		    or Date_Cmp($time, $next_start)) {
-		    $w->write_programme(\%program);
-		}
-	    }
-
+	    push @programs, { %program } if %program;
 	    %program = (channel => $ch_xmltv_id,
-			start => $next_start,
+			raw_start => $1,
 		       );
 	
 	    if (defined $third) {
@@ -508,28 +487,75 @@ sub process_table( $$$$ ) {
 			warn "saw no title ('$title_class') for program, discarding\n";
 		    }
 		    else {
-			$program{stop}=utc_offset("$today $1", $BASE_TZ);
-			if (likely_midnight_crossing($program{start}, $program{stop}, $today)
-			    and not $crossed_midnight++) {
-			    $today = nextday($today);
-			    $program{stop} = utc_offset("$today $1", $BASE_TZ);
-			}
-			
-			# Leave %program to be written on the next
-			# pass through the loop.
-			#
+			$program{raw_stop} = $1;
+			push @programs, { %program };
+			%program = ();
 		    }
 		}
 	    }			# if we have a time row.
 	}
     }
 
-    if (%program) {
-	if ($WRITE_ZERO_LENGTH
-	    or not defined $program{stop} # length unknown
-	    or Date_Cmp($program{start}, $program{stop})) {
-	    $w->write_programme(\%program);
+    # Now we have a list of programs with raw start and stop times.
+    # Turn these into real datetimes, working out when we move to the
+    # next day.
+    #
+    $today =~ tr/-//d;
+    my $tomorrow = nextday($today);
+    my $crossed_midnight = 0;
+    my $prev;
+    foreach (@programs) {
+      SET_TIMES:
+	if ($crossed_midnight) {
+	    $_->{start} = utc_offset("$tomorrow $_->{raw_start}", $BASE_TZ);
+	    $_->{stop} = utc_offset("$tomorrow $_->{raw_stop}", $BASE_TZ)
+	      if defined $_->{raw_stop};
 	}
+	else {
+	    $_->{start} = utc_offset("$today $_->{raw_start}", $BASE_TZ);
+	    $_->{stop} = utc_offset("$today $_->{raw_stop}", $BASE_TZ)
+	      if defined $_->{raw_stop};
+
+	    if ($prev) {
+		my $prev_end = $prev->{stop};
+		$prev_end = $prev->{start} if not defined $prev_end;
+		die if not defined $prev_end;
+
+		if (likely_midnight_crossing($prev_end, $_->{start}, $today)) {
+		    $crossed_midnight = 1;
+		    goto SET_TIMES;
+		}
+	    }
+
+	    if (defined $_->{stop}
+		and likely_midnight_crossing($_->{start}, $_->{stop}, $today)) {
+		# This programme itself straddles midnight.
+		$_->{stop} = utc_offset("$tomorrow $_->{raw_stop}", $BASE_TZ);
+		$crossed_midnight = 1;
+	    }
+	}
+	delete @$_{qw(raw_start raw_stop)};
+	$prev = $_;
+    }
+
+    for (my $i = 0; $i < @programs; $i++) {
+	my ($this, $next) = @programs[$i, $i + 1];
+	unless ($WRITE_ZERO_LENGTH) {
+	    if (defined $this->{stop}) {
+		next if not Date_Cmp($this->{start}, $this->{stop});
+	    }
+	    else {
+		# Can't work out if this programme is zero length from
+		# its own times: but we are allowed to have a peek at
+		# the next programme, and if it starts at the same
+		# time as this one, assume this one is to be chopped.
+		#
+		if (defined $next) {
+		    next if not Date_Cmp($this->{start}, $next->{start});
+		}
+	    }
+	}
+	$w->write_programme($this);
     }
 }
 
