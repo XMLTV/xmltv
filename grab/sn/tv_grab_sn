@@ -57,6 +57,8 @@ use Getopt::Long;
 use Date::Manip;
 use LWP::Simple;
 use HTML::TableExtract; # parse html nicer than regular expressions.
+use Date::Manip;
+
 use XMLTV;
 use XMLTV::Memoize; XMLTV::Memoize::check_argv();
 use XMLTV::Ask;
@@ -67,6 +69,28 @@ To configure: $0 --configure [--config-file FILE]
 To grab listings: $0 [--config-file FILE] [--output FILE] [--days N]
 END
   ;
+
+# Whether zero-length programmes should be included in the output.
+my $WRITE_ZERO_LENGTH = 0;
+
+# For an unknown reason, the site includes '&#xxxx' character
+# escapes even though the page is Latin-1 and so should not
+# have chars outside the 8-bit range.  Try to make them into
+# something legal.
+#
+# This is partly based on web searches for examples of Spanish
+# words with the missing letter filled in, so it may not be
+# accurate.
+my %char_map
+  = (8217 => 'i',
+     8212 => chr(242),		# LATIN SMALL LETTER O WITH GRAVE
+     8211 => chr(241),		# LATIN SMALL LETTER N WITH TILDE
+     8240 => chr(226),		# LATIN SMALL LETTER A WITH CIRCUMFLEX
+     8226 => chr(239),		# LATIN SMALL LETTER I WITH DIAERESIS
+     8218 => 'i',
+     382  => chr(251),		# LATIN SMALL LETTER U WITH CIRCUMFLEX
+     339  => 'u',
+    );
 
 # Get options.
 XMLTV::Memoize::check_argv('get');
@@ -154,178 +178,225 @@ while (<CONF>) {
     }
 }
 
+sub tidy( $ );
+sub nextday( $ );
+sub process_table( $$$$ );
+sub dc( $$ );
+sub pd( $ );
+
 # Assume the listings source uses CET (see BUGS above).
 Date_Init('TZ=CET');
-my $now = ParseDate('now'); die if not defined $now;
-my $today = UnixDate($now, '%Q');
-my $startDate=$today;
-my $data;
+my $now = pd('2002-09-26');
+warn "FIXME 2002-09-26!\n";
 
-my $row;
-my $table;
-
-#defines what table to reach.
-my $channel_name="";
-my $channel_id="";
-my $program_name="";
-my $program_description="";
-my $showview_code="";
-my $program_start="";
-my $program_stop="";
-
-sub tidy ($ );
-sub nextday( $ );
-sub print_record();
-sub process_table();
-
-#Find Channels.
-
-if (!$opt_output) {
-  open(OUTFILE,">-");
-}else{
-  open(OUTFILE,">".$opt_output);
+# Memoize some date parsing routines, if possible.  FIXME move to
+# XMLTV::Memoize.
+#
+eval { require Memoize };
+unless ($@) {
+    foreach (qw(nextday pd UnixDate dc Date_Cmp)) {
+	Memoize::memoize($_) or warn "cannot memoize $_";
+    }
 }
 
-my $local_data=get("http://www.dagenstv.com/$country/frontpage");
+#Find Channels.
+my $url="http://www.dagenstv.com/$country/frontpage";
+my $local_data=get($url);
 if ($local_data=~m/<select\s*name=\"cha\"(.*?)<\/select>/s) {
     $local_data=$1;
+    local $SIG{__WARN__} = sub {
+	warn "$url: $_[0]";
+    };
 
+    my %w_args;
+    $w_args{OUTPUT} = $opt_output if defined $opt_output;
+    $w_args{encoding} = 'ISO-8859-1';
+    my $w = new XMLTV::Writer(%w_args);
 
-    print OUTFILE <<END
-<?xml version="1.0" encoding="ISO-8859-1"?>
-<!DOCTYPE tv SYSTEM "xmltv.dtd">
-
-<tv>
-END
-  ;
+    # TODO: standardize these things between grabbers.
+    $w->start({ 'source-info-url'     => 'http://www.dagenstv.com/',
+		'source-data-url'     => "http://www.dagenstv.com/$country/frontpage",
+		'generator-info-name' => 'XMLTV',
+		'generator-info-url'  => 'http://membled.com/work/apps/xmltv/',
+	      });
+    # TODO write <channel> elements.
 
     # for each channel
-    while ($local_data=~m/<option\s*value=\"([0-9]+)\"\s*>([^>]+)<\/option>/sg) {
-	$channel_name=tidy($2);
-	$channel_id=$1;
-	$today=$startDate;
-	my $local_startDate=$startDate;
+    while ($local_data=~m/<option\s*value=\"(\d+)\"\s*>([^>]+)<\/option>/sg) {
+	my $channel_name=tidy($2);
+	my $channel_id=$1;
+	my $day=$now;
 	for (my $i=0;$i<$opt_days;$i++) {
-	    $program_start="";
-	    $program_stop="";
 	    #for each day
 	    if ($i>0) {
-		$local_startDate=nextday($local_startDate);
+		$day=dc($day, '+ 1 day'); die if not defined $day;
 	    }
-	    $today=$local_startDate;
 	    #get info
-	    process_table();
+	    process_table($w, $day, $channel_name, $channel_id);
 	}
     }
-    print OUTFILE "</tv>\n";
-    close(OUTFILE);
+    $w->end();
 }else{
     die "Could not find channel listing.";
 }
 
 
-
-sub process_table() {
-my $URL_BASE = "http://www.dagenstv.com/$country/chart/";
-if ($today=~m/([0-9]{4,4})([0-9][0-9])([0-9][0-9])/) {
-    $data=get("$URL_BASE?dat=$1-$2-$3&cha=$channel_id");
-}else{
-    die "Could not parse date";
-}
-my $te = new HTML::TableExtract(depth=>3, count=>5,keep_html=>1 );
-my $ts;
-$te->parse($data);
-$table=$te->first_table_found();
-          foreach $row ($te->rows($table)) {
-	      my $tmp;
-	      $tmp=tidy(@$row[0]);
-
-	      if ($tmp=~m/[0-9]{2,2}:[0-9]{2,2}/) {
-	      if ($program_name && $tmp && !$program_stop) {
-		  #We have a record without endtime. use next starttime as endtime
-		  $program_stop=$tmp;
-		  $program_stop=~s/://sg;
-		  print_record();
-  	          $program_start=$tmp;
-	      }
-	      elsif($tmp) {
-		  $program_start=$tmp;
-	      }
-	      #Format startdate
-	      $program_start=~s/://sg;
-
-	     $tmp=@$row[2];
-	     if ($tmp=~m/<span class=\"charteventname\">\s*([^<]+)\s*</s) {
-		 $program_name=tidy($1);
-
-	     }
-	     if ($tmp=~m/<span class=\"chartshowview\">\s*\[([^\]]+)\]\s*</s) {
-		 $showview_code=tidy($1);
-	     }
-	     if ($tmp=~m/<span class=\"chartdescription\">\s*([^<]+)\s*</s) {
-		 $program_description=tidy($1);
-	     }
-
-	      if ($tmp=~m/<\/span>\s*\(([0-9]{2,2}:[0-9]{2,2})\)\s*</s) {
-		  $program_stop=$1;
-		  $program_stop=~s/://sg;
-		  print_record();
-	     }
-
-
-
-	  }# if we have a time row.
-
-          }
-
-}
-
-#print a program record. We're using nasty global declarations here.
-sub print_record() {
-
-    #we have some null-programs which is really a content package, containing sub-programs. we're dealing with real programs only.
-
-    # FIXME wouldn't undef be better here than empty string?
-    if ($program_start eq '') {
-	warn "program with unknown start time\n";
+#Fetch a URL and process it.
+#
+#Arguments:
+#    XMLTV::Writer object to write to
+#    Date::Manip object giving the day to grab
+#    xmltv id of channel
+#    dagenstv id of channel
+sub process_table( $$$$ ) {
+    my ($w, $date, $channel_name, $channel_id) = @_;
+    my $today = UnixDate($date, '%Y-%m-%d');
+    my $url = "http://www.dagenstv.com/$country/chart/?dat=$today&cha=$channel_id";
+    my $data=get($url);
+    if (not defined $data) {
+	die "could not fetch $url, aborting\n";
     }
-    elsif ($program_stop eq '') {
-	warn "program with unknown stop time\n";
-    }
-    elsif ($program_start!=$program_stop) {
-	if (($program_stop)>$program_start) {
-	    $program_start=$today.$program_start;
-	    $program_stop=$today.$program_stop;
-	}else{
-	    $program_start=$today.$program_start;
-	    $today=nextday($today);#Wrap the day!
-	    $program_stop=$today.$program_stop;
+    local $SIG{__WARN__} = sub {
+	warn "$url: $_[0]";
+    };
+
+    my $te = new HTML::TableExtract(depth=>3, count=>5,keep_html=>1 );
+    my $ts;
+    $te->parse($data);
+    my $table=$te->first_table_found();
+    $today =~ tr/-//d;
+    my %program = (channel => $channel_name);
+    foreach my $row ($te->rows($table)) {
+	# Get the interesting fields of this row.
+	my ($first, $third) = (tidy($row->[0]), tidy($row->[2]));
+
+	if ($first=~m/(\d\d:\d\d)/) {
+	    if (defined $program{title} && not defined $program{stop}) {
+		#We have a record without endtime. use next starttime as endtime
+		$program{stop} = pd("$today $1 CET");
+		my $cmp = Date_Cmp($program{start}, $program{stop});
+		if ($cmp > 0) {
+		    $today = nextday($today);
+		    $program{stop} = pd("$today $1 CET");
+		}
+
+		if ($WRITE_ZERO_LENGTH or $cmp) {
+		    foreach (@program{'start', 'stop'}) {
+			# Convert to plain strings for writing.
+			$_ = UnixDate($_, '%q %z');
+		    }
+		    $w->write_programme(\%program);
+		}
+		%program = (channel => $channel_name);
+	    }
+
+	    $program{start} = pd("$today $1 CET");
+
+	    if (defined $third) {
+		my %classes = (charteventname => sub {
+				   push @{$program{title}}, [ $_ ];
+			       },
+			       chartshowview => sub {
+				   if (/^\[(\d+)\]$/) {
+				       $program{showview} = $1;
+				   }
+				   else {
+				       warn "bad showview number '$_'\n";
+				   }
+			       },
+			       chartdescription => sub {
+				   push @{$program{desc}}, [ $_ ];
+			       },
+			      );
+		while ($third=~s/<span class=\"(.+?)\">\s*([^<]+)\s*</</) {
+		    my ($class, $content) = ($1, $2);
+		    my $handler = $classes{$class};
+		    if (not defined $handler) {
+			warn "unknown class $class in HTML\n";
+			next;
+		    }
+		    for ($content) { $handler->() }
+		}
+
+		if ($third=~m/<\/span>\s*\((\d\d:\d\d)\)\s*</s) {
+		    $program{stop}=pd("$today $1 CET");
+		    my $cmp = Date_Cmp($program{start}, $program{stop});
+		    if ($cmp > 0) {
+			$today = nextday($today);
+			$program{stop} = pd("$today $1 CET");
+		    }
+
+		    if ($WRITE_ZERO_LENGTH or $cmp) {
+			foreach (@program{'start', 'stop'}) {
+			    # Convert to plain strings for writing.
+			    $_ = UnixDate($_, '%q %z');
+			}
+			$w->write_programme(\%program);
+		    }
+		    %program = (channel => $channel_name);
+		}
+	    }			# if we have a time row.
 	}
-	
-	print OUTFILE "<programme channel=\"$channel_name\" showview=\"$showview_code\" start=\"$program_start CET\" stop=\"$program_stop CET\">\n";
-	print OUTFILE "<title>$program_name</title>\n";
-	print OUTFILE "<desc>$program_description</desc>\n";
-	print OUTFILE "</programme>\n";
     }
-
-    $program_name="";
-    $program_description="";
-    $showview_code="";
-    $program_start="";
-    $program_stop="";
 }
+
 
 # Trim spaces and newlines, fix rogue characters.
+my %warned_char;
+# I hope that these &#xxx; entities are decimal not octal.
+sub decode_char( $ ) {
+    for (shift) {
+	if ($_ < 256) {
+	    # It might not be a legal Latin-1 value but we deal with
+	    # those afterwards.
+	    #
+	    return chr($_);
+	}
+	elsif ($_ >= 256 and $_ < 65536) {
+	    # 16-bit character, really shouldn't occur.  We can
+	    # correct some of these.
+	    #
+	    my $to = $char_map{$_};
+	    if (not defined $to) {
+		warn "stripping unknown 16-bit character $_ in HTML\n"
+		  unless $warned_char{$_}++;
+		return '';
+	    }
+	    return $to;
+	}
+	else {
+	    warn "stripping very strange character $_ in HTML\n"
+	      unless $warned_char{$_}++;
+	    return '';
+	}
+    }
+}
 sub tidy($) {
     for (my $tmp=shift) {
+	return undef if not defined;
 	s/\n$//sg;
 	s/\s*$//sg;
 	s/^\s*//sg;
-	s/& /&amp; /g;
 
-	# Some weird characters need removing.
-	s/([\200-\237])/sprintf('&#%o;', ord($1))/eg;
-	s/([\000-\037])//g;
+	# Deal with &#xxx; entities, including those which specify
+	# illegal characters.
+	#
+	s/&\#(\d{3,});/decode_char($1)/eg;
+
+	# We've reduced the string to 8-bit chars, but some of them
+	# are not legal Latin-1.
+	#
+	s/([\000-\037])//g; # remove control characters
+	tr/\220/\352/;      # LATIN SMALL LETTER E WITH CIRCUMFLEX
+	tr/\235/\371/;      # LATIN SMALL LETTER U WITH GRAVE
+	tr/†/?/;         # no idea, FIXME
+	tr/\217/e/;
+	tr/\200-\237//d && warn "removing illegal high-bit-set chars\n";
+
+	s/&lt;/</g;
+	s/&gt;/>/g;
+	s/&amp;/&/g;
+
 	return $_;
     }
 }
@@ -333,8 +404,26 @@ sub tidy($) {
 # Bump a YYYYMMDD date by one.
 sub nextday( $ ) {
     my $d = shift; $d =~ /^\d{8}$/ or die;
-    my $p = ParseDate($d); die if not defined $p;
-    my $n = DateCalc($p, '+ 1 day'); die if not defined $n;
+    my $p = pd($d);
+    my $n = dc($p, '+ 1 day');
     return UnixDate($n, '%Q');
 }
 
+# Wrapper for DateCalc().
+sub dc( $$ ) {
+    my $err;
+    my $r = DateCalc(@_, \$err);
+    die "DateCalc() failed with $err" if $err;
+    die 'DateCalc() returned undef' if not defined $r;
+    return $r;
+}
+
+# Wrapper for ParseDate().  FIXME commonize.
+sub pd( $ ) {
+    for ($_[0]) {
+	return undef if not defined;
+	my $r = ParseDate($_);
+	die "bad date $_" if not defined $r or not length $r;
+	return $r;
+    }
+}
