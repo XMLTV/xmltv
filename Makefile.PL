@@ -150,7 +150,10 @@ It is a CGI program which runs through a web server and web browser, or
 with the lynxcgi mode of the lynx web browser.  You need to install it
 by hand; this Makefile.PL will only check that the necessary libraries
 are present.",
-       prereqs => { 'CGI' => 0 } },
+       prereqs => { 'CGI' => 0 },
+       type => 'run',
+       default => 0,
+     },
 
      { name => 'tv_grab_na',
        blurb => 'Tv_grab_na is the listings grabber for North America.',
@@ -173,7 +176,8 @@ foreach my $info (@opt_components) {
     my $default;
     if (not @prereqs_names) {
 	# Everything already installed.
-	$default = 1;
+	$default = $info->{default};
+	$default = 1 if not defined $default;
     }
     elsif (@prereqs_names == 1) {
 	my $mod = $prereqs_names[0];
@@ -199,7 +203,21 @@ foreach my $info (@opt_components) {
 	$default = 0;
     }
 
-    if (XMLTV::Ask::askBooleanQuestion("Do you wish to install $name?", $default)) {
+    my $type = $info->{type};
+    $type = 'install' if not defined $type;
+    my $msg;
+    if ($type eq 'install') {
+	$msg = "Do you wish to install $name?";
+    }
+    elsif ($type eq 'run') {
+	$msg = "Do you plan to run $name?";
+    }
+    else {
+	warn "bad optional component 'type' $type";
+	$msg = "Use $name?";
+    }
+
+    if (XMLTV::Ask::askBooleanQuestion($msg, $default)) {
 	push @exes, @{$info->{exes}}               if $info->{exes};
 	push @docs, @{$info->{docs}}               if $info->{docs};
 	%pm = (%pm, %{$info->{pm}})                if $info->{pm};
@@ -246,7 +264,7 @@ sub test_prereq( $$ ) {
     my $ver = $mod->VERSION;
     if ($minver != 0) {
 	return [ 'TOO_OLD', undef ] if not defined $ver;
-	return [ 'TOO_OLD', $ver ] if $ver < $minver;
+	return [ 'TOO_OLD', $ver ] if $ver lt $minver;
     }
 
     return [ 'OK', undef ];
