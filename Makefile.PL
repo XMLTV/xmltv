@@ -79,6 +79,7 @@ my %pm
      'lib/IMDB.pm'                => '$(INST_LIBDIR)/XMLTV/IMDB.pm',
      'filter/Grep.pm'             => '$(INST_LIBDIR)/XMLTV/Grep.pm',
      'grab/Memoize.pm'            => '$(INST_LIBDIR)/XMLTV/Memoize.pm',
+     'grab/Grab_XML.pm'           => '$(INST_LIBDIR)/XMLTV/Grab_XML.pm',
     );
 
 # Modules required to install.
@@ -686,12 +687,21 @@ sub MY::processPL {
 sub MY::makefile {
     package MY;
     my $inherited = shift->SUPER::makefile(@_);
-    
+
     # Add an extra dependency: the contents of tv_grab_uk's packages
-    # directory. 
+    # directory.
     #
     $inherited =~ s{^(Makefile\s+:)}{$1 grab/uk/channel_pkgs}m
       or die "no Makefile dependencies line in: $inherited";
+    return $inherited;
+}
+
+# Fix filename of some generated manpages.
+sub MY::manifypods {
+    package MY;
+    my $inherited = shift->SUPER::manifypods(@_);
+    $inherited =~ s!\$\(INST_MAN3DIR\)/grab::Grab_XML.\$\(MAN3EXT\)!"\$(INST_MAN3DIR)/XMLTV::Grab_XML.\$(MAN3EXT)"!;
+    $inherited =~ s!\$\(INST_MAN3DIR\)/Summarize.\$\(MAN3EXT\)!"\$(INST_MAN3DIR)/XMLTV::Summarize.\$(MAN3EXT)"!;
     return $inherited;
 }
 

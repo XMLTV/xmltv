@@ -54,35 +54,22 @@ happen.
 =cut
 
 use strict;
-use Getopt::Long;
+
+# We work by inheriting from XMLTV::Grab_XML and overriding certain
+# methods.
+#
+use XMLTV::Grab_XML;
+package Grab_XML_de;
+use base 'XMLTV::Grab_XML';
+
 use Date::Manip;
 use LWP::Simple;
 
-use XMLTV;
-use XMLTV::Memoize;
 # Todo: perhaps we should internationalize messages and docs?
-use XMLTV::Usage <<END
-$0: get Germany/Austria television listings in XMLTV format
-usage: $0 [--help] [--output FILE] [--days N] [--offset N] [--quiet]
-END
-  ;
-
-# Use Log::TraceMessages if installed.
-BEGIN {
-    eval { require Log::TraceMessages };
-    if ($@) {
-	*t = sub {};
-	*d = sub { '' };
-    }
-    else {
-	*t = \&Log::TraceMessages::t;
-	*d = \&Log::TraceMessages::d;
-	Log::TraceMessages::check_argv();
-    }
+sub country( $ ) {
+    my $pkg = shift;
+    return 'Germany/Austria';
 }
-
-# Use Term::ProgressBar if installed.
-use constant Have_bar => eval { require Term::ProgressBar; 1 };
 
 # Use Compress::Zlib if installed, else spawn external gzip.
 use File::Temp;
@@ -108,126 +95,51 @@ BEGIN {
     }
 }
 
-
-sub nextday( $ );
-
-# Get options.
-XMLTV::Memoize::check_argv('get');
-my ($opt_days,
-    $opt_help,
-    $opt_output,
-    $opt_offset,
-    $opt_quiet,
-    $opt_configure,
-    $opt_config_file,
-);
-$opt_offset = 0; # default
-$opt_quiet = 0; # default
-GetOptions('days=i'        => \$opt_days,
-	   'help'          => \$opt_help,
-	   'output=s'      => \$opt_output,
-	   'offset=i'      => \$opt_offset,
-	   'quiet'         => \$opt_quiet,
-	   'configure'     => \$opt_configure,
-	   'config-file=s' => \$opt_config_file,
-	  )
-  or usage(0);
-die 'number of days must not be negative'
-  if (defined $opt_days && $opt_days < 0);
-usage(1) if $opt_help;
-if ($opt_configure) {
-    print STDERR "no configuration necessary\n";
-    exit();
-}
-for ($opt_config_file) {
-    warn "this grabber has no configuration, so ignoring --config-file $_\n"
-      if defined;
-}
-
 # Assume the listings source uses CET (see BUGS above).
-Date_Init('TZ=CET');
-my $now = DateCalc(ParseDate('now'), "$opt_offset days");
-die if not defined $now;
-my $today = UnixDate($now, '%Q');
+sub date_init( $ ) {
+    my $pkg = shift;
+    Date_Init('TZ=CET');
+}
 
 my $URL_BASE = 'http://www.szing.at/xmltv/';
 # http://yasd.cc/xmltv/index.lst is a backup server, but we don't use
 # that at present.
-my $index = get("${URL_BASE}index.lst");
-my %urls; # by date
-foreach (split /\n/, $index) {
-    if (not /^(tv_(\d{8})\.xml\.gz);(\d+)$/) {
-	warn "unexpected entry in index: $_, skipping\n";
-	next;
+
+# Returns a hash mapping YYYMMDD to URL.
+sub urls_by_date( $ ) {
+    my $pkg = shift;
+    my $url = "${URL_BASE}index.lst";
+    my $index = get($url);
+    die "could not get index page $url, aborting\n"
+      if not defined $index;
+    my %urls;
+    foreach (split /\n/, $index) {
+	if (not /^(tv_(\d{8})\.xml\.gz);(\d+)$/) {
+	    warn "unexpected entry in index: $_, skipping\n";
+	    next;
+	}
+	my ($filename, $date, $size) = ($1, $2, $3);
+	if (defined $urls{$date}) {
+	    warn "file for $date seen twice in index\n";
+	}
+	$urls{$date} = "$URL_BASE$filename";
     }
-    my ($filename, $date, $size) = ($1, $2, $3);
-    if (defined $urls{$date}) {
-	warn "file for $date seen twice in index\n";
-    }
-    $urls{$date} = "$URL_BASE$filename";
+    return %urls;
 }
 
-my @to_get;
-my $days_left = $opt_days;
-for (my $day = $today; defined $urls{$day}; $day = nextday($day)) {
-    if (defined $days_left and $days_left-- == 0) {
-	last;
-    }
-    push @to_get, $urls{$day};
-}
-if (defined $days_left and $days_left > 0) {
-    warn "couldn't get all of $opt_days days, only "
-      . ($opt_days - $days_left) . "\n";
-}
-elsif (not @to_get) {
-    warn "couldn't get any listings from the site <$URL_BASE> for today or later\n";
-}
-
-my $bar = new Term::ProgressBar('downloading listings', scalar @to_get)
-  if Have_bar && not $opt_quiet;
-my @listingses;
-foreach my $url (@to_get) {
-    my $xml;
-    local $SIG{__WARN__} = sub {
-	my $msg = shift;
-	$msg = "warning: something's wrong" if not defined $msg;
-	print STDERR "$url: $msg\n";
-    };
-
-    my $got = get($url);
-    if (not defined $got) {
-	warn 'failed to download, skipping';
-	next;
-    }
-
-    $xml = gunzip($got);
-    t 'got XML: ' . d $xml;
-    if (not defined $xml) {
-	warn 'failed to gunzip, skipping';
-	next;
+# Given some data downloaded for a particular day, turn it into XML.
+sub xml_from_data( $$ ) {
+    my $pkg = shift;
+    local $_ = gunzip(shift);
+    if (not defined) {
+	warn 'could not gunzip';
+	return undef;
     }
 
     # Fix empty 'length' elements that wrongly appear in the XML.
-    $xml =~ s!<length[^>]*></length>!!g;
+    s!<length[^>]*></length>!!g;
 
-    push @listingses, XMLTV::parse($xml);
-    update $bar if Have_bar && not $opt_quiet;
-}
-my %w_args = ();
-if (defined $opt_output) {
-    my $fh = new IO::File ">$opt_output";
-    die "cannot write to $opt_output\n" if not $fh;
-    %w_args = (OUTPUT => $fh);
-}
-XMLTV::write_data(XMLTV::cat(@listingses), %w_args);
-exit();
-
-
-# Bump a YYYYMMDD date by one.
-sub nextday( $ ) {
-    my $d = shift; $d =~ /^\d{8}$/ or die;
-    my $p = ParseDate($d); die if not defined $p;
-    my $n = DateCalc($p, '+ 1 day'); die if not defined $n;
-    return UnixDate($n, '%Q');
+    return $_;
 }
 
+Grab_XML_de->go();
