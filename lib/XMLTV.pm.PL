@@ -5,7 +5,6 @@
 #
 
 use strict;
-use diagnostics;
 sub print_list( $$ );
 
 my $out = shift @ARGV; die "no output file given" if not defined $out;
