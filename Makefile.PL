@@ -119,7 +119,7 @@ my %prereqs
      'XML::Parser' => 2.34,
      'XML::Twig'   => 3.09,
      'Date::Manip' => 5.42,
-     'XML::Writer' => 0,
+     'XML::Writer' => '0.4.1',
      'Memoize'     => 0,
      'Storable'    => 2.04,
     );
