@@ -25,8 +25,8 @@ you want to receive.  Choose a terrestrial analogue TV region, and
 optionally some digital or satellite channels plus radio.  To help you
 choose digital channels some 'packages' of channels are defined.
 
-Then running B<tv_grab_uk> with no arguments will get a weekE<39>s
-listings for the stations you chose.
+Then running B<tv_grab_uk> with no arguments will get a listings for
+the stations you chose, for as many days as possible.
 
 B<--configure> Prompt for which stations to download and write the
 configuration file.
@@ -168,7 +168,7 @@ my ($opt_days,
     $opt_offset,
     $opt_quiet,
    );
-$opt_days   = 7; # default
+$opt_days   = 4; # default
 $opt_quiet  = 0; # default
 $opt_offset = 0; # default today
 GetOptions('days=i'        => \$opt_days,
@@ -597,7 +597,7 @@ sub grab( @ ) {
     #
     # We download all the files at once, then process them one by one.
     #
-    my @to_get;
+    my @to_parse;
     if (keys %wanted) {
 	my @chs = sort { $a <=> $b }
 	  map { $_->{first_ananova_id} }
@@ -607,41 +607,82 @@ sub grab( @ ) {
 	    print STDERR 'grabbing ' . (scalar @chs) . ' channels from '
 	      . (scalar @ch_all) . " available\n";
 	}
-	foreach my $day (($opt_offset + 1) .. ($opt_offset + $opt_days)) {
+
+	my @urls_for_day;
+	foreach (@urls_for_day) { die if not ref }
+	my ($first_day, $last_day) = ($opt_offset + 1, $opt_offset + $opt_days);
+	foreach my $day ($first_day..$last_day) {
 	    my $CHS_PER_REQ = 10;
 	    for (my $i = 0; $i < @chs; $i += $CHS_PER_REQ) {
 		my $end = $i + $CHS_PER_REQ;
 		$end = @chs if $end > @chs;
-		push @to_get, "$BASE_URL?day=day$day&c="
-		  . join('.', @chs[$i .. $end-1]);
+		my $url = "$BASE_URL?day=day$day&c=" . join('.', @chs[$i .. $end-1]);	
+		push @{$urls_for_day[$day]}, $url;
 	    }
+	}
+
+	my $num_to_get = 0;
+        foreach (@urls_for_day) {
+	    $num_to_get += scalar @$_ if defined;
+	}
+        my $bar = new Term::ProgressBar('downloading listings', $num_to_get)
+	  if $have_bar;
+
+      DAY: foreach my $day ($first_day..$last_day) {
+	    my (@success, @get_failed, @no_content);
+	    foreach (@{$urls_for_day[$day]}) {
+		t "downloading page: $_";
+		my $got = get($_);
+		if (not defined $got) {
+		    push @get_failed, $_;
+		}
+		elsif (not fix_ananova_xml(\$got)) {
+		    push @no_content, $_;
+		}
+		else {
+		    push @success, [ $got, $_ ];
+		}
+		update $bar if $have_bar;
+	    }
+	    if (not @success) {
+		if (not @get_failed and not @no_content) {
+		    # Huh?  Every page should be in one of the lists.
+		    die;
+		}
+		elsif (not @get_failed and @no_content) {
+		    if ($day == 1) {
+			die "no content for first day, giving up\n";
+		    }
+		    else {
+			my $prev = $day - 1;
+			warn "no content for day $day, assuming --days $prev\n";
+			last DAY;
+		    }
+		}
+		elsif (@get_failed and not @no_content) {
+		    die "every single page for day $day failed to download, giving up\n";
+		}
+		elsif (@get_failed and @no_content) {
+		    if ($day == 1) {
+			die "first day had download failures and no content, giving up\n";
+		    }
+		    else {
+			my $prev = $day - 1;
+			warn "download and content failures for day $day, assuming --days $prev\n";
+			last DAY;
+		    }
+		}
+		else { die }
+	    }
+	    push @to_parse, @success;
 	}
     }
     else {
 	warn "apparently nothing to download\n";
     }
 
-    my $bar = new Term::ProgressBar('downloading listings', scalar @to_get)
+    my $bar = new Term::ProgressBar('parsing', scalar @to_parse)
       if $have_bar;
-    my @to_parse;
-    foreach (@to_get) {
-	t "downloading page: $_";
-	my $got = get($_);
-	if (not defined $got) {
-	    warn "failed to get $_, skipping page\n";
-	}
-	elsif (not fix_ananova_xml(\$got)) {
-	    warn "$_: bad content, skipping page\n";
-	}
-	else {
-	    push @to_parse, [ $got, $_ ];
-	}
-	update $bar if $have_bar;
-    }
-
-    $bar = new Term::ProgressBar('parsing', scalar @to_parse)
-      if $have_bar;
-
     my ($encoding, $credits, @prog_lists);
     my $w;
     my %written_xid;
@@ -1460,6 +1501,9 @@ sub fix_zero_length( $ ) {
 # Modifies the string passed in and returns true iff it should now be
 # a parsable XMLTV document.
 #
+# If this routine returns false, for the time being you can assume
+# that means 'moderately sane - but no content'.
+#
 sub fix_ananova_xml( $ ) {
     for (${ $_[0] }) {
 	# Work around bad characters.
@@ -1477,7 +1521,9 @@ sub fix_ananova_xml( $ ) {
 	}
 	
 	if (not /<tv/) {
-	    warn "no <tv> element found in XML: $_\n";
+	    # No top-level <tv> element.  Don't warn, this is actually
+	    # a common occurrence.
+	    #
 	    return 0;
 	}
 
