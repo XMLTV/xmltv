@@ -299,8 +299,8 @@ sub getForms($)
 	}
 	
 	if ( $insideForm=~m/<select/ios ) {
-	    $insideForm=~s/<select/<select/ios;
-	    $insideForm=~s/<\/select>/<\/select>/ios;
+	    $insideForm=~s/<select/<select/iosg;
+	    $insideForm=~s/<\/select>/<\/select>/iosg;
 	    my $start;
 	    while (($start=index($insideForm, "<select")) != -1 ) {
 		my $end=index($insideForm, "</select>", $start)+length("</select>");
