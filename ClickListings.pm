@@ -15,6 +15,11 @@ package ClickListings::ParseTable;
 
 #
 # $Log$
+# Revision 1.7  2001/11/11 17:04:35  epaepa
+# Changed a lot of 'print STDERR' to 'warn', it makes it clearer what the
+# purpose is.  Debug statements didn't change since they're not actually
+# warnings.
+#
 # Revision 1.6  2001/11/11 16:44:19  epaepa
 # Whoops, just realized that the last changelog message would itself get
 # keyword-expanded, causing no end of confusion.  I had to perform some
@@ -545,7 +550,7 @@ sub evaluateDetails
 	    }
 
 	    if ( defined($i) && length($i) ) {
-		print STDERR "Failed to decode info: \"$i\"\n" if ( $debug );
+		warn "Failed to decode info: \"$i\"\n" if ( $debug );
 		push(@unmatched, $i);
 	    }
 	}
@@ -572,14 +577,14 @@ sub evaluateDetails
 		    }
 		    else {
 			if ( $found != 0 ) {
-			    print STDERR "undefined qualifier(s) (or actor list may be corrupt) $info\n";
+			    warn "undefined qualifier(s) (or actor list may be corrupt) $info\n";
 			}
 			else {
 			    # add unfound keywords to the list of known undefined keywords.
 			    for my $k (@unmatched) {
 				if ( !defined($undefQualifiers->{$k}) ) {
 				    $undefQualifiers->{$k}=1;
- 				    print STDERR "warning: unidentified qualifier \"$k\"\n";
+ 				    warn "warning: unidentified qualifier '$k'\n";
 				}
 				else {
 				    $undefQualifiers->{$k}++;
@@ -595,7 +600,7 @@ sub evaluateDetails
 		for my $k (@unmatched) {
 		    if ( ! defined($undefQualifiers->{$k}) ) {
 			$undefQualifiers->{$k}=1;
-			print STDERR "warning: unidentified qualifier \"$k\"\n";
+			warn "warning: unidentified qualifier \"$k\"\n";
 		    }
 		    else {
 			$undefQualifiers->{$k}++;
@@ -695,7 +700,7 @@ sub endField($)
 		}
 	    }
 	    if ( keys (%{$e}) != $understood ) {
-		print STDERR "understood $understood, out of ".keys (%{$e}) ." keys of:".dumpMe($e)."\n";
+		warn "understood $understood, out of ".keys (%{$e}) ." keys of:".dumpMe($e)."\n";
 	    }
 	}
 	print STDERR "PROG SYNTAX: $str\n";
@@ -762,13 +767,13 @@ sub endField($)
 		    next;
 		}
 		else {
-		    print STDERR "warning: img link defined with unknown image link ".$thg0->{attr}->{src}."\n";
+		    warn "warning: img link defined with unknown image link ".$thg0->{attr}->{src}."\n";
 		    next;
 		}
-		print STDERR "img link defined with unknown image link ".$thg0->{attr}->{src}."\n";
+		warn "img link defined with unknown image link ".$thg0->{attr}->{src}."\n";
 		exit(1);
 	    }
-	    print STDERR "img link defined without src definition $e ".$thg0."\n";
+	    warn "img link defined without src definition $e ".$thg0."\n";
 	    print STDERR dumpMe($thg0)."\n";
 	    exit(1);
 	}
@@ -929,7 +934,7 @@ sub endField($)
 		}
 	    }
 	    if ( keys (%{$e}) != $understood ) {
-		print STDERR "understood $understood, out of ".keys (%{$e}) ." keys of:";
+		warn "understood $understood, out of ".keys (%{$e}) ." keys of:";
 		print STDERR dumpMe($e)."\n";
 	    }
 	}
@@ -983,7 +988,7 @@ sub endField($)
 		# ignore
 	    }
 	    else {
-		print STDERR "ignoring start tag: $tag\n";
+		warn "ignoring start tag: $tag\n";
 	    }
 	}
 	elsif ( defined($entry->{endtag}) ) {
@@ -1008,14 +1013,14 @@ sub endField($)
 		# ignore
 	    }
 	    else {
-		print STDERR "ignoring end tag: $tag\n";
+		warn "ignoring end tag: $tag\n";
 	    }
 	}
 	elsif ( defined($entry->{text}) ) {
 		$textSections[$startEndTagCount].=$entry->{text};
 	}
 	else {
-	    print STDERR "undefined thing:$count:".dumpMe($entry)."\n";
+	    warn "undefined thing:$count:".dumpMe($entry)."\n";
 	    die "undefined thing";
 	}
     }
@@ -1045,7 +1050,7 @@ sub endField($)
 	    $result->{prog_details}=$text;
 	}
 	else {
-	    print STDERR "don't have a place for extra text section '$text'\n";
+	    warn "don't have a place for extra text section '$text'\n";
 	}
     }
     if ( defined($result->{prog_desc}) ) {
@@ -1225,7 +1230,7 @@ sub storeListing
     my ($self, $filename)=@_;
 
     if ( ! open(FILE, "> $filename") ) {
-	print STDERR "$filename: $!";
+	warn "$filename: $!";
 	return(0);
     }
     my %hash;
@@ -1250,7 +1255,7 @@ sub restoreListing
     my ($self, $filename)=@_;
 
     if ( ! open(FILE, "< $filename") ) {
-	print STDERR "$filename: $!";
+	warn "$filename: $!";
 	return(0);
     }
     my %hash;
@@ -1261,7 +1266,7 @@ sub restoreListing
     eval {<FILE>};
     if ($@) {
 	$/=$saveit;
-	print STDERR "failed to read $filename: $@\n";
+	warn "failed to read $filename: $@\n";
 	close(FILE);
 	return(1);
     }
@@ -1384,7 +1389,7 @@ sub readSchedule
 		}
 
 		if ( !defined($urldata) ) {
-		    print STDERR "unable to read url $url\n";
+		    warn "unable to read url $url\n";
 		    return(0);
 		}
 		else {
@@ -1411,10 +1416,10 @@ sub readSchedule
 			unlink("urldata/$hour-$year-$month-$day.html");
 		    }
 		    if ( $attemptDelay > 30*100 ) {
-			print STDERR "failed too many times..giving up\n";
+			warn "failed too many times..giving up\n";
 			return(0);
 		    }
-		    print STDERR "sleeping $attemptDelay seconds and trying again..\n";
+		    warn "sleeping $attemptDelay seconds and trying again..\n";
 		    sleep($attemptDelay);
 		    $attemptDelay+=30;
 		    undef($urldata);
@@ -1448,7 +1453,7 @@ sub readSchedule
 		# <a href='gridlisting.asp?UID={5E9C238D-F399-4DA4-BEB1-52D3C7BA5776}&\
 		#  StartDay=10/3/2001&StartTime=12&gChRef=&Page=0&CO=8200&ShowType='><img src='../images/tvguide/arrow-left.gif' border='0'></a>
 		if ( !($urldata=~m/<a href=\'gridlisting.asp\?UID=[^&]+&StartDay=[^&]+&StartTime=([0-9]+)[^>]+><img src='..\/images\/tvguide\/arrow-right.gif'/i) ) {
-		    print STDERR "error: unable to determine number of hours in each listing\n";
+		    warn "error: unable to determine number of hours in each listing\n";
 		    print STDERR "urldata:\n$urldata\n";
 		    return(0);
 		}
@@ -1465,12 +1470,12 @@ sub readSchedule
 		}
 
 		if ( !($urldata=~m/<b>Lineup:<\/b>[^\|]+\|\s+([A-Z]+)&nbsp;/o) ) {
-		    print STDERR "error: time zone information missing from url source\n";
+		    warn "error: time zone information missing from url source\n";
 		    print STDERR "urldata:\n$urldata\n";
 		    return(0);
 		}
 		if ( defined($self->{TimeZone}) && $self->{TimeZone} ne $1 ) {
-		    print STDERR "error: attempt to add listings from two different time zones\n";
+		    warn "error: attempt to add listings from two different time zones\n";
 		    print STDERR "       $self->{TimeZone} != $1\n";
 		    return(0);
 		}
@@ -1483,7 +1488,7 @@ sub readSchedule
 
 	    my $tablearr=$tbl->{Table};
 	    if ( !defined($tablearr) ) {
-		print STDERR "no tables found\n";
+		warn "no tables found\n";
 		print STDERR "urldata:\n$urldata\n";
 		return(0);
 	    }
@@ -1607,7 +1612,7 @@ sub readSchedule
 		my $field=$timerow[0];
 
 		if ( !defined($field->{prog_title}) ) {
-		    print STDERR "analizing time cell:".dumpMe($field)."\n";
+		    print STDERR "analyzing time cell:".dumpMe($field)."\n";
 		    die "time cell failed to give value in 'prog_title'";
 		}
 		
@@ -1700,11 +1705,11 @@ sub readSchedule
 		    $totalcolspan+=$r[$j]{colspan};
 		}
 		if ( $totalcolspan != $SegmentsInTimeLine ) {
-		    print STDERR "ERROR: row $row has $totalcolspan column spans, not $SegmentsInTimeLine\n";
+		    warn "ERROR: row $row has $totalcolspan column spans, not $SegmentsInTimeLine\n";
 		    if ( defined($r[0]->{prog_desc}) ) {
-			print STDERR "       looks like it might be channel ".$r[0]->{prog_desc}."\n";
+			warn "       looks like it might be channel ".$r[0]->{prog_desc}."\n";
 		    }
-		    print STDERR "       adjusting length of first program, attempting to continue\n";
+		    warn "       adjusting length of first program, attempting to continue\n";
 		    if ( $debug ) {
 			for (my $j=1; $j<scalar(@r) ; $j++ ) {
 			    print STDERR "schedule for $row $j :".dumpMe(\%{$r[$j]})."\n";
@@ -1757,9 +1762,9 @@ sub readSchedule
 		$totalcolspan+=$r[$i]{colspan};
 	    }
 	    if ( $totalcolspan != $SegmentsInTimeLine ) {
-		print STDERR "ERROR: row $row has $totalcolspan column spans, not $SegmentsInTimeLine\n";
+		warn "ERROR: row $row has $totalcolspan column spans, not $SegmentsInTimeLine\n";
 		if ( defined($r[0]->{prog_desc}) ) {
-		    print STDERR "       looks like it might be channel ".$r[0]->{prog_desc}."\n";
+		    warn "       looks like it might be channel ".$r[0]->{prog_desc}."\n";
 		}
 		for (my $i=1; $i<scalar(@r) ; $i++ ) {
 		    print STDERR "schedule for $row $i :".dumpMe(\%{$r[$i]})."\n";
@@ -1866,7 +1871,7 @@ sub readSchedule
 		    $channel->{localStation}=$possible;
 		}
 		else {
-		    print STDERR "problems with row:$nrow:".dumpMe(\%{$row[0]})."\n";
+		    warn "problems with row:$nrow:".dumpMe(\%{$row[0]})."\n";
 		    die "don't know where to place $possible";
 		}
 	    }
@@ -1878,7 +1883,7 @@ sub readSchedule
 		    $channel->{affiliate}=$possible;
 		}
 		else {
-		    print STDERR "problems with row:$nrow:".dumpMe(\%{$row[0]})."\n";
+		    warn "problems with row:$nrow:".dumpMe(\%{$row[0]})."\n";
 		    die "don't know where to place $possible";
 		}
 	    }
@@ -1886,7 +1891,7 @@ sub readSchedule
 
 	# verify and warn that the if IND appeared, it wasn't assigned to the localstation.
 	if ( defined($channel->{localStation}) && $channel->{localStation}=~/^IND$/io ) {
-	    print STDERR "warning: channel $channel->{number} has call lets IND, parse may have failed";
+	    warn "warning: channel $channel->{number} has call lets IND, parse may have failed";
 	}
 	if ( $debug ) { print STDERR "loaded channel:".dumpMe(\%{$channel})."\n";}
 	
@@ -1941,7 +1946,7 @@ sub readSchedule
 
 	    if ( defined($cell1->{contToNextListing}) ) {
 		if ( !defined($cell2->{contFromPreviousListing}) ) {
-		    print STDERR "cell [col,row] [$col+1,$nrow] missing link to previous listing\n";
+		    warn "cell [col,row] [$col+1,$nrow] missing link to previous listing\n";
 		}
 		if ( defined($cell1->{prog_title}) && defined($cell2->{prog_title}) &&
 		     $cell1->{prog_title} eq $cell2->{prog_title} ) {
@@ -2031,7 +2036,7 @@ sub readSchedule
 	    if ( defined($cell->{prog_actors}) ) {
 		for my $actor (@{$cell->{prog_actors}}) {
 		    if ( defined($self->{undefQualifiers}->{$actor}) ) {
-			print STDERR "fixing incorrectly identified actor '$actor'\n" if ( $debug );
+			warn "fixing incorrectly identified actor '$actor'\n" if ( $debug );
 		    }
 		    else {
 			push(@{$prog->{actors}}, $actor);
@@ -2079,7 +2084,7 @@ sub getAndParseDetails($$)
 		
     my $urldata=$self->getDetailURLData($url);
     if ( !defined($urldata) ) {
-	print STDERR "unable to read url $url\n";
+	warn "unable to read url $url\n";
 	return(undef);
     }
 
@@ -2143,7 +2148,7 @@ sub getAndParseDetails($$)
 		$min=$1;
 	    }
 	    else {
-		print STDERR "warning: failed to parse Duration field $desc\n";
+		warn "warning: failed to parse Duration field $desc\n";
 	    }
 	    # don't replace duration, believe what is in the schedule grid instead.
 	    $nprog->{duration}=$min if ( defined($min) );
@@ -2201,7 +2206,7 @@ sub getAndParseDetails($$)
 	    push(@{$nprog->{ratings}}, "MPAA Rating:$desc");
 	}
 	else {
-	    print STDERR "$prog_ref: unidentified field '$field' has desc='$desc'\n";
+	    warn "$prog_ref: unidentified field '$field' has desc='$desc'\n";
 	}
     }
 
@@ -2234,8 +2239,8 @@ sub mergeDetails($$)
 
     if ( defined($nprog->{subtitle}) ) {
 	if ( defined($prog->{subtitle}) && $nprog->{subtitle} ne $prog->{subtitle} ) {
-	    print STDERR "warning: subtitle of $prog->{title} is different\n";
-	    print STDERR "warning: '$nprog->{subtitle}' != '$prog->{subtitle}'\n";
+	    warn "warning: subtitle of $prog->{title} is different\n";
+	    warn "warning: '$nprog->{subtitle}' != '$prog->{subtitle}'\n";
 	}
 	$prog->{subtitle}=$nprog->{subtitle};
 	delete($nprog->{subtitle});
@@ -2243,8 +2248,8 @@ sub mergeDetails($$)
     
     if ( defined($nprog->{year}) ) {
 	if ( defined($prog->{year}) && $nprog->{year} ne $prog->{year} ) {
-	    print STDERR "warning: year of $prog->{title} is different\n";
-	    print STDERR "warning: '$nprog->{year}' != '$prog->{year}'\n";
+	    warn "warning: year of $prog->{title} is different\n";
+	    warn "warning: '$nprog->{year}' != '$prog->{year}'\n";
 	}
 	#print STDERR "$prog->{prog_ref}: year is $str\n";
 	$prog->{year}=$nprog->{year};
@@ -2260,10 +2265,10 @@ sub mergeDetails($$)
 	if ( defined($prog->{duration}) ) {
 	    if ( $nprog->{duration} ne $prog->{duration} ) {
 		if ( $debug ) {
-		    print STDERR "warning: duration of $prog->{title} is different\n";
-		    print STDERR "warning: '$nprog->{duration}' != '$prog->{duration}'\n";
+		    warn "warning: duration of $prog->{title} is different\n";
+		    warn "warning: '$nprog->{duration}' != '$prog->{duration}'\n";
 		    if ( defined($prog->{contFromPreviousListing}) ) {
-			print STDERR "warning: was expected (cont from previous listing)\n";
+			warn "warning: was expected (cont from previous listing)\n";
 		    }
 		}
 	    }
@@ -2280,8 +2285,8 @@ sub mergeDetails($$)
 
     if ( defined($nprog->{desc}) ) {
 	if ( defined($prog->{desc}) && $nprog->{desc} ne $prog->{desc} ) {
-	    print STDERR "warning: description of $prog->{title} is different\n";
-	    print STDERR "warning: '$nprog->{desc}' != '$prog->{desc}'\n";
+	    warn "warning: description of $prog->{title} is different\n";
+	    warn "warning: '$nprog->{desc}' != '$prog->{desc}'\n";
 	}
 	#print STDERR "$prog->{prog_ref}: description is $nprog->{desc}\n";
 	if ( length($nprog->{desc}) ) {
@@ -2292,8 +2297,8 @@ sub mergeDetails($$)
 
     if ( defined($nprog->{director}) ) {
 	if ( defined($prog->{director}) && $nprog->{director} ne $prog->{director} ) {
-	    print STDERR "warning: director of $prog->{title} is different\n";
-	    print STDERR "warning: '$nprog->{director}' != '$prog->{director}'\n";
+	    warn "warning: director of $prog->{title} is different\n";
+	    warn "warning: '$nprog->{director}' != '$prog->{director}'\n";
 	}
 	#print STDERR "$prog->{prog_ref}: director is $nprog->{director}\n";
 	$prog->{director}=$nprog->{director};
@@ -2305,7 +2310,7 @@ sub mergeDetails($$)
 	    my @lactors=@{$prog->{actors}};
 	    my $out=0;
 	    if ( scalar(@lactors) != scalar(@actors) ) {
-		print STDERR "warning: actor list different size\n";
+		warn "warning: actor list different size\n";
 		$out++;
 	    }
 	    my $top=scalar(@lactors);
@@ -2314,11 +2319,11 @@ sub mergeDetails($$)
 	    }
 	    for (my $num=0; $num<$top ; $num++ ) {
 		if ( $lactors[$num] ne $actors[$num] ) {
-		    print STDERR "warning: actor $num '".$lactors[$num]." != ".$actors[$num]."\n";
+		    warn "warning: actor $num '".$lactors[$num]." != ".$actors[$num]."\n";
 		    $out++;
 		}
 	    }
-	    print STDERR "warning: actor list different for $prog->{title} in $out ways\n" if ( $out );
+	    warn "warning: actor list different for $prog->{title} in $out ways\n" if ( $out );
 	}
 	$prog->{actors}=\@actors;
 	#print STDERR "$prog->{prog_ref}: actors defined as ". join(",", @actors)."\n";
@@ -2332,7 +2337,7 @@ sub mergeDetails($$)
 	delete($nprog->{ratings});
     }
     if ( scalar(keys %{$nprog}) != 0 ) {
-	print STDERR "$prog->{pref}: ignored scaped values of nprog:".dumpMe($nprog)."\n";
+	warn "$prog->{pref}: ignored scaped values of nprog:".dumpMe($nprog)."\n";
     }
     return($prog);
 }
@@ -2383,10 +2388,10 @@ sub expandDetails
 		$foundInCache++;
 	    }
 	    else {
-		print STDERR "$prog->{title}: missing program type, looking it up...\n" if ($debug);
+		warn "$prog->{title}: missing program type, looking it up...\n" if ($debug);
 		my $info=$self->getAndParseDetails($refNumber);
 		if ( !defined($info) ) {
-		    print STDERR "\t failed to parse url\n" if ($debug);
+		    warn "\t failed to parse url\n" if ($debug);
 		}
 		else {
 		    # only add things to the db if the cache is enabled
@@ -2402,7 +2407,7 @@ sub expandDetails
 	    }
 	}
 	else {
-	    print STDERR "$prog->{title}: missing program type and ref#, defaulting to <undef>\n" if ($debug);
+	    warn "$prog->{title}: missing program type and ref#, defaulting to <undef>\n" if ($debug);
 	}
     }
     if ( defined($ptypedb) ) {
