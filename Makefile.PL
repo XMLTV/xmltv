@@ -728,7 +728,12 @@ windows_dist ::
 	        troff -mandoc -Tascii $$i | grotty -buo \
 	            | perl -pe 's/Date::Manip[(]3[)]/date_formats.txt/g' \
 	            >$(PREFIX)/doc/man/`basename $$i .1`.txt; \
-        done
+	done
+	# Remove 'real' manual pages, not needed on Windows.
+	rm -rfv $(PREFIX)/man $(PREFIX)/share/man
+	# My MakeMaker creates this dud directory.
+	rm -rfv $(PREFIX)/5.8.0
+	rmdir $(PREFIX)/share/doc
 	set -e; \
 	out=$(PREFIX)/doc/man/date_formats.txt; \
 	echo Extracting part of Date::Manip manual page into $$out; \
