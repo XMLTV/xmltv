@@ -1,31 +1,181 @@
-#!/bin/sh
+#!/usr/bin/perl -w
 # 
 # $Id$
 #
-# Make a distribution tarball from a working copy.  Not very well
-# written; all those rm -rfs might be dangerous.
+# This script checks out the latest head revision (by checking it
+# out from scratch), updates version information in README,
+# ignores files/dirs we don't want to release, tags the source
+# files in cvs, generates a ChangeLog and generates the
+# .tar.gz and .tar.bz2 files for release.
+#
+# It DOES NOT: post the files to sf, or email announcements, or
+# update www pages, although it reminds you to do so :)
 # 
-# See release notes and/or cvs logs entries for module history
-# 
-# -- Ed Avis, epa98@doc.ic.ac.uk
+# -- jerry@matilda.com
 # 
 
-vers=`perl -ne '/^XMLTV\s+([0-9.-]+)\s*$/ && (print("$1\n"), exit)' README`
-dir="xmltv-$vers"
-if test -e ../$dir; then echo $dir already exists; exit 1; fi
-mkdir ../$dir      || exit 1
-cp -avi * ../$dir  || exit 1
-cd ../$dir         || exit 1
-#find . -name CVS -type d -prune -exec rm -rf {} \; || exit 1
-rm -rf attic       || exit 1
-rm -rf leon        || exit 1
-rm -rf cgi         || exit 1
-rm -rf todo        || exit 1
-rm -f mkdist       || exit 1
-rm -f tvprefs      || exit 1
-rm -f uk.xml       || exit 1
-rm -f tv.xml       || exit 1
-rm -f web_cache.db || exit 1
-rm -f ChangeLog.old|| exit 1
-echo ../$dir
-echo 'You did remember to update the ChangeLog?'
+use strict;
+#use diagnostics;
+use Getopt::Long;
+
+#$SIG{__WARN__} = sub { die $_[0] };
+
+my $debug;
+
+sub do_system($)
+{
+    my $cmd=$_[0];
+
+    print "$cmd\n";
+
+    my $rc=system($cmd);
+    if ( $rc != 0 ) {
+	die "command failed: $rc";
+    }
+}
+
+sub Usage()
+{
+    print "mkdist --version <id> [options]\n";
+    print "where options are:\n";
+    print "    --help                    - this usage message\n";
+    print "    --debug                   - print debug messages as we go\n";
+    print "    --sfuser <loginname>      - sourceforge login with cvs access\n";
+    print "    --login                   - perform cvs login to refresh/verify cvs access\n";
+    print "    --version <id>.           - creating version <id> (use 0.4, or 0.4.1)\n";
+}
+
+use vars qw/$opt_help $opt_debug $opt_sfuser $opt_login $opt_version/;
+
+if ( ! GetOptions('help', 'debug', 'sfuser=s', 'login', 'version=s') ) {
+    Usage();
+    exit(1);
+}
+
+if ( defined($opt_help) ) {
+    Usage();
+    exit(0);
+}
+
+$debug=1 if ( defined($opt_debug) );
+
+die "must specify --version" if ( !defined($opt_version) );
+die "must specify --sfuser" if ( ! $opt_sfuser );
+
+print "opt_version=\"$opt_version\"\n" if ( $debug );
+
+if ( !($opt_version=~m/^\d+\.\d+$/o) && !($opt_version=~m/^\d+\.\d+\.\d+$/o) ) {
+    print STDERR "invalid version id, specify something of the form \"[0-9].[0-9]\" or \"[0-9].[0-9].[0-9]\"\n";;
+    exit(1);
+}
+
+my $cvs_tag="V$opt_version";
+$cvs_tag=~s/\./_/og;
+
+print "version tag to use is: $cvs_tag\n" if ( $opt_debug );
+
+# always use ssh for cvs access
+$ENV{CVS_RSH}="ssh";
+
+if ( defined($opt_login) ) {
+    # use pserver to login
+    $ENV{CVSROOT}=":pserver:$opt_sfuser\@cvs.xmltv.sourceforge.net:/cvsroot/xmltv";
+    do_system("cvs login");
+}
+
+print "\nChecking out current head revision in ./xmltv ..\n";
+do_system("CVS_RSH=ssh CVSROOT=\":ext:$opt_sfuser\@cvs.xmltv.sourceforge.net:/cvsroot/xmltv\" cvs -q co xmltv");
+
+open(FD, "< xmltv/README") || die "README: $!";
+$_=<FD>;
+chop();
+close(FD);
+
+if ( m/^XMLTV\s+$opt_version$/ ) {
+    print "\nversion information in README looks fine ($_)\n";
+}
+else {
+    print "\nupdating README version line\n";
+    open(FD, "< xmltv/README") || die "README: $!";
+    open(OD, "> .README-tmp");
+    print OD "XMLTV $opt_version\n";
+    while(<FD>) {
+	print OD "$_";
+    }
+    close(OD);
+    close(FD);
+    unlink("xmltv/README") || die "unlink xmltv/README:$!";
+    rename(".README-tmp", "xmltv/README") || die "rename README-tmp to xmltv/README:$!";
+
+    print "checking in new README with updated version line to \"XMLTV $opt_version\"\n";
+    chdir("xmltv");
+    do_system("cvs ci -m \'updated version to XMLTV $opt_version\' README");
+    chdir("..");
+}
+
+chdir("xmltv");
+print "\nremoving old tag $cvs_tag just in case\n";
+do_system("cvs tag -d \"$cvs_tag\"");
+chdir("..");
+
+my @dirs2remove=qw(attic
+		   leon
+		   cgi
+		   todo);
+
+my @files2remove=qw(mkdist
+		    ChangeLog.old);
+
+my $cmd="tar cf save.tar ";
+for my $dir (@dirs2remove) { $cmd.="./xmltv/$dir "; }
+for my $file (@files2remove) { $cmd.="./xmltv/$file "; }
+
+$cmd.="`find xmltv -name CVS -type d`";
+
+print "\ntemperarily removing files/dirs not for release..\n";
+do_system($cmd);
+
+for my $dir (@dirs2remove) {
+    # take easy route :)
+    do_system("rm -rf xmltv/$dir");
+}
+
+for my $file (@files2remove) {
+    print "rm xmltv/$file";
+    unlink("xmltv/$file") || die "unlink xmltv/$file: $!";
+}
+
+chdir("xmltv");
+print "\ngenerating ChangeLog..\n";
+do_system("cvs2cl.pl --utc");
+
+print "\ntagging release with $cvs_tag..\n";
+do_system("cvs tag \"$cvs_tag\"");
+chdir("..");
+
+print "\nremoving CVS dirs..\n";
+do_system("find xmltv -name CVS -type d -prune -exec rm -rf {} \\;");
+
+print "\nrenaming xmltv directory to xmltv-$opt_version..\n";
+rename("xmltv", "xmltv-$opt_version");
+
+print "\n";
+do_system("tar cf - ./xmltv-$opt_version | gzip --best > xmltv-$opt_version.tar.gz");
+do_system("tar cf - ./xmltv-$opt_version | bzip2 --compress --stdout > xmltv-$opt_version.tar.bz2");
+print "\n";
+
+print "\nrestoring files that won't be released..\n";
+rename("xmltv-$opt_version", "xmltv");
+unlink("xmltv/ChangeLog");
+do_system("tar xpf save.tar");
+unlink("save.tar");
+
+print "\n------------------------------------------------------------------------------------\n";
+print "Things left to do:\n";
+print " 1. post files on sf\n";
+print " 2. update www page\n";
+print " 3. email release announcement to both xmltv-announce\@lists.sf.net and freshmeat users";
+print "\n------------------------------------------------------------------------------------\n";
+
+exit 0;
+
