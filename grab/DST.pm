@@ -14,6 +14,11 @@ use Date::Manip; # no Date_Init(), that can be done by the app
 use XMLTV::TZ qw(gettz tz_to_num);
 use XMLTV::Date;
 
+# Three modes:
+#   eur (default): Europe and elsewhere
+#   na:            US (most states) and Canada
+#   none:          places that don't observe DST
+#
 our $Mode = 'eur';
 
 # Use Log::TraceMessages if installed.
@@ -117,8 +122,11 @@ sub parse_local_date($$) {
     elsif ($Mode eq 'na') {
 	($start_dst, $end_dst) = @{dst_dates_na($year, $winter_tz)};
     }
+    elsif ($Mode eq 'none') {
+	return Date_ConvTZ($dp, $winter_tz, 'UTC');
+    }
     else { die }
-	
+
     foreach ($start_dst, $end_dst) {
 	$_ = Date_ConvTZ($_, 'UTC', $winter_tz);
     }
@@ -213,6 +221,9 @@ sub date_to_local( $$ ) {
     }
     elsif ($Mode eq 'na') {
 	($start_dst, $end_dst) = @{dst_dates_na($year, $base_tz)};
+    }
+    elsif ($Mode eq 'none') {
+	return [ Date_ConvTZ($d, 'UTC', $base_tz), $base_tz ];
     }
     else { die }
 
