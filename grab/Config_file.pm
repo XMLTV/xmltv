@@ -90,6 +90,8 @@ sub read_lines( $;$ ) {
 	push @r, $_;
     }
     close FH or die "cannot close $f: $!\n";
+    die "config file $f is empty, please delete and run me with --configure\n"
+      if not @r;
     return @r;
 }
 
