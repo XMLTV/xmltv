@@ -181,6 +181,13 @@ sub new_doc() {
     return (\@data, $t);
 }
 
+# Private.
+sub sanity( $ ) {
+    for (shift) {
+    	croak "no <tv> element found" if not /<tv/;
+    }
+}
+
 =pod
 
 =item parse(document)
@@ -200,10 +207,7 @@ is not currently handled by the XMLTV format, or by this module.
 =cut
 sub parse( $ ) {
     my $str = shift;
-    # Sanity-check before cranking up the XML machinery.
-    if ($str !~ /<tv/) {
-	croak "no <tv> element found";
-    }
+    sanity($str);
     my ($data, $t) = new_doc();
     $t->parse($str);
     return $data;
@@ -225,12 +229,100 @@ sub parsefile( $ ) {
     return $data;
 }
 
+=pod
+
+=item parse_callback(document, [ \$encoding, \$credits ],
+                     channel_callback, programme_callback)
+
+An alternative interface.  Whereas C<parse()> reads the whole document
+and then returns a finished data structure, with this routine you
+specify a subroutine to be called as each <channel> element is read
+and another for each <programme> element.
+
+The first argument is the document to parse.  The second argument is a
+pair of two references to variables where encoding and credits
+information will be stored (this data appears once at the beginning
+of the file and isnE<39>t worth handling through callbacks).  The next
+argument will be called with the Perl data structure for each channel
+as it is parsed, and likewise the fourth argument handles programmes.
+
+For example:
+
+    my $document = '<tv>...</tv>';
+    my $encoding;
+    my %credits;
+
+    # The callback for each channel populates this hash.
+    my %channels;
+    sub channel_cb( $ ) {
+	my $c = shift;
+	$channels{$c->{id}} = $c;
+    }
+
+    # The callback for each programme.  We know that channels are
+    # always read before programmes, so the %channels hash will be
+    # fully populated.
+    #
+    sub programme_cb( $ ) {
+        my $p = shift;
+        print "got programme: $p->{title}->[0]->[0]\n";
+        my $c = $channels{$p->{channel}};
+        print 'channel name is: ', $c->{'display-name'}->[0]->[0], "\n";
+    }
+
+    # Let's go.
+    XMLTV::parse_callback($document, [ \$encoding, \%credits ],
+                          \&channel_cb, \&programme_cb);
+
+=cut
+# Private.
+sub new_doc_callback( $$$ ) {
+    my ($data, $ch_cb, $p_cb) = @_;
+    new XML::Twig(StartTagHandlers =>
+		  { '/tv' => sub { tv_handler($data, @_) } },
+		  TwigHandlers =>
+		  { '/tv/channel'   => sub {
+			my ($t, $node) = @_;
+			die if not defined $node;
+			my $c = node_to_channel($node);
+			$t->purge();
+			$ch_cb->($c);
+		    },
+		
+		    '/tv/programme' => sub {
+			my ($t, $node) = @_;
+			die if not defined $node;
+			my $p = node_to_programme($node);
+			$t->purge();
+			$p_cb->($p);
+		    } });
+}
+
+sub parse_callback( $$$$ ) {
+    my ($str, $data, $ch_cb, $p_cb) = @_;
+    sanity($str);
+    new_doc_callback($data, $ch_cb, $p_cb)->parse($str);
+}
+
+=pod
+
+=item parsefile_callback(filename, [ \$encoding, \$credits ],
+			 channel_callback, programme_callback)
+
+As C<parse_callback()> but takes a filename instead of a document.
+
+=cut
+sub parsefile_callback( $$$$ ) {
+    my ($f, $data, $ch_cb, $p_cb) = @_;
+    new_doc_callback($data, $ch_cb, $p_cb)->parsefile($f);
+}
+
 # Private.  Three handlers indirectly called by XML::Twig.  First arg
 # is the XMLTV data structure, remaining args those passed by
 # XML::Twig to its handlers.
 #
 sub tv_handler( $$$ ) {
-    my ($d, $t, $node) = @_;
+    my ($d, $t, $node) = @_; die if not defined $node;
     t 'tv_handler() ENTRY';
     $d->[1] = get_attrs($node);
     t 'got attrs: ' . d $d->[1];
@@ -246,7 +338,7 @@ sub do_channel( $$$ ) {
     $t->purge();
 }
 sub do_programme( $$$ ) {
-    my ($d, $t, $node) = @_;
+    my ($d, $t, $node) = @_; die if not defined $node;
     push @{$d->[3]}, node_to_programme($node);
     $t->purge();
 }
@@ -294,7 +386,7 @@ sub write_data( $;@ ) {
 # the 'x-whatever' attributes.
 #
 sub get_attrs( $ ) {
-    my $node = shift;
+    my $node = shift; die if not defined $node;
     my %r = %{$node->atts()};
     foreach (keys %r) {
 	delete $r{$_} if /^x-/;
@@ -683,7 +775,7 @@ minutes or hours if that would look better.
 
 =cut
 $Handlers{length}->[0] = sub( $ ) {
-    my $node = shift;
+    my $node = shift; die if not defined $node;
     my %attrs = %{get_attrs($node)};
     my $d = get_text($node);
     if ($d =~ /^\s*$/) {
@@ -745,7 +837,7 @@ a single space on either side of each dot.
 
 =cut
 $Handlers{'episode-num'}->[0] = sub( $ ) {
-    my $node = shift;
+    my $node = shift; die if not defined $node;
     my %attrs = %{get_attrs($node)};
     my $system = $attrs{system};
     $system = 'onscreen' if not defined $system;
@@ -876,7 +968,7 @@ The 'start' and 'channel' attributes are converted to keys in a hash.
 
 =cut
 $Handlers{'previously-shown'}->[0] = sub( $ ) {
-    my $node = shift;
+    my $node = shift; die if not defined $node;
     my %attrs = %{get_attrs($node)};
     my $r = {};
     foreach (qw(start channel)) {
@@ -929,7 +1021,7 @@ a hash.
 
 =cut
 $Handlers{subtitles}->[0] = sub( $ ) {
-    my $node = shift;
+    my $node = shift; die if not defined $node;
     my %attrs = %{get_attrs($node)};
     my %r;
     $r{type} = $attrs{type} if defined $attrs{type};
@@ -971,7 +1063,7 @@ I<icon> handler.
 
 =cut
 $Handlers{rating}->[0] = sub( $ ) {
-    my $node = shift;
+    my $node = shift; die if not defined $node;
     my %attrs = %{get_attrs($node)};
     my $system = delete $attrs{system} if exists $attrs{system};
     foreach (keys %attrs) {
@@ -1060,7 +1152,7 @@ and 'height' keys.
 
 =cut
 $Handlers{icon}->[0] = sub( $ ) {
-    my $node = shift;
+    my $node = shift; die if not defined $node;
     my %attrs = %{get_attrs($node)};
     warn "missing 'src' attribute in icon" if not defined $attrs{src};
     return \%attrs;
@@ -1119,7 +1211,7 @@ would also be okay.
 
 =cut
 $Handlers{'with-lang'}->[0] = sub( $ ) {
-    my $node = shift;
+    my $node = shift; die if not defined $node;
     my $value = get_text($node);
     if (not length $value) {
 	warn 'empty string for with-lang value';
@@ -1171,7 +1263,7 @@ and just [] for 'present but no text'.
 
 =cut
 $Handlers{'with-lang-or-empty'}->[0] = sub( $ ) {
-    my $node = shift;
+    my $node = shift; die if not defined $node;
     my $value = get_text($node);
     my %attrs = %{get_attrs($node)};
     my $lang = $attrs{lang} if exists $attrs{lang};
@@ -1252,7 +1344,7 @@ Similar remarks apply to URLs.
 =cut
 # Private.
 sub node_to_programme( $ ) {
-    my $node = shift;
+    my $node = shift; die if not defined $node;
     my %programme;
 #    local $Log::TraceMessages::On = 1;
 
@@ -1286,7 +1378,7 @@ sub node_to_programme( $ ) {
 
 # Private.
 sub node_to_channel( $ ) {
-    my $node = shift;
+    my $node = shift; die if not defined $node;
     my %channel;
     t 'node_to_channel() ENTRY';
 
@@ -1450,18 +1542,17 @@ BEGIN {
 
 =back
 
-=head1 INCREMENTAL READING AND WRITING
+=head1 WRITING
 
-Because of the way parsing is currently implemented, it is not possible
-to read a file lazily.  You have to wait for the whole XML document to
-be loaded in and parsed, and then you are given all the programmes and
-channels at once.
+When reading a file you have the choice of using C<parse()> to gulp
+the whole file and return a data structure, or using
+C<parse_callback()> to get the programmes one at a time, although
+channels and other data are still read all at once.
 
-The C<write_data()> function provides the equivalent approach to writing:
-it prints a whole XMLTV document at once.  This is often sufficient, but
-sometimes you want to write out programmes gradually, as they are produced.
-For this you can manually create an C<XMLTV::Writer> object and call
-methods on it.  Synopsis:
+There is a similar choice when writing data: the C<write_data()>
+routine prints a whole XMLTV document at once, but if you want to
+write an XMLTV document incrementally you can manually create an
+C<XMLTV::Writer> object and call methods on it.  Synopsis:
 
   use XMLTV;
   my $w = new XMLTV::Writer();
