@@ -79,6 +79,9 @@ sub get_nice_aux( $ ) {
 # Initialize HTTP::Cache::Transparent if the file
 # specified by the environment variable CACHE_CONF 
 # (default ~/.xmltv/cache.conf) exists.
+#
+# Returns whether the cache-config file was found and used.
+#
 sub init_cache
 {
     my $winhome = $ENV{HOMEDRIVE} . $ENV{HOMEPATH} 
@@ -92,7 +95,7 @@ sub init_cache
         # The configuration file doesn't exist. Don't use the cache.
         # In the future, we may want to create a default configuration
         # file here.
-        return;
+        return 0;
     }
 
     open(IN, "< $conffile") 
@@ -117,7 +120,8 @@ sub init_cache
     close(IN);
 
     if (exists($data{DisableCache}) and $data{DisableCache}) {
-        return;
+	# Cache is explicitly disabled, but still the config is there.
+        return 1;
     }
 
     delete($data{DisableCache});
@@ -131,6 +135,7 @@ sub init_cache
 
     require HTTP::Cache::Transparent;
     HTTP::Cache::Transparent::init(\%data);
+    return 1;
 }
 
 1;
