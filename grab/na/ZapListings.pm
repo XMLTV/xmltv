@@ -1049,7 +1049,6 @@ sub getChannelList($$)
     #
     my @rows;
     my @indexes = (0);
-    print STDERR "splitting at <tr\n";
     my $left = $html;
     my $pos = 0;
     while ((my $idx = index($left, '<tr')) != -1) {
