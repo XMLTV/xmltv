@@ -1873,12 +1873,21 @@ sub crunchStage($$)
     $self->redirect(undef);
 
     if ( $ret == 0 ) {
-	$self->status("prep stage $stage success");
+	if ( $self->{errorCountInLog} == 0 ) {
+	    $self->status("prep stage $stage succeeded with no errors");
+	}
+	else {
+	    $self->status("prep stage $stage succeeded with $self->{errorCountInLog} errors in $self->{imdbDir}/stage$stage.log");
+	}
     }
     else {
-	$self->status("prep stage $stage failed");
+	if ( $self->{errorCountInLog} == 0 ) {
+	    $self->status("prep stage $stage failed (with no logged errors)");
+	}
+	else {
+	    $self->status("prep stage $stage failed with $self->{errorCountInLog} errors in $self->{imdbDir}/stage$stage.log");
+	}
     }
-    $self->status("stage $stage produced $self->{errorCountInLog} errors in $self->{imdbDir}/stage$stage.log");
     return($ret);
 }
 
