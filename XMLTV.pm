@@ -19,8 +19,6 @@ use Lingua::Preferred qw(which_lang);
 use Carp;
 use Data::Dumper;
 
-use XMLTV::UK_TZ;
-
 # Handlers for different subelements of programme.  First value is the
 # name of the element, second is a subroutine which turns the DOM node
 # into a scalar, third is one to write the scalar given an XML::Writer

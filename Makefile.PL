@@ -32,6 +32,7 @@ WriteMakefile
 		   'grab/uk/tv_grab_uk.PL' => 'grab/uk/tv_grab_uk',
 		 },
    'PM'            => { 'XMLTV.pm'                   => '$(INST_LIBDIR)/XMLTV.pm',
+			'lib/TZ.pm'                  => '$(INST_LIBDIR)/XMLTV/TZ.pm',
 			'grab/Ask.pm'                => '$(INST_LIBDIR)/XMLTV/Ask.pm',
 			'grab/Memoize.pm'            => '$(INST_LIBDIR)/XMLTV/Memoize.pm',
 			'grab/na/ZapListings.pm'     => '$(INST_LIBDIR)/XMLTV/ZapListings.pm',
