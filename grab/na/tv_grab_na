@@ -85,9 +85,17 @@ and keyword substitions like B<--listings>.
 B<--listings FILE> Write output to FILE rather than standard output.
 FILE may contain L<date(1)> style substitutions, for example use
 B<--listings "listings-%d%m%Y.xml"> to separate output by day.
-Similarily, keywords B<%postalcode> and B<%zipcode> are also substituted from
-settings current configuration.  The filename is only re-evaluated
-when a new dayE<39>s listings is started.
+Keywords B<%postalcode> and B<%zipcode> are also substituted from
+settings current configuration. Channel-based keywords B<%ChannelNumber> and
+B<%ChannelCallLetters> may be used, which cause the filename to be
+re-evaluated between each channel for each day, instead of just when a
+new days listings is started. Be warned, adverse results can occur if you
+use the B<%ChannelNumber> and/or B<%ChannelCallLetters> in the output
+pathname for a multi-day grab without some %d (or similar) substitution.
+For instance, if you use --listings "listings-%ChannelNumber" for a
+multi-day grab, the listings file will only contain the first days
+listings (or last days listings if --listings-overwrite is used)
+since the file will be re-evaluated after ever channel grab.
 
 B<--listings-overwrite X> Should tv_grab_na overwrite existing --listings output
 files or skip the ones that exist? (default=false - do not overwrite
@@ -287,6 +295,30 @@ sub getStationTransientFlag($$$)
     return($self->{channels}->{$station}->{transient}->{$flag});
 }
 
+sub getStationChannelNumber($$)
+{
+    my ($self, $station)=@_;
+
+    # commonly, stations are identified as '2 CFRN' so
+    # we try and decode.
+    if ( $station=~m/^\s*(\d+)\s*(.*)/o ) {
+	return($1);
+    }
+    return(undef);
+}
+
+sub getStationChannelCallLetters($$)
+{
+    my ($self, $station)=@_;
+
+    # commonly, stations are identified as '2 CFRN' so
+    # we try and decode.
+    if ( $station=~m/^\s*(\d+)\s*(.*)/o ) {
+	return($2);
+    }
+    return(undef);
+}
+
 sub removeStationTransientFlag($$$)
 {
     my ($self, $station, $flag)=@_;
@@ -440,7 +472,7 @@ use vars qw/$opt_debug $opt_quiet $opt_stats/;
 sub statusMessage($)
 {
     if ( !$opt_quiet ) {
-	print STDERR "STATUS:$opt_quiet:".$_[0];
+	print STDERR $_[0];
     }
 }
 
@@ -631,8 +663,9 @@ sub Usage($)
     print $fp "       <file> may contain Date::Manip::Unix substitutions\n";
     print $fp "       for instance, use --listings \"listings-%d%m%Y.xml\" to separate output\n";
     print $fp "       by day. Similarily, %postalcode, %zipcode, are also substituted from\n";
-    print $fp "       settings in the current configuration.\n";
-    print $fp "       The filename is only re-evaluated when a new days listings is started.\n";
+    print $fp "       settings in the current configuration. Channel-based keywords %ChannelNumber\n";
+    print $fp "       and %ChannelCallLetters may be used, which cause the filename to be re-evaluated\n";
+    print $fp "       between each channel for each day instead of just when a new days listings is started.\n";
     print $fp "       if no --listings is specified stdout is used\n";
     print $fp "\n";
     print $fp "   --listings-overwrite <boolean>\n";
@@ -1522,6 +1555,7 @@ sub grab
 	else {
 	    $listingsDefinition=~s/%(postal|zip)code//og;
 	}
+	$listingsDefinition=~s/%(Channel)/%%$1/og;
     }
 
     my $skipAllGrabs;
@@ -1595,13 +1629,15 @@ sub grab
 		    $skipGrabThisFileExists=1;
 		}
 		else {
-		    mkpathtofile($dayFilename) || die "mkdir $listingsDefinition:$!";
-		    statusMessage("writing listings to $dayFilename\n");
-		    $output = openOutputFileFD($dayFilename) || die "$dayFilename: $!";
-		    $writer = new XML::Writer(OUTPUT=>$output,
-					      DATA_MODE => 1, DATA_INDENT => 2 );
-		    writeListingsXMLHeader($writer);
-		    $stats->{num_channels}=writeOutChannels($config, $writer);
+		    if ( !($dayFilename=~m/%Channel/o) ) {
+			mkpathtofile($dayFilename) || die "mkdir $dayFilename:$!";
+			statusMessage("writing listings to $dayFilename\n");
+			$output = openOutputFileFD($dayFilename) || die "$dayFilename: $!";
+			$writer = new XML::Writer(OUTPUT=>$output,
+						  DATA_MODE => 1, DATA_INDENT => 2 );
+			writeListingsXMLHeader($writer);
+			$stats->{num_channels}=writeOutChannels($config, $writer);
+		    }
 		    $skipGrabThisFileExists=0;
 		}
 	    }
@@ -1637,8 +1673,8 @@ sub grab
 			    sleep($opt_retry_delay) if ( $opt_retry_delay > 0 );
 			}
 			my $ret=$lg->readSchedule($config->getStationTransientFlag($station, 'zap2it-id'),
-					       $station,
-					       $day, $month, $Year);
+						  $station,
+						  $day, $month, $Year);
 			if ( $ret == -1) {
 			    errrorMessage("failed to read schedule for $Year-$month-$day for station $station\n");
 			    # fail hard on first failure
@@ -1693,14 +1729,65 @@ sub grab
 			#Date::Manip::Date_SetConfigVariable('TZ', $lg->{TimeZone});
 			#Date::Manip::Date_Init();
 			
-			$stats->{num_programs}+=writeOutPrograms($lg, $runNDayOfYear+$nday, $Year, $tz, $writer, $station);
+			# if no writer exists, then we're suppose to generate one after every successful channel
+			# grab. This should only occur if some %Channel* attribute exists in the filename.
+			if ( !defined($writer) ) {
+			    my $filename=$dayFilename;
+			    
+			    my $number=$config->getStationChannelNumber($station);
+			    my $callletters=$config->getStationChannelCallLetters($station);
+
+			    if ( $filename=~m/%ChannelNumber/o ) {
+				if ( !defined($number) ) {
+				    errorMessage("you've used \%ChannelNumber in your output filename, but Channel \"$station\" failed to provide one");
+				    errorMessage("please forward details of this problem to xmltv-devel\@lists.sf.net");
+				    last; # break early
+				}
+				$filename=~s/%ChannelNumber/$number/og;
+			    }
+			    if ( $filename=~m/%ChannelCallLetters/o ) {
+				if ( !defined($callletters) ) {
+				    errorMessage("you've used \%ChannelCallLetters in your output filename, but Channel \"$station\" failed to provide one");
+				    errorMessage("please forward details of this problem to xmltv-devel\@lists.sf.net");
+				    last; # break early
+				}
+				$filename=~s/%ChannelCallLetters/$callletters/og;
+			    }
+
+			    if ( $filename eq $dayFilename ) {
+				die "how did we get here with dayFilename=$dayFilename ?";
+			    }
+
+			    if ( !$overwrite && -f $filename ) {
+				statusMessage("listings in $filename exist, skipping\n");
+				$stats->{num_alreadyHad}++;
+			    }
+			    else {
+				mkpathtofile($filename) || die "mkdir $filename:$!";
+				statusMessage("writing listings to $filename\n");
+				my $o = openOutputFileFD($filename) || die "$dayFilename: $!";
+				my $w = new XML::Writer(OUTPUT=>$o,
+							DATA_MODE => 1, DATA_INDENT => 2 );
+				writeListingsXMLHeader($w);
+				$stats->{num_channels}+=writeOutChannel($config, $w, $station);
+				$stats->{num_programs}+=writeOutPrograms($lg, $runNDayOfYear+$nday, $Year, $tz, $w, $station);
+				writeListingsXMLFooter($w);
+				$w->end();
+				closeOutputFileFD($o);
+			    }
+			}
+			else {
+			    $stats->{num_programs}+=writeOutPrograms($lg, $runNDayOfYear+$nday, $Year, $tz, $writer, $station);
+			}
 		    }
 		}
 
 		if ( !defined($writer_g) || $writer != $writer_g ) {
-		    writeListingsXMLFooter($writer);
-		    $writer->end();
-		    closeOutputFileFD($output);
+		    if ( defined($writer) ) {
+			writeListingsXMLFooter($writer);
+			$writer->end();
+			closeOutputFileFD($output);
+		    }
 		}
 		if ( $failEntireDay ) {
 		    if ( defined($dayFilename) ) {
@@ -2029,6 +2116,54 @@ sub writeOutPrograms($$$$$$)
     return(scalar(@programs));
 }
 
+# write out a single channel in xml format
+sub writeOutChannel($$$)
+{
+    my ($config, $writer, $station)=@_;
+
+    if ( defined($config->getStationTransientFlag($station, 'notavailable')) ) {
+	return(0);
+    }
+    
+    if ( !$config->stationIncluded($station)) {
+	return(0);
+    }
+    
+    $writer->startTag('channel', id=> $station);
+
+    # just for testing - may be enabled (properly supported) in a future release 
+    if ( 0 ) {
+	if ( defined($config->getStationTransientFlag($station, 'zap2it-id')) ) {
+	    $writer->emptyTag('channel-id', system=>"TMSID",
+			      id=>$config->getStationTransientFlag($station, 'zap2it-id'));
+	}
+    }
+    
+    # just for testing - may be enabled (properly supported) in a future release 
+    if ( 0 ) {
+	my $number=$config->getStationsChannelNumber($station);
+	if ( defined($number) ) {
+	    $writer->dataElement('channel-number', $number);
+	}
+	my $letters=$config->getStationsChannelCallLetters($station);
+	if ( defined($letters) ) {
+	    $writer->dataElement('channel-callletters', $letters);
+	}
+    }
+    
+    $writer->dataElement('display-name', "Channel $station");
+    if ( defined($config->stationIcon($station)) ) {
+	# Write as empty tag because icon can never contain anything.
+	$writer->emptyTag('icon', 'src'=>$config->stationIcon($station));
+    }
+    
+    # not supported as of yet
+    #$writer->dataElement('url', $channel->{url}) if ( defined($channel->{url}) );
+    $writer->endTag('channel');
+    return(1);
+}
+
+
 # write the channels in xml format
 sub writeOutChannels($$)
 {
@@ -2036,41 +2171,9 @@ sub writeOutChannels($$)
 
     my $count=0;
     foreach my $station ($config->stationsInDisplayOrder()) {
-	
-	next if ( defined($config->getStationTransientFlag($station, 'notavailable')) );
-	next if ( !$config->stationIncluded($station));
-
-	$writer->startTag('channel', id=> $station);
-
-	# just for testing - may be enabled (properly supported) in a future release 
-	if ( 0 ) {
-	    if ( defined($config->getStationTransientFlag($station, 'zap2it-id')) ) {
-		$writer->emptyTag('channel-id', system=>"TMSID",
-				  id=>$config->getStationTransientFlag($station, 'zap2it-id'));
-	    }
-	}
-
-	# just for testing - may be enabled (properly supported) in a future release 
-	if ( 0 ) {
-	    if ( $station=~m/^\s*(\d+)\s*(.*)/o ) {
-		my $number=$1;
-		my $callletters=$2;
-		$writer->dataElement('channel-number', $number);
-		$writer->dataElement('channel-callletters', $callletters);
-	    }
-	}
-
-	$writer->dataElement('display-name', "Channel $station");
-	if ( defined($config->stationIcon($station)) ) {
-	    # Write as empty tag because icon can never contain anything.
-	    $writer->emptyTag('icon', 'src'=>$config->stationIcon($station));
-	}
-
-	# not supported as of yet
-	#$writer->dataElement('url', $channel->{url}) if ( defined($channel->{url}) );
-	$writer->endTag('channel');
-	$count++;
+	$count+=writeOutChannel($config, $writer, $station);
     }
+
 
     return($count);
 }
