@@ -192,17 +192,27 @@ sub go( $ ) {
 	  if defined;
     }
 
-    $pkg->date_init();
+    # Date::Manip has a bug where 'now' will be wrong if you change
+    # the timezone.  It won't be correctly converted from the system
+    # timezone to the new one.  So we call ParseDate('now') _before_
+    # date_init().
+    #
     my $now = DateCalc(ParseDate('now'), "$opt_offset days");
     die if not defined $now;
+    $pkg->date_init();
     my $today = UnixDate($now, '%Q');
 
     my %urls = $pkg->urls_by_date();
+    t 'URLs by date: ' . d \%urls;
 
     my @to_get;
     my $days_left = $opt_days;
+    t '$days_left starts at ' . d $days_left;
+    t '$today=' . d $today;
     for (my $day = $today; defined $urls{$day}; $day = $pkg->nextday($day)) {
+	t "\$urls{$day}=" . d $urls{$day};
 	if (defined $days_left and $days_left-- == 0) {
+	    t 'got to last day';
 	    last;
 	}
 	push @to_get, $urls{$day};
