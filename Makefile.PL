@@ -4,6 +4,10 @@ use Config;
 use File::Basename ();
 use strict;
 
+sub test_module( $$ );
+sub test_special( $$ );
+sub targets( $ );
+
 use vars '$VERSION';
 $VERSION = '0.5.4';
 
@@ -184,34 +188,59 @@ are present.",
        blurb => 'Tv_grab_sn is the listings grabber for Sweden and Norway.',
        exes => [ 'grab/sn/tv_grab_sn' ],
        prereqs => { 'HTML::TableExtract' => '1.08' } },
+
+     { name => 'tv_grab_nz',
+       blurb => 'Tv_grab_nz is the listings grabber for New Zealand.',
+       exes => [ 'grab/nz/tv_grab_nz' ],
+       prereqs => {},
+       special_prereqs
+       => [ [ sub {
+		  my $p = `python -V 2>&1`;
+		  return undef if not defined $p;
+		  $p =~ /Python (\S+)/ or return undef;
+		  return $1;
+	      },
+	      'Python', '1.5.2' ] ] },
     );
 
 foreach my $info (@opt_components) {
     my $name = $info->{name};
     print STDERR "* $info->{blurb}\n\n";
-    use vars '%p'; local *p = $info->{prereqs};
-    my @prereqs_names = grep { test_prereq($_, $p{$_})->[0] ne 'OK' } keys %p;
+
+    my %modules_missing;
+    use vars '%module_prereqs';
+    local *module_prereqs = $info->{prereqs} || {};
+    foreach (sort keys %module_prereqs) {
+	my $ver = $module_prereqs{$_};
+	next if test_module($_, $ver)->[0] eq 'OK';
+	warn "strange, module prereq $_ mentioned twice"
+	  if defined $modules_missing{$_};
+	$modules_missing{$_} = $ver;
+    }
+
+    use vars '@special_prereqs';
+    my %special_missing;
+    local *special_prereqs = $info->{special_prereqs} || {};
+    foreach (@special_prereqs) {
+	my ($sub, $name, $ver) = @$_;
+	next if test_special($sub, $ver)->[0] eq 'OK';
+	warn "strange, special prereq $name mentioned twice"
+	  if defined $special_missing{$name};
+	$special_missing{$name} = $ver;
+    }
+	
+    my %missing = (%modules_missing, %special_missing);
     my $default;
-    if (not @prereqs_names) {
+    if (not keys %missing) {
 	# Everything already installed.
 	$default = $info->{default};
 	$default = 1 if not defined $default;
     }
-    elsif (@prereqs_names == 1) {
-	my $mod = $prereqs_names[0];
-	print STDERR "To install $name, you will need the $mod module.";
-	my $min_ver = $prereqs{$mod};
-	if ($min_ver) {
-	    print STDERR " (version $min_ver or higher)";
-	}
-	print STDERR "\n\n";
-	$default = 0;
-    }
     else {
-	print STDERR "To install $name, you will need the following modules:\n\n";
-	foreach (sort @prereqs_names) {
+	print STDERR "To install $name, you will need the following packages:\n\n";
+	foreach (sort keys %missing) {
 	    print STDERR "$_";
-	    my $min_ver = $prereqs{$_};
+	    my $min_ver = $missing{$_};
 	    if ($min_ver) {
 		print STDERR " (version $min_ver or higher)";
 	    }
@@ -260,7 +289,7 @@ my $warned_uninstall_broken = 1;
 # FAILED        - the second scalar contains an error message.
 # TOO_OLD       - the second scalar contains the version found.
 #
-sub test_prereq( $$ ) {
+sub test_module( $$ ) {
     my ($mod, $minver) = @_;
     die if not defined $mod; die if not defined $minver;
     eval "require $mod";
@@ -280,11 +309,33 @@ sub test_prereq( $$ ) {
     }
 
     my $ver = $mod->VERSION;
-    if ($minver != 0) {
+    if ($minver ne '0') {
 	return [ 'TOO_OLD', undef ] if not defined $ver;
 	return [ 'TOO_OLD', $ver ] if $ver lt $minver;
     }
 
+    return [ 'OK', undef ];
+}
+
+# Run a subroutine and check that its output has the correct version.
+#
+# Parameters:
+#   code reference to run
+#   minumum version
+#
+# The code ref should return undef meaning 'package not present' or
+# else a version number.
+#
+# Returns as for test_module() (but 'FAILED' not an option).
+#
+sub test_special( $$ ) {
+    my ($sub, $minver) = @_;
+    my $ver = $sub->();
+    return [ 'NOT_INSTALLED', undef ] if not defined $ver;
+    if ($minver ne '0') {
+	return [ 'TOO_OLD', undef ] if not defined $ver;
+	return [ 'TOO_OLD', $ver ] if $ver lt $minver;
+    }
     return [ 'OK', undef ];
 }
 
@@ -299,7 +350,7 @@ foreach my $p ((sort keys %prereqs), (sort keys %recommended)) {
     my $Verbed = uc(substr($verbed, 0, 1)) . substr($verbed, 1);
     my $minver = $required ? $prereqs{$p} : $recommended{$p};
     die "bad minver for $p" if not defined $minver;
-    my ($r, $more) = @{test_prereq($p, $minver)};
+    my ($r, $more) = @{test_module($p, $minver)};
     if ($r eq 'OK') {
 	# Installed and recent enough.
     }
@@ -608,7 +659,7 @@ sub MY::makefile {
 }
 
 # Split a section of makefile into targets.
-sub targets {
+sub targets( $ ) {
     my @lines = split /\n/, shift;
     $_ .= "\n" foreach @lines;
     my %r;
