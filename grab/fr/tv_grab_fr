@@ -1,0 +1,625 @@
+#!/usr/bin/perl -w
+
+=head1 NAME
+
+tv_grab_fr - Grab TV listings for France.
+
+=head1 SYNOPSIS
+
+To configure: tv_grab_fr --configure [--config-file FILE]
+To grab listings: tv_grab_fr [--output FILE] [--quiet]
+Slower, detailed grab: tv_grab_fr --slow [--output FILE] [--days N] [--offset N] [--quiet]
+Help: tv_grab_fr --help
+
+=head1 DESCRIPTION
+
+Output TV listings for several channels available in France (Hertzian,
+Cable/satellite, Canal+ Sat, TPS).  The data comes from
+tf1.guidetele.com.  The default is to grab as many days as possible
+from the current day onwards. By default the program description are
+not downloaded, so if you want description and ratings, you should
+active the --slow option.
+
+B<--configure> Grab channels informations from the website and ask for
+channel type and names.
+
+B<--output FILE> write to FILE rather than standard output.
+
+B<--days N> grab N days starting from today, rather than as many as
+possible. Due to the website organization, the speed is exactly the
+same, whatever the number of days is until you activate the --slow
+option.  So this option is ignored if --slow is not also given.
+
+B<--offset N> start grabbing N days from today, rather than starting
+today.  N may be negative. Due to the website organization, N cannot
+be inferior to -1.  As with --days, this is only useful for limiting
+downloads in --slow mode.
+
+B<--slow> Get additional information from the website, like program
+description, reviews and credits.
+
+B<--quiet> suppress the progress messages normally written to standard
+error.
+
+=head1 SEE ALSO
+
+L<xmltv(5)>
+
+=head1 AUTHOR
+
+Sylvain Fabre, centraladmin@lahiette.com
+
+=cut
+
+# Todo: perhaps we should internationalize messages and docs?
+use XMLTV::Usage <<END
+$0: get French television listings in XMLTV format
+To configure: tv_grab_fr --configure [--config-file FILE]
+To grab listings: tv_grab_fr [--output FILE] [--quiet]
+Slower, detailed grab: tv_grab_fr --slow [--output FILE] [--days N] [--offset N] [--quiet]
+END
+  ;
+
+# Use Term::ProgressBar if installed.
+use constant Have_bar => eval { require Term::ProgressBar; 1 };
+
+use warnings;
+use strict;
+use XMLTV::Version '$Id$ ';
+use Getopt::Long;
+use HTML::TreeBuilder;
+use HTML::Entities; # parse entities
+use IO::File;
+use URI;
+use Date::Manip;
+use XMLTV;
+use XMLTV::Memoize;
+use XMLTV::Ask;
+use XMLTV::Mode;
+use XMLTV::Config_file;
+use XMLTV::Europe_TZ;
+use XMLTV::Get_nice;
+
+#***************************************************************************
+# Main declarations
+#***************************************************************************
+my $GRID_BASE_URL = 'http://telepoche.guidetele.com/index.html?b=';
+my $GRID_BY_CHANNEL = 'http://telepoche.guidetele.com/index_chaine.html?c=';
+my $SHEET_URL = "http://telepoche.guidetele.com/fiche.html?id=";
+my $ROOT_URL  = "http://telepoche.guidetele.com/";
+my $LANG = "fr";
+my $MAX_STARS = 4;
+my $MAX_RETRY = 5;
+my $VERSION   = "220204-01";
+
+# Grid id defined by the website according to channel types (needed to build the URL)
+my %GridType = (  "HERTZIENNE" => "15305",
+                  "CABLE/SAT"  => "15306",
+                  "TPS"        => "15307",
+                  "CANAL SAT"  => "15308",
+                  "ETRANGERES" => "15309" );
+
+# Slot of hours according to the website (needed to build the URL)
+my @offsets = (24, 0, 4, 8, 12, 16, 20);
+
+#***************************************************************************
+# Global variables allocation according to options
+#***************************************************************************
+XMLTV::Memoize::check_argv('get_page_aux');
+my ($opt_days,  $opt_help,  $opt_output,  $opt_offset,  $opt_quiet,  $opt_list_channels, $opt_config_file, $opt_configure, $opt_slow, $opt_licons);
+$opt_quiet  = 0;
+# The website is able to store up to nine days from now
+my $default_opt_days = 9;
+$opt_output = '-'; # standard output
+GetOptions('days=i'    => \$opt_days,
+     'help'      => \$opt_help,
+     'output=s'  => \$opt_output,
+     'offset=i'  => \$opt_offset,
+     'quiet'     => \$opt_quiet,
+     'configure' => \$opt_configure,
+     'config-file=s' => \$opt_config_file,
+     'list-channels' => \$opt_list_channels,
+     'slow' => \$opt_slow
+    )
+  or usage(0);
+
+#***************************************************************************
+# Options processing, warnings, checks and default parameters
+#***************************************************************************
+die 'Number of days must not be negative'  if (defined $opt_days && $opt_days < 0);
+die 'Cannot get more than one day before current day' if (defined $opt_offset && $opt_offset < -1);
+usage(1) if $opt_help;
+
+if (not $opt_slow) {
+    # Certain options are ignored in fast mode.
+    my %slow_options = (days => $opt_days,
+                        offset => $opt_offset,
+                       );
+    foreach (sort keys %slow_options) {
+        if (defined $slow_options{$_}) {
+            say <<END
+In normal, fast grabbing mode all days are fetched at once, so the
+--$_ option does nothing.  The option is useful only for reducing
+the extra downloads caused by --slow mode.
+END
+              ;
+        }
+    }
+$opt_days = $default_opt_days;
+$opt_offset = 0;
+}
+else {
+    # The options can be used, but we default them if not set.
+    $opt_offset = 0 if not defined $opt_offset;
+    $opt_days = $default_opt_days if not defined $opt_days;
+}
+
+if ( (($opt_offset + $opt_days) > $default_opt_days) or ($opt_offset > $default_opt_days) ) {
+    $opt_days = $default_opt_days - $opt_offset;
+    if ($opt_days < 0) {
+        $opt_offset = 0;
+        $opt_days = $default_opt_days;
+    }
+    say <<END
+The website does not handle more than $default_opt_days days.
+So the grabber is now configure with --offset $opt_offset --days $opt_days
+END
+;
+}
+
+#***************************************************************************
+# Last init before doing real work
+#***************************************************************************
+my %results;
+my $lastdaysoffset = $opt_offset + $opt_days - 1;
+
+# Now detects if we are in configure mode
+my $mode = XMLTV::Mode::mode('grab', # default
+                        $opt_configure => 'configure',
+                        $opt_list_channels => 'list-channels');
+
+# File that stores which channels to download.
+my $config_file = XMLTV::Config_file::filename($opt_config_file, 'tv_grab_fr', $opt_quiet);
+
+
+#***************************************************************************
+# Sub sections
+#***************************************************************************
+sub get_channels( $ );
+sub process_channel_grid_page( $$$$ );
+
+# Get a page using this agent.
+sub get_page( $ ) {
+    my $url = shift;
+    # For Memoize s sake make extra sure of scalar context
+    return scalar get_page_aux($url);
+}
+
+# Curious function to deal with the Get_nice API which does not offer an internal retry mode.
+# Awful, but it seems to work.
+sub get_page_aux {
+    my $url = shift;
+    my $retry = $MAX_RETRY;
+    my $got;
+
+GET:
+    eval { $got = get_nice($url) };
+    goto GET if $@ and $@ =~ /could not fetch/ and --$retry;
+
+    die "Can\'t download $url !!! Check you internet connection." if $retry == 0;
+    return $got;
+}
+
+sub xmlencoding {
+    # encode for xml
+    $_[0] =~ s/</&lt;/g;
+    $_[0] =~ s/>/&gt;/g;
+    $_[0] =~ s/&/\%26/g;
+    return $_[0];
+}
+
+sub tidy {
+    # clean bad characters from HTML
+    for (my $s = shift) {
+        tr/\205//d;
+        tr/\222/''/;
+        s/\234/oe/g;
+        s/&#8722;/ /g;
+
+        # Not strictly a bad character but it does get in the way.
+        s/&nbsp;/ /g;
+        tr/\240/ /;
+        return $_;
+    }
+}
+
+#***************************************************************************
+# Configure mode
+#***************************************************************************
+if ($mode eq 'configure') {
+    XMLTV::Config_file::check_no_overwrite($config_file);
+    open(CONF, ">$config_file") or die "Cannot write to $config_file: $!";
+
+    # Get a list of available channels, according to the grid type
+    my @gts = sort keys %GridType;
+    my @gtnames = map { $GridType{$_} } @gts;
+    my @gtqs = map { "Get channels type : $_?" } @gts;
+    my @gtwant = askManyBooleanQuestions(1, @gtqs);
+
+    my $bar = new Term::ProgressBar('getting channel lists',
+                                    scalar grep { $_ } @gtwant)
+                    if Have_bar && not $opt_quiet;
+    my %channels_for;
+    foreach my $i (0 .. $#gts) {
+        my ($gt, $gtw, $gtname) = ($gts[$i], $gtwant[$i], $gtnames[$i]);
+        next if not $gtw;
+        my %channels = get_channels( $gtname );
+        die 'No channels could be found' if not %channels;
+        $channels_for{$gt} = \%channels;
+        update $bar if Have_bar && not $opt_quiet;
+    }
+
+    my %asked;
+    foreach (@gts) {
+        my $gtw = shift @gtwant;
+        my $gtname = shift @gtnames;
+        if ($gtw) {
+            my %channels = %{$channels_for{$_}};
+            say "Channels for $_";
+
+            # Ask about each channel (unless already asked).
+            my @chs = grep { not $asked{$_}++ } sort keys %channels;
+            my @names = map { $channels{$_}{name} } @chs;
+            my @qs = map { "add channel $_?" } @names;
+            my @want = askManyBooleanQuestions(1, @qs);
+            foreach (@chs) {
+                my $w = shift @want;
+                warn("cannot read input, stopping channel questions"), last if not defined $w;
+                # Print a config line, but comment it out if channel not wanted.
+                print CONF '#' if not $w;
+                print CONF "channel $_ $channels{$_}{name};$channels{$_}{icon}\n";
+            }
+        }
+    }
+    close CONF or warn "cannot close $config_file: $!";
+    say("Finished configuration.");
+    exit();
+}
+
+#***************************************************************************
+# Check mode checking and get configuration file
+#***************************************************************************
+die if $mode ne 'grab' and $mode ne 'list-channels';
+
+my @config_lines;
+if ($mode eq 'grab') {
+    @config_lines = XMLTV::Config_file::read_lines($config_file);
+}
+
+#***************************************************************************
+# Prepare the XMLTV writer object
+#***************************************************************************
+my %w_args;
+if (defined $opt_output) {
+    my $fh = new IO::File(">$opt_output");
+    die "cannot write to $opt_output: $!" if not defined $fh;
+    $w_args{OUTPUT} = $fh;
+}
+
+$w_args{encoding} = 'ISO-8859-1';
+my $writer = new XMLTV::Writer(%w_args);
+$writer->start
+  ({ 'source-info-url'     => 'http://telepoche.guidetele.com/',
+     'source-data-url'     => 'http://telepoche.guidetele.com/',
+     'generator-info-name' => 'XMLTV',
+     'generator-info-url'  => 'http://membled.com/work/apps/xmltv/',
+   });
+
+#***************************************************************************
+# List channels only case
+#***************************************************************************
+if ($opt_list_channels) {
+    # Get a list of available channels, according to the grid type
+    my @gts = sort keys %GridType;
+    my @gtnames = map { $GridType{$_} } @gts;
+    my @gtqs = map { "List channels for grid : $_?" } @gts;
+    my @gtwant = askManyBooleanQuestions(1, @gtqs);
+
+    foreach (@gts) {
+        my $gtw = shift @gtwant;
+        my $gtname = shift @gtnames;
+        if ($gtw) {
+            say  "Now getting grid : $_ \n";
+            my %channels = get_channels( $gtname );
+            die 'no channels could be found' if (scalar(keys(%channels)) == 0);
+            foreach my $ch_did (sort(keys %channels)) {
+                my $ch_xid = "C".$ch_did."telepoche.com";
+                $writer->write_channel({ id => $ch_xid,
+                                         'display-name' => [ [ $channels{$ch_did}{name} ] ],
+                                         'icon' => [{src=>$ROOT_URL.$channels{$ch_did}{icon}}] });
+            }
+       }
+     }
+     $writer->end();
+     exit();
+}
+
+#***************************************************************************
+# Now the real grabbing work
+#***************************************************************************
+die if $mode ne 'grab';
+
+#***************************************************************************
+# Build the working list of channel name/channel id
+#***************************************************************************
+my (%channels, $chicon, $chid, $chname);
+my $line_num = 1;
+foreach (@config_lines) {
+    ++ $line_num;
+    next if not defined;
+
+    # Here we store the Channel name with the ID in the config file, as the XMLTV id = Website ID
+    if (/^channel:?\s+(\S+)\s+([^\#]+);([^\#]+)/) {
+        $chid = $1;
+        $chname = $2;
+        $chicon = $3;
+        $chname =~ s/\s*$//;
+        $channels{$chid} = {'name'=>$chname, 'icon'=>$chicon};
+    } else {
+        warn "$config_file:$line_num: bad line $_\n";
+    }
+}
+
+#***************************************************************************
+# Now process the days by getting the main grids.
+#***************************************************************************
+my @to_get;
+warn "No working channels configured, so no listings\n" if not %channels;
+
+# The website stores channel information by hour area for a whole week !
+foreach $chid (sort keys %channels) {
+    $writer->write_channel({ id => "C".$chid.".telepoche.com", 'display-name' => [[$channels{$chid}{name}]], 'icon' => [{src=>$ROOT_URL.$channels{$chid}{icon}}]});
+    foreach (@offsets) {
+        my $url = $GRID_BY_CHANNEL . "$chid&h=$_";
+        push @to_get, [ $url, $chid, $_ ];
+    }
+}
+my $bar = new Term::ProgressBar('getting listings', scalar @to_get)  if Have_bar && not $opt_quiet;
+foreach (@to_get) {
+    my ($url, $chid, $slot ) = @$_;
+    process_channel_grid_page($writer, $chid, $url, $slot);
+    update $bar if Have_bar && not $opt_quiet;
+}
+$writer->end();
+
+#***************************************************************************
+# Specific functions for grabbing information
+#***************************************************************************
+sub get_channels( $ ) {
+    my $gridid = shift;
+    my %channels;
+    my $url = $GRID_BASE_URL.$gridid;
+
+    my $t = HTML::TreeBuilder->new;
+    $t->parse(tidy(get_page($url)));
+    $t->eof;
+    # print "URL  : " . $url ."\n";
+    foreach my $cellTree ( $t->look_down( "_tag", "td", "width", "50", "height", "62" ) ) {
+        my $chid = $cellTree->look_down( "_tag", "a" )->attr('href');
+        $chid =~ /index_chaine.html\?d=....-..-..\&c=(.*)\&b=/
+          or $chid =~ /index_chaine.html\?c=(.*)\&b=/
+            or die "cannot parse URL with channel id: $chid";
+        $chid = $1;
+        my $imgCell = $cellTree->look_down( "_tag", "img" );
+        $channels{$chid} = {'name' => $imgCell->attr('alt'), 'icon' => $imgCell->attr('src') };
+    }
+    $t->delete(); undef $t;
+    return %channels;
+}
+
+sub process_channel_grid_page( $$$$ ) {
+    my ($writer, $chid, $url, $slot) = @_;
+    my ($genre, $showview, $hours, $starthour, $endhour, $date, $dateindex) = 0;
+    my ($title, $subgenre, $footext, $star_rating, $datecreate) = 0;
+
+    Date_Init("TZ=UTC");
+    my $t = HTML::TreeBuilder->new;
+    my $nbloop = 0;
+    $t->parse(tidy(get_page($url)));
+    $t->eof;
+    # Each day is encapsulated in a table with the following parameters :
+    foreach my $tableTree ($t->look_down('_tag', 'table', 'width', '532', 'name', "chn_$chid") ) {
+        # Then we have the current date
+        if ( my $cellTree = $tableTree->look_down('_tag', 'span', 'class' => 'sTxt') ) {
+            if (my $dateTree = $cellTree->look_down('_tag', 'b') ) {
+                my ($day, $month) = split (/\//,$dateTree->as_text);
+                $date = ParseDate("$month/$day/".UnixDate(DateCalc("today","+$nbloop days"),"%Y"));
+                $dateindex = UnixDate($date, "%Y%m%d");
+
+                # We need to limit the number of days fetched in slow
+                # mode, but in fast mode no limit is needed since
+                # there is a single fetch for all days.
+                #
+                if ($opt_slow) {
+                    next if Date_Cmp($dateindex, UnixDate(DateCalc("today", "+$opt_offset days"),"%Y%m%d")) < 0;
+                    next if Date_Cmp($dateindex, UnixDate(DateCalc("today", "+$lastdaysoffset days"),"%Y%m%d")) > 0;
+                }
+                $nbloop += 1;
+            } else {
+                die "Malformated content on URL : $url \n";
+            }
+        }
+        # Then the program information
+        foreach my $progTree ($tableTree->look_down('_tag', 'a', 'onmouseout', 'nd()') ) {
+            my $line = $progTree->attr('onmouseover');
+            $line =~ (!m/drc\(([^""]+)\)/);
+            $line =~ m/\'(.*)\',\'(.*)\'/;
+            $title = $2;
+            my $mydata = $1;
+            next if ( $title eq 'Fin des programmes');
+            ($hours, $genre, $showview) = split (/<br>/, $mydata);
+            next if ( !$hours );
+            # Process the title, sometimes a showview field is shown
+            $title =~ s/^\d{7} //;
+            $title =~ s/\\//g;
+            if ($title =~ s/\s*([*]+)\s*$//) {
+                my $n = length $1;
+                if (0 < $n and $n <= $MAX_STARS) {
+                    $star_rating = $n;
+                } elsif ($MAX_STARS < $n) {
+                    warn "too many stars ($n), expected at most $MAX_STARS\n";
+                } else { die }
+            }
+            die if $title =~ /[*]$/;
+
+            my ($language, $subtitles_language);
+            for ($title) {
+                s/\s+$//;
+                if (s/\s+\(VO\)$//) {
+                    # Version originale - language is unknown but not
+                    # French.  There is no way to represent this in
+                    # the DTD.
+                    #
+                }
+                elsif (s/\s+\(VO sous-titr.e\)$//) {
+                    # Language unknown, but we know it has French
+                    # subtitles.
+                    #
+                    $subtitles_language = 'fr';
+                }
+                elsif (s/\s+\(VF\)$//) {
+                    # Version francaise.  The title may or may not be
+                    # translated.
+                    #
+                    $language = 'fr';
+                }
+            }
+
+            # Process hours, there are like HHhMM
+            ($starthour, $endhour)  = split("-", $hours);
+            $starthour =~ s/h//g
+                or die "Cannot detect start hour from website : $starthour \n";
+            $endhour   =~ s/h//g
+                or die "Cannot detect end hour from website : $endhour \n";
+            # Process the start/stop dates
+            my $start = $dateindex.$starthour."00";
+            my $stop  = $dateindex.$endhour."00";
+            # Dummy site : the slot 0-4 of day n is in fact the slot 0-4 for day n+1
+            if ( $slot == 24 ) {
+                my $myslot = substr($starthour, 0, 2);
+                $start = &UnixDate(&DateCalc($start, "+1 day"), "%Y%m%d%H%M%S")
+                    if ($myslot >= 0 && $myslot < 4);
+                $stop  = &UnixDate(&DateCalc($stop, "+1 day"), "%Y%m%d%H%M%S");
+            }
+            # Last check to see if start > stop
+            if ( Date_Cmp($start, $stop) > 0 ) {
+                $stop = &UnixDate(&DateCalc($stop, "+1 day"), "%Y%m%d%H%M%S");
+            }
+            # Now set the proper timezone (WT/ST) according to current date
+            $start = utc_offset( $start, "+0100");
+            $stop  = utc_offset( $stop , "+0100");
+            my %prog = (channel  => "C".$chid.".telepoche.com",
+                        title    => [ [ $title ] ],             # lang unknown
+                        start    => $start,
+                        stop     => $stop
+                        );
+            $prog{'star-rating'} = [ "$star_rating/$MAX_STARS" ]
+              if defined $star_rating;
+            for ($language) { $prog{language} = [ $_ ] if defined }
+            for ($subtitles_language) {
+                $prog{subtitles} = [ { type => 'onscreen',
+                                       language => [ $_ ] } ]
+                  if defined;
+            }
+            # Sometimes the genre is not set, so replace it by the showview field
+            if (defined $genre and $genre =~ m/Showview : /) {
+                $showview = $genre;
+                undef $genre;
+            }
+            # Process the genre, subgenre and date if defined
+            if  (defined $genre ) {
+                ($genre, $datecreate) = split("-", $genre);
+                ($genre, $subgenre)   = split(",", $genre);
+                for ($genre) { s/^\s+//; s/\s+$// }
+                if (defined $subgenre) {
+                    for ($subgenre) { s/^\s+//; s/\s+$// }
+                    $prog{category} = [ [ xmlencoding($genre), $LANG ], [ xmlencoding($subgenre), $LANG ] ];
+                } else {
+                    $prog{category} = [ [ xmlencoding($genre), $LANG ] ];
+                }
+                if (defined $datecreate) {
+                    for ($datecreate) { s/^\s+//; s/\s+$// }
+                    $prog{date} = $datecreate ;
+                }
+             }
+            # Process the showview field
+            if ( defined $showview ) {
+                $showview =~ s/Showview : //;
+                for ($showview) { s/^\s+//; s/\s+$// }
+                $prog{showview} = $showview;
+            }
+            my ($idesc, $tdesc, $imgdesc);
+            # Now get program description if the longlisting option is set
+            if ( $opt_slow && $progTree->attr('class') eq 'fic' ) {
+                my $id = $progTree->attr('href');
+                my @desc;
+                $id =~ m/javascript\:of\((\d+)\)/
+                    or die "expected 'javascript' href, got: $id";
+                $id = $1;
+                my $tfic = HTML::TreeBuilder->new;
+                $tfic->parse(tidy(get_page($SHEET_URL . $id)));
+                $tfic->eof;
+                my ($resume, $histoire, $avis);
+                if ( $tdesc = $tfic->look_down('_tag', 'td', 'width', '396', 'class', 'txt') ) {
+                    foreach my $cdesc ($tdesc->look_down('_tag', 'p', 'class', 'txt') ) {
+                        $cdesc->delete_ignorable_whitespace();
+                        my $desc = $cdesc->as_text;
+                        chop($desc);
+                        if ( $desc =~ s/RESUME//g ) {
+                            warn "RESUME seen twice\n" if defined $resume;
+                            $resume = $desc;
+                        }
+                        if ( $desc =~ s/HISTOIRE//g ) {
+                            warn "HISTOIRE seen twice\n" if defined $histoire;
+                            $histoire = $desc;
+                        }
+                        if ( $desc =~ s/AVIS//g ) {
+                            warn "AVIS seen twice\n" if defined $avis;
+                            $avis = $desc;
+                        }
+                    }
+                }
+
+                # RESUME is main definition, HISTOIRE shorter.
+                foreach ($resume, $histoire) {
+                    push @{$prog{desc}}, [ $_, $LANG ] if defined;
+                }
+
+                # Add AVIS to the main description, or make a new desc
+                # for it if there are none.
+                #
+                if (defined $avis) {
+                    if ($prog{desc}) {
+                        $prog{desc}->[0]->[0] .= $avis;
+                    }
+                    else {
+                        push @{$prog{desc}}, [ $avis, $LANG ];
+                 }
+                }
+
+                if ($idesc = $tfic->look_down('_tag', 'table',  'width', '190', 'height', '100%') ) {
+                    if ($tdesc = $idesc->look_down('_tag', 'td', 'valign', 'top', 'align', 'center' ) ) {
+                        if ($imgdesc = $tdesc->look_down('_tag', 'img') ) {
+                            $prog{icon} = [ {'src' => $ROOT_URL.$imgdesc->attr('src') } ];
+                        }
+                    }
+                }
+            }
+            if ( !$results{$prog{start}.$chid} ) {
+                $results{$prog{start}.$chid} = "1";
+                $writer->write_programme(\%prog);
+            }
+        }
+    }
+    $t->delete(); undef $t;
+}
