@@ -99,7 +99,7 @@ if ($cmd eq 'tv_grab_uk_rt'
     	    {
 	        die "directory $dir not found\n If not kept with the executable, specify with --share\n"
 	        }
-        print "adding '--share=$dir'\n";
+        print STDERR "adding '--share=$dir'\n";
         push @ARGV,"--share",$dir;
     }
 }
