@@ -818,12 +818,14 @@ sub MY::processPL {
     }
 
     # And some of the .in generators need the share/ directory passed
-    # as an extra argument.
+    # as an extra argument.  This is the location in the installed
+    # system, not that where files are being copied, so $(PREFIX) but
+    # no $(DESTDIR).
     #
     foreach (@grab_need_share) {
 	$inherited =~
 	  s<(grab/$_/tv_grab_$_.PL grab/$_/tv_grab_$_)\s*$>
-	    <$1 $::extra_constants{INSTALLSHARE}>m
+	    <$1 \$(PREFIX)/share/xmltv>m
 	    or die "no call to $_.PL in: $inherited";
     }
     return $inherited;
