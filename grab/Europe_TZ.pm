@@ -78,11 +78,15 @@ sub parse_eur_date($$) {
 #    t "got timezone $got_tz from date $date";
     if (defined $got_tz) {
 	# Need to work out whether the timezone is one of the two
-	# allowable values.
+	# allowable values (or UTC, that's always okay).
+	#
+	# I don't remember the reason for this check... perhaps it is
+	# just paranoia.
 	#
 	my $got_tz_num = tz_to_num($got_tz);
-	croak "got timezone $got_tz from $date, but it's not $winter_tz or $summer_tz\n"
-	    if $got_tz_num ne $winter_tz and $got_tz_num ne $summer_tz;
+	croak "got timezone $got_tz from $date, but it's not $winter_tz, $summer_tz or UTC\n"
+	    if $got_tz_num ne $winter_tz and $got_tz_num ne $summer_tz
+	      and $got_tz_num ne '+0000';
 
 	# One thing we don't check is that the explicit timezone makes
 	# sense for this time of year.  So you can specify summer
