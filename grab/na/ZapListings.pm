@@ -1079,7 +1079,7 @@ sub getChannelList($$)
 
 	my $result=new XMLTV::ZapListings::ScrapeRow()->parse($row);
 	if ( !$result ) {
-	    warn("ignoing html table row that failed to parse:'$row'");
+	    warn("ignoring html table row that failed to parse:'$row'");
 	    next;
 	}
 
@@ -1423,7 +1423,7 @@ sub scrapehtml($$$)
 	# run it through our row scaper that separates out the html
 	my $result=new XMLTV::ZapListings::ScrapeRow()->parse($row);
 	if ( !$result ) {
-	    warn("ignoing html table row that failed to parse:'$row'");
+	    warn("ignoring html table row that failed to parse:'$row'");
 	    next;
 	}
 
