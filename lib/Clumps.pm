@@ -181,7 +181,8 @@ sub clump_relation( $ ) {
 sub fix_clumps( $$$ ) {
     die 'usage: fix_clumps(old programme, listref of replacements, clump relation)' if @_ != 3;
     my ($orig, $new, $rel) = @_;
-    return if not defined $orig->{clumpidx}; # optimize common case
+    # Optimize common case.
+    return if not defined $orig->{clumpidx} or $orig->{clumpidx} eq '0/1';
     die if ref($rel) ne 'HASH';
     die if ref($new) ne 'ARRAY';
     use vars '@new'; local *new = $new;
@@ -210,6 +211,10 @@ sub fix_clumps( $$$ ) {
     }
 
     my @relatives = @{relatives($rel, $orig)};
+    if (not @relatives) {
+	warn "programme has clumpidx of $orig->{clumpidx}, but cannot find others in same clump\n";
+	return;
+    }
     check_same_channel(\@relatives);
     @relatives = sort by_date @relatives;
     t 'relatives of orig (sorted): ' . d \@relatives;
@@ -222,8 +227,7 @@ sub fix_clumps( $$$ ) {
 	nuke_from_rel($rel, $orig);
 
 	if (@relatives == 0) {
-	    # Strange... why is this running at all?
-	    warn;
+	    die;
 	}
 	elsif (@relatives == 1) {
 	    delete $relatives[0]->{clumpidx};
