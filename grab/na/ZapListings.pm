@@ -945,14 +945,16 @@ sub getChannelList($$)
     my $res=&doRequest($self->{ua}, $req, $self->{Debug});
     warn "zap2it gave us a server error, but let's go for it anyway\n" if $res->code eq '500' and !$got500error++;
     if ( !(   $res->is_success || $res->code eq '500') || $res->content()=~m/your session has timed out/i ) {
-	# again.
+	# again, but manditory sleep(5) between retries
+	sleep(5);
 	$res=&doRequest($self->{ua}, $req, $self->{Debug});
 
 	# looks like some requests require two identical calls since
 	# the zap2it server gives us a cookie that works with the second
 	# attempt after the first fails
 	if ( !$res->is_success || $res->content()=~m/your session has timed out/i ) {
-	    # again.
+	    # again, but manditory sleep(5) between retries
+	    sleep(5);
 	    $res=&doRequest($self->{ua}, $req, $self->{Debug});
 	}
     }
@@ -990,14 +992,16 @@ sub getChannelList($$)
 
     warn "zap2it gave us a server error, but let's go for it anyway\n" if $res->code eq '500' and !$got500error++;
     if ( !($res->is_success || $res->code eq '500') || $res->content()=~m/your session has timed out/i ) {
-	# again.
+	# again, but manditory sleep(5) between retries
+	sleep(5);
 	$res=&doRequest($self->{ua}, $req, $self->{Debug});
 
 	# looks like some requests require two identical calls since
 	# the zap2it server gives us a cookie that works with the second
 	# attempt after the first fails
 	if ( !$res->is_success || $res->content()=~m/your session has timed out/i ) {
-	    # again.
+	    # again, but manditory sleep(5) between retries
+	    sleep(5);
 	    $res=&doRequest($self->{ua}, $req, $self->{Debug});
 	}
     }
@@ -2120,12 +2124,13 @@ sub readSchedule($$$$$)
 	# attempt after the first fails
     warn "zap2it gave us a server error, but let's go for it anyway\n" if $res->code eq '500' and !$got500error++;
     if ( !($res->is_success || $res->code eq '500') || $res->content()=~m/your session has timed out/i ) {
-	    # again.
+	    # again, but manditory sleep(5) between retries
+	    sleep(5);
 	    $res=&doRequest($self->{ua}, $req, $self->{Debug});
 	}
 
 	warn "zap2it gave us a server error, but let's go for it anyway\n" if $res->code eq '500' and !$got500error++;
-    if ( !($res->is_success || $res->code eq '500') ) {
+	if ( !($res->is_success || $res->code eq '500') ) {
 	    warn("zap2it failed to give us a page: ".$res->code().":".
 			     HTTP::Status::status_message($res->code())."\n");
 	    warn("check postal/zip code or www site (maybe they're down)\n");
