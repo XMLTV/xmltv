@@ -13,8 +13,14 @@ use vars '%extra_constants';
      INSTALLPLAINDOC => "\$(PREFIX)/share/doc/xmltv-$::VERSION",
      INST_SHARE      => 'blib/share',
      INSTALLSHARE    => '$(PREFIX)/share/xmltv',
-     # This next line shouldn't be needed, it works around a bug.
-     INSTALLMAN1DIR  => '$(PREFIX)/man/man1',
+
+     # Manual page constants, shouldn't really be needed, but work
+     # around bugs and make sure this stuff is the same across
+     # MakeMaker versions.
+     INSTALLMAN1DIR  => '$(PREFIX)/share/man/man1',
+     INSTALLMAN3DIR  => '$(PREFIX)/share/man/man3',
+     MAN3EXT         => '3',
+
      # Directory to install into when making Windows binary dist.
      WINDOWS_DIST    => "xmltv-$VERSION-win32",
     );
@@ -443,7 +449,7 @@ windows_dist ::
 	            >$(PREFIX)/doc/man/`basename $$i .1`.txt; \
 	done
 	rm -rfv $(INSTALLBIN) $(PREFIX)/lib/ $(INSTALLMAN1DIR) $(INSTALLMAN3DIR)
-	rmdir $(PREFIX)/man
+	rmdir $(PREFIX)/share/man
 	cp -avi xmltv.dtd $(PREFIX)
 	# The following command will not be necessary when the source
 	# tree was checked out on a DOSish system.
