@@ -32,8 +32,8 @@ BEGIN {
 eval { require Memoize };
 unless ($@) {
     foreach (qw(parse_eur_date date_to_eur dst_dates
-		ParseDate UnixDate DateCalc Date_Cmp
-		ParseDateDelta gettz)) {
+		parse_date UnixDate DateCalc Date_Cmp
+		gettz)) {
 	Memoize::memoize($_) or die "cannot memoize $_: $!";
     }
 }
@@ -43,7 +43,7 @@ our @EXPORT = qw(parse_eur_date date_to_eur utc_offset);
 
 # parse_eur_date()
 #
-# Wrapper for ParseDate() that tries to guess what timezone a date is
+# Wrapper for parse_date() that tries to guess what timezone a date is
 # in.  You must pass in the 'base' timezone as the second argument:
 # this base timezone gives winter time, and summer time is one hour
 # ahead.  So the base will be UTC for Britain, Ireland and Portugal,
@@ -62,7 +62,7 @@ our @EXPORT = qw(parse_eur_date date_to_eur utc_offset);
 #   unparsed date from some country following EU DST conventions
 #   base timezone giving winter time in that country
 #
-# Returns: parsed date, or undef if error
+# Returns: parsed date.  Throws exception if error.
 #
 sub parse_eur_date($$) {
 #    local $Log::TraceMessages::On = 1;
@@ -70,7 +70,6 @@ sub parse_eur_date($$) {
     croak 'usage: parse_eur_date(unparsed date, base timezone)'
       if @_ != 2 or not defined $date or not defined $base;
     my $winter_tz = tz_to_num($base);
-    croak "bad timezone $base" if not defined $winter_tz;
     my $summer_tz = sprintf('%+05d', $winter_tz + 100); # 'one hour'
 
     my $got_tz = gettz($date);
@@ -80,10 +79,8 @@ sub parse_eur_date($$) {
 	# allowable values.
 	#
 	my $got_tz_num = tz_to_num($got_tz);
-	return undef if not defined $got_tz_num;
-	if ($got_tz_num ne $winter_tz and $got_tz_num ne $summer_tz) {
-	    return undef;
-	}
+	croak "got timezone $got_tz from $date, but it's not $winter_tz or $summer_tz\n"
+	    if $got_tz_num ne $winter_tz and $got_tz_num ne $summer_tz;
 
 	# One thing we don't check is that the explicit timezone makes
 	# sense for this time of year.  So you can specify summer
@@ -91,12 +88,11 @@ sub parse_eur_date($$) {
 	#
 
 	# OK, the timezone is there and it looks sane, continue.
-	eval { return parse_date($date) }; return undef;
+	return parse_date($date);
     }
 
     t 'no timezone present, we need to guess';
-    my $dp;
-    eval { $dp = parse_date($date) }; return undef if $@;
+    my $dp = parse_date($date);
     t "parsed date string $date into: " . d $dp;
 
     # Start and end of summer time in that year, in UTC
@@ -128,10 +124,7 @@ sub parse_eur_date($$) {
 	$summer = 0;
     }
     elsif (Date_Cmp($dp, $start_dst_skipto) < 0) {
-	# Date is impossible (time goes from from $start_dst UTC to
-	# $start_dst_skipto DST).
-	#
-	return undef;
+	croak "date is impossible - time goes from $start_dst UTC to $start_dst_skipto DST";
     }
     elsif (Date_Cmp($dp, $end_dst) < 0) {
 	# During summer time.
@@ -166,7 +159,7 @@ sub parse_eur_date($$) {
 # on when during the year it is.
 #
 # Parameters:
-#   date in UTC (from ParseDate())
+#   date in UTC (from parse_date())
 #   base timezone (winter time)
 #
 # Returns ref to list of
@@ -198,7 +191,6 @@ sub date_to_eur( $$ ) {
     elsif (Date_Cmp($d, $end_dst) < 0) {
 	# During summer time.
 	my $base_tz_num = tz_to_num($base_tz);
-	croak "bad timezone $base_tz" if not defined $base_tz_num;
 	$use_tz = sprintf('%+05d', $base_tz_num + 100); # one hour
     }
     else {
@@ -211,7 +203,7 @@ sub date_to_eur( $$ ) {
 
 # utc_offset()
 #
-# given a date/time string in a ParseDate compatible format
+# given a date/time string in a parse_date() compatible format
 # (preferably YYYYMMDDhhmmss) and a "base" timezone (eg "CET"), return
 # this time string with UTC offset appended. The "base" timezone
 # should be the non-DST timezone for the country ("winter time"). This

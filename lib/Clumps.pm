@@ -26,6 +26,7 @@
 #
 
 package XMLTV::Clumps;
+use XMLTV::Date;
 use Date::Manip; # no Date_Init(), that can be done by the app
 use Tie::RefHash;
 
@@ -121,13 +122,11 @@ sub relatives( $$ ) {
 }
 
 
-# Private.  Wrappers for Date::Manip.
+# Private.  Wrappers for Date::Manip and XMLTV::Date;
 sub pd( $ ) {
     for ($_[0]) {
 	return undef if not defined;
-	my $r = ParseDate($_);
-	die "bad date $_" if not defined $r;
-	return $r;
+	return parse_date($_);
     }
 }
 

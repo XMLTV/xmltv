@@ -46,26 +46,28 @@ sub parse_date( $ ) {
     # Assume any string of 4 digits means the year.
     if ($raw =~ /\d{4}/) {
 	$parsed = ParseDate($raw);
-	croak "cannot parse date '$raw'" if not length $parsed;
+	croak "cannot parse date '$raw'" if not $parsed;
 	return $parsed;
     }
 
     # Year not specified, see which fits best.
     if (not defined $now) {
 	$now = ParseDate('now');
-	die if not length $now;
+	die if not $now;
 	$this_year = UnixDate($now, '%Y');
 	die if $this_year !~ /^\d{4}$/;
     }
-    my @poss = grep length, map { ParseDate("$raw $_") }
-      ($this_year - 1 .. $this_year + 1);
+    my @poss;
+    foreach (map { ParseDate("$raw $_") } ($this_year - 1 .. $this_year + 1)) {
+	push @poss, $_ if $_;
+    }
 
     if (not @poss) {
 	# Well, tacking on a year didn't work, perhaps we'll have to
 	# just parse the string as supplied.
 	#
 	$parsed = ParseDate($raw);
-	croak "cannot parse date '$raw'" if not length $parsed;
+	croak "cannot parse date '$raw'" if not $parsed;
 	return $parsed;
     }
 	

@@ -6,6 +6,7 @@
 package XMLTV::TZ;
 use Carp;
 use Date::Manip; # no Date_Init(), that can be done by the app
+use XMLTV::Date;
 # Won't Memoize, you can do that yourself.
 use base 'Exporter'; our @EXPORT_OK;
 @EXPORT_OK = qw(gettz ParseDate_PreservingTZ tz_to_num parse_local_date);
@@ -53,7 +54,8 @@ sub ParseDate_PreservingTZ($) {
     croak 'usage: ParseDate_PreservingTZ(unparsed date string)'
       if @_ != 1;
     my $u = shift;
-    my $p = ParseDate($u); return undef if not defined $p;
+    my $p = ParseDate($u);
+    die "cannot parse $u" if not $p;
     my $tz = gettz($u) || 'UTC';
 #    print STDERR "date $u parsed to $p (timezone read as $tz)\n";
     $p = Date_ConvTZ($p, undef, $tz);
@@ -67,10 +69,7 @@ sub ParseDate_PreservingTZ($) {
 # Turn a timezone string into a numeric form.  For example turns 'CET'
 # into '+0100'.  If the timezone is already numeric it's unchanged.
 #
-# Returns undef if the timezone is not recognized.  (OK, throwing an
-# exception would probably make more sense, but Date::Manip has its
-# peculiar interface style where you have to manually check the result
-# of every call and we might as well fit into that.)
+# Throws an exception if the timezone is not recognized.
 #
 sub tz_to_num( $ ) {
     my $tz = shift;
@@ -86,9 +85,9 @@ sub tz_to_num( $ ) {
     # then compare against the same date with UTC.
     #
     my $date_str = '2000-01-01 00:00:00'; # arbitrary
-    my $base = ParseDate("$date_str UTC"); die if not defined $base;
+    my $base = parse_date("$date_str UTC");
     t "parsed '$date_str UTC' as $base";
-    my $d = ParseDate("$date_str $tz"); return undef if not defined $d;
+    my $d = parse_date("$date_str $tz");
     t "parsed '$date_str $tz' as $base";
     my $err;
     my $delta = DateCalc($d, $base, \$err);
@@ -125,7 +124,7 @@ sub tz_to_num( $ ) {
 # NB, use this function _before_ changing the default timezone to UTC,
 # if you want to parse some dates in the user's local timezone!
 #
-# Like ParseDate(), returns undef on error.
+# Throws an exception on error.
 #
 sub parse_local_date( $ ) {
     my $d = shift;
@@ -133,7 +132,7 @@ sub parse_local_date( $ ) {
     t 'parse_local_date() parsing: ' . d $d;
     my $pd = ParseDate($d);
     t 'ParseDate() returned: ' . d $pd;
-    return undef if not defined $pd;
+    die "cannot parse date $d" if not $pd;
     my $r = Date_ConvTZ($pd, Date_TimeZone(), 'UTC');
     t 'converted into UTC: ' . d $r;
     return $r;

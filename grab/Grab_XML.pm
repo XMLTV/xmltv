@@ -7,6 +7,7 @@ use XMLTV::Usage;
 use XMLTV::Memoize;
 use XMLTV::TZ qw(parse_local_date);
 use XMLTV::Get_nice qw();
+use XMLTV::Date;
 
 # Use Log::TraceMessages if installed.
 BEGIN {
@@ -101,7 +102,7 @@ Bump a YYYYMMDD date by one.  You probably shouldnE<39>t override this.
 sub nextday( $$ ) {
     my $pkg = shift;
     my $d = shift; $d =~ /^\d{8}$/ or die;
-    my $p = ParseDate($d); die if not defined $p;
+    my $p = parse_date($d);
     my $n = DateCalc($p, '+ 1 day'); die if not defined $n;
     return UnixDate($n, '%Q');
 }
