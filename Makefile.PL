@@ -735,7 +735,12 @@ sub MY::installbin {
 	my $ch_pkgs_dir= 'grab/uk/channel_pkgs';
 	my $wanted = sub {
 	    return if -d;
-	    return if $File::Find::name =~ m!/CVS/!; # handy in working copy
+
+	    # Ignore files that may be lying around in a CVS working
+	    # copy but cannot be part of the xmltv package.
+	    #
+	    return if /^\#/ || /~$/ || $File::Find::name =~ m!/CVS/!;
+
 	    die if defined $share_files{$File::Find::name};
 	    (my $inst = $File::Find::name) =~ s!^grab/uk/!tv_grab_uk/! or die;
 	    $share_files{$File::Find::name} = $inst;
