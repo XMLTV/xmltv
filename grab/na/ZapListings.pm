@@ -899,6 +899,18 @@ sub getProviderList($)
     return(@{$self->{ProviderList}->{$self->{GeoCode}}});
 }
 
+sub index_bothcases($$)
+{
+    my ($str, $substr) = @_;
+    my $r;
+    foreach (index($str, lc $substr), index($str, uc $substr)) {
+	next if $_ == -1;
+	$r = $_ if not defined $r or $_ < $r;
+    }
+    return -1 if not defined $r;
+    return $r;
+}
+
 # now allows you to get a list of avail of channels for
 # any of the valid provider ids for the give postal/zipcode
 sub getChannelList($$)
@@ -1030,14 +1042,32 @@ sub getChannelList($$)
 
     my $rowNumber=0;
     my $html=$content;
-    $html=~s/<TR/<tr/og;
-    $html=~s/<\/TR/<\/tr/og;
 
-    for my $row (split(/<tr/, $html)) {
-	# nuke everything leading up to first >
-	# which amounts to html attributes of <tr used in split
-	$row=~s/^[^>]*>//so;
-	$row=~s/<\/tr>.*//so;
+    # Avoid using regular expressions to avoid triggering segfault in
+    # Perl.  Though it's not yet proven, IMHO, that perl's regexp
+    # engine is the code at fault.
+    #
+    my @rows;
+    my @indexes = (0);
+    print STDERR "splitting at <tr\n";
+    my $left = $html;
+    my $pos = 0;
+    while ((my $idx = index($left, '<tr')) != -1) {
+	push @indexes, $idx + $pos;
+	$left = substr($left, $idx + 3);
+	$pos += $idx + 3;
+    }
+
+    foreach (0 .. $#indexes - 1) {
+	my ($this, $next) = @indexes[$_, $_ + 1];
+	push @rows, substr($html, $this, $next - $this);
+    }
+
+    foreach my $row (@rows) {
+ 	# nuke everything leading up to first >
+ 	# which amounts to html attributes of <tr used in split
+	$row = substr($row, index($row, '>'));
+	$row = substr($row, 0, index($row, '</tr>'));
 
 	$rowNumber++;
 
