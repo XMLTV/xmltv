@@ -43,7 +43,7 @@ BEGIN {
 # memoization was wanted.
 #
 sub check_argv( @ ) {
-    local $Log::TraceMessages::On = 1;
+#    local $Log::TraceMessages::On = 1;
     my $yes = 0;
     my $filename;
     my @new_argv;
