@@ -116,6 +116,11 @@ BEGIN {
     }
 }
 
+# Initialize cookie_jar
+use LWP::Simple qw($ua);
+use HTTP::Cookies;
+my $cookies = HTTP::Cookies->new;
+$ua->cookie_jar($cookies);
 
 # Whether zero-length programmes should be included in the output.
 my $WRITE_ZERO_LENGTH = 0;
@@ -170,7 +175,7 @@ GetOptions('days=i'        => \$opt_days,
 	   'help'          => \$opt_help,
 	   'configure'     => \$opt_configure,
 	   'config-file=s' => \$opt_config_file,
-       'gui:s'         => \$opt_gui,
+	   'gui:s'         => \$opt_gui,
 	   'output=s'      => \$opt_output,
 	   'quiet'         => \$opt_quiet,
 	   'list-channels' => \$opt_list_channels,
@@ -203,18 +208,23 @@ if ($mode eq 'configure') {
     $bar->finish() if not $opt_quiet;
     
     # Ask about tv2.dk id.
-    my $res = ask( "\nTo be able to get some extra features from tv2.dk, the site needs a userid.
-Create an account on login.tv2.dk and find your cookie file.
-cat <cookie file> | grep tv2login | sed 's/^.*id%3D\\([0-9]*\\)%.*\$/\\1/g'
-Currently the extra features ars the category tag, which require you
+	my $username = ask( "\nTo be able to get some extra features from tv2.dk, the site needs a username and password.
+Currently the extra features are the category tag, which require you
 to go to http://tv.tv2.dk/indstillinger/ and move all icons under
 'Programoversigt' to the list of shown icons.
 
-Enter either your tv2.dk loginid or a blank line :");
-    
-    if ( $res =~ /[0-9]{1,}/ ) {
-       print CONF "userid $res\n"
-    }
+Enter either your tv2.dk username or a blank line :");
+	while(length($username)!=0) {
+		my $password = ask_password("Enter your tv2.dk password:");
+		$userid = get_tv2id($username,$password);
+		if($userid == -1) {
+			$username = ask("Wrong password.
+Enter either your tv2.dk username or a blank line :");
+		} else {
+			print CONF "userid $userid\n";
+			$username = "";
+		}
+	}
 
     # Ask about each channel.
     my @chs = sort keys %channels;
@@ -278,7 +288,9 @@ if ($opt_list_channels) {
 	my $ch_name = $channels{$ch_did};
 	my $ch_xid = "$ch_did.tv.tv2.dk";
 	$writer->write_channel({ id => $ch_xid,
-				 'display-name' => [ [ $ch_name ] ] });
+				 'display-name' => [ [ $ch_name ] ],
+				 'icon' => [{'src' => get_icon($ch_did)}]
+				});
     }
     $bar->finish() if not $opt_quiet;
     $writer->end();
@@ -322,11 +334,21 @@ my @to_get;
 
 # the order in which we fetch the channels matters
 my $today = UnixDate($now, '%Y-%m-%d'); die if not defined $today;
+
+# It looks like 5:00 is midnight at tv2.dk..
+# This means we have to be extra carefull at 0:00 and 5:00
+# Give a warning 30 min before and after.. Just in case.
+if( (UnixDate(DateCalc($now,'+30min'),'%H') == 5) || (UnixDate(DateCalc($now,'+30min'),'%H') == 0) ) {
+	warn 'It is not recomended to run this script at 23:30-00:30 and 4:30-5:30';
+}
+
 foreach $ch_did (@channels) {
     $ch_name = $channels{$ch_did};
     my $ch_xid = "$ch_did.tv.tv2.dk";
     $writer->write_channel({ id => $ch_xid,
-			     'display-name' => [ [ $ch_name ] ] });
+			     'display-name' => [ [ $ch_name ] ],
+				 'icon' => [{'src' => get_icon($ch_did)}]
+				 });
     for (my $i = $opt_offset;$i<($opt_offset + $opt_days);$i++) {
 	# Request day when constructing URL since it is represented as
 	# an integere offset from today. Still pass in the computed
@@ -336,13 +358,6 @@ foreach $ch_did (@channels) {
 	push @to_get, [ $i, $day, $ch_xid, $ch_did ];
     }
 }
-
-# Initialize cookie_jar
-use LWP::Simple qw($ua);
-use HTTP::Cookies;
-my $cookies = HTTP::Cookies->new;
-
-$ua->cookie_jar($cookies);
 
 my %warned_ch_name; # suppress duplicate warnings
 
@@ -375,14 +390,20 @@ sub process_listings_page ( $$$$$ ){
     my ($writer, $ch_xmltv_id, $tv2date, $tv2chan, $day_obj) = @_;
     my $next_day = 0;
     my $day = UnixDate($day_obj, '%Q');
+	my $dayOffset = 0;
     t "getting channel $ch_xmltv_id, date $day";
+    
+	# If after midnight and before 5, we are off by a day.
+	if( UnixDate($now,'%H') < 5 ) {
+		$dayOffset = 1;
+	}
 
     # Setting cookies
     if(defined $userid) {
 	$cookies->set_cookie(0,'cookTV2[intPingUserID]',$userid,'/','.tv2.dk',80,1,0,9999999,0);
     }
     $cookies->set_cookie(0,'cookTV2[KanalID]',$tv2chan,'/','.tv2.dk',80,1,0,9999999,0);
-    $cookies->set_cookie(0,'cookTV2[Dato]',$tv2date,'/','.tv2.dk',80,1,0,9999999,0);
+	$cookies->set_cookie(0,'cookTV2[Dato]',$tv2date+$dayOffset,'/','.tv2.dk',80,1,0,9999999,0);
     $cookies->set_cookie(0,'cookTV2[Periode]','1','/','.tv2.dk',80,1,0,9999999,0);
     $cookies->set_cookie(0,'cookTV2[Kategori]','0','/','.tv2.dk',80,1,0,9999999,0);
     # For some reason this line only works, if you have a valid userid.
@@ -393,10 +414,11 @@ sub process_listings_page ( $$$$$ ){
     #
     my $t = new HTML::TreeBuilder();
     $t->parse(tidy(get_nice("http://tv.tv2.dk/tv/listning.php")));
-
+	
     $cookies->clear;
     
-    my @elems = $t->look_down(class => 'udsendelse');
+    my @elems = $t->look_down(class => 'udsendelse-vises-nu');
+    push @elems, $t->look_down(class => 'udsendelse');
     if (not @elems) {
 	warn "did not see any 'udsendelse' elements, skipping page";
 	return;
@@ -694,4 +716,31 @@ sub nextday {
     my $p = parse_date($d);
     my $n = DateCalc($p, '+ 1 day');
     return UnixDate($n, '%Q');
+}
+
+# This will emulate a browser login request, and filter out the login id.
+sub get_tv2id {
+	my ($username,$password) = @_;
+	my @form = ["returnURL" => "http://tv.tv2.dk/",
+			"username" => $username,
+			"password" => $password,
+			"LOGIN" => "True",
+			"autologon" => "On"];
+	$ua->post("http://login.tv2.dk/login.php",@form);
+	my @lines = split(/\n/,$cookies->as_string);
+	while($_ = shift @lines) {
+		s/^Set-Cookie3: ([^;]*);.*$/$1/;
+		if(/^tv2login=/) {
+			s/^.*id%.{0,2}3D([0-9]*).*$/$1/;
+			return $_;
+		}
+	}
+	return -1;
+}
+
+# Icon URL for a given channel.
+sub get_icon {
+	my ($url) = @_;
+	$url =~s/^0*//;
+	return "http://tv.tv2.dk/images/logo/".$url.".gif";
 }
