@@ -875,10 +875,10 @@ sub initGeoCodeAndGetProvidersList($$)
 
     while ( $content=~s/<SELECT(.*)(?=<\/SELECT>)//ios ) {
         my $options=$1;
-        while ( $options=~s/<OPTION value="(\d+)">([^<]+)<\/OPTION>//ios ) {
+        while ( $options=~s/<OPTION value="(\d+)"\s*>([^<]+)<\/OPTION>//ios ) {
 	    my $p;
 	    $p->{id}=$1;
-	    $p->{description}=$2;
+	    $p->{description}=massageText($2);
             #main::debugMessage("provider $1 ($2)\n";
 	    push(@{$self->{ProviderList}->{$self->{GeoCode}}}, $p);
         }
