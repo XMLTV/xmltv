@@ -319,129 +319,7 @@ if (not $opt_slow) {
 	die if not defined $day;
 	my $url = 'http://www.tvgids.nl/zoekprogramma.php'
 	  . "?station=$ch_tvgids_id&interval=$day_offset";
-	local $SIG{__WARN__} = sub {
-	    warn "$url: $_[0]";
-	};
-	local $SIG{__DIE__} = sub {
-	    die "$url: $_[0]";
-	};
-	my $t = new HTML::TreeBuilder;
-	$t->parse(get_courteous($url));
-	my %interesting; ++ $interesting{$_} foreach
-	  qw(lijst_zender lijst_tijd details_programma);
-	my @elems = $t->look_down(sub { die if not defined $_[0];
-					my $c = $_[0]->attr('class');
-					return 0 if not defined $c;
-					return $interesting{$c} });
-	if (not @elems) {
-	    warn 'did not find any programmes in page';
-	    next;
-	}
-	my @bits;
-	foreach (@elems) {
-	    my $class = $_->attr('class');
-	    my @cont = $_->content_list();
-	  check_content:
-	    if (not @cont) {
-		warn "found $class elem without content, ignoring"
-		  unless $class eq 'lijst_zender';
-		next;
-	    }
-	    elsif (@cont == 1) {
-		for ($cont[0]) {
-		    if (ref) {
-			# Unpack this extra layer of element.
-			@cont = $_->content_list();
-			goto check_content;
-		    }
-		    s/^\s+//; s/\s+$//;
-		    push @bits, [ $class, $_ ];
-		}
-	    }
-	    elsif (@cont > 1) {
-		warn "found $class elem with more than one elem inside, ignoring"
-		  unless $class eq 'lijst_zender';
-		next;
-	    }
-	}
-	$t->delete();
-	if (not @bits) {
-	    warn "did not see any content, skipping page";
-	    next;
-	}
-	if ($bits[0]->[0] eq 'lijst_zender') {
-	    my $date_str = $bits[0]->[1];
-	    my $d = ParseDate($date_str);
-	    if (defined $d) {
-		die "date in page $d ($date_str) doesn't match expected $day"
-		  if UnixDate($d, '%Q') ne UnixDate($day, '%Q');
-		shift @bits;
-	    }
-	    # otherwise, leave it for later processing
-	}
-#	use Log::TraceMessages qw(t d);
-#	$Log::TraceMessages::On = 1;
-#	t 'bits: ' . d \@bits;
-	while (@bits >= 3) {
-	    my $ch_bit = shift @bits;
-	    my $ch_class = $ch_bit->[0];
-	    if ($ch_class ne 'lijst_zender') {
-		warn "bit expected to be channel name has class $ch_class not lijst_zender, skipping";
-		next;
-	    }
-	    my $ch = $ch_bit->[1];
-	    
-	    my $times_bit = shift @bits;
-	    my $times_class = $times_bit->[0];
-	    if ($times_class ne 'lijst_tijd') {
-		warn "bit expected to be times has class $times_class not lijst_tijd, skipping";
-		next;
-	    }
-	    my $times = $times_bit->[1];
-	    
-	    my $title_bit = shift @bits;
-	    my $title_class = $title_bit->[0];
-	    if ($title_class ne 'details_programma') {
-		warn "bit expected to be title has class $title_class not details_programma, skipping";
-		next;
-	    }
-	    my $title = $title_bit->[1];
-	    
-	    # Right, got channel name, times, and title.
-	    # FIXME should check channel name (among other things).
-	    unless ($times =~ /^(\d\d):(\d\d)-(\d\d):(\d\d)$/
-		    and 0 <= $1 and $1 < 24 and 0 <= $2 and $2 < 60
-		    and 0 <= $3 and $3 < 24 and 0 <= $4 and $4 < 60) {
-		warn "bad programme times $times, skipping ($ch, $times, $title)";
-		next;
-	    }
-	    my ($start_hh, $start_mm, $stop_hh, $stop_mm) = ($1, $2, $3, $4);
-	    die if not defined $day;
-	    my $start = ParseDate("$day $start_hh:$start_mm");
-	    die if not defined $start;
-	    my $stop = ParseDate("$day $stop_hh:$stop_mm");
-	    die if not defined $stop;
-	    if (Date_Cmp($start, $stop) > 0) {
-		$day = UnixDate(DateCalc($day, '+ 1 dag'), '%Y-%m-%d');
-		$stop = ParseDate("$day $stop_hh:$stop_mm");
-		die if not defined $stop;
-		die unless Date_Cmp($start, $stop) < 0;
-	    }
-	    
-	    $writer->write_programme({ start => UnixDate($start, '%q') . " $TZ",
-				       stop => UnixDate($stop, '%q') . " $TZ",
-				       channel => $ch_xmltv_id,
-				       title => [ [ $title, $LANG ] ] });
-	}
-	foreach (@bits) {
-	    my ($type, $text) = @$_;
-	    if ($type eq 'lijst_zender' and $text eq 'Volgende') {
-		# To be expected.
-	    }
-	    else {
-		warn "discarding leftover $type: $text";
-	    }
-	}
+	do_summary_page($writer, $url, $day, $ch_xmltv_id);
 	update $bar if Have_bar and not $opt_quiet;
     }
 }
@@ -920,6 +798,143 @@ sub get_channels {
     return %channels;
 }
 
+
+# Process a page containing the summary information and write
+# programmes to an XMLTV::Writer.
+#
+# Parameters:
+#   XMLTV::Writer object
+#   URL to fetch
+#   Date::Manip object giving day (at least for the start of the page)
+#   XMLTV id of channel
+#
+sub do_summary_page( $$$$ ) {
+    my ($writer, $url, $day, $ch_xmltv_id) = @_;
+    local $SIG{__WARN__} = sub {
+	warn "$url: $_[0]";
+    };
+    local $SIG{__DIE__} = sub {
+	die "$url: $_[0]";
+    };
+    my $t = new HTML::TreeBuilder;
+    $t->parse(get_courteous($url));
+    my %interesting; ++ $interesting{$_} foreach
+      qw(lijst_zender lijst_tijd details_programma);
+    my @elems = $t->look_down(sub { die if not defined $_[0];
+				    my $c = $_[0]->attr('class');
+				    return 0 if not defined $c;
+				    return $interesting{$c} });
+    if (not @elems) {
+	warn 'did not find any programmes in page';
+	next;
+    }
+    my @bits;
+    foreach (@elems) {
+	my $class = $_->attr('class');
+	my @cont = $_->content_list();
+      check_content:
+	if (not @cont) {
+	    warn "found $class elem without content, ignoring"
+	      unless $class eq 'lijst_zender';
+	    next;
+	}
+	elsif (@cont == 1) {
+	    for ($cont[0]) {
+		if (ref) {
+		    # Unpack this extra layer of element.
+		    @cont = $_->content_list();
+		    goto check_content;
+		}
+		s/^\s+//; s/\s+$//;
+		push @bits, [ $class, $_ ];
+	    }
+	}
+	elsif (@cont > 1) {
+	    warn "found $class elem with more than one elem inside, ignoring"
+	      unless $class eq 'lijst_zender';
+	    next;
+	}
+    }
+    $t->delete();
+    if (not @bits) {
+	warn "did not see any content, skipping page";
+	next;
+    }
+    if ($bits[0]->[0] eq 'lijst_zender') {
+	my $date_str = $bits[0]->[1];
+	my $d = ParseDate($date_str);
+	if (defined $d) {
+	    die "date in page $d ($date_str) doesn't match expected $day"
+	      if UnixDate($d, '%Q') ne UnixDate($day, '%Q');
+	    shift @bits;
+	}
+	# otherwise, leave it for later processing
+    }
+    #	use Log::TraceMessages qw(t d);
+    #	$Log::TraceMessages::On = 1;
+    #	t 'bits: ' . d \@bits;
+    while (@bits >= 3) {
+	my $ch_bit = shift @bits;
+	my $ch_class = $ch_bit->[0];
+	if ($ch_class ne 'lijst_zender') {
+	    warn "bit expected to be channel name has class $ch_class not lijst_zender, skipping";
+	    next;
+	}
+	my $ch = $ch_bit->[1];
+	
+	my $times_bit = shift @bits;
+	my $times_class = $times_bit->[0];
+	if ($times_class ne 'lijst_tijd') {
+	    warn "bit expected to be times has class $times_class not lijst_tijd, skipping";
+	    next;
+	}
+	my $times = $times_bit->[1];
+	
+	my $title_bit = shift @bits;
+	my $title_class = $title_bit->[0];
+	if ($title_class ne 'details_programma') {
+	    warn "bit expected to be title has class $title_class not details_programma, skipping";
+	    next;
+	}
+	my $title = $title_bit->[1];
+	
+	# Right, got channel name, times, and title.
+	# FIXME should check channel name (among other things).
+	unless ($times =~ /^(\d\d):(\d\d)-(\d\d):(\d\d)$/
+		and 0 <= $1 and $1 < 24 and 0 <= $2 and $2 < 60
+		and 0 <= $3 and $3 < 24 and 0 <= $4 and $4 < 60) {
+	    warn "bad programme times $times, skipping ($ch, $times, $title)";
+	    next;
+	}
+	my ($start_hh, $start_mm, $stop_hh, $stop_mm) = ($1, $2, $3, $4);
+	die if not defined $day;
+	my $start = ParseDate("$day $start_hh:$start_mm");
+	die if not defined $start;
+	my $stop = ParseDate("$day $stop_hh:$stop_mm");
+	die if not defined $stop;
+	if (Date_Cmp($start, $stop) > 0) {
+	    $day = UnixDate(DateCalc($day, '+ 1 dag'), '%Y-%m-%d');
+	    $stop = ParseDate("$day $stop_hh:$stop_mm");
+	    die if not defined $stop;
+	    die unless Date_Cmp($start, $stop) < 0;
+	}
+	
+	$writer->write_programme({ start => UnixDate($start, '%q') . " $TZ",
+				   stop => UnixDate($stop, '%q') . " $TZ",
+				   channel => $ch_xmltv_id,
+				   title => [ [ $title, $LANG ] ] });
+    }
+    foreach (@bits) {
+	my ($type, $text) = @$_;
+	if ($type eq 'lijst_zender' and $text eq 'Volgende') {
+	    # To be expected.
+	}
+	else {
+	    warn "discarding leftover $type: $text";
+	}
+    }
+}
+
 sub get_courteous {
     # This is to ensure scalar context, to work around weirdnesses
     # with Memoize (I just can't figure out how SCALAR_CACHE and
@@ -931,18 +946,18 @@ sub get_courteous {
 sub get_courteous_aux {
     my $url = shift;
     my $r = LWP::Simple::get($url);
-
+    
     # At the moment download failures seem rare, so the script dies if
     # any page cannot be fetched.  We could later change this routine
     # to return undef on failure.  But dying here makes sure that a
     # failed page fetch doesn't get stored in XMLTV::Memoize's cache.
     #
     die "could not fetch $url, aborting\n" if not defined $r;
-
+    
     # Be nice to the server.  Technically we don't need to do this
     # after the very last fetch, but sleeping every time is simpler.
     #
     sleep(rand 5);
-
+    
     return $r;
 }
