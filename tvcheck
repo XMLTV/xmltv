@@ -4,7 +4,7 @@
 #
 # tvcheck
 #
-# This script searches a channel guide for shows in a show list and alerts when
+# This script searches a channel GUIDE for shows in a show list and alerts when
 # a listed show is missing from it's time slot, or shows up at other days or times.
 #
 # The show list is a custom XML format.
@@ -20,9 +20,12 @@
 #     See cvs logs entries for module history
 #
 #
-
+use Tk;
+use Tk::TableMatrix;
 use XML::Simple;
 use Date::Manip;
+use Data::Dumper;
+use Getopt::Long;
 use XMLTV;
 use Lingua::Preferred qw(which_lang);
 
@@ -32,88 +35,363 @@ use Lingua::Preferred qw(which_lang);
 select STDERR; $|=1;
 select STDOUT; $|=1;
 @WEEKDAY  = qw (Sun Mon Tue Wed Thu Fri Sat);
+$WEEKDAY  = "SunMonTueWedThuFriSat   ";
 
-$GUIDE_XML= shift || 'guide.xml';
-$SHOW_XML = shift || 'shows.xml';
-$TODAY    = (localtime())[6];
+#    COL_TYPE  1:List 2:Entry 3:checkbox
+@COL       = qw(day channel hhmm len title chanonly dayonly timeonly neartime);
+@COL_TYPE  = qw(1         1    2   2     1       3       3         3        3);
+
+$CONFIGURE= 0;
+$GUIDE_XML= 'guide.xml';
+$SHOW_XML = 'shows.xml';
+$TODAY    = $WEEKDAY[(localtime())[6]];
 
 #
 # Global Vars
 #
-my @guide;     # episode list ( TV Schedule )
-my %g_titles;  # tv schedule by title (title key), value reference to @guide member
-my %g_time;    # tv schedule by channel/time.
+@SHOWS        = (); # raw show data
+$SHOW_TABLE   = ""; # stores pointer to SHOW_TABLE
+@SHOW_DATA    = (); # pointer to raw by SHOW_TABLE row
+%SHOW_DATA    = (); # data for SHOW_TABLE
+%SHOW_WIDTH   = (); # column widths for SHOW_TABLE
 
-my %chan;      # channel list ( channel-id key )
+$SHOW_CHANGED = 0;  # updated if show needs to be saved
+$SHOW_SORT    = 4;  # column to sort SHOW_TABLE
+$SHOW_ROW     = 0;  # last selected row
 
-my @shows;     # list of shows to check
-my %sh_time;   # show list by channel,date+time
+@GUIDE     = ();    # episode list
+%GUIDE     = ();    # episode indexes
 
-my @lang ;     # preferred languages
+@CHAN      = ();    # channel list (sorted)
+%CHAN      = ();    # channel list ( channel-id key )
 
-#
-# Load input files
-#
-print "Loading xml guide info\n";
-my $xml = XMLTV::read_data($GUIDE_XML);
-%chan   = %{$xml->[2] };
-@guide  = @{$xml->[3] };
+@SELECT    = ();    # array of selector widgits
 
-print "Loading xml show info\n";
-$xml = XMLin($SHOW_XML, searchpath => ".", forcearray => 1 );
-@shows = @{$xml->{shows}};
-@lang  = @{$xml->{lang}};
+@LANG         = ();    # preferred languages
+
+$COL_VALUE[$_] = "" foreach (0..$#COL);
 
 #
-# Build an indexes for Episode Data
+# Step 1, Parse Parameters -------------------------------------------------------
 #
-print "Building Episode Indexes\n";
-foreach $ep (@guide)
+# First lets check to see if someone asked for help.
+# this is easier to do here than later.
 {
-    $ep->{displayed} = 0;
-
-#
-# Show by title...
-#
-    foreach (@{$ep->{title}})
+    my $scan=0;
+    if ( ! GetOptions( configure => \$CONFIGURE,
+                       scan      => \$scan,
+                      'shows=s'  => \$SHOW_XML,
+                      'guide=s'  => \$GUIDE_XML))
     {
-        push @{$g_titles{lc($_->[0])}}, $ep;
-    }
+        print " tvcheck v \$revision$\n\n";
+        print " part of the xmltv toolkit ( http://xmltv.sourceforge.net )\n\n";
+        print "usage $0 (--configure|--scan) [--options] \n";
+        print "where --options are:\n";
+        print "   --shows <file>\n";
+        print "     xml files with show info (default shows.xml )\n";
+        print "\n";
+        print "   --guide <file>\n";
+        print "     xml files with guide info (default guide.xml )\n";
+        print "\n";
+        print "   --configure\n";
+        print "     run configuration GUI instead of checking listings\n";
+        print "\n";
+    	exit(1);
+    } # HelpUsage
+
+    die "Please select either --scan, --configure, or --help\n" if ($CONFIGURE+$scan != 1);
+    
+} # get params
+
+load_shows($SHOW_XML);
+load_guide($GUIDE_XML);
 
 #
-# Show by Channel/Date/Time ( used to check show slot )
+# Step 3, is it time to CONFIGURE?  --------------------------------------------------------
 #
-# Lots of possible problems here
-#    XMLTV format allows partial dates.  They don't help us, Either YYYYMMDDHHMM or skip!
-#    We should check time zone, but doing TZ conversion would take a lot of time. For now,
-#        assume guide times are local times.  At least here.
-#    In both of these cases, the episode would still show up as "other episodes" just not a match.
-#    Also Assume one episode starts at a channel/date/hhmm. If not, keep the last.
+if ($CONFIGURE)
+{
 #
-        if ( $ep->{start} =~ /^(\d{8})(\d{4})/ )
-        {
-           $g_time{$ep->{channel}}{$1}{$2} = $ep;
-        }
-} # Building episode indexes
+# create main window!
+#
+
+$TOP = MainWindow->new;
 
 #
-# Convert show list to date/time
+# configure menu bar
+#
+{
+my $menubar = $TOP->Menu(-type => 'menubar');
+$TOP->configure(-menu => $menubar );
+
+my $f = $menubar->cascade(-label => '~File', -tearoff => 0);
+$f->command(-label   => 'Open Guide ...',
+            -command => sub {
+                        	my $file = $TOP->getOpenFile(-filetypes => [["XML Files",".xml"]],
+             	                                         -title => 'Open Guide File' );
+                            load_guide($file) if ($file);
+                            });
+
+$f->command(-label   => 'Open Shows ...',
+            -command => sub {
+                            return if changed_check();
+                        	my $file = $TOP->getOpenFile(-filetypes => [["XML Files",".xml"]],
+                                       -title => 'Open Show File');
+                            load_guide($file) if ($file);
+                            });
+
+$f->command(-label   => 'New Shows',
+            -command => sub {
+                             $SHOW_XML='';
+                             @SHOWS=();
+                             load_show_table();
+                             });
+
+$f->command(-label   => 'Save Shows',
+            -command => \&Save_shows );
+
+$f->command(-label   => 'Save Shows As ...',
+            -command => sub {
+                              my $file = $TOP->getSaveFile( -filetypes => [["XML Files",".xml"]],
+	                                                            -title => 'Save show file');
+                              if ($file) { $SHOW_XML=$file; Save_shows();}
+                            });
+
+my $h = $menubar->cascade(-label => '~Help', -tearoff => 0);
+$h->command(-label   => 'Help',
+            -command => \&help_popup );
+
+$h->command(-label   => 'About',
+            -command => \&help_about );
+
+} # menu bar
+
+#
+# create show table
+#
+$SHOW_TABLE = $TOP->Scrolled('TableMatrix',
+                  -cols => ($#COL+1),
+                  -rows => (@SHOWS ? $#SHOWS+1 : 10 ),
+                  -height   => 10,
+			      -titlerows => 1,
+			      -variable => \%SHOW_DATA,
+			      -roworigin =>  0,  -colorigin  => 0, 
+			      -colstretchmode => 'all',
+			      -selecttype => 'row',
+			      -sparsearray => 1,
+			      -state => 'disabled',
+                  -anchor => 'w',
+                  );
+$SHOW_TABLE->colWidth( %SHOW_WIDTH );
+$SHOW_TABLE->pack(-expand => 1, -fill => 'both');
+$SHOW_TABLE->bind('<1>', sub {
+            my $w   = shift;
+            my $Ev  = $w->XEvent;
+            my $row = $w->index('@'.$Ev->x.",".$Ev->y,"row");
+            my $col = $w->index('@'.$Ev->x.",".$Ev->y,"col");
+            
+            $w->selectionClear('all');
+            if ($row)
+            {
+                $SHOW_ROW=$row;
+                $w->selectionSet("$row,0","$row,".($#COL+1));
+                for $col (0..$#COL)   # load selection pane
+                {
+                    $COL_VALUE[$col] = $SHOW_DATA{"$row,$col"};
+                    if ($COL_TYPE[$col]== 1 ||
+                        $COL_TYPE[$col]== 2 )
+                    {
+                        my $dst = $SELECT[$col]{entry};
+                        $dst -> delete(0,'end');
+                        $dst -> insert(0,$SHOW_DATA{"$row,$col"});
+                    }
+                } 
+            }
+            else
+            {
+                $SHOW_SORT = ($SHOW_SORT == $col ? -$col : $col);
+print "Show sort $SHOW_SORT\n";
+                load_show_table();
+            }
+}); # show table click bind
+
+my $selframe = $TOP->Frame->pack(-side => 'bottom');
+#
+# Control Buttons
+#
+{
+    my $frame=$selframe->Frame()->pack( -side => 'left' );
+    $frame->Button( -text    => "Clear",
+                       -command => sub{
+                                    for $col (0..$#COL)
+                                    {
+                                        $COL_VALUE[$col]="";
+                                        $SELECT[$col]{entry}->delete(0,'end') if $COL_TYPE[$col]==1;
+                                        $SELECT[$col]{entry}->delete(0,'end') if $COL_TYPE[$col]==2;
+                                    }
+                                    load_selection_items();
+                                    }) -> pack(-fill => 'x');
+
+    $frame->Button( -text    => "Add",
+                       -command => sub{
+                                    my $row = $#SHOWS+1;
+                                    for $col (0..$#COL)
+                                    {
+                                        my $val="";
+                                        $val=$SELECT[$col]{entry}->get if $COL_TYPE[$col]==1;
+                                        $val=$SELECT[$col]{entry}->get if $COL_TYPE[$col]==2;
+                                        $val=$COL_VALUE[$col]          if $COL_TYPE[$col]==3;
+                                        $SHOWS[$row]{$COL[$col]}=$val;
+                                    }
+                                    load_show_table();
+                                    $SHOW_CHANGED=1;                                    
+                                    }) -> pack(-fill => 'x');
+    $frame->Button( -text    => "Update",
+                       -command => sub{
+                                    return unless $SHOW_ROW;
+                                    for $col (0..$#COL)
+                                    {
+                                        my $val="";
+                                        $val=$SELECT[$col]{entry}->get if $COL_TYPE[$col]==1;
+                                        $val=$SELECT[$col]{entry}->get if $COL_TYPE[$col]==2;
+                                        $val=$COL_VALUE[$col]          if $COL_TYPE[$col]==3;
+                                        $SHOW_DATA[$SHOW_ROW]{$COL[$col]}=$val;
+                                    }
+                                    $SHOW_CHANGED=1;
+                                    load_show_table();
+                                    }) -> pack(-fill => 'x');
+
+    $frame->Button( -text    => "Delete",
+                       -command => sub{
+                                    return unless $SHOW_ROW;
+                                    $SHOW_DATA[$SHOW_ROW]{title}=undef;
+                                    load_show_table();
+                                    $SHOW_CHANGED=1;
+                                    }) -> pack(-fill => 'x');
+
+    $frame->Button( -text    => "Exit",
+                    -command => sub{
+                                        return if changed_check();
+                                        $TOP -> destroy();
+                                       }) -> pack(-fill => 'x' );
+} # control buttons
+
+#
+# Selector Widgets
+# Type 1 ( listbox )
+#
+foreach $col (0..$#COL)
+{
+    next unless $COL_TYPE[$col] == 1;
+    my $frame =$selframe->Frame()->pack( -side => 'left' );
+    my $label =$frame->Label(-text => $COL[$col])->pack();
+    my $entry =$frame->Entry()->pack();
+    my $list  =$frame->Scrolled('Listbox',
+                         -setgrid    => 1,
+                         -height     =>12,
+                         -selectmode => 'row',
+                         -scrollbars => 'w');
+    $list -> {SubWidget} -> {scrolled} -> privateData('Entry') -> {Entry} = $entry;
+    $list -> pack(qw/-side left -expand yes -fill both/);
+    $list -> bind('<ButtonRelease 1>' => sub  {
+                            my $w = shift;
+                            my $entry = $w-> privateData('Entry') -> {Entry};
+                            $entry -> delete(0,'end');
+                            $entry -> insert(0,$w->get('active'));
+                            load_selection_items();
+                       	},
+          );
+    $SELECT[$col]= { frame => $frame,
+                     label => $label,
+                     entry => $entry,
+                     list  => $list };
+} # type 1 selectors 
+
+#
+# Selector Widgets
+# Type 2 ( entry )
+# Note: Type 2 and Type 3 share a frame 
+#
+my $selframe2 =$selframe->Frame()->pack( -side => 'left' );
+foreach $col (0..$#COL)
+{
+    next unless $COL_TYPE[$col] == 2;
+
+    my $frame = $selframe2;
+    my $label =$frame->Label(-text => $COL[$col])->pack();
+    my $entry =$frame->Entry()->pack();
+    $frame->Label(-text => " ")->pack();
+
+    $SELECT[$col]= { frame => $frame,
+                     label => $label,
+                     entry => $entry,
+                   };
+} # type 2 selectors
+
+#
+# Selector Widgets
+# Type 3 ( checkbox  )
+# Note: Type 2 and Type 3 share a frame 
+#
+foreach $col (0..$#COL)
+{
+    next unless $COL_TYPE[$col] == 3;
+
+    my $frame = $selframe2;
+    my $check = $frame->Checkbutton( -text => $COL[$col],
+                                     -variable => \$COL_VALUE[$col],
+                                   ) -> pack();
+
+    $SELECT[$col]= { frame => $frame,
+                     check => $check,
+                   };
+} # type 3 selectors 
+
+load_selection_items();
+
+#
+# let the games begin!
+#
+print "GUI running\n";
+Tk::MainLoop;
+} # CONFIGURE
+
+#
+# Step 3, do an actual tvcheck --------------------------------------------------------
+#
+else
+{
+
+#
+# Build show_time index
 #
 print "Computing show time index\n";
-foreach $show (@shows)
+my $unique=1;
+foreach $show (@SHOW_DATA)
 {
     my $start;
-    if ($TODAY == $show->{day})
+    
+    if ($show->{day})  # deal with shows without a specific day ( phase 2 only )
     {
-       $start=ParseDate(sprintf("Today at %s:%s",substr($show->{hhmm},0,2),
-                                                 substr($show->{hhmm},2,2)));
-    }
-    else
-    {
-       $start=ParseDate(sprintf("next %s at %s:%s",$WEEKDAY[$show->{day}],
-                                                      substr($show->{hhmm},0,2),
-                                                      substr($show->{hhmm},2,2)));
-    }
+        $show->{day} = $WEEKDAY[$show->{day}] if ($show->{day} =~ /\d/);
+        if ($TODAY eq $show->{day})
+        {
+           $start=ParseDate(sprintf("Today at %s:%s",substr($show->{hhmm},0,2),
+                                                     substr($show->{hhmm},2,2)));
+        }
+        else
+        {
+           $start=ParseDate(sprintf("next %s at %s:%s",$show->{day},
+                                                       substr($show->{hhmm},0,2),
+                                                       substr($show->{hhmm},2,2)));
+        }
+        ($show->{mmdd},$show->{start}) = UnixDate( $start, "%m%d","%Y%m%d");
+     }
+     else
+     {
+        $start="9999".($unique++);
+        $show->{mmdd} = "";
+     }
     
     unless ($start)
     {
@@ -121,68 +399,86 @@ foreach $show (@shows)
         next;
     }
 
-    $show->{mmdd} = UnixDate( $start, "%Y%m%d");
-    $sh_time{$start}{$show->{channel}} = $show;
-} #build sh_time index
+    $show->{channel}="" unless exists $show -> {channel};
+    $SHOW_TIME{$start}{$show->{channel}} = $show;
+} #build SHOW_TIME index
 
 #
 # let the games begin... process shows!
 #
 print "Processing shows\n\n";
-foreach $start (sort keys %sh_time)
+foreach $start (sort keys %SHOW_TIME)
 {
-    foreach $chan (sort keys %{$sh_time{$start}})
+    foreach $chan (sort keys %{$SHOW_TIME{$start}})
     {
-        my $show = $sh_time{$start}{$chan};
-        
+        my $show = $SHOW_TIME{$start}{$chan};
+
 #
 # See what episode is on at that time
 #
+    if ( $show -> {mmdd} ) # skip this phase for certain shows
+    {
         my $ep = find_episode($show);
         if (!defined $ep)
         {
-           printf "%-60s **** NO GUIDE DATA ****\n",sh_summary($show);
-           next;
+           printf "%-60s **** NO GUIDE DATA ****\n",sh_summary($show).opt_summary($show);
         }
-        elsif ( lc(get_text($ep->{title})) ne lc($show->{title} ))
+        elsif ( get_text($ep->{title}) ne $show->{title} )
         {
-           printf "%-50s **** wrong show in slot **** \n",sh_summary($show);
+           printf "%-50s **** wrong show in slot **** \n",sh_summary($show).opt_summary($show);
            print " "x10,ep_summary($ep),"\n";
         }
         else
         {
             $ep->{displayed}=$show;
-            print ep_summary($ep),"\n";
+            print ep_summary($ep),opt_summary($show),"\n";
+
+            if ( $show->{hhmm} ne $ep->{hhmm} )
+            {
+                print "     ***** Start Time Alert ***** Expected $show->{hhmm} got $ep->{hhmm}\n";
+            }
             if ( !$show->{anylen} && $show->{len} ne $ep->{len} )
             {
                 print "     ***** LENGTH ALERT ***** Expected $show->{len} got $ep->{len}\n";
             }
         }
-        
+    }
+    else
+    {
+       print sh_summary($show),"\n";
+    }
 
 #
 # See if the show is on at other times
 #
-    foreach $ep ( @{$g_titles{lc($show->{title})}})
+    foreach $ep ( @{$GUIDE{all}{$show->{title}}})
     {
-        next if ($ep->{displayed} eq $show); # already displayed
+        next if $ep->{displayed} eq $show;
+        $ep->{displayed}=$show;
 
+        gen_episode_dates($ep) unless $ep->{day};
+    
 #
 # check channel
 #
-        next if ( !$show->{anychan} && $chan ne $ep->{channel} );
+        next if ( $show->{chanonly} && $chan ne $ep->{channel} );
 
 
 #
 # check day
 #
-        gen_ep_dates($ep) unless (exists $ep->{day});
-        next if ( $show->{dayonly} && $WEEKDAY[$show->{day}] ne $ep->{day});
+        next if ( $show->{dayonly}  && $show->{day} ne $ep->{day});
 
 #
 # check time
 #
         next if ( $show->{timeonly} && $show->{hhmm} ne $ep->{hhmm});
+        if ( $show -> {neartime})
+        {
+            my $delta = abs( substr($show->{hhmm},0,2) -
+                             substr(  $ep->{hhmm},0,2) );
+            next unless $delta < 3;
+        }
 
 #
 # ok, guess we're interested in it, print it
@@ -193,25 +489,31 @@ foreach $start (sort keys %sh_time)
   print "\n";
   } # show chan loop
 } # show time loop
+} # tvcheck scan
 
 #
 # That's it, have a nice day
 #
+print "Exiting\n";
 exit 0;
 
 #
-# Generate a few extra episode dates ( in a subroutine to make changes easier )
+# Support subroutines -------------------------------------------------------
 #
-sub gen_ep_dates
-{
-   my $ep = shift;
-   my $date1= ParseDate($ep->{start});
-   my $date2= ParseDate($ep->{stop});
-    
-   ($ep->{hhmm}, $ep->{day}, $ep->{mmdd}) = UnixDate( $date1,"%H%M","%a","%m%d");
-    $ep->{len} = Delta_Format( DateCalc( $date1, $date2), 0,"%mh");
-}
 
+sub opt_summary
+{
+    my $show=shift;
+    my @options=();
+    foreach (0..$#COL)
+    {
+        next unless $COL_TYPE[$_] == 3;
+        push @options,$COL[$_] if $show->{$COL[$_]};
+    }
+    return '{'.join(",",@options).'}' if @options;
+    return "";
+} #opt_summary
+    
 #
 # ep_summary
 #
@@ -222,8 +524,6 @@ sub ep_summary
     my $ep   = shift || die "ep_summary, how about a episode fella!";
     my $flag = shift || 0;
     
-    gen_ep_dates($ep) unless (exists $ep->{day});
-
 #
 # XMLTV format does some wierd things (IMHO) for multi-part episodes. let's deal with it
 #
@@ -235,10 +535,12 @@ sub ep_summary
       $part = ($1+1)."/$2" if ($ep->{"episode-num"}->[0]) =~ m!\.{\d+}/{\d+}!i;
     }
     
+    gen_episode_dates($ep) unless $ep->{day};
+    
     return join(" ",$ep->{day},
                    $ep->{mmdd},
                    "$ep->{hhmm}/$ep->{len}",
-                   get_text($chan{ $ep->{channel}}),
+                   get_text($CHAN{ $ep->{channel}}),
         		   ($flag ? "" : get_text( $ep->{title} ) ),
         		    "\"$desc\" $part",
         			($ep->{"previously-shown"} ? "(R)" : "" ));
@@ -252,13 +554,20 @@ sub ep_summary
 sub sh_summary
 {
     my $show = shift;
-    return join(" ",$WEEKDAY[$show->{day}],
-                          substr($show->{mmdd},4),
+    if ($show-> {day})
+    {
+          return join(" ",$show->{day},
+                          $show->{mmdd},
                           "$show->{hhmm}/$show->{len}",
-                          get_text($chan{ $show->{channel}}),
+                          get_text($CHAN{ $show->{channel}}),
                           $show->{title},
                      );
-}
+    }
+    else
+    {
+          return "$show->{title} (title-scan only)";
+    }
+} #sh_summary
 
 #
 # find_episode
@@ -279,14 +588,16 @@ sub find_episode
     my $hhmm = $show->{hhmm};
 
     my $a;
-    foreach $key ( sort keys %{$g_time{$chan}{$mmdd}} )
+#print "scanning GUIDE{$chan}{$mmdd}\n";
+    foreach $key ( sort keys %{$GUIDE{$chan}{$mmdd}} )
     {
+#print "Checking $key,$hhmm\n";
         last if $key gt $hhmm;
         $a=$key;
     }
 
     return undef unless defined $a;
-    return $g_time{$chan}{$mmdd}{$a};
+    return $GUIDE{$chan}{$mmdd}{$a};
 } # find_episode
 
 #
@@ -308,7 +619,403 @@ sub get_text
       next if exists $values{$key}; # only keep first value for a language
       $values{$key} = $_->[0];
    }
-   return $values{ which_lang( \@lang, [ keys %values ] ) };
+   return $values{ which_lang( \@LANG, [ keys %values ] ) };
 
 } #get_text
+
+####################################################################
+sub load_show_table
+{
+
+%SHOW_DATA=();
+%SHOW_WIDTH=();
+#
+# Table headings
+#
+foreach $col (0..$#COL)
+{
+    $SHOW_DATA{"0,$col"}=(abs($SHOW_SORT) == $col ? uc("_$COL[$col]_") : lc($COL[$col]));
+    $SHOW_WIDTH{$col}   = length($COL[$col]);
+}
+
+#
+# build sort key of table data
+#
+my %sort_keys=();
+foreach $show (@SHOWS)
+{
+    next unless defined $show -> {title}; # skip deleted records
+    my $key = $show->{$COL[abs($SHOW_SORT)]} || 0;
+
+#
+# special sort... by day
+#
+    if ( $SHOW_SORT == 0 )
+    {
+        $key=index($WEEKDAY,$key)/3;
+        $key=9 if $key < 0;
+        $key=int($key);
+    }
+#
+# special sort.. channel 
+#
+    elsif ( abs($SHOW_SORT) == 1 )
+    {
+        $key=sprintf("%03d",$1) if $key =~ /^(\d+)/;
+    }
+
+#
+# save value
+#
+        push    @{$sort_keys{lc($key)}},$show;
+} # build sort keys
+#
+# display table data sorted by key
+#
+my $row=0;
+my @keys=sort keys %sort_keys;
+   @keys = reverse @keys if $SHOW_SORT<0;
+foreach $key (@keys)
+{
+   foreach $show (@{$sort_keys{$key}})
+   {
+      $row++;
+      $SHOW_DATA[$row]=$show;
+      foreach $col (0..$#COL)
+      {
+        next unless $show->{$COL[$col]};
+        $SHOW_DATA{"$row,$col"}= $show->{$COL[$col]};
+        $SHOW_WIDTH{$col}      = length($show->{$COL[$col]}) if ($SHOW_WIDTH{$col}<length($show->{$COL[$col]}));
+      }
+   }
+}
+$SHOW_ROW=0;
+$SHOW_WIDTH{$_} += 3 foreach keys %SHOW_WIDTH;
+if ($SHOW_TABLE)
+{
+    $SHOW_TABLE -> configure (-rows => $row+1 );
+    $SHOW_TABLE -> clearCache if $SHOW_TABLE;
+    $SHOW_TABLE -> selectionClear('all');
+    $TOP->title("tvcheck config -".( $SHOW_XML || '(untitled)' ));
+}
+} # load_show_table
+
+#
+# load selection values
+#
+sub load_selection_items
+{
+
+#
+# load Day list
+#
+    $SELECT[0]{list} -> delete(0,"end");
+    $SELECT[0]{list} -> insert(0,"",@WEEKDAY);
+
+#
+# load Channel list
+#
+    $SELECT[1]{list} -> delete(0,"end");
+    $SELECT[1]{list} -> insert(0,"",@CHAN);
+
+
+    my $day   = $SELECT[0]{entry}->get;
+    my $chan  = $SELECT[1]{entry}->get;
+    my $title = $SELECT[4]{entry}->get;
+    my $match = undef;
+
+#
+# load Title list ( also fill hhmm and day if known )
+#
+    $SELECT[4]{list} -> delete(0,"end");
+    if ($day && $chan)
+    {
+        $SELECT[4]{list} -> insert(0,"",sort keys %{$GUIDE{$day}{$chan}});
+        $match = $GUIDE{$day}{$chan}{$title};
+    }
+    elsif ($day)
+    {
+        $SELECT[4]{list} -> insert(0,"",sort keys %{$GUIDE{day}{$day}} );
+        $match=$GUIDE{day}{$day}{$title};
+    }
+    elsif ($chan)
+    {
+        $SELECT[4]{list} -> insert(0,"",sort keys %{$GUIDE{chan}{$chan}} );
+        $match=$GUIDE{chan}{$chan}{$title};
+    }
+    else
+    {
+        $SELECT[4]{list} -> insert(0,"",sort keys %{$GUIDE{all}} );
+        $match=$GUIDE{all}{$title};
+    }
+
+#
+# if we have a match, fill all fields
+#
+    if ($match)
+        {
+            $SELECT[0]{entry}->delete(0,'end');
+            $SELECT[0]{entry}->insert(0,$match->[0]->[0]);
+
+            $SELECT[1]{entry}->delete(0,'end');
+            $SELECT[1]{entry}->insert(0,$match->[0]->[1]);
+
+            $SELECT[2]{entry}->delete(0,'end');
+            $SELECT[2]{entry}->insert(0,$match->[0]->[2]);
+
+            $SELECT[3]{entry}->delete(0,'end');
+            $SELECT[3]{entry}->insert(0,$match->[0]->[3]);
+        }
+
+} #load_selection_items
+
+#
+# help popup
+#
+sub help_popup
+{
+    my $help = MainWindow->new;
+    $help->title("tvcheck help");
+    $help->Label(-wraplength => '4i' ,
+                -justify    => 'left',
+                -text       => "
+This is a program to create/maintain a show XML file for use with tvcheck.
+
+I hope it's fairly intuitive.  One thing that can get you is the aggressive nature of the autofill of the selection fields. The good news is the routine only kicks off when you click a listbox.  Don't click in a listbox and you can edit the raw data all like.
+
+Don't forget to check out README.tvcheck
+
+Good Luck!
+Robert Eden
+rmeden\@cpan.org
+")->pack();
+} # help_popup
+
+sub help_about
+{
+    my $help = MainWindow->new;
+    $help->title("tvcheck about");
+    $help->Label(-wraplength => '4i' ,
+                -justify    => 'left',
+                -text       => '
+
+tvcheck $Revision$
+(C) 2002 Robert Eden
+rmeden@cpan.org
+
+This program can be used/distributed on the same terms as the XMLTV distribution.
+
+http://xmltv.sourceforge.net
+')->pack;
+} # help_about
+
+#
+# Error popup
+#
+sub error_popup
+{
+    my $msg = shift;
+
+    print "error: $msg\n";
+
+    $TOP->messageBox( -icon => 'error',
+                      -type => 'ok',
+                     -title => 'Tvcheck error',
+                   -message => $msg) if $TOP;
+} #error popup
+
+#
+# load show array
+#
+sub load_shows
+{
+    my $file = shift;
+    unless (-e $file)
+    {
+        print "\n****show file not found ($file)\n\n";
+        return;
+    }
+    
+    $SHOW_XML = $file;
+    print "Loading xml show info ($SHOW_XML)\n";
+    my $xml = XMLin($SHOW_XML, searchpath => ".", forcearray => 1 );
+    @SHOWS=@{$xml->{shows}};
+    @LANG= @{$xml->{lang}};
+
+#
+# fix numeric weekday in old shows file
+#
+    foreach $show (@SHOWS)
+    {
+        next unless $show->{day};
+        $show->{day}=$WEEKDAY[$1] if $show->{day} =~ /^(\d+)/;
+    }
+    
+    unless (@SHOWS)
+    {
+        error_popup("$SHOW_XML does not appear to be a show xml file");
+    }
+
+    load_show_table();
+
+    if ($SHOW_TABLE)
+    {
+        $SHOW_TABLE->pack('forget');
+        $SHOW_TABLE->pack(-side => 'top', -expand => 1, -fill => 'both');
+    }
+    $SHOW_CHANGED=0;
+} #load_show
+
+    
+#
+# load channel guide
+#
+sub load_guide
+{
+    my $file = shift;
+
+    unless (-e $file)
+    {
+        print "\n****Guide file not found ($file)\n\n";
+        return;
+    }
+
+    
+    my $st=time();
+    my $c=0;
+    $GUIDE_XML = $file;
+    print "Loading xml guide info ($file) ";
+    $xml = XMLTV::read_data($file);
+    %CHAN   = %{$xml->[2] };
+    @GUIDE  = @{$xml->[3] };
+    %GUIDE  = ();
+    print $#GUIDE+1," recs / ",(time()-$st)," secs\n";
+    #
+    # Build channel sort
+    #
+    my %sorting;
+    foreach (keys %CHAN )
+    {
+        my $key = $_;
+           $key=sprintf("%03d",$1) if /^(\d+)/;
+        $sorting{$key}=$_;
+    }
+    @CHAN=();
+    map { push @CHAN,$sorting{$_}; } sort keys %sorting;
+
+    #
+    # Build indexes for Episode Data
+    #
+    $st=time();
+    $c=0;
+    print "Building Episode Indexes ";
+    foreach $ep (@GUIDE)
+    {
+       print "." unless $c++ % 1000;       
+       my $title = get_text($ep->{title});
+       my $chan  = $ep->{channel} || "" ;
+       $ep->{displayed}="";
+
+       if ($CONFIGURE)
+       {
+        gen_episode_dates($ep);
+        my $array = [$ep->{day},$ep->{channel},$ep->{hhmm},$ep->{len}]; 
+
+        push @{$GUIDE{all}       {$title}             }    ,$array; # all titles
+        push @{$GUIDE{chan}      {$chan}      {$title}}    ,$array; # titles by chan
+        push @{$GUIDE{day}       {$ep->{day}} {$title}}    ,$array; # titles by day
+        push @{$GUIDE{$ep->{day}}{$chan}      {$title}}    ,$array; # titles by chan by day
+        }
+        else
+        {
+            push @{$GUIDE{all}{$title}},$ep;    # all titles
+
+            if ( $ep->{start} =~ /^(\d{4})(\d{4})(\d{4})/ )
+            {            
+               $GUIDE{$chan}{$2}{$3}=$ep; # index by chan, date, time
+#print "GUIDE{$chan}{$2}{$3}\n";
+             }
+        }
+    } # building guide indexes
+    print " $c recs / ",time()-$st,"secs \n";
+  error_popup("guide file $GUIDE_XML does not appear to be valid") unless @GUIDE;
+
+  load_selection_items() if $SELECT[0];  
+} #load_guide
+
+
+#
+# Generate XML to save current show array
+#
+sub Save_shows
+{
+    unless ($SHOW_XML)
+    {
+        error_popup("no show file defined, data will be lost, aborting");
+        return 1;
+    }
+
+#
+# recreate show array dropping deleted elements
+#
+    my @newshow;
+    foreach $show (@SHOWS)
+    {
+        next unless $show -> {title};
+        foreach $item ( keys %$show )
+        {
+            delete $show -> {$item} unless $show->{$item};
+#            delete $show -> {$item}     if $show->{$item} eq '';
+        }
+        push @newshow,$show;
+    }
+
+#
+# dump xml
+#
+        print "saving shows to $SHOW_XML\n";
+        my $string = XMLout( { shows => \@newshow,
+                               lang  => \@LANG,
+                             },
+                         rootname      => 'tvcheck',
+                         outputfile    => $SHOW_XML,
+                       );
+        warn "Error outputing XML\n" unless $string;
+        $SHOW_CHANGED=0;
+} # Save_shows
+    
+#
+# give chance to save file before losing changes
+#
+sub changed_check
+{
+    if ($SHOW_CHANGED)
+    {
+        my $button = $TOP->messageBox( -icon => 'warning',
+                                       -type => 'YesNoCancel',
+                                       -title => 'File Change Warning',
+                                       -message => "Show data changed. Do you want to save?");
+        if    ($button eq 'yes')     { Save_shows(); }
+        elsif ($button eq 'cancel' ) { return 1;    }
+        elsif ($button ne 'no' )     { die "Button returned unexpected value <$button>\n"};
+    }
+    return 0;
+} # changed_check
+
+sub gen_episode_dates
+{
+   my $ep = shift;
+   
+   my $date1= ParseDate($ep->{start});
+   my $date2= ParseDate($ep->{stop});
+
+   my ($hhmm, $day, $mmdd ) = UnixDate( $date1,"%H%M","%a","%m%d");
+   my $len                  = Delta_Format( DateCalc( $date1, $date2), 0,"%mh");
+
+   $ep->{hhmm} = $hhmm;
+   $ep->{day}  = $day;
+   $ep->{mmdd} = $mmdd;
+   $ep->{len}  = $len;
+
+} # gen_episode_dates
 
