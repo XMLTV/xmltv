@@ -34,18 +34,23 @@ GetOptions('nodeps' => \$opt_nodeps, 'yes' => \$opt_yes);
 our $VERSION;
 $VERSION = '0.5.19';
 
+# Fragment of Makefile text to give the directory where files should
+# be installed.
+#
+my $location = '$(DESTDIR)/$(PREFIX)';
+
 our %extra_constants;
 %extra_constants
   = (INST_PLAINDOC   => 'blib/doc',
-     INSTALLPLAINDOC => "\$(PREFIX)/share/doc/xmltv-$::VERSION",
+     INSTALLPLAINDOC => "$location/share/doc/xmltv-$::VERSION",
      INST_SHARE      => 'blib/share',
-     INSTALLSHARE    => '$(PREFIX)/share/xmltv',
+     INSTALLSHARE    => "$location/share/xmltv",
 
      # Manual page constants, shouldn't really be needed, but work
      # around bugs and make sure this stuff is the same across
      # MakeMaker versions.
-     INSTALLMAN1DIR  => '$(PREFIX)/share/man/man1',
-     INSTALLMAN3DIR  => '$(PREFIX)/share/man/man3',
+     INSTALLMAN1DIR  => "$location/share/man/man1",
+     INSTALLMAN3DIR  => "$location/share/man/man3",
      MAN3EXT         => '3',
 
      # Directory to install into when making Windows binary dist.
@@ -179,10 +184,13 @@ END
 # spun off into separate projects.
 #
 my @opt_components
-  = ({ name => 'tv_grab_de',
-       blurb => 'Grabber for Germany and Austria',
-       exes => [ 'grab/de/tv_grab_de' ],
-     },
+  = (
+
+# tv_grab_de not currently working
+#      { name => 'tv_grab_de',
+#        blurb => 'Grabber for Germany and Austria',
+#        exes => [ 'grab/de/tv_grab_de' ],
+#      },
 
      { name => 'tv_grab_uk',
        blurb => 'Grabber for Britain',
@@ -243,7 +251,7 @@ my @opt_components
 	       return $p;
 	   },
 	   'Python', '17105648', '1.5.2' ] ] },
-     
+
      { name => 'tv_grab_fi',
        blurb => 'Grabber for Finland',
        exes => [ 'grab/fi/tv_grab_fi' ],
@@ -614,7 +622,9 @@ END
     $inherited .= 'pure_uninstall :: pure_$(INSTALLDIRS)_uninstall' . "\n";
     $inherited .= 'uninstall :: all pure_uninstall plaindoc_uninstall share_uninstall' . "\n";
 
-    # Add a target for a Windows distribution.
+    # Add a target for a Windows distribution.  Note this is
+    # singlequoted and then we substitute one variable by hand!
+    #
     $inherited .= q{
 
 xmltv.exe :: $(EXE_FILES) lib/exe_wrap.pl lib/exe_opt.pl
@@ -629,11 +639,11 @@ xmltv.exe :: $(EXE_FILES) lib/exe_wrap.pl lib/exe_opt.pl
 	$(RM_F) exe_opt.txt
 
 windows_dist ::
-	@perl -e "if (-e '$(PREFIX)') { print STDERR qq[To build a Windows distribution, please rerun Makefile.PL with\nPREFIX set to a new (nonexistent) directory then 'make windows_dist'.\n(Remember that only absolute paths work properly with MakeMaker.)\n]; exit 1 }"
+	@perl -e "if (-e '$location') { print STDERR qq[To build a Windows distribution, please rerun Makefile.PL with\nPREFIX set to a new (nonexistent) directory then 'make windows_dist'.\n(Remember that only absolute paths work properly with MakeMaker.)\n]; exit 1 }"
 	$(MAKE) install
-	perl -MExtUtils::Command -e mv $(INSTALLPLAINDOC) $(PREFIX)/doc/
-	perl -MExtUtils::Command -e rm_r $(PREFIX)/share/doc
-	perl -MExtUtils::Command -e mkpath $(PREFIX)/doc/man
+	perl -MExtUtils::Command -e mv $(INSTALLPLAINDOC) $location/doc/
+	perl -MExtUtils::Command -e rm_r $location/share/doc
+	perl -MExtUtils::Command -e mkpath $location/doc/man
 	# Convert the manual pages to plain text.  A bit roundabout,
 	# this, we could just use pod2text to start with.  But since
 	# 'make' generates troff documentation anyway this code is
@@ -648,19 +658,19 @@ windows_dist ::
 	        echo Converting $$i to plain text; \
 	        troff -mandoc -Tascii $$i | grotty -buo \
 	            | perl -pe 's/Date::Manip[(]3[)]/date_formats.txt/g' \
-	            >$(PREFIX)/doc/man/`basename $$i .1`.txt; \
+	            >$location/doc/man/`basename $$i .1`.txt; \
 	done
 	# Remove 'real' manual pages, not needed on Windows.
-	rm -rfv $(PREFIX)/man $(PREFIX)/share/man
+	rm -rfv $location/man $location/share/man
 	# My MakeMaker creates this dud directory.
-	rm -rfv $(PREFIX)/5.8.0
-	rmdir $(PREFIX)/share/doc
+	rm -rfv $location/5.8.0
+	rmdir $location/share/doc
 
 	# Generate Date::Manip docs by filtering perldoc output.  The
 	# use of temp files instead of pipes is so set -e works properly.
 	#
 	set -e; \
-	out=$(PREFIX)/doc/man/date_formats.txt; \
+	out=$location/doc/man/date_formats.txt; \
 	echo Extracting part of Date::Manip manual page into $$out; \
 	echo "This is an extract from the documentation of Perl's" \
 	     "Date::Manip module, describing the different format" \
@@ -673,8 +683,8 @@ windows_dist ::
 	perl -ne 'BEGIN { print "\n=pod\n\n" }  print if (/^The format options are:/ .. /^=/) and not /^=/' <$$out.tmp >$$out.tmp.1; \
 	pod2text <$$out.tmp.1 >>$$out; \
 	rm $$out.tmp*
-	perl -MExtUtils::Command -e rm_rf $(INSTALLBIN) $(PREFIX)/lib/ $(INSTMANDIR) $(INSTALLMAN3DIR)
-	perl -MExtUtils::Command -e cp xmltv.dtd $(PREFIX)
+	perl -MExtUtils::Command -e rm_rf $(INSTALLBIN) $location/lib/ $(INSTMANDIR) $(INSTALLMAN3DIR)
+	perl -MExtUtils::Command -e cp xmltv.dtd $location
 	# The following command will not be necessary when the source
 	# tree was checked out on a DOSish system.  It may not even
 	# work properly when run on a DOSish system - should check.
@@ -682,14 +692,15 @@ windows_dist ::
 	# (Simulation in perl of find | xargs; there's probably a
 	# better way but I'm too lazy to find it.)
 	#
-	perl -MFile::Find -e "find(sub { print qq[\\$$File::Find::name\n] if -f and not /[.]jpg/ }, '$(PREFIX)')" | perl -e 'chomp(@ARGV = (@ARGV, <STDIN>)); exec @ARGV' perl -i -pe 'BEGIN { binmode STDIN } s/\r*\n*$$/\r\n/'
-	perl -MExtUtils::Command -e mv $(PREFIX)/doc/README* $(PREFIX)
-	perl -MExtUtils::Command -e mv $(PREFIX)/README.win32 $(PREFIX)/README
+	perl -MFile::Find -e "find(sub { print qq[\\$$File::Find::name\n] if -f and not /[.]jpg/ }, '$location')" | perl -e 'chomp(@ARGV = (@ARGV, <STDIN>)); exec @ARGV' perl -i -pe 'BEGIN { binmode STDIN } s/\r*\n*$$/\r\n/'
+	perl -MExtUtils::Command -e mv $location/doc/README* $location
+	perl -MExtUtils::Command -e mv $location/README.win32 $location/README
 	@echo
-	@echo Part of a Windows distribution tree has been made in $(PREFIX)/.
+	@echo Part of a Windows distribution tree has been made in $location/.
 	@echo Now copy in the executables!
 
 };
+    $inherited =~ s/\$location/$location/g or die;
 
     return $inherited;
 }
