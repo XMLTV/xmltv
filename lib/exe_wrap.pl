@@ -118,15 +118,17 @@ foreach my $exe (split(/ /,$files))
 #
 # execute our command
 #
-    # Would like to use do() but there is no reliable way to check for
-    # errors.
-    #
-    open EXE, $exe or die "cannot open $exe: $!";
-    my $code;
-    { local $/;  undef $/; $code = <EXE> }
-    eval $code;
-    die $@ if $@;
-    exit;
+    $0 = $_;        # set $0 to our script
+    $r = require $exe;
+    exit $r;
+
+
+
+
+
+
+
+
 }
 
 #
