@@ -685,18 +685,16 @@ sub MY::processPL {
     my $inherited = shift->SUPER::processPL(@_);
 
     # Add some exra dependencies.
-    $inherited =~ s!^(\s*filter/tv_grep\s+::\s.+)!$1 filter/tv_grep.in pm_to_blib!m
-      or die "no filter/tv_grep in: $inherited";
-    $inherited =~ s!^(\s*grab/uk/tv_grab_uk\s+::\s.+)!$1 grab/uk/tv_grab_uk.in!m
-      or die "no grab/uk/tv_grab_uk in: $inherited";
-    $inherited =~ s!^(\s*grab/uk_rt/tv_grab_uk_rt\s+::\s.+)!$1 grab/uk_rt/tv_grab_uk_rt.in!m
-      or die "no grab/uk_rt/tv_grab_uk_rt in: $inherited";
-    $inherited =~ s!^(\s*grab/it/tv_grab_it\s+::\s.+)!$1 grab/it/tv_grab_it.in!m
-      or die "no grab/it/tv_grab_it in: $inherited";
-    $inherited =~ s!^(\s*grab/nz/tv_grab_nz\s+::\s.+)!$1 grab/nz/tv_grab_nz.in!m
-      or die "no grab/nz/tv_grab_nz in: $inherited";
-    $inherited =~ s!^(\s*lib/XMLTV\.pm\s+::\s.+)!$1 lib/XMLTV.pm.in!m
-      or die "no lib/XMLTV.pm in: $inherited";
+    my @deps = ('filter/tv_grep' => [ qw(filter/tv_grep.in pm_to_blib) ],
+		(map { ("grab/$_/tv_grab_$_" => [ "grab/$_/tv_grab_$_.in" ]) }
+		 qw(uk uk_rt it nz)),
+		'lib/XMLTV.pm' => [ 'lib/XMLTV.pm.in' ]);
+    my ($k, $v);
+    while (@deps) {
+	($k, $v, @deps) = @deps;
+	$inherited =~ s!^(\s*$k\s+::\s.+)!"$1 " . join(' ', @$v)!me
+	  or die "no $k in: $inherited";
+    }
 
     # And some of the .in generators need the share/ directory passed
     # as an extra argument.
