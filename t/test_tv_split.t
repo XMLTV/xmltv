@@ -34,16 +34,13 @@ usage(0) if @ARGV;
 my @inputs = <$tests_dir/*.xml>;
 my @inputs_gz = <$tests_dir/*.xml.gz>; s/\.gz$// foreach @inputs_gz;
 @inputs = sort (@inputs, @inputs_gz);
-foreach (@inputs) {
-    s!^$tests_dir/!! or die;
-}
 die "no test cases (*.xml, *.xml.gz) found in $tests_dir"
   if not @inputs;
 
 print '1..', (scalar @inputs), "\n";
 my $n = 0;
 my $old_cwd;
-INPUT: foreach (@inputs) {
+INPUT: foreach my $input (@inputs) {
     ++$n;
 
     if (defined $old_cwd) {
@@ -52,14 +49,34 @@ INPUT: foreach (@inputs) {
     else {
 	$old_cwd = cwd;
     }
+    
+    # Quick and dirty checking of XML files.  Before we start, read
+    # the input XML and note how many programmes of each kind.
+    #
+    my %input;
+    open(FH, $input) or die "cannot open $input: $!";
+    while (<FH>) {
+	next unless /<programme/;
 
+	/start="(.+?)"/ or die "$input:$.: no start\n";
+	my $start = $1;
+	$start =~ /^\d{4}(\d{2})/
+	  or die "$input:$.: don't understand start time $start\n";
+	my $month = $1;
+
+	/channel="(.+?)"/ or die "$input:$.: no channel\n";
+	my $channel = $1;
+	++$input{"channel$channel-month$month"};
+    }
+
+    # Make temporary directory and split into it.
     my $dir = tempdir(CLEANUP => 1);
     die if not -d $dir;
-    copy("$tests_dir/$_", "$dir/$_")
-      or die "cannot copy $tests_dir/$_ to $dir/$_: $!";
-    system 'gzip', '-d', "$dir/$_" if /[.]gz$/;
-    chdir $dir or die "cannot chdir to $dir: $!";
-    my @cmd = ('tv_split', '--output', 'channel%channel%-month%m.out', $_);
+    die 'gzipped files not supported (could add)'
+      if $input =~ /[.]gz$/;
+    my @cmd = ("$cmds_dir/tv_split",
+	       '--output', "$dir/channel%channel%-month%m.out",
+	       $input);
     my $r = system @cmd;
 
     # Check command return status.
@@ -73,23 +90,8 @@ INPUT: foreach (@inputs) {
 	next;
     }
 
-    # Quick and dirty checking of XML files.
-    my %input;
-    open(FH, $_) or die "cannot open $_: $!";
-    while (<FH>) {
-	next unless /<programme/;
-
-	/start="(.+?)"/ or die "$_:$.: no start\n";
-	my $start = $1;
-	$start =~ /^\d{4}(\d{2})/
-	  or die "$_:$.: don't understand start time $start\n";
-	my $month = $1;
-
-	/channel="(.+?)"/ or die "$_:$.: no channel\n";
-	my $channel = $1;
-	++$input{"channel$channel-month$month"};
-    }
-
+    # Read the files generated.
+    chdir $dir or die "cannot chdir to $dir: $!";
     my %found;
     foreach (<*.out>) {
 	open(FH, $_) or die "cannot open $_: $!";
