@@ -657,6 +657,7 @@ sub scrapehtml($$$)
 			  Chinese
 			  Colonial
 			  Cree
+			  Dene
 			  English
 			  Farsi
 			  French
