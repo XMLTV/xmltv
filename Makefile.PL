@@ -368,6 +368,7 @@ my @opt_components
        prereqs => { 'XML::LibXML' => 0,
                     'Compress::Zlib' => 0,
                     'IO::Stringy' => 0,
+		    'HTTP::Cache::Transparent' => 0,
                   },
      },
 
