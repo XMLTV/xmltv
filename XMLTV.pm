@@ -8,7 +8,7 @@ package XMLTV;
 use strict;
 use base 'Exporter'; use vars qw(@EXPORT @EXPORT_OK);
 @EXPORT = ();
-@EXPORT_OK = qw(best_name list_programme_keys read_data write_data);
+@EXPORT_OK = qw(best_name list_programme_keys read_data parse parsefile write_data);
 
 use XML::DOM;
 use XML::Writer;
@@ -295,12 +295,14 @@ sub call_handlers_read( $$$ ) {
 }
 
 
-# read_data()
+# parsefile()
 #
 # Read an XMLTV file and return source, channel and programme
 # information.
 #
-# Parameter: filename to read from
+# Parameter: filename or URL to read from.  Supports same URLs as
+# XML::DOM::Parser.
+#
 # Returns: something a bit like
 #    [ 'UTF-8',
 #      { 'source-info-name' => 'Ananova', 'generator-info-name' => 'XMLTV' },
@@ -319,14 +321,38 @@ sub call_handlers_read( $$$ ) {
 # returns no matter what encoding the input file used.  It's really
 # just there for symmetry with write_data().
 #
-sub read_data( $ ) {
+# read_data() is a deprecated name for parsefile().
+#
+sub read_data( $ ) { # FIXME remove altogether
+    warn "XMLTV::read_data() deprecated, use XMLTV::parsefile() instead\n";
+    &parsefile;
+}
+sub parsefile( $ ) {
     my $filename = shift;
     my $p = new XML::DOM::Parser;
     my $doc = $p->parsefile($filename);
-    die "cannot parse $filename" if not defined $doc;
+    die "$filename is not XML" if not defined $doc;
+    return parse_doc($doc);
+}
 
+# parse()
+#
+# As parsefile() but deals with a string of XML data rather than a
+# filename.
+#
+sub parse( $ ) {
+    my $str = shift;
+    my $p = new XML::DOM::Parser;
+    my $doc = $p->parse($str);
+    die "string passed in is not XML" if not defined $doc;
+    return parse_doc($doc);
+}
+
+# Private.  Convert a DOM tree to XMLTV data structures.
+sub parse_doc( $ ) {
+    my $doc = shift;
     # We assume that the XMLTV document is valid, but some errors are
-    # caught anyway.  Running the file through read_data() is a good
+    # caught anyway.  Running the file through this is a good
     # thing to do *in addition to* validating with nsgmls.
     #
 
@@ -371,7 +397,7 @@ sub read_data( $ ) {
 # Write a complete XMLTV file to stdout.
 #
 # Parameters:
-#   listref of four elements as returned by read_data()
+#   listref of four elements as returned by parse()
 #   arguments to be passed on to XMLTV::Writer's constructor
 #
 # For example:
@@ -494,7 +520,7 @@ sub trunc {
 }
 
 
-# The following helper routines for read_data() take an XML::DOM node
+# The following helper routines for parse_doc() take an XML::DOM node
 # representing a particular subelement of 'programme' and extract its
 # data.  They warn and return undef if error.
 #
@@ -566,6 +592,10 @@ sub read_length( $ ) {
     my $node = shift;
     my %attrs = %{dom_attrs($node)};
     my $d = dom_text($node);
+    if ($d =~ /^\s*$/) {
+	warn "empty 'length' element";
+	return undef;
+    }
     if ($d !~ tr/0-9// or $d =~ tr/0-9//c) {
 	warn "bad content of 'length' element: $d";
 	return undef;
