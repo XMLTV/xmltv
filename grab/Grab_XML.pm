@@ -6,6 +6,7 @@ use Date::Manip;
 use XMLTV;
 use XMLTV::Usage;
 use XMLTV::Memoize;
+use XMLTV::TZ qw(parse_local_date);
 
 # Use Log::TraceMessages if installed.
 BEGIN {
