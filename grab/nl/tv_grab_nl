@@ -311,9 +311,12 @@ if (not $opt_slow) {
 	die if not defined $day;
 	foreach (process_summary_page($url, $day, $day)) {
 	    my ($start, $stop, $title, $url) = @$_;
+	    if (not defined $start or not defined $stop) {
+		warn "couldn't get times for $title, skipping\n";
+		next;
+	    }
 	    my ($start_base, $start_tz) = @{date_to_eur($start, $TZ)};
 	    my ($stop_base, $stop_tz) = @{date_to_eur($stop, $TZ)};
-
 	    $writer->write_programme
 	      ({ start => UnixDate($start_base, '%q') . " $start_tz",
 		 stop => UnixDate($stop_base, '%q') . " $stop_tz",
@@ -840,6 +843,13 @@ sub get_channels() {
 # where start and stop are Date::Manip objects, title is a string, and 
 # url is the page to download if you want full details.
 #
+# Note that stop may be unset, since the format doesn't require that
+# stop times be known.  More surprisingly, start may be unset as well!
+# The meaning of this is that the times for that programme were
+# completely nonsensical, and you should do something like putting it
+# into a clump with the last valid programme that appeared before it,
+# or else drop it with a warning.
+#
 sub process_summary_page( $$$ ) {
     my ($url, $day, $official_day) = @_;
     die if not defined $url;
@@ -950,34 +960,41 @@ sub process_summary_page( $$$ ) {
 	
 	# Right, got channel name, times, and title.
 	# FIXME should check channel name (among other things).
-	unless ($times =~ /^(\d\d):(\d\d)-(\d\d):(\d\d)$/
+	#
+	my ($start, $stop);
+	if ($times =~ /^(\d\d):(\d\d)-(\d\d):(\d\d)$/
 		and 0 <= $1 and $1 < 24 and 0 <= $2 and $2 < 60
 		and 0 <= $3 and $3 < 24 and 0 <= $4 and $4 < 60) {
-	    warn "bad programme times $times, skipping ($ch, $times, $title)";
-	    next;
-	}
-	my ($start_hh, $start_mm, $stop_hh, $stop_mm) = ($1, $2, $3, $4);
-	die if not defined $day;
-	my $start = parse_eur_date("$day $start_hh:$start_mm", $TZ);
-	die if not defined $start;
-	my $stop = parse_eur_date("$day $stop_hh:$stop_mm", $TZ);
-	die if not defined $stop;
-	t "parsed times: $start..$stop";
-	if (Date_Cmp($start, $stop) > 0) {
-	    # FIXME this logic is duplicate with write_details().
-	    if ($next_day++) {
-		warn "seeming to span more than one midnight, skipping rest of page";
-		@bits = ();
-		last;
-	    }
-	    $day = UnixDate(DateCalc($day, '+ 1 day'), '%Y-%m-%d');
+	    my ($start_hh, $start_mm, $stop_hh, $stop_mm) = ($1, $2, $3, $4);
+	    die if not defined $day;
+	    $start = parse_eur_date("$day $start_hh:$start_mm", $TZ);
+	    die if not defined $start;
 	    $stop = parse_eur_date("$day $stop_hh:$stop_mm", $TZ);
 	    die if not defined $stop;
-	    die unless Date_Cmp($start, $stop) < 0;
-	    t "gone to next day ($day)";
-	    t '$stop now ' . d $stop;
+	    t "parsed times: $start..$stop";
+	    
+	    if (Date_Cmp($start, $stop) > 0) {
+		if ($next_day++) {
+		    # But we already crossed midnight once, so the times
+		    # must be just plain wrong.
+		    #
+		    t 'bogus times (stop < start)';
+		    undef $start; undef $stop;
+		}
+		else {
+		    $day = UnixDate(DateCalc($day, '+ 1 day'), '%Y-%m-%d');
+		    $stop = parse_eur_date("$day $stop_hh:$stop_mm", $TZ);
+		    die if not defined $stop;
+		    die unless Date_Cmp($start, $stop) < 0;
+		    t "gone to next day ($day)";
+		    t '$stop now ' . d $stop;
+		}
+	    }
 	}
-	
+	else {
+	    t 'no sane-looking times given in page, leave them undef';
+	}
+
 	my $title_url = URI->new_abs($title_href, $url);
 	push @r, [ $start, $stop, $title, $title_url ];
     }
