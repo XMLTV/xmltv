@@ -6,35 +6,35 @@
 
 use strict;
 use diagnostics;
-use IO::File;
 sub print_list( $$ );
 
 my $out = shift @ARGV; die "no output file given" if not defined $out;
 my $in = 'lib/XMLTV.pm.in';
-my $out_fh = new IO::File "> $out" or die "cannot write to $out: $!";
-my $in_fh = new IO::File "< $in" or die "cannot read $in: $!";
+open(OUT_FH, ">$out") or die "cannot write to $out: $!";
+open(IN_FH, $in) or die "cannot read $in: $!";
 require $in;
 die if not @XMLTV::Channel_Handlers; die if not @XMLTV::Programme_Handlers;
-while (<$in_fh>) {
+while (<IN_FH>) {
     if (/^\s*\@CHANNEL_HANDLERS\s*$/) {
-	print_list($out_fh, \@XMLTV::Channel_Handlers);
+	print_list(\*OUT_FH, \@XMLTV::Channel_Handlers);
     }
     elsif (/^\s*\@PROGRAMME_HANDLERS\s*$/) {
-	print_list($out_fh, \@XMLTV::Programme_Handlers);
+	print_list(\*OUT_FH, \@XMLTV::Programme_Handlers);
     }
     else {
-	print $out_fh $_;
+	print OUT_FH $_;
     }
 }
-close $out_fh or die "cannot close $out: $!";
-close $in_fh or die "cannot close $in: $!";
+close OUT_FH or die "cannot close $out: $!";
+close IN_FH or die "cannot close $in: $!";
 
 sub print_list( $$ ) {
-    my ($fh, $l) = @_;
-    print $fh "\n=over\n";
+    local *FH = shift;
+    my $l = shift;
+    print FH "\n=over\n";
     foreach (@$l) {
 	my ($elem_name, $h_name, $mult) = @$_;
-	print $fh "\n=item $elem_name, I<$h_name>, B<$mult>\n";
+	print FH "\n=item $elem_name, I<$h_name>, B<$mult>\n";
     }
-    print $fh "\n\n=back\n";
+    print FH "\n\n=back\n";
 }
