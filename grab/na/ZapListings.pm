@@ -1130,6 +1130,33 @@ sub setValue($$$$)
     return($hash)
 }
 
+sub decodeStars($$)
+{
+    my ($self, $hash_ref, $desc, $htmlsource)=@_;
+    my $prog=$$hash_ref;
+
+    if ( $desc=~s;\s*(\*+)\s*$;; ) {
+	if ( length($1) > 4 ) {
+	  main::statusMessage("star rating of $1 is > expected 4, notify xmltv-users\@lists.sf.net\n");
+	}
+	$self->setValue(\$prog, "star_rating", sprintf("%d/4", length($1)));
+    }
+    elsif ( $desc=~s;\s*(\*+)(\s*)(1/2)\s*$;; ||
+	    $desc=~s;\s*(\*+)(\s*)(\+)\s*$;; ) {
+	if ( length($1) > 4 ) {
+	  main::statusMessage("star rating of $1$2$3 is > expected 4, notify xmltv-users\@lists.sf.net\n");
+	}
+	$self->setValue(\$prog, "star_rating", sprintf("%d.5/4", length($1)));
+    }
+    else {
+	if ( $self->{Debug} ) {
+	  main::debugMessage("FAILED to decode what we think should be star ratings\n");
+	  main::debugMessage("\tsource: $htmlsource\n\tdecode failed on:'$desc'\n");
+	}
+    }
+    return($desc);
+}
+
 #
 # scraping html, here's the theory behind this madness.
 # 
@@ -1233,13 +1260,6 @@ sub scrapehtml($$$)
 
     my @programs;
 
-    my $lastProgram;
-
-    if ( defined($self->{lastProgramInfo}) ) {
-	$lastProgram=$self->{lastProgramInfo};
-	delete($self->{lastProgramInfo});
-    }
-
     for my $row (split(/<tr/, $html)) {
 	# nuke everything leading up to first >
 	# which amounts to html attributes of <tr used in split
@@ -1322,30 +1342,8 @@ sub scrapehtml($$$)
 		    $postRest="";
 		}
 
-		if ( defined($preRest) && length($preRest) ) {
-		    #if ( $self->{Debug} ) {
-			#main::debugMessage("prereset: $preRest\n");
-		    #}
-		    if ( $preRest=~s;\s*(\*+)\s*$;; ) {
-		        if ( length($1) > 4 ) {
-		           main::statusMessage("star rating of $1 is > expected 4, notify xmltv-users\@lists.sf.net\n");
-		        }
-			$self->setValue(\$prog, "star_rating", sprintf("%d/4", length($1)));
-		    }
-		    elsif ( $preRest=~s;\s*(\*+)(\s*)(1/2)\s*$;; ||
-			    $preRest=~s;\s*(\*+)(\s*)(\+)\s*$;; ) {
-		        if ( length($1) > 4 ) {
-		           main::statusMessage("star rating of $1$2$3 is > expected 4, notify xmltv-users\@lists.sf.net\n");
-		        }
-			$self->setValue(\$prog, "star_rating", sprintf("%d.5/4", length($1)));
-		    }
-		    else {
-			if ( $self->{Debug} ) {
-		           main::debugMessage("FAILED to decode what we think should be star ratings\n");
-			   main::debugMessage("\tsource: $htmlsource\n\tdecode failed on:'$preRest'\n");
-			}
-		    }
-		}
+		$preRest=$self->decodeStars(\$prog, $preRest, $htmlsource);
+
 		if ( length($preRest) || length($postRest) ) {
 		    $desc.="<font><text>";
 		    if ( length($preRest) && length($postRest) ) {
@@ -1363,72 +1361,44 @@ sub scrapehtml($$$)
 			main::debugMessage("put back details, now have '$desc'\n");
 		    }
 		}
+
+		if ( 1 ) {
+		    # anytime end hour is < start hour, end hour is next morning
+		    # posted start time is 12 am and end hour is also 12 then adjust
+		    if ( $prog->{start_hour} == 0 && $prog->{end_hour}==12 ) {
+			$self->setValue(\$prog, "end_hour", 0);
+		    }
+		    # prog starting after 6 with posted start > end hour
+		    elsif ( $prog->{start_hour} > 18 && $posted_start_hour > $prog->{end_hour} ) {
+			$self->setValue(\$prog, "end_hour", $prog->{end_hour}+24);
+		    }
+		    # if started in pm and end was not 12, then adjustment to 24 hr clock
+		    elsif ( $prog->{start_hour} > $prog->{end_hour} ) {
+			$self->setValue(\$prog, "end_hour", $prog->{end_hour}+12);
+		    }
+		}
+
+	    }
+	    elsif ( $desc=~s;<font><text>(.*?)</text></td>$;;io ||
+		    $desc=~s;<font><text>(.*?)</text><br><a><img></a></td>$;;io ){
+		my $rest=$1;
+
+		$rest=~s/^\&nbsp\;//o;
+
+		$rest=$self->decodeStars(\$prog, $rest, $htmlsource);
+
+		if ( length($rest) ) {
+		    $desc.="<font><text>".$rest."</text></td>";
+		    if ( $self->{Debug} ) {
+			main::debugMessage("put back details, now have '$desc'\n");
+		    }
+		}
 	    }
 	    else {
-	      main::errorMessage("FAILED to find endtime\n");
+	      main::errorMessage("FAILED to find/estimate endtime\n");
 	      main::errorMessage("\tsource: $htmlsource\n");
 	      main::errorMessage("\thtml:'$desc'\n");
 	    }
-
-	    if ( 1 ) {
-		# anytime end hour is < start hour, end hour is next morning
-		# posted start time is 12 am and end hour is also 12 then adjust
-		if ( $prog->{start_hour} == 0 && $prog->{end_hour}==12 ) {
-		    $self->setValue(\$prog, "end_hour", 0);
-		}
-		# prog starting after 6 with posted start > end hour
-		elsif ( $prog->{start_hour} > 18 && $posted_start_hour > $prog->{end_hour} ) {
-		    $self->setValue(\$prog, "end_hour", $prog->{end_hour}+24);
-		}
-		# if started in pm and end was not 12, then adjustment to 24 hr clock
-		elsif ( $prog->{start_hour} > $prog->{end_hour} ) {
-		    $self->setValue(\$prog, "end_hour", $prog->{end_hour}+12);
-		}
-	    }
-
-	    # check for program holes
-	    if ( defined($lastProgram) ) {
-
-		# recalc endhour incase last prog of yesterday ended after midnight
-		my $endHour=$lastProgram->{end_hour};
-		if ( $endHour>= 24 ) {
-		    $endHour-=24;
-		}
-
-		# assumes we're grabbing one day after another
-		my $EndTimeInSeconds=(3600*$endHour)+(60*$lastProgram->{end_min});
-		    
-		my $startedAt=(3600*$prog->{start_hour})+(60*$prog->{start_min});
-		if ( $startedAt != $EndTimeInSeconds ) {
-		    my $p;
-
-		    $p->{start_hour}=$lastProgram->{end_hour};
-		    if ( $p->{start_hour}>= 24 ) {
-			$p->{start_hour}-=24;
-		    }
-		    $p->{start_min}= $lastProgram->{end_min};
-		    $p->{end_hour}=$prog->{start_hour};
-		    $p->{end_min}= $prog->{start_min};
-		    $p->{title}="unknown";
-
-		    my $range=sprintf("%02d:%02d to %02d:%02d",
-				      $p->{start_hour},$p->{start_min},$p->{end_hour},$p->{end_min});
-		    if ( $self->{DebugListings} ) {
-			if ( $EndTimeInSeconds > $startedAt ) {
-			    $p->{precomment}="filler for programing hole from yesterday at $range today";
-			}
-			else {
-			    $p->{precomment}="filler for programing hole from $range";
-			}
-		    }
-		    push(@programs, $p);
-		  main::statusMessage("filled in program hole from $range on $htmlsource\n");
-		}
-	    }
-
-	    # track when the last program ended down to the second
-	    $lastProgram->{end_hour}=$prog->{end_hour};
-	    $lastProgram->{end_min}=$prog->{end_min};
 
 	    if ( $desc=~s;<b><a><text>\s*(.*?)\s*</text></a></b>;;io ) {
 		$self->setValue(\$prog, "title", massageText($1));
@@ -1877,10 +1847,100 @@ sub scrapehtml($$$)
 	    }
 
 	    push(@programs, $prog);
-	    $self->{lastProgramInfo}=$lastProgram;
 	}
     }
-    return(@programs);
+
+    my $lastProgram;
+
+    if ( defined($self->{lastProgramInfo}) ) {
+	$lastProgram=$self->{lastProgramInfo};
+	delete($self->{lastProgramInfo});
+
+	if ( !defined($lastProgram->{end_hour}) ||
+	     !defined($lastProgram->{end_min}) ) {
+	    die "how did we get here ?";
+	}
+    }
+
+    my @newPrograms;
+    my $maxi=scalar(@programs);
+    for (my $i=0 ; $i<$maxi; $i++ ) {
+	my $prog=$programs[$i];
+
+	#print "checking program $i:$prog->{title} $prog->{start_hour}:$prog->{start_min}\n";
+
+	if ( !defined($prog->{end_hour}) ) {
+	    if ( $i+1 < $maxi ) {
+		my $nprog=$programs[$i+1];
+		#print "getting end from program ($i+1):$nprog->{title} $nprog->{start_hour}:$nprog->{start_min}\n";
+		$prog->{end_hour}=$nprog->{start_hour};
+		$prog->{end_min}=$nprog->{start_min};
+	    }
+	    else {
+		# todo - fix this
+		# last program of the day should end at midnight for now.
+		#print "ending at 12am\n";
+		$prog->{end_hour}=24;
+		$prog->{end_min}=0;
+	    }
+	}
+
+	push(@newPrograms, $prog);
+
+	# check for program holes
+	if ( defined($lastProgram) ) {
+
+	    if ( !defined($lastProgram->{end_hour}) ||
+		 !defined($lastProgram->{end_min}) ) {
+		die "how did we get here ?";
+	    }
+
+	    # recalc endhour incase last prog of yesterday ended after midnight
+	    my $endHour=$lastProgram->{end_hour};
+
+	    if ( $endHour>= 24 ) {
+		$endHour-=24;
+	    }
+	    
+	    # assumes we're grabbing one day after another
+	    my $EndTimeInSeconds=(3600*$endHour)+(60*$lastProgram->{end_min});
+	    
+	    my $startedAt=(3600*$prog->{start_hour})+(60*$prog->{start_min});
+	    if ( $startedAt != $EndTimeInSeconds ) {
+		my $p;
+		
+		$p->{start_hour}=$lastProgram->{end_hour};
+		if ( $p->{start_hour}>= 24 ) {
+		    $p->{start_hour}-=24;
+		}
+		$p->{start_min}= $lastProgram->{end_min};
+		$p->{end_hour}=$prog->{start_hour};
+		$p->{end_min}= $prog->{start_min};
+		$p->{title}="unknown";
+		
+		my $range=sprintf("%02d:%02d to %02d:%02d",
+				  $p->{start_hour},$p->{start_min},$p->{end_hour},$p->{end_min});
+		if ( $self->{DebugListings} ) {
+		    if ( $EndTimeInSeconds > $startedAt ) {
+			$p->{precomment}="filler for programing hole from yesterday at $range today";
+		    }
+		    else {
+			$p->{precomment}="filler for programing hole from $range";
+		    }
+		}
+		push(@newPrograms, $p);
+	      main::statusMessage("filled in program hole from $range on $htmlsource\n");
+	    }
+	}
+	
+	# track when the last program ended down to the second
+	$lastProgram->{end_hour}=$prog->{end_hour};
+	$lastProgram->{end_min}=$prog->{end_min};
+    }
+	
+    $self->{lastProgramInfo}=$lastProgram;
+
+    return(@newPrograms);
 }
 
 sub readSchedule($$$$$)
@@ -1959,7 +2019,8 @@ sub readSchedule($$$$$)
 	main::debugMessage("scraping html for $year-$month-$day on station $stationid: $station_desc\n");
     }
 
-    if ( defined($self->{scrapeState}) && defined($self->{scrapeState}->{$stationid}) ) {
+    if ( defined($self->{scrapeState}) &&
+	 defined($self->{scrapeState}->{$stationid}) ) {
 	$self->{lastProgramInfo}=delete($self->{scrapeState}->{$stationid});
     }
 
