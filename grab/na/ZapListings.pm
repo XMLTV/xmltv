@@ -888,7 +888,7 @@ sub scrapehtml($$$)
 	    }
 	    my @extras;
 	    while ($desc=~s;<text>\s*(.*?)\s*</text>;;io ) {
-		push(@extras, massageText($1); #if ( length($1) );
+		push(@extras, massageText($1)); #if ( length($1) );
 	    }
 	    if ( $self->{Debug} ) {
 		print STDERR "POSTEXTRA: $desc\n";
