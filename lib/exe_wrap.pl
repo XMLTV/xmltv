@@ -39,6 +39,12 @@ END
 }
 
 #
+# check for --quiet
+#
+my $opt_quiet=0;
+foreach (@ARGV) {$opt_quiet = 1 if /--quiet/i };
+
+#
 # get/check time zone
 #
 unless (exists $ENV{TZ})
@@ -54,7 +60,7 @@ unless (exists $ENV{TZ})
        $ENV{TZ}= $tz;
 
 } #timezone
-print STDERR "Timezone is $ENV{TZ}\n";
+print STDERR "Timezone is $ENV{TZ}\n" unless $opt_quiet;
 
 
 $cmd = shift || "";
@@ -99,7 +105,7 @@ if ($cmd eq 'tv_grab_uk_rt'
     	    {
 	        die "directory $dir not found\n If not kept with the executable, specify with --share\n"
 	        }
-        print STDERR "adding '--share=$dir'\n";
+        print STDERR "adding '--share=$dir'\n" unless $opt_quiet;
         push @ARGV,"--share",$dir;
     }
 }
