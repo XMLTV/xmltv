@@ -62,6 +62,7 @@ END
 if ($cmd eq 'tv_grab_uk'
  or $cmd eq 'tv_grab_uk_rt'
  or $cmd eq 'tv_grab_it'
+ or $cmd eq 'tv_grab_nl'
  )
 {
     unless (grep(/^--share/i,@ARGV))  # don't add our --share if one supplied
