@@ -1,10 +1,10 @@
 #!/usr/bin/perl -w
 #
 # Run lots of filter programs on lots of inputs and check the output
-# is as expected.  We do not check the stderr messages, and we do not
-# allow for filters that return an error code.  In fact, they're not
-# filters at all: we assume that each can take an input filename and
-# the --output option.
+# is as expected.  Stderr is checked if there is an 'expected_err'
+# file but we do not allow for filters that return an error code.  In
+# fact, they're not filters at all: we assume that each can take an
+# input filename and the --output option.
 #
 # -- Ed Avis, ed@membled.com, 2002-02-14
 #
