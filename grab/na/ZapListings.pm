@@ -106,7 +106,7 @@ sub getSRC($$)
     my @arr=@{$self->{Row}};
     my $thing=$arr[$index-1];
 
-    #main::errorMessage("item $index : ".XMLTV::ZapListings::Scraper::dumpMe($thing)."\n");
+    #main::errorMessage("item $index : ".XMLTV::ZapListings::dumpMe($thing)."\n");
     if ( $thing->{starttag}=~m/img/io ) {
 	return($thing->{attr}->{src}) if ( defined($thing->{attr}->{src}) );
 	return($thing->{attr}->{SRC}) if ( defined($thing->{attr}->{SRC}) );
@@ -121,7 +121,7 @@ sub getHREF($$)
     my @arr=@{$self->{Row}};
     my $thing=$arr[$index-1];
 
-    #main::errorMessage("item $index : ".XMLTV::ZapListings::Scraper::dumpMe($thing)."\n");
+    #main::errorMessage("item $index : ".XMLTV::ZapListings::dumpMe($thing)."\n");
     if ( $thing->{starttag}=~m/a/io) {
 	return($thing->{attr}->{href}) if ( defined($thing->{attr}->{href}) );
 	return($thing->{attr}->{HREF}) if ( defined($thing->{attr}->{HREF}) );
@@ -131,6 +131,44 @@ sub getHREF($$)
 }
 
 1;
+
+########################################################
+#
+# little LWP::UserAgent that accepts redirects
+#
+########################################################
+package XMLTV::ZapListings::RedirPostsUA;
+use HTTP::Request::Common;
+
+# include LWP separately to verify minimal requirements on version #
+use LWP 5.62;
+use LWP::UserAgent;
+
+use vars qw(@ISA);
+@ISA = qw(LWP::UserAgent);
+
+#
+# add env_proxy flag to constructed UserAgent.
+#
+sub new
+{
+    my $proto = shift;
+    my $class = ref($proto) || $proto;
+    my $self = $class->SUPER::new(@_,
+				  env_proxy => 1,
+				  timeout => 180);
+    bless ($self, $class);
+    $self->agent('Mozilla/5.0');
+    return $self;
+}
+
+sub redirect_ok { 1; }
+
+1;
+
+########################################################
+# END
+########################################################
 
 package XMLTV::ZapListings;
 
@@ -155,64 +193,455 @@ sub new
     }
     $self->{GeoCode}=$code;
     $self->{Debug}=0 if ( !defined($self->{Debug}) );
-    $self->{httpHost}=getHttpHost();
 
     $self->{cookieJar}=HTTP::Cookies->new();
 
     $self->{ua}=XMLTV::ZapListings::RedirPostsUA->new('cookie_jar'=>$self->{cookieJar});
-    if ( 0 && ! $self->{ua}->passRequirements($self->{Debug}) ) {
-	main::errorMessage("version of ".$self->{ua}->_agent()." doesn't handle cookies properly\n");
-	main::errorMessage("upgrade to 5.61 or later and try again\n");
-	return(undef);
-    }
+
+    # add POST requests to redirectable mix
+    push(@{$self->{ua}->requests_redirectable },'POST');
 
     bless($self, $type);
 
-    $self->setupSession();
+    if ( $self->initGeoCodeAndGetProvidersList($self->{GeoCode}) != 0 ) {
+	return(undef);
+    }
 
     return($self);
 }
 
-sub getHttpHost()
+sub dumpMe($)
 {
-    return("tvlistings2.zap2it.com");
+    require Data::Dumper;
+    my $s = $_[0];
+    my $d = Data::Dumper::Dumper($s);
+    $d =~ s/^\$VAR1 =\s*//;
+    $d =~ s/;$//;
+    chomp $d;
+    return $d;
 }
 
-# request the initial page so that the ASPSESSION* cookie is set.
-sub setupSession($)
+sub getForms($)
+{
+    my $content=$_[0];
+    my @forms;
+
+    while ( 1 ) {
+	my $start=index($content, "<form");
+	$start=index($content, "<FORM") if ( $start == -1 );
+
+	if ( $start == -1 ) {
+	    $start=index($content, $1) if ( $start=~m/(<FORM)/ios );
+	}
+	last if ( $start == -1 );
+
+	my $insideContent=substr($content, $start);
+
+	my $end=index($insideContent, "</form>");
+	$end=index($insideContent, "</FORM>") if ( $end == -1 );
+
+	if ( $end == -1 ) {
+	    $end=index($content, $1) if ( $end=~m/(<FORM)/ios );
+	}
+	last if ( $end == -1 );
+
+	#print STDERR "indexes are $start,$end\n";
+
+	$end+=length("</form>");
+
+	$insideContent=substr($insideContent, 0, $end);
+	#print STDERR "inside = $insideContent\n";
+
+	$content=substr($content, $start+$end);
+
+	$insideContent=~s/^<form\s*([^>]+)>(.*)<\/form>$//ios;
+	my $formAttrs=$1;
+	my $insideForm=$2;
+	
+	#print STDERR "checking '$formAttrs' and '$insideForm'\n";
+
+	#while ( $content=~s/<form\s*([^>]+)>(.*)(?!<\/form>)//ios ) {
+	#my $formAttrs=$1;
+	#my $insideForm=$2;
+
+	my $form;
+	while ( $formAttrs=~s/^\s*([^=]+)=//ios ) {
+	    my $attr=$1;
+	    $attr=~tr/[A-Z]/[a-z]/;
+	    if ( $formAttrs=~m/^\"/o ) { #"
+		$formAttrs=~s/^\"([^\"]*)\"\s*//o; #"
+		$form->{attrs}->{$attr}=$1;
+	    }
+	    else {
+		$formAttrs=~s/^([^\s]+)\s*//o;
+		$form->{attrs}->{$attr}=$1;
+	    }
+	    $formAttrs=~s/\s+$//o;
+	}
+	while ( $insideForm=~s/<input\s*([^>]+)>//ios ) {
+	    my $inputAttrs=$1;
+	    my $input;
+	    $input->{type}="text"; # default
+	    while ( $inputAttrs=~s/^\s*([^=]+)=//ios ) {
+		my $attr=$1;
+		$attr=~tr/[A-Z]/[a-z]/;
+		if ( $inputAttrs=~m/^\"/o ) { #"
+		    $inputAttrs=~s/^\"([^\"]*)\"\s*//o; #"
+		    $input->{$attr}=$1;
+		}
+		else {
+		    $inputAttrs=~s/^([^\s]+)\s*//o;
+		    $input->{$attr}=$1;
+		}
+		$inputAttrs=~s/\s+$//o;
+	    }
+	    push(@{$form->{inputs}}, $input);
+	}
+	
+	if ( $insideForm=~m/<select/ios ) {
+	    $insideForm=~s/<select/<select/ios;
+	    $insideForm=~s/<\/select>/<\/select>/ios;
+	    my $start;
+	    while (($start=index($insideForm, "<select")) != -1 ) {
+		my $end=index($insideForm, "</select>", $start)+length("</select>");
+		my $above=substr($insideForm, 0, $start);
+		
+		my $ntext=substr($insideForm, $start, $end);
+		$insideForm=$above.substr($insideForm, $end);
+
+		while ( $ntext=~s/^<select\s*([^>]+)>(.*)(?=<\/select>)//ios ) {
+		    my $selectAttrs=$1;
+		    my $options=$2;
+		    my $select;
+		    while ( $selectAttrs=~s/^\s*([^=]+)=//ios ) {
+			my $attr=$1;
+			$attr=~tr/[A-Z]/[a-z]/;
+			if ( $selectAttrs=~m/^\"/o ) { #"
+			    $selectAttrs=~s/^\"([^\"]*)\"\s*//o; #"
+			    $select->{attrs}->{$attr}=$1;
+			}
+			else {
+			    $selectAttrs=~s/^([^\s]+)\s*//o;
+			    $select->{attrs}->{$attr}=$1;
+			}
+			$selectAttrs=~s/\s+$//o;
+		    }
+		    while ( $options=~s/\s*<OPTION\s*([^>]+)>([^<]+)<\/OPTION>\s*//ios ||
+			    $options=~s/\s*<OPTION\s*([^>]+)>([^<]+)\s*<OPTION>/<OPTION>/ios ||
+			    $options=~s/\s*<OPTION\s*([^>]+)>([^<|]+)\s*$//ios) {
+			my $optionAttrs=$1;
+			my $optionValue=$2;
+			my $option;
+			
+			$optionValue=~s/\s+$//og;
+
+			$option->{cdata}=$optionValue;
+			$option->{value}=$optionValue; # default value is contents
+			while ( $optionAttrs=~s/^\s*([^=]+)=//ios ) {
+			    my $attr=$1;
+			    $attr=~tr/[A-Z]/[a-z]/;
+			    if ( $optionAttrs=~m/^\"/o ) { #"
+				$optionAttrs=~s/^\"([^\"]*)\"\s*//o; #"
+				$option->{attrs}->{$attr}=$1;
+			    }
+			    else {
+				$optionAttrs=~s/^([^\s]+)\s*//o;
+				$option->{attrs}->{$attr}=$1;
+			    }
+			    $optionAttrs=~s/\s+$//o;
+			}
+			while ( $optionAttrs=~s/^\s*selected//ios ) {
+			    $option->{selected}=1;
+			}
+			push(@{$select->{options}}, $option);
+		    }
+		    push(@{$form->{selects}}, $select);
+		}
+	    }
+	}
+	
+	while ( $insideForm=~s/<textarea\s*([^>]+)>(.*)(?=<\/textarea>)//ios ) {
+	    my $textAreaAttrs=$1;
+	    my $textArea;
+	    while ( $textAreaAttrs=~s/^\s*([^=]+)=//ios ) {
+		my $attr=$1;
+		$attr=~tr/[A-Z]/[a-z]/;
+		if ( $textAreaAttrs=~m/^\"/o ) { #"
+		    $textAreaAttrs=~s/^\"([^\"]*)\"\s*//o; #"
+		    $textArea->{$attr}=$1;
+		}
+		else {
+		    $textAreaAttrs=~s/^([^\s]+)\s*//o;
+		    $textArea->{$attr}=$1;
+		}
+		$textAreaAttrs=~s/\s+$//o;
+	    }
+	    push(@{$form->{textAreas}}, $textArea);
+	}
+
+	# minimal validation of form attributes
+	if ( !defined($form->{attrs}->{id}) &&
+	     defined($form->{attrs}->{name}) ) {
+	    $form->{attrs}->{id}=$form->{attrs}->{name};
+	    delete($form->{attrs}->{name});
+	}
+	
+	if ( !defined($form->{attrs}->{method}) &&
+	     defined($form->{attrs}->{type}) ) {
+	    $form->{attrs}->{method}=$form->{attrs}->{type};
+	    delete($form->{attrs}->{type});
+	}
+
+	# minimal validation of inputs
+	if ( defined($form->{inputs}) ) {
+	    for my $input (@{$form->{inputs}}) {
+		if ( !defined($input->{name}) &&
+		     defined($input->{id}) ) {
+		    $input->{name}=$input->{id};
+		    delete($input->{id});
+		}
+		# validate input field:
+		if ( $input->{type} eq "text" ) {
+		    if ( !defined($input->{name}) ) {
+			print STDERR dumpMe($input);
+			die "Form input - 'text' missing name attr";
+		    }
+		    # optional attrs are maxlength,size,value
+		}
+		elsif ( $input->{type} eq "password" ) {
+		    # no optional attrs
+		    if ( !defined($input->{name}) ) {
+			print STDERR dumpMe($input);
+			die "Form input - missing name attr";
+		    }
+		}
+		elsif ( $input->{type} eq "checkbox" ) {
+		    if ( !defined($input->{name}) ) {
+			print STDERR dumpMe($input);
+			die "Form input - missing name attr";
+		    }
+		    if ( !defined($input->{value}) ) {
+			print STDERR dumpMe($input);
+			die "Form input - missing name attr";
+		    }
+		    # optional attrs: checked
+		}
+		elsif ( $input->{type} eq "radio" ) {
+		    if ( !defined($input->{name}) ) {
+			print STDERR dumpMe($input);
+			die "Form input - missing name attr";
+		    }
+		    # optional attrs: checked
+		}
+		elsif ( $input->{type} eq "submit" ) {
+		    # optional attrs: name, value
+		}
+		elsif ( $input->{type} eq "image" ) {
+		    # optional attrs: ?.x, ?.y, src, img
+		}
+		elsif ( $input->{type} eq "reset" ) {
+		    # optional attrs: name, value
+		}
+		elsif ( $input->{type} eq "button" ) {
+		    # optional attrs: ??
+		}
+		elsif ( $input->{type} eq "file" ) {
+		    # optional attrs: ??
+		}
+		elsif ( $input->{type} eq "hidden" ) {
+		    if ( !defined($input->{name}) ) {
+			#print STDERR dumpMe($input);
+			#print STDERR "Form input - missing name attr\n";
+			$input->{name}="unknown";
+		    }
+		    if ( !defined($input->{value}) ) {
+			print STDERR dumpMe($input);
+			die "Form input - missing value attr";
+		    }
+		}
+	    }
+	}
+	push(@forms, $form);
+    }
+    return(@forms);
+}
+
+sub prepValue($)
+{
+    my $val=shift;
+    if ( $val=~m/\s/o ||
+	 $val=~m/\"/o ) {
+	$val="\"$val\"";
+    }
+    return($val);
+}
+
+sub dumpForm($)
+{
+    my $form=shift;
+    my $buf="";
+
+    if ( defined($form->{attrs}) ) {
+	$buf="<form";
+	for my $attr (keys %{$form->{attrs}}) {
+	    $buf.=" $attr=\"".$form->{attrs}->{$attr}."\"";
+	}
+	$buf.=">\n";
+    }
+    else {
+	$buf="<form>\n";
+    }
+    if ( defined($form->{inputs}) ) {
+	#$buf.="  <inputs>\n";
+	for my $input (@{$form->{inputs}}) {
+	    $buf.="  <input type=$input->{type}";
+	    for my $attr (sort keys %$input) {
+		next if ( $attr eq "type" );
+		my $value=$input->{$attr};
+		$buf.=" ".prepValue($attr)."=".prepValue($value);
+	    }
+	    $buf.=">\n";
+	}
+	#$buf.="  </inputs>\n";
+    }
+    if ( defined($form->{selects}) ) {
+	#$buf.="  <selects>\n";
+	for my $select (@{$form->{selects}}) {
+	    if ( $select->{attrs} ) {
+		$buf.="   <select";
+		for my $attr (keys %{$select->{attrs}}) {
+		    $buf.=" ".prepValue($attr)."=".prepValue($select->{attrs}->{$attr});
+		}
+		$buf.=">\n";
+	    }
+	    else {
+		$buf.="   <select>\n";
+	    }
+	    $buf.="     <options>\n";
+	    if ( defined($select->{options}) ) {
+		#$buf.=" type=$input->{type}";
+		for my $option (@{$select->{options}} ) {
+		    $buf.="      <op cdata=".prepValue($option->{cdata}).
+			" str=".prepValue($option->{value});
+		    if ( defined($option->{attrs}) ) {
+			for my $attr (sort keys %{$option->{attrs}}) {
+			    next if ( $attr eq "type" );
+			    my $value=$option->{attrs}->{$attr};
+			    $buf.=" ".prepValue($attr)."=".prepValue($value);
+			}
+		    }
+		    $buf.=">\n";
+		}
+	    }
+	    $buf.="     </options>\n";
+	    $buf.="   </select>\n";
+	}
+	#$buf.="     </selects>\n";
+    }
+    return($buf);
+}
+
+
+# todo - should use encoding flag on form to decide how to submit request.
+sub Form2Request($$)
 {
     my $self=shift;
-    my ($ua, $code, $httphost) = @_;
+    my $form=shift;
 
-    # some of the pages seem to require these cookies to be set
-    $self->{ua}->cookie_jar->set_cookie(0,'bhCookie','1','/',$self->{httpHost},undef,0,0,10000,0);
-    $self->{ua}->cookie_jar->set_cookie(0,'popunder','yes','/',$self->{httpHost},undef,0,0,10000,0);
+    return(undef) if ( !defined($form->{attrs}) );
 
-    my $req = GET("http://$self->{httpHost}/partnerinfo.asp?URL=/index.asp&zipcode=$self->{GeoCode}");
+    my $button;
+    my @pairs;
 
-    # Redirections are disabled while requesting this page, as the required
-    # cookie will be send in the first response.
-    my $x = $self->{ua}->requests_redirectable();
-    $self->{ua}->requests_redirectable([]);
+    if ( defined($form->{attrs}->{id}) &&
+	 defined($form->{attrs}->{name}) ) {
+	push(@pairs, $form->{attrs}->{name});
+	push(@pairs, $form->{attrs}->{id});
+    }
 
-    $self->{ua}->request($req);
+    for my $input (@{$form->{inputs}}) {
+	if ( !defined($input->{type}) ) {
+	  main::errorMessage("zap2it form 'input' missing type");
+	    
+	    return(undef);
+	}
+	if ( $input->{type} eq "submit" ||
+	     $input->{type} eq "image") {
+	    if ( defined($button) ) {
+		# skip subsequent buttons
+		next;
+	    }
+	    $button=$input;
+	}
+	if ( defined($input->{name}) ) {
+	    if ( !defined($input->{value}) ) {
+		if ( defined($self->{formSettings}->{$input->{name}}) ) {
+		    $input->{value}=$self->{formSettings}->{$input->{name}};
+		}
+		else {
+		  main::errorMessage("zap2it form has input '$input->{name}' we don't have a value for");
+		    
+		    return(undef);
+		}
+	    }
+	}
+	if ( $input->{type} eq "image" ) {
+	    push(@pairs, $input->{name}.".x");
+	    push(@pairs, "1");
+	    push(@pairs, $input->{name}.".y");
+	    push(@pairs, "1");
+	}
+	else {
+	    push(@pairs, $input->{name});
+	    push(@pairs, $input->{value});
+	}
+    }
+    if ( defined($form->{selects}) ) {
+	for my $select (@{$form->{selects}}) {
+	    if ( defined($select->{attrs}->{name}) ) {
+		my $name=$select->{attrs}->{name};
+		if ( defined($self->{formSettings}->{$name}) ) {
+		    push(@pairs, $name);
+		    push(@pairs, $self->{formSettings}->{$name});
+		}
+		else {
+		  main::errorMessage("zap2it form has select '$name' we don't have a value for");
+		    
+		    return(undef);
+		}
+	    }
+	}
+    }
 
-    $self->{ua}->requests_redirectable($x);
+    if ( $form->{attrs}->{method} eq "get" ) {
+	my $url="$form->{attrs}->{action}";
+	@pairs=reverse(@pairs);
+	while (scalar(@pairs)) {
+	    $url.="&".pop(@pairs)."=".pop(@pairs);
+	}
+	return(GET(URI->new_abs($url, $self->{formSettings}->{urlbase})));
+    }
+    elsif ( $form->{attrs}->{method} eq "post" ) {
+	my $uri = URI->new('http:');
+	$uri->query_form(@pairs);
+	my $content = $uri->query;
+
+	# not sure, but handing @pairs to POST (as arg #2) I guess
+	# isn't the way to use this, so instead I put the args in 
+	# the content of the request
+	my $req=POST(URI->new_abs($form->{attrs}->{action},
+				  $self->{formSettings}->{urlbase}));
+
+	$req->header('Content-Length' =>length($content));
+        $req->content($content);
+	return($req)
+    }
+    else {
+	return(undef);
+    }
 }
 
-sub getUserAgent($)
-{
-    my $self=shift;
-    return($self->{ua});
-}
-
-sub getCookieJar($)
-{
-    my $self=shift;
-    return($self->{cookieJar});
-}
-
-sub doRequest($$$$)
+sub doRequest($$$)
 {
     my ($ua, $req, $debug)=@_;
 
@@ -245,6 +674,12 @@ sub doRequest($$$$)
     }
 
     if ( $debug ) {
+	#my @forms=getForms($res->content());
+	#for my $form (@forms) {
+	    #$form->{dump}=dumpForm($form);
+	    #print STDERR $form->{dump};
+	#}
+
 	if ($res->is_success) {
 	    main::statusMessage("==== success ====\n");
 	}
@@ -261,64 +696,131 @@ sub doRequest($$$$)
     return($res);
 }
 
-sub getProviders($)
+sub getCurrentReleaseInfo($$)
 {
-    my ($self)=@_;
+    my $url=shift;
+    my $debug=shift;
+    my $ua=XMLTV::ZapListings::RedirPostsUA->new();
 
-    my $debug=$self->{Debug};
+    my $res=doRequest($ua, GET($url), $debug);
+    if ( !defined($res) ) {
+	return(undef);
+    }
+    # html looks something like:
+    #    <TR BGCOLOR="#EAECEF" ALIGN="center">
+    #    <TD ALIGN="left">
+    #    <B>xmltv</B></TD><TD>0.5.6
+    #    </TD>
+    #    <td>January 6, 2003</td>
 
-    my $req=GET("http://$self->{httpHost}/system.asp?partner_id=national&zipcode=$self->{GeoCode}");
+    my $content=$res->content();
+    if ( $content=~m;<TR[^>]*>\s*<TD[^>]*>\s*<B>([^<]+)</B>\s*</TD>\s*<TD>([^<]+)</TD>\s*<td>([^<]+)</td>;ois ) {
+	my %ret;
 
-    # actually attempt twice since first time in, we get a cookie that
-    # works for the second request
-    my $res=&doRequest($self->{ua}, $req, $debug);
+	$ret{NAME}=$1;
+	$ret{VERSION}=$2;
+	$ret{DATESTRING}=$3;
+
+	for my $key (keys %ret) {
+	    $ret{$key}=~s/^\s+//o;
+	    $ret{$key}=~s/\s+$//o;
+	}
+	if ( $debug ) {
+            main::debugMessage("URL: $url\n");
+            main::debugMessage("Returned $ret{NAME} $ret{VERSION} on $ret{DATESTRING}\n");
+	}
+	return(\%ret);
+    }
+    else {
+	return(undef);
+    }
+}
+
+sub getZipCodeForm($$$)
+{
+    my $self=shift;
+    my $geocode=shift;
+    my $urlbase=shift;
+
+    $self->{formSettings}->{zipcode}=$geocode;
+    $self->{formSettings}->{urlbase}=$urlbase;
+
+    return($self->Form2Request($self->{ZipCodeForm}));
+}
+
+sub initGeoCodeAndGetProvidersList($$)
+{
+    my $self=shift;
+    my $geocode=shift;
+
+    my $req = GET("http://www.zap2it.com/index");
+    my $res=&doRequest($self->{ua}, $req, $self->{Debug});
+
+    # traverse through forms on the page looking for the magic one.
+    # @zap2it - locate form based on name=zipcode input on a form
+    
+    # todo - this should be a query instead of a dump/scan
+    my @forms=getForms($res->content());
+    for my $form (@forms) {
+	my $dump=dumpForm($form);
+	#print STDERR $dump;
+	if ( $dump=~m/\s+name=zipcode/ois ) {
+	    $self->{ZipCodeForm}=$form;
+	    last;
+	}
+    }
+
+    if ( !defined($self->{ZipCodeForm}) ) {
+      main::errorMessage("zap2it top level web page doesn't have a zipcode form\n");
+	return(-1);
+    }
+
+    $req=$self->getZipCodeForm($geocode, $res->base());
+    if ( !defined($req) ) {
+	return(-1);
+    }
+
+    $res=&doRequest($self->{ua}, $req, $self->{Debug});
 
     # looks like some requests require two identical calls since
     # the zap2it server gives us a cookie that works with the second
-    # attempt after the first fails
     if ( !$res->is_success || $res->content()=~m/your session has timed out/i ) {
 	# again.
-	$res=&doRequest($self->{ua}, $req, $debug);
+	$res=&doRequest($self->{ua}, $req, $self->{Debug});
     }
 
     if ( !$res->is_success ) {
 	main::errorMessage("zap2it failed to give us a page: ".$res->code().":".
 			 HTTP::Status::status_message($res->code())."\n");
-	main::errorMessage("check postal/zip code or www site (maybe they're down)\n");
-	return(undef);
+	main::errorMessage("looks like we located the right form, check postal/zip code on zap2it.com web site (maybe they're down)\n");
+	return(-1);
     }
 
+    # reset urlbase
+    $self->{formSettings}->{urlbase}=$res->base();
+
     my $content=$res->content();
-    if ( $debug ) {
-	open(FD, "> providers.html") || die "providers.html:$!";
-	print FD $content;
-	close(FD);
+
+    # todo - this should be a query instead of a dump/scan
+    for my $form (getForms($content)) {
+	my $dump=dumpForm($form);
+	if ( $dump=~m/\s+name=provider/oi ) {
+	    $self->{ProviderForm}=$form;
+	    #print STDERR "Providers Form:\n$dump";
+	    last;
+	}
+    }
+
+    if ( !defined($self->{ProviderForm}) ) {
+      main::errorMessage("zap2it failed to give us a form to choose a Provider\n");
+	return(-1);
     }
 
     if ( $content=~m/(We do not have information for the zip code[^\.]+)/i ) {
 	main::errorMessage("zap2it says:\"$1\"\ninvalid postal/zip code\n");
-	return(undef);
+	return(-1);
     }
 
-    if ( $debug ) {
-	if ( !$content=~m/<Input type="hidden" name="FormName" value="edit_provider_list.asp">/ ) {
-	    main::errorMessage("Warning: form may have changed(1)\n");
-	}
-	if ( !$content=~m/<input type="submit" value="See Listings" name="saveProvider">/ ) {
-	    main::errorMessage("Warning: form may have changed(2)\n");
-	}
-	if ( !$content=~m/<input type="hidden" name="zipCode" value="$self->{GeoCode}">/ ) {
-	    main::errorMessage("Warning: form may have changed(3)\n");
-	}
-	if ( !$content=~m/<input type="hidden" name="ziptype" value="new">/ ) {
-	    main::errorMessage("Warning: form may have changed(4)\n");
-	}
-	if ( !$content=~m/<input type=submit value="Confirm Channel Lineup" name="preview">/ ) {
-	    main::errorMessage("Warning: form may have changed(5)\n");
-	}
-    }
-
-    my @providers;
     while ( $content=~s/<SELECT(.*)(?=<\/SELECT>)//ios ) {
         my $options=$1;
         while ( $options=~s/<OPTION value="(\d+)">([^<]+)<\/OPTION>//ios ) {
@@ -326,48 +828,66 @@ sub getProviders($)
 	    $p->{id}=$1;
 	    $p->{description}=$2;
             #main::debugMessage("provider $1 ($2)\n";
-	    push(@providers, $p);
+	    push(@{$self->{ProviderList}->{$self->{GeoCode}}}, $p);
         }
     }
-    if ( !@providers ) {
+    if ( !defined($self->{ProviderList}) ) {
 	main::errorMessage("zap2it gave us a page with no service provider options\n");
 	main::errorMessage("check postal/zip code or www site (maybe they're down)\n");
 	main::errorMessage("(LWP::UserAgent version is ".$self->{ua}->_agent().")\n");
-	return(undef);
+	return(-1);
     }
-    return(@providers);
+
+    return(0);
 }
 
-sub getChannelList($$$)
+sub getProviderList($)
 {
-    my ($self, $provider)=@_;
+    my $self=shift;
+    return(@{$self->{ProviderList}->{$self->{GeoCode}}});
+}
 
-    my $debug=$self->{Debug};
+# now allows you to get a list of avail of channels for
+# any of the valid provider ids for the give postal/zipcode
+sub getChannelList($$)
+{
+    my $self=shift;
+    my $providerId=shift;
 
-    my $req = POST("http://$self->{httpHost}/system.asp?partner_id=national&zipcode=$self->{GeoCode}",
-		   [saveProvider=>"See Listings",
-		    zipcode=>"$self->{GeoCode}",
-		    provider=>"$provider",
-		    FormName=>'system.asp',
-		    btnPreviewYes=>'Confirm Channel Lineup',
-		    page_from=>''
-		    ]);
-
-    my $res=&doRequest($self->{ua}, $req, $debug);
-    if ( !$res->is_success || $res->content()=~m/your session has timed out/i ) {
-	# again.
-	$res=&doRequest($self->{ua}, $req, $debug);
+    my $found;
+    for my $p (@{$self->{ProviderList}->{$self->{GeoCode}}}) {
+	if ( $p->{id} eq $providerId ) {
+	    $found=$p;
+	    last;
+	}
     }
 
-    $req=GET("http://$self->{httpHost}/listings_redirect.asp\?spp=0");
-    $res=&doRequest($self->{ua}, $req, $debug);
+    if ( !defined($found) ) {
+      main::errorMessage("invalid provider id, not valid of postal/zip code $self->{GeoCode}\n");
+	return(-1);
+    }
+
+    # ensure you have formSetting set up
+    $self->{formSettings}->{zipcode}=$self->{GeoCode};
+    $self->{formSettings}->{provider}=$providerId;
+
+    my $req=$self->Form2Request($self->{ProviderForm});
+    if ( !defined($req) ) {
+	return(-1);
+    }
+
+    my $res=&doRequest($self->{ua}, $req, $self->{Debug});
+    if ( !$res->is_success || $res->content()=~m/your session has timed out/i ) {
+	# again.
+	$res=&doRequest($self->{ua}, $req, $self->{Debug});
+    }
 
     # looks like some requests require two identical calls since
     # the zap2it server gives us a cookie that works with the second
     # attempt after the first fails
     if ( !$res->is_success || $res->content()=~m/your session has timed out/i ) {
 	# again.
-	$res=&doRequest($self->{ua}, $req, $debug);
+	$res=&doRequest($self->{ua}, $req, $self->{Debug});
     }
 
     if ( !$res->is_success ) {
@@ -392,10 +912,28 @@ sub getChannelList($$$)
     # Probably this is not needed?  I think that calling dumpPage() if
     # an error occurs is probably better.  -- epa
     # 
-    if ( $debug ) {
+    if ( $self->{Debug} ) {
 	open(FD, "> channels.html") || die "channels.html: $!";
 	print FD $content;
 	close(FD);
+    }
+
+    # todo - this should be a query instead of a dump/scan
+    for my $form (getForms($content)) {
+	my $dump=dumpForm($form);
+	if ( $dump=~m/\s+name=displayType/io &&
+	     $dump=~m/\s+name=startDay/io &&
+	     $dump=~m/\s+name=startTime/io &&
+	     $dump=~m/\s+name=station/io ) {
+	    $self->{ChannelByTextForm}=$form;
+	    #print STDERR "ChannelByTextForm:\n$dump";
+	    last;
+	}
+    }
+
+    if ( !defined($self->{ChannelByTextForm}) ) {
+      main::errorMessage("zap2it failed to give us a form to choose a Text Listings\n");
+	return(-1);
     }
 
     my @channels;
@@ -436,7 +974,7 @@ sub getChannelList($$$)
 		return(undef);
 	    }
 	    else {
-		my $icon=URI->new_abs($ref, "http://$self->{httpHost}/");
+		my $icon=URI->new_abs($ref, $res->base());
 		$nchannel->{icon}=$icon;
 	    }
 
@@ -551,122 +1089,6 @@ sub dumpPage($)
     }
 }
 
-1;
-
-
-########################################################
-#
-# little LWP::UserAgent that accepts redirects
-#
-########################################################
-package XMLTV::ZapListings::RedirPostsUA;
-use HTTP::Request::Common;
-
-# include LWP separately to verify minimal requirements on version #
-use LWP 5.62;
-use LWP::UserAgent;
-
-use vars qw(@ISA);
-@ISA = qw(LWP::UserAgent);
-
-#
-# manually check requirements on LWP (libwww-perl) installation
-# leaving this subroutine here in case we need something less
-# strict or more informative then what 'use LWP 5.60' gives us.
-# 
-sub passRequirements($$)
-{
-    my ($self, $debug)=@_;
-    my $haveVersion=$LWP::VERSION;
-
-  main::debugMessage("requirements check: have $self->_agent(), require 5.61\n");
-
-    if ( $haveVersion=~/(\d+)\.(\d+)/ ) {
-	if ( $1 < 5 || ($1 == 5 && $2 < 61) ) {
-	    die "$0: requires libwww-perl version 5.61 or later, (you have $haveVersion)";
-	    return(0);
-	}
-    }
-    # pass
-    return(1);
-}
-
-#
-# add env_proxy flag to constructed UserAgent.
-#
-sub new
-{
-    my $proto = shift;
-    my $class = ref($proto) || $proto;
-    my $self = $class->SUPER::new(@_, env_proxy => 1,
-				  timeout => 180);
-    bless ($self, $class);
-    #$self->agent('Mozilla/5.0');
-    return $self;
-}
-
-sub redirect_ok { 1; }
-1;
-
-########################################################
-# END
-########################################################
-
-package XMLTV::ZapListings::Scraper;
-
-use HTTP::Request::Common;
-
-sub new
-{
-    my ($type) = shift;
-    my $self={ @_ };            # remaining args become attributes
-
-    if ( ! defined($self->{PostalCode}) &&
-	 ! defined($self->{ZipCode}) ) {
-	die "no PostalCode or ZipCode specified in create";
-    }
-
-    # create own own ZapListings handle each time
-    $self->{zl}=new XMLTV::ZapListings('PostalCode'=>$self->{PostalCode},
-				       'ZipCode' => $self->{ZipCode},
-				       'Debug' => $self->{Debug});
-
-    # since I know we don't care, lets pretend there's only one code :)
-    if ( defined($self->{PostalCode}) ) {
-	$self->{ZipCode}=$self->{PostalCode};
-	delete($self->{PostalCode});
-    }
-
-    die "no ProviderID specified in create" if ( ! defined($self->{ProviderID}) );
-
-    $self->{httphost}=XMLTV::ZapListings::getHttpHost();
-
-    my $req = POST("http://$self->{httphost}/system.asp?partner_id=national&zipcode=$self->{ZipCode}",
-		   [saveProvider=>"See Listings",
-		    zipcode=>"$self->{ZipCode}",
-		    provider=>"$self->{ProviderID}",
-		    FormName=>'system.asp',
-		    btnPreviewYes=>'Confirm Channel Lineup',
-		    page_from=>''
-		    ]);
-
-    # initialize listings cookies
-    my $res=&XMLTV::ZapListings::doRequest($self->{zl}->getUserAgent(), $req, $self->{Debug});
-    if ( !$res->is_success || $res->content()=~m/your session has timed out/i ) {
-	# again.
-	$res=&XMLTV::ZapListings::doRequest($self->{zl}->getUserAgent(), $req, $self->{Debug});
-    }
-
-    bless($self, $type);
-    return($self);
-}
-
-sub getCookieJar($)
-{
-    my $self=shift;
-    return($self->{zl}->getCookieJar());
-}
-
 use HTML::Entities qw(decode_entities);
 
 sub massageText
@@ -681,17 +1103,6 @@ sub massageText
     $text=~s/\s+$//o;
     $text=~s/\s+/ /o;
     return($text);
-}
-
-sub dumpMe($)
-{
-    require Data::Dumper;
-    my $s = $_[0];
-    my $d = Data::Dumper::Dumper($s);
-    $d =~ s/^\$VAR1 =\s*//;
-    $d =~ s/;$//;
-    chomp $d;
-    return $d;
 }
 
 sub setValue($$$$)
@@ -813,6 +1224,14 @@ sub scrapehtml($$$)
     $html=~s/<\/TR/<\/tr/og;
 
     my @programs;
+
+    my $lastProgram;
+
+    if ( defined($self->{lastProgramInfo}) ) {
+	$lastProgram=$self->{lastProgramInfo};
+	delete($self->{lastProgramInfo});
+    }
+
     for my $row (split(/<tr/, $html)) {
 	# nuke everything leading up to first >
 	# which amounts to html attributes of <tr used in split
@@ -943,7 +1362,7 @@ sub scrapehtml($$$)
 	      main::errorMessage("\thtml:'$desc'\n");
 	    }
 
-	    if ( defined($prog->{end_hour}) ) {
+	    if ( 1 ) {
 		# anytime end hour is < start hour, end hour is next morning
 		# posted start time is 12 am and end hour is also 12 then adjust
 		if ( $prog->{start_hour} == 0 && $prog->{end_hour}==12 ) {
@@ -958,6 +1377,51 @@ sub scrapehtml($$$)
 		    $self->setValue(\$prog, "end_hour", $prog->{end_hour}+12);
 		}
 	    }
+
+	    # check for program holes
+	    if ( defined($lastProgram) ) {
+
+		# recalc endhour incase last prog of yesterday ended after midnight
+		my $endHour=$lastProgram->{end_hour};
+		if ( $endHour>= 24 ) {
+		    $endHour-=24;
+		}
+
+		# assumes we're grabbing one day after another
+		my $EndTimeInSeconds=(3600*$endHour)+(60*$lastProgram->{end_min});
+		    
+		my $startedAt=(3600*$prog->{start_hour})+(60*$prog->{start_min});
+		if ( $startedAt != $EndTimeInSeconds ) {
+		    my $p;
+
+		    $p->{start_hour}=$lastProgram->{end_hour};
+		    if ( $p->{start_hour}>= 24 ) {
+			$p->{start_hour}-=24;
+		    }
+		    $p->{start_min}= $lastProgram->{end_min};
+		    $p->{end_hour}=$prog->{start_hour};
+		    $p->{end_min}= $prog->{start_min};
+		    $p->{title}="unknown";
+
+		    my $range=sprintf("%02d:%02d to %02d:%02d",
+				      $p->{start_hour},$p->{start_min},$p->{end_hour},$p->{end_min});
+		    if ( $self->{DebugListings} ) {
+			if ( $EndTimeInSeconds > $startedAt ) {
+			    $p->{precomment}="filler for programing hole from yesterday at $range today";
+			}
+			else {
+			    $p->{precomment}="filler for programing hole from $range";
+			}
+		    }
+		    push(@programs, $p);
+		  main::statusMessage("filled in program hole from $range on $htmlsource\n");
+		}
+	    }
+
+	    # track when the last program ended down to the second
+	    #$lastProgram->{EndTimeInSeconds}=$dayStartTimeInSeconds+(3600*$prog->{end_hour})+(60*$prog->{end_min});
+	    $lastProgram->{end_hour}=$prog->{end_hour};
+	    $lastProgram->{end_min}=$prog->{end_min};
 
 	    if ( $desc=~s;<b><a><text>\s*(.*?)\s*</text></a></b>;;io ) {
 		$self->setValue(\$prog, "title", massageText($1));
@@ -1406,6 +1870,7 @@ sub scrapehtml($$$)
 	    }
 
 	    push(@programs, $prog);
+	    $self->{lastProgramInfo}=$lastProgram;
 	}
     }
     return(@programs);
@@ -1428,32 +1893,28 @@ sub readSchedule($$$$$)
 	$/=$s;
     }
     else {
-	my $ua=XMLTV::ZapListings::RedirPostsUA->new('cookie_jar'=>$self->getCookieJar());
 
-	if ( 0 && ! $ua->passRequirements($self->{Debug}) ) {
-	    main::errorMessage("version of ".$ua->_agent()." doesn't handle cookies properly\n");
-	    main::errorMessage("upgrade to 5.61 or later and try again\n");
+	# magic zapit state, we anticipate matching
+	$self->{formSettings}->{displayType}="Text";
+	$self->{formSettings}->{duration}="1";
+	$self->{formSettings}->{startDay}="$month/$day/$year";
+	$self->{formSettings}->{startTime}="0";
+	$self->{formSettings}->{category}="0";
+	$self->{formSettings}->{station}="$stationid";
+
+	my $req=$self->Form2Request($self->{ChannelByTextForm});
+	if ( !defined($req) ) {
 	    return(-1);
 	}
-
-	my $req=POST("http://$self->{httphost}/listings_redirect.asp\?partner_id=national",
-		     [ displayType => "Text",
-		       duration => "1",
-		       startDay => "$month/$day/$year",
-		       startTime => "0",
-		       category => "0",
-		       station => "$stationid",
-		       goButton => "GO"
-		       ]);
-
-	my $res=&XMLTV::ZapListings::doRequest($ua, $req, $self->{Debug});
+	
+	my $res=&doRequest($self->{ua}, $req, $self->{Debug});
 
 	# looks like some requests require two identical calls since
 	# the zap2it server gives us a cookie that works with the second
 	# attempt after the first fails
 	if ( !$res->is_success || $res->content()=~m/your session has timed out/i ) {
 	    # again.
-	    $res=&XMLTV::ZapListings::doRequest($ua, $req, $self->{Debug});
+	    $res=&doRequest($self->{ua}, $req, $self->{Debug});
 	}
 
 	if ( !$res->is_success ) {
@@ -1491,7 +1952,15 @@ sub readSchedule($$$$$)
 	main::debugMessage("scraping html for $year-$month-$day on station $stationid: $station_desc\n");
     }
 
+    if ( defined($self->{scrapeState}) && defined($self->{scrapeState}->{$stationid}) ) {
+	$self->{lastProgramInfo}=delete($self->{scrapeState}->{$stationid});
+    }
+
     @{$self->{Programs}}=$self->scrapehtml($content, "$year-$month-$day on station $station_desc (id $stationid)");
+    if ( defined($self->{lastProgramInfo}) ) {
+	$self->{scrapeState}->{$stationid}=delete($self->{lastProgramInfo});
+    }
+
     if ( scalar(@{$self->{Programs}}) == 0 ) {
 	unlink($cacheFile) if ( defined($cacheFile) );
 
@@ -1520,5 +1989,6 @@ sub getPrograms($)
 }
 
 1;
-
-
+########################################################
+# END
+########################################################
