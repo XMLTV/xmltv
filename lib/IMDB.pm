@@ -166,6 +166,14 @@ sub checkIndexesOkay($)
 	    # 0.2 -> 0.3 upgrade requires prepStage 5 to be re-run
 	    return("imdbDir index db requires minor reindexing, rerun --prepStage 3 and 5\n");
 	}
+	if ( $1 == 0 && $2 == 3 ) {
+	    # 0.2 -> 0.3 upgrade requires prepStage 5 to be re-run
+	    return("imdbDir index db requires major reindexing, rerun --prepStage 2 and new prepStages 5,6 and 7\n");
+	}
+	if ( $1 == 0 && $2 == 4 ) {
+	    # 0.2 -> 0.3 upgrade requires prepStage 5 to be re-run
+	    return("imdbDir index db corrupt (got version 0.4), rerun --prepStage all\n");
+	}
 	# okay
 	return(undef);
     }
