@@ -803,12 +803,13 @@ sub applyFound($$$)
     return($prog);
 }
 
-sub augmentProgram($$)
+sub augmentProgram($$$)
 {
-    my ($self, $prog)=@_;
+    my ($self, $prog, $moviesOnly)=@_;
 
     $self->{stats}->{programCount}++;
-
+    
+    # assume first title in first language is the one we want.
     my $title=$prog->{title}->[0]->[0];
 
     if ( defined($prog->{date}) && $prog->{date}=~m/^\d\d\d\d$/o ) {
@@ -834,25 +835,27 @@ sub augmentProgram($$)
 	# fall through and try again as a tv series
     }
 
-    my $id=$self->findTVSeriesInfo($title);
-    if ( defined($id) ) {
-	$self->{stats}->{$id->{matchLevel}."Matches"}++;
-	$self->{stats}->{$id->{matchLevel}}->{$id->{qualifier}}++;
-	return($self->applyFound($prog, $id));
-    }
-
-    if ( 0 ) {
-	# this has hard to support 'close' results, unless we know
-	# for certain we're looking for a movie (ie duration etc)
-	# this is a bad idea.
-	$id=$self->findMovieInfo($title, undef, 2); # any title match
+    if ( !$moviesOnly ) {
+	my $id=$self->findTVSeriesInfo($title);
 	if ( defined($id) ) {
 	    $self->{stats}->{$id->{matchLevel}."Matches"}++;
 	    $self->{stats}->{$id->{matchLevel}}->{$id->{qualifier}}++;
 	    return($self->applyFound($prog, $id));
 	}
+
+	if ( 0 ) {
+	    # this has hard to support 'close' results, unless we know
+	    # for certain we're looking for a movie (ie duration etc)
+	    # this is a bad idea.
+	    my $id=$self->findMovieInfo($title, undef, 2); # any title match
+	    if ( defined($id) ) {
+		$self->{stats}->{$id->{matchLevel}."Matches"}++;
+		$self->{stats}->{$id->{matchLevel}}->{$id->{qualifier}}++;
+		return($self->applyFound($prog, $id));
+	    }
+	}
+	$self->status("failed to find a match for show \"$title\"");
     }
-    $self->status("failed to find a match for show \"$title\"");
     return(undef);
 }
 
