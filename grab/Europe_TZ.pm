@@ -80,10 +80,13 @@ sub parse_eur_date($$) {
 
     # No timezone present, we need to guess.
     my $dp = ParseDate($date);
-    return undef if not defined $dp;
+    return undef if not $dp;
 
     # Start and end of summer time in that year, in UTC
-    my ($start_dst, $end_dst) = @{dst_dates(UnixDate($dp, '%Y'))};
+    my $year = UnixDate($dp, '%Y');
+    die "cannot convert Date::Manip object $dp to year"
+      if not defined $year;
+    my ($start_dst, $end_dst) = @{dst_dates($year)};
 
     # The clocks shift backwards and forwards by one hour.
     my $clock_shift = "1 hour";
@@ -207,7 +210,7 @@ sub utc_offset( $$ ) {
 # dst_dates()
 #
 # Return the dates (in UTC) when summer starts and ends in a given
-# year.
+# year.  Private.
 #
 # According to <http://www.rog.nmm.ac.uk/leaflets/summer/summer.html>,
 # summer time starts at 01:00 on the last Sunday in March, and ends at
@@ -223,7 +226,7 @@ sub utc_offset( $$ ) {
 #   end time and date of summer time (in UTC)
 #
 sub dst_dates($) {
-    croak 'usage: dst_dates(year)' if @_ != 1;
+    die "usage: dst_dates(year), got args: @_" if @_ != 1;
     my $year = shift;
     die "don't know about DST before 1998" if $year < 1998;
 
