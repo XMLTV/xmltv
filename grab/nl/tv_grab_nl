@@ -921,7 +921,7 @@ sub get_channels() {
 #   XMLTV id of channel
 #
 # Returns a list of tuples of the form [ start, stop, title, url ]
-# where start and stop are Date::Manip objects, title is a string, and 
+# where start and stop are Date::Manip objects, title is a string, and
 # url is the page to download if you want full details.
 #
 # Note that stop may be unset, since the format doesn't require that
@@ -929,8 +929,7 @@ sub get_channels() {
 # The meaning of this is that the times for that programme were
 # completely nonsensical, and you should do something like putting it
 # into a clump with the last valid programme that appeared before it,
-# or else drop it with a warning.  (However if stop is set, start will
-# be.)
+# or else drop it with a warning.
 #
 sub process_summary_page( $$$ ) {
     my ($url, $day, $official_day) = @_;
@@ -1008,8 +1007,7 @@ sub process_summary_page( $$$ ) {
 	}
 	# otherwise, leave it for later processing
     }
-    my @r;
-    my $next_day = 0;
+    my @todo;
     while (@bits >= 3) {
 	my $ch_bit = shift @bits;
 	my $ch_class = $ch_bit->[0];
@@ -1053,49 +1051,144 @@ sub process_summary_page( $$$ ) {
 	    next;
 	}
 	
-	# Right, got channel name, times, and title.
-	# FIXME should check channel name (among other things).
-	#
-	my ($start, $stop);
-	die if not defined $day;
-	my ($start_hh, $start_mm, $stop_hh, $stop_mm);
+	my ($start_hhmm, $stop_hhmm);
 	if ($times =~ /^(\d\d):(\d\d)-/
 	    and 0 <= $1 and $1 < 24 and 0 <= $2 and $2 < 60) {
-	    ($start_hh, $start_mm) = ($1, $2);
-	    $start = parse_eur_date("$day $start_hh:$start_mm", $TZ);
-	    die if not defined $start;
-	    t "parsed start time $start";
+	    $start_hhmm = "$1:$2";
 	}
 	if ($times =~ /-(\d\d):(\d\d)$/
 	    and 0 <= $1 and $1 < 24 and 0 <= $2 and $2 < 60) {
-	    ($stop_hh, $stop_mm) = ($1, $2);
-	    $stop = parse_eur_date("$day $stop_hh:$stop_mm", $TZ);
-	    die if not defined $stop;
-	    t "parsed stop time $stop";
-	}
-	
-	if (defined $start and defined $stop
-	    and Date_Cmp($start, $stop) > 0) {
-	    if ($next_day++) {
-		# But we already crossed midnight once, so the times
-		# must be just plain wrong.
-		#
-		t 'bogus times (stop < start)';
-		undef $start; undef $stop;
-	    }
-	    else {
-		$day = UnixDate(DateCalc($day, '+ 1 day'), '%Y-%m-%d');
-		t "gone to next day ($day)";
-		$stop = parse_eur_date("$day $stop_hh:$stop_mm", $TZ);
-		die if not defined $stop;
-		die unless Date_Cmp($start, $stop) < 0;
-		t '$stop now ' . d $stop;
-	    }
+	    $stop_hhmm = "$1:$2";
 	}
 
+	# Right, got channel name, times, and title.
+	# FIXME should check channel name (among other things).
+	#
 	my $title_url = URI->new_abs($title_href, $url);
-	push @r, [ $start, $stop, $title, $title_url ];
+	push @todo, [ $start_hhmm, $stop_hhmm, $title, $title_url ];
     }
+
+    # Now we need to make some sense of the times.  When stop time
+    # appears before start time this could mean we have crossed
+    # midnight, or it could just be a mistake.  If there is more than
+    # one such potential crossing we pick the one with the shortest
+    # resulting programme length and assume the others are mistakes.
+    #
+    my @crossings;
+    my $shortest;
+    my $next_day = UnixDate(DateCalc($day, '+ 1 day'), '%Y-%m-%d');
+    my $crossing_at;
+#    local $Log::TraceMessages::On = 1;
+    t 'looking at raw times and searching for midnight crossing: ' . d \@todo;
+    for (my $i = 0; $i < @todo; ++$i) {
+	my ($start_hhmm, $stop_hhmm) = @{$todo[$i]};
+	t '$start_hhmm=' . d $start_hhmm;
+	t '$stop_hhmm=' . d $stop_hhmm;
+	next if not defined $start_hhmm;
+	next if not defined $stop_hhmm;
+
+	my $start = parse_eur_date("$day $start_hhmm", $TZ);
+	die if not defined $start;
+	my $stop = parse_eur_date("$day $stop_hhmm", $TZ);
+	die if not defined $stop;
+	t "checking if $start -> $stop goes backwards";
+	next if Date_Cmp($start, $stop) <= 0;
+	t "yup, it's a candidate";
+
+	my $stop_next_day = parse_eur_date("$next_day $stop_hhmm", $TZ);
+	die if not defined $stop_next_day;
+	die if Date_Cmp($stop_next_day, $start) <= 0;
+	t 'if it were, stop time on next day would be: ' . d $stop_next_day;
+
+	my $distance = DateCalc($start, $stop_next_day);
+	t '...and length of programme: ' . d $distance;
+	t 'shortest length so far: ' . d $shortest;
+	if (not defined $shortest or $distance lt $shortest) {
+	    t 'this is the best so far';
+	    $shortest = $distance;
+	    $crossing_at = $i;
+	}
+    }
+    t '@todo=' . d \@todo;
+
+    # Now given the place at which we cross from $day to $next_day we
+    # can add the appropriate days to the hh:mm times.
+    #
+    my @r;
+    if (not defined $crossing_at) {
+	foreach (@todo) {
+	    my ($start_hhmm, $stop_hhmm, $title, $title_url) = @$_;
+	    my $start = "$day $start_hhmm" if defined $start_hhmm;
+	    my $stop = "$day $stop_hhmm" if defined $stop_hhmm;
+	    push @r, [ $start, $stop, $title, $title_url ];
+	}
+    }
+    else {
+	for (my $i = 0; $i < $crossing_at; ++$i) {
+	    my ($start_hhmm, $stop_hhmm, $title, $title_url) = @{$todo[$i]};
+	    my $start = "$day $start_hhmm" if defined $start_hhmm;
+	    my $stop = "$day $stop_hhmm" if defined $stop_hhmm;
+	    push @r, [ $start, $stop, $title, $title_url ];
+	}
+	for (my $i = $crossing_at) {
+	    my ($start_hhmm, $stop_hhmm, $title, $title_url) = @{$todo[$i]};
+	    my $start = "$day $start_hhmm" if defined $start_hhmm;
+	    my $stop = "$next_day $stop_hhmm" if defined $stop_hhmm;
+	    push @r, [ $start, $stop, $title, $title_url ];
+	}
+	for (my $i = $crossing_at + 1; $i < @todo; ++$i) {
+	    my ($start_hhmm, $stop_hhmm, $title, $title_url) = @{$todo[$i]};
+	    my $start = "$next_day $start_hhmm" if defined $start_hhmm;
+	    my $stop = "$next_day $stop_hhmm" if defined $stop_hhmm;
+	    push @r, [ $start, $stop, $title, $title_url ];
+	}
+    }
+
+    # Now we can parse the dates into Date::Manip objects.
+    foreach (@r) {
+	use vars qw($start $stop);
+	local (*start, *stop) = \ ($_->[0], $_->[1]);
+	if (defined $start) {
+	    $start = parse_eur_date($start, $TZ);
+	    die if not defined $start;
+	}
+	if (defined $stop) {
+	    $stop = parse_eur_date($stop, $TZ);
+	    die if not defined $stop;
+	}
+    }
+    t 'after parsing dates: ' . d \@r;
+
+    # Check the dates and weed out those which are obviously wrong.
+    my $last_start;
+    foreach (@r) {
+	use vars qw($start $stop);
+	local (*start, *stop) = \ ($_->[0], $_->[1]);
+	t 'checking dates, $last_start=' . d $last_start;
+	t '$start=' . d $start;
+	t '$stop=' . d $stop;
+	if (defined $start and defined $stop
+	    and Date_Cmp($start, $stop) > 0) {
+	    # Appears to stop before it starts.  Assume the stop time
+	    # is bogus but the start time might be okay.
+	    #
+	    undef $stop;
+	}
+	if (defined $last_start) {
+	    if (defined $start and Date_Cmp($start, $last_start) < 0) {
+		# Appears to start before previous start.
+		undef $start;
+	    }
+	    if (defined $stop and Date_Cmp($stop, $last_start) < 0) {
+		# Stops before previous start - that's just as bad.
+		undef $stop;
+	    }
+	}
+	$last_start = $start if defined $start;
+    }
+    t 'removed bad dates, now: ' . d \@r;
+
+    # If there is a 'next page' link do a recursive call to handle it.
     foreach (@bits) {
 	my ($type, $href, $text) = @$_;
 	if ($type eq 'lijst_zender' and $text eq 'Volgende') {
@@ -1110,6 +1203,8 @@ sub process_summary_page( $$$ ) {
 	    warn "discarding leftover $type: $text";
 	}
     }
+
+    t 'returning tuples: ' . d \@r;
     return @r;
 }
 
