@@ -119,16 +119,8 @@ foreach my $exe (split(/ /,$files))
 # execute our command
 #
     $0 = $_;        # set $0 to our script
-    $r = require $exe;
-    exit $r;
-
-
-
-
-
-
-
-
+    require $exe;
+    exit 0;
 }
 
 #
