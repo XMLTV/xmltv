@@ -143,7 +143,7 @@ sub askManyBooleanQuestions( $@ )
     while (@_) {
 	my $q = shift @_;
 	my $r = askQuestion($q, ($default ? 'yes' : 'no'),
-			    'yes', 'no', ($default ? 'all' : 'none'));
+			    'yes', 'no', 'all', 'none');
 	last if not defined $r;
 	if ($r eq 'yes') {
 	    push @r, 1;
