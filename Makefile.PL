@@ -1,7 +1,5 @@
 #!/usr/bin/perl -w
 
-# FIXME use ExtUtils::Command not rm(1).
-
 use ExtUtils::MakeMaker;
 use Config;
 use File::Basename ();
@@ -613,9 +611,9 @@ windows_dist ::
 	        exit 1; \
 	fi
 	$(MAKE) install
-	mv $(INSTALLPLAINDOC) $(PREFIX)/doc/
-	rmdir $(PREFIX)/share/doc
-	mkdir -p $(PREFIX)/doc/man
+	perl -MExtUtils::Command -e mv $(INSTALLPLAINDOC) $(PREFIX)/doc/
+        perl -MExtUtils::Command -e rm_r $(PREFIX)/share/doc
+        perl -MExtUtils::Command -e mkpath $(PREFIX)/doc/man
 
         # Convert the manual pages to plain text.  A bit roundabout,
         # this, we could just use pod2text to start with.  But since
@@ -644,14 +642,14 @@ windows_dist ::
 	     "README.win32)." | fmt >$$out; \
         echo >>$$out; \
 	(perldoc -u Date::Manip | perl -ne 'BEGIN { print "\n=pod\n\n" } print if (/^The format options are:/ .. /^=/) and not /^=/' | pod2text) >>$$out
-	rm -rfv $(INSTALLBIN) $(PREFIX)/lib/ $(INST_MAN1DIR) $(INSTALLMAN3DIR)
-	cp -avi xmltv.dtd $(PREFIX)
+	perl -MExtUtils::Command -e rm_rf $(INSTALLBIN) $(PREFIX)/lib/ $(INST_MAN1DIR) $(INSTALLMAN3DIR)
+	perl -MExtUtils::Command -e cp xmltv.dtd $(PREFIX)
 	# The following command will not be necessary when the source
 	# tree was checked out on a DOSish system.
 	#
 	find $(PREFIX) -type f ! -name \*.jpg | xargs unix2dos
-	mv -vi $(PREFIX)/doc/README* $(PREFIX)
-	mv -vf $(PREFIX)/README.win32 $(PREFIX)/README
+	perl -MExtUtils::Command -e mv $(PREFIX)/doc/README* $(PREFIX)
+	perl -MExtUtils::Command -e mv $(PREFIX)/README.win32 $(PREFIX)/README
 	@echo
 	@echo Part of a Windows distribution tree has been made in $(PREFIX)/.
 	@echo Now copy in the executables!
@@ -716,8 +714,8 @@ END
 
 	    $extra .= <<END
 \$(INST_$uc)/$inst_pos: $src Makefile $dir_exists
-	\@rm -f \$(INST_$uc)/$inst_pos
-	cp $src \$(INST_$uc)/$inst_pos
+	\@\$(RM_F) \$(INST_$uc)/$inst_pos
+	perl -MExtUtils::Command -e cp $src \$(INST_$uc)/$inst_pos
 	-\@\$(CHMOD) \$(PERM_RW) \$(INST_$uc)/$inst_pos
 END
 	      ;
@@ -739,7 +737,7 @@ END
 	
 	# And realclean should remove them, by calling realclean_$filetype.
 	$inherited =~ s/^(\s*realclean\s+::\s.+)/$1 realclean_$filetype/m or die;
-	$inherited .= "realclean_$filetype ::\n\trm -f ";
+	$inherited .= "realclean_$filetype ::\n\t\$(RM_F) ";
 	foreach (sort keys %files) {
 	    my $inst_pos = $files{$_};
 	    $inherited .= "\$(INST_$uc)/$inst_pos ";
@@ -757,7 +755,7 @@ sub MY::clean {
     package MY;
     my $inherited = shift->SUPER::clean(@_);
     $inherited =~ s/\s+$//;
-    $inherited .= "\n\t-rm -f $_\n" foreach @to_clean;
+    $inherited .= "\n\t-\$(RM_F) $_\n" foreach @to_clean;
     return $inherited;
 }
 
