@@ -37,7 +37,8 @@ sub STORE {
 package XMLTV::Ananova_Channel;
 BEGIN {
     if (not @Tie::RefHash::Nestable::ISA) {
-	*Tie::RefHash::Nestable = *Tie::RefHash::MyNestable;
+	# Apparently this is the way to copy the whole namespace.
+	*Tie::RefHash::Nestable:: = *Tie::RefHash::MyNestable::;
     }
 }
 
