@@ -7,6 +7,7 @@ use File::Find;
 use strict;
 
 sub test_module( $$ );
+sub check_date_manip();
 sub test_special( $$ );
 sub targets( $ );
 
@@ -89,10 +90,11 @@ my %prereqs
   = (
      'LWP' => 5.65,
      'XML::Twig' => 3.09,
-     'Date::Manip' => 5.41,
+     # Date::Manip checked below, not mentioned here
      'XML::Writer' => 0,
      'Memoize' => 0,
     );
+check_date_manip(); # but others are checked later
 
 # Files which are run to generate source code.
 my %pl_files = ('filter/tv_grep.PL'     => 'filter/tv_grep',
@@ -121,40 +123,6 @@ my @grab_need_share;
 # other grabber needs the same variable-number-of-files installation).
 #
 my $do_uk_channel_pkgs = 0;
-
-# There is something particularly broken about Date::Manip on Red Hat
-# 8.0, we check for that specially.
-#
-if ($^O =~ /linux/i) {
-    open(FH, 'perl -MDate::Manip -e 0 2>&1 |') or die "cannot open pipe from perl: $!";
-    while (<FH>) {
-	if (/^Malformed UTF-8 character/) {
-	    if (defined $ENV{LC_ALL} and $ENV{LC_ALL} =~ s/\.UTF-?8//) {
-		die
-"Your installed Date::Manip module is producing errors like: $_
-
-This is a known bug with UTF-8 locales, most commonly seen on Red Hat
-Linux 8.0. See
-<http://bugzilla.redhat.com/bugzilla/show_bug.cgi?id=74884>.
-
-Until Date::Manip is fixed to work with UTF-8, you need to change your
-LC_ALL environment variable to turn off the UTF-8 locale.
-
-Try setting LC_ALL to en_US and running the Makefile.PL again.  If that
-doesn't work, please contact the XMLTV maintainer.
-";
-	    }
-	    else {
-		die
-"Your installed Date::Manip module is producing errors like '$_', but
-locale is not UTF-8.  Try setting LC_ALL=en_US and running the
-Makefile.PL again; also report this message to the XMLTV maintainer.
-";
-	    }
-	}
-    }
-    close FH;			# ignore exit status
-}
 
 # 'Recommended but not required'.  It isn't currently handled to have
 # the same module in both sets.
@@ -445,6 +413,102 @@ sub test_module( $$ ) {
     }
 
     return [ 'OK', undef ];
+}
+
+# Special case for Date::Manip and its screwed-up version numbering
+# (which is mostly my fault).  This dies on error rather than
+# returning anything.  It warns, but continues, if it cannot tell
+# whether the version is new enough.
+#
+sub check_date_manip() {
+    # First try running it externally to avoid spewing warnings.  Hmm
+    # perhaps this code could be removed.  Still, some extra checking
+    # can't hurt.
+    #
+    open(FH, 'perl -MDate::Manip -e 0 2>&1 |') or die "cannot open pipe from perl: $!";
+    while (<FH>) {
+	if (/^Malformed UTF-8 character/) {
+	    if (defined $ENV{LC_ALL} and $ENV{LC_ALL} =~ s/\.UTF-?8//) {
+		die
+"Your installed Date::Manip module is producing warnings like: $_
+
+You need to upgrade to release 5.40.epa1 or later, which fixes the
+module to not produce warnings under UTF-8 locales.  You can get this
+version from <http://membled.com/work/patches/DateManip/>.
+";
+	    }
+	    else {
+		die
+"Your installed Date::Manip module is producing errors like '$_', but
+locale is not UTF-8.  Try setting LC_ALL=en_US and running the
+Makefile.PL again; also report this message to the XMLTV maintainer.
+
+Alternatively, it might help to upgrade to Date::Manip 5.40.epa1 or
+later; you can get that version from
+<http://membled.com/work/patches/DateManip/>.
+";
+	    }
+	}
+    }
+    close FH;			# ignore exit status
+
+    eval "require Date::Manip";
+    if ($@) {
+	# This if-test is separate to suppress spurious 'Use of
+	# uninitialized value in numeric lt (<)' warning.
+	#
+	if ($@ ne '') {
+	    if ($@ =~ /^Can\'t locate \S+\.pm in \@INC/) {
+		die
+"The module Date::Manip doesn't seem to be installed.  Unlike other
+prerequisites, for this one you need to get the module from the page
+<http://membled.com/work/patches/DateManip/> rather than from CPAN,
+because the CPAN version (and the development version from the
+Date::Manip home page) doesn't have needed bug fixes.  At least, this
+was true at the time of writing.
+
+Please install the module from the page mentioned above and try again.
+";
+	    }
+	    else {
+		chomp (my $msg = $@);
+		die
+"Failed to load the Date::Manip module because of: $msg
+
+You can install the needed version of Date::Manip from
+<http://membled.com/work/patches/DateManip/>.
+";
+	    }
+	}
+    }
+
+    my $ver = Date::Manip->VERSION;
+    if ($ver ge '5.40.epa1' and $ver =~ /epa/) {
+	# Okay.
+    }
+    elsif ($ver ge '5.41') {
+	warn 
+"
+Not sure whether a recent enough version of Date::Manip is installed.
+The minimum required version is 5.40.epa1 available at
+<http://membled.com/work/patches/DateManip/>.  Your version is $ver,
+but I don't know whether it includes the needed bug fixes from the
+'epa' series.  Certainly the development release '5.41' made on
+2002-12-18 did not.  But if your version is newer than that, it might
+have the fixes.  Continuing, but please contact
+xmltv-users\@lists.sourceforge.net if you're not sure whether you need
+to upgrade Date::Manip.
+
+";
+    }
+    else {
+	die 
+"The version of Date::Manip installed ($ver) is too old.  At least
+5.40.epa1 is required.  That is an unofficial release of Date::Manip
+with some extra bug fixes compared to the standard version, and you
+can get it from <http://membled.com/work/patches/DateManip/>.
+";
+    }
 }
 
 # Run a subroutine and check that its output has the correct version.
