@@ -8,70 +8,217 @@
 use strict;
 use XMLTV;
 use Data::Dumper;
-use Getopt::Long;
+use Date::Manip;
 
 sub usage();
+sub all_text( $$ );
+sub abbrev( $$ );
+sub on_after( $ );
+sub match_regexp( $ );
 
-# Kludge to allow a mixture of short and long options.  Will break if
-# one day things like '-i' are acceptable as arguments to other
-# options.
+#my $now = ParseDate('now'); die if not defined $now;
+
+# Tests to apply.  We store them as a disjunction of conjunctions, for
+# example (a && b && c) || (d && e) || (f && g).
 #
-my %long =
-  (
-   '-i' => '--ignore-case',
-   '-e' => '--e'
-  );
-foreach (@ARGV) {
-    last if $_ eq '--';
-    if (defined $long{$_}) { $_ = $long{$_} }
-}
-my $ignore_case = 0;
-my @code;
-GetOptions('ignore-case' => \$ignore_case, 'e=s' => \@code);
+my @conjunctions;
+my @curr_conjunction;
 
-# Perl seems to handle multiple -e options by concatenating them into
-# a single string, so we'll do the same.
-#
-my $have_code = 0;
-if (@code) {
-    $have_code = 1;
-    my $code = join(' ', @code);
-    eval "sub code { $code }";
-    die "error evaluating code $code: $@" if $@;
-}
+my ($ignore_case, $regexp, $ended_options, $filename);
+while (@ARGV) {
+    my $arg = shift @ARGV;
 
-my $pattern;
-if (not $have_code) {
-    # Pattern required.
-    usage() unless 1 <= @ARGV and @ARGV < 3;
-    $pattern = shift;
-}
-else {
-    usage() unless 1 <= @ARGV and @ARGV < 2;
-}
+    unless ($ended_options) {
+	if ($arg eq '--') {
+	    $ended_options = 1;
+	    next;
+	}
+	if ($arg eq '-i' or abbrev('--ignore-case', $arg)) {
+	    $ignore_case = 1; # no warning if given twice
+	    next;
+	}
 
-my $filename = @ARGV ? $ARGV[0] : '-';
-my ($encoding, $credits, $ch, $progs) = @{XMLTV::read_data($filename)};
+	my $pred; # subroutine to test a programme and return boolean
+	if ($arg eq '-and' or $arg eq '--and') { # no abbrevs
+	    next;
+	}
+	elsif ($arg eq '-e' or abbrev('--eval', $arg)) {
+	    my $code = shift @ARGV;
+	    die "-e requires an argument, a snippet of Perl code"
+	      if not defined $code;
+	    $pred = eval "sub { $code }";
+	    if ($@) {
+		die "-e $code: $@\n";
+	    }
+	    if (not defined $pred) {
+		# Shouldn't happen, I think.
+		die "-e $code failed for some reason";
+	    }
+	}
+	elsif (abbrev('--on-after', $arg)) {
+	    my $date = shift @ARGV;
+	    die "--on-after requires an argument, a date and time"
+	      if not defined $date;
+	    my $pd = ParseDate($date);
+	    die "--on-after $date: invalid date\n"
+	      if not defined $pd;
+	    $pred = sub { on_after($pd) };
+	}
+	if (defined $pred) {
+	    push @curr_conjunction, $pred;
+	    next;
+	}
+    }
 
-# Todo: lazy writing of programmes
-my @out;
-foreach (@$progs) {
-    if ($have_code) {
-	push @out, $_ if code();
+    # It wasn't an option, see if it's a regexp or filename.
+    if (not $ended_options and $arg =~ /^-/) {
+	die "bad option $arg\n";
+    }
+
+    # A regular expression is allowed only in the simple case where we
+    # haven't got any of the fancy boolean tests.
+    #
+    if (not defined $regexp
+	and not @conjunctions and not @curr_conjunction) {
+	$regexp = $arg;
+	next;
+    }
+    elsif (not defined $filename) {
+	$filename = $arg;
+	next;
     }
     else {
-	my $tmp = Dumper($_);
-	if ($ignore_case) {
-	    push @out, $_ if /$pattern/io;
-	}
-	else {
-	    push @out, $_ if /$pattern/o;
-	}
+	warn "bad argument $arg (cannot grep multiple files)\n";
+	usage();
     }
+}
+push @conjunctions, \@curr_conjunction if @curr_conjunction;
+if (not @conjunctions and not defined $regexp) {
+    warn "neither boolean tests nor regexp given\n";
+    usage();
+}
+elsif (not @conjunctions and defined $regexp) {
+    @conjunctions = ([ sub { match_regexp($regexp) } ]);
+}
+elsif (@conjunctions and not defined $regexp) {
+    # Okay.
+}
+elsif (@conjunctions and defined $regexp) {
+    warn "bad argument $regexp\n";
+    usage();
+}
+
+$filename = '-' if not defined $filename;
+my ($encoding, $credits, $ch, $progs) = @{XMLTV::read_data($filename)};
+
+my @out;
+PROG: foreach (@$progs) {
+    CONJ: foreach my $conj (@conjunctions) {
+	  foreach my $test (@$conj) {
+	      # Every test in the conjunction must succeed.
+	      next CONJ if not $test->();
+	  }
+	  # They all succeeded, write the programme.
+	  push @out, $_;
+	  next PROG;
+      }
+      # All the conjunctions failed, won't write.
 }
 XMLTV::write_data([$encoding, $credits, $ch, \@out]);
 
 sub usage() {
-    print STDERR "usage: $0 [--ignore-case|-i] [-e perl_code] pattern [filename]\n";
+    print STDERR <<END
+usage: $0 [--ignore-case|-i] [expression|regexp] [file]
+where expression may consist of
+    --eval PERL_CODE
+    --on-after DATE
+    EXPR1 -and EXPR2
+-and is implicit and may be omitted.
+END
+  ;
     exit(1);
 }
+
+# all_text()
+#
+# Get all pieces of text for a particular programme attribute.
+#
+# Parameters:
+#   programme hashref
+#   attribute name, eg 'title', 'desc'
+#
+# Returns: list of text strings for that attribute
+#
+# I wrote Lingua::Preferred::acceptable_lang() especially for this
+# routine but then realized that when grepping you probably don't care
+# about viewing only those strings applicable to the current language.
+#
+sub all_text( $$ ) {
+    my ($p, $key) = @_;
+    return () if not $p->{$key};
+    return map { $_->[0] } @{$p->{$key}};
+}
+
+# Long option abbreviation.
+sub abbrev( $$ ) {
+    my ($abbrev, $arg) = @_;
+    return ($arg =~ /^--\w/ && index($abbrev, $arg) == 0);
+}
+
+
+####
+# Boolean tests.  These work on the programme $_ and return true or
+# false.  Their behaviour should be affected, if appropriate, by the
+# global $ignore_case.
+#
+my %warned_no_stop;
+sub on_after( $ ) {
+    my $cutoff = shift;
+    my $stop = $_->{stop};
+
+    if (not defined $stop) {
+	# We use the start time instead, that will lose some shows
+	# crossing the boundary but is mostly accurate.
+	#
+	my $start = $_->{start};
+	my $pd = ParseDate($start);
+	if (not defined $pd) {
+	    warn "bad start time $start\n";
+	    return 1;
+	}
+
+	my $result = (Date_Cmp($cutoff, $pd) < 0);
+	if (not $result) {
+	    # This programme was dropped, but maybe it wouldn't have
+	    # been if it had a stop time.
+	    #
+	    # We should warn about this: but have an allowance of one
+	    # programme per channel without stop time, because you
+	    # can reasonably expect that from sorted listings.
+	    #
+	    unless ($warned_no_stop{$_->{channel}}++) {
+		warn "not all programmes have stop times, "
+		  . "cannot accurately filter those on after a certain time\n"
+		    . "(maybe filter through sort_listings to add stop times)\n";
+	    }
+	}
+	return $result;
+    }
+    else {
+	my $pd = ParseDate($stop);
+	if (not defined $pd) {
+	    warn "bad stop time $stop\n";
+	    return 1;
+	}
+	return (Date_Cmp($cutoff, $pd) < 0);
+    }
+}
+
+
+sub match_regexp( $ ) {
+    my $regexp = shift;
+    # Stringify the whole darn thing and match against that.
+    my $tmp = Dumper($_);
+    return $ignore_case ? /$regexp/i : /$regexp/;
+}
+
