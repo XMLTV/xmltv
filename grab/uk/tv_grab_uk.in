@@ -84,7 +84,7 @@ BEGIN {
 my $have_bar;
 BEGIN {
     eval { require Term::ProgressBar };
-    $have_bar = not defined $@;
+    $have_bar = not $@;
 }
 
 use XMLTV;
@@ -177,13 +177,32 @@ if (not defined $CONFIG_FILE) {
 	$CONFIG_FILE = 'tv_grab_uk';
     }
 }
-if (-e $CONFIG_FILE) {
-    print STDERR "using config file $CONFIG_FILE\n";
+
+if ($opt_configure) {
+    if (-e $CONFIG_FILE) {
+	print <<END
+The configuration file $CONFIG_FILE already exists.  There is
+currently no support for altering an existing configuration, you have
+to reconfigure from scratch.
+
+END
+  ;
+	if (not askBooleanQuestion
+	    ('Do you wish to overwrite the old configuration?', 0)) {
+	    print "Exiting.\n";
+	    exit 0;
+	}
+    }
 }
-elsif (not $opt_configure) {
-    die "config file $CONFIG_FILE does not exist, run me with --configure\n";
+else {
+    if (-e $CONFIG_FILE) {
+	print STDERR "using config file $CONFIG_FILE\n";
+    }
+    else {
+	die "config file $CONFIG_FILE does not exist, run me with --configure\n";
+    }
 }
- 
+
 # On Windows Date::Manip can have trouble finding the local timezone.
 # Since the output listings shouldn't depend on the local timezone
 # anyway, we just set it here.
@@ -262,7 +281,6 @@ else {
 # Ask the user which channels to download, and write $CONFIG_FILE.
 sub configure() {
 #    local $Log::TraceMessages::On = 1;
-    warn "FIXME overwriting existing $CONFIG_FILE\n";
     # FIXME need to make directory
     open(CONF, ">$CONFIG_FILE") or die "cannot write to $CONFIG_FILE: $!";
     my %chose_ch;
@@ -334,11 +352,23 @@ END
 	}
     }
 
-    if (askBooleanQuestion('Download radio listings?', 1)) {
-	print CONF "type radio\n";
+    my @radio_chs = grep { my $t = $_->get_type(); defined $t and $t eq 'radio' }
+      XMLTV::Ananova_Channel->all();
+
+    if (@radio_chs == 0) {
+	print "Hmm, there don't seem to be any radio channels available.\n";
+    }
+    elsif (@radio_chs < 10) {
+	if (askBooleanQuestion('Download radio listings?', 1)) {
+	    print CONF "type radio\n";
+	}
+    }
+    else {
+	print 'There are ', (scalar @radio_chs),
+	  " radio channels, please select those you want individually\n";
     }
 
-    print "Any other channels which may have been missed?\n";
+    print "Any other channels?\n";
     for (;;) {
 	print "Enter the name of a channel, or '.' to finish: ";
 	my $in = <STDIN>;
@@ -496,6 +526,8 @@ sub grab( @ ) {
 	  map { $_->get_first_ananova_id() }
 	    keys %wanted;
 	die if not @chs;
+	print STDERR 'grabbing ' . (scalar @chs) . ' channels from '
+	  . (scalar @all_chs) . " available\n";
 	foreach my $day (1 .. $opt_days) {
 	    my $CHS_PER_REQ = 10;
 	    for (my $i = 0; $i < @chs; $i += $CHS_PER_REQ) {
@@ -512,31 +544,39 @@ sub grab( @ ) {
 
     my $bar = new Term::ProgressBar('downloading listings', scalar @to_get)
       if $have_bar;
-    my @listingses;
+    my @to_parse;
     foreach (@to_get) {
 	t "downloading page: $_";
-	eval {
-	    my $got = get($_);
-	    if (not defined $got) {
-		warn "failed to get $_, skipping page\n";
-	    }
-	    elsif (not fix_ananova_xml(\$got)) {
-		warn "$_: bad content, skipping page\n";
-	    }
-	    else {
-		t "parsing content of $_";
-		my $data;
-		{
-		    local $Log::TraceMessages::On = 0;
-		    eval { $data = XMLTV::parse($got) };
-		    die "$_: $@" if $@;
-		}
-		push @listingses, $data;
-	    }
-	};
-	die "$_: $@" if $@;
+	my $got = get($_);
+	if (not defined $got) {
+	    warn "failed to get $_, skipping page\n";
+	}
+	elsif (not fix_ananova_xml(\$got)) {
+	    warn "$_: bad content, skipping page\n";
+	}
+	else {
+	    push @to_parse, [ $got, $_ ];
+	}
 	update $bar if $have_bar;
     }
+
+    $bar = new Term::ProgressBar('parsing', scalar @to_parse)
+      if $have_bar;
+
+    my @listingses;
+    foreach (@to_parse) {
+	my ($xml, $url) = @$_;
+	t "parsing content of $url";
+	my $r;
+	{
+	    local $Log::TraceMessages::On = 0;
+	    eval { $r = XMLTV::parse($xml) };
+	    die "$_: $@" if $@;
+	}
+	push @listingses, $r;
+	update $bar if $have_bar;
+    }
+
     my %w_args = ();
     if (defined $opt_output) {
 	my $fh = new IO::File ">$opt_output";
@@ -564,6 +604,8 @@ sub grab( @ ) {
 #    local $Log::TraceMessages::On = 1;
     t '\%by_ch: ' . d \%by_ch;
     @progs = ();
+    $bar = new Term::ProgressBar('miscellaneous fixes', scalar keys %by_ch)
+      if $have_bar;
     foreach (keys %by_ch) {
 	t "doing channel $_";
 	my $progs = $by_ch{$_};
@@ -582,6 +624,7 @@ sub grab( @ ) {
 	fix_zero_length($progs);
 
 	push @progs, @$progs;
+	update $bar if $have_bar;
     }
 
     # Warn about occasional bug where blank titles are generated.
@@ -761,6 +804,7 @@ sub do_region( $$$$ ) {
 	next;
     }
     $fc->delete();
+    for ($reg_name) { s/^\s+//; s/\s+$// }
     $r->{$reg_id} = $reg_name;
 
     # Inside a <region> element are some <channel> elements.
