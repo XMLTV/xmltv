@@ -1127,24 +1127,29 @@ sub status($$)
     }
 }
 
+use XMLTV::Gunzip;
+use IO::File;
+sub openMaybeGunzip($)
+{
+    for ( shift ) {
+	return gunzip_open($_) if m/\.gz$/;
+	return new IO::File("< $_");
+    }
+}
+
 sub readMovies($$$)
 {
     my ($self, $countEstimate, $file)=@_;
     my $startTime=time();
 
-    if ( $file=~m/\.gz$/o ) {
-	open(FD, "gzip -c -d $file |") || return(-2);
-    }
-    else {
-	open(FD, "< $file") || return(-2);
-    }
-    while(<FD>) {
+    my $fh = openMaybeGunzip($file) || return(-2);
+    while(<$fh>) {
 	if ( m/^MOVIES LIST/o ) {
-	    if ( !($_=<FD>) || !m/^===========/o ) {
+	    if ( !($_=<$fh>) || !m/^===========/o ) {
 		$self->error("missing ======= after MOVIES LIST at line $.");
 		return(-1);
 	    }
-	    if ( !($_=<FD>) || !m/^\s*$/o ) {
+	    if ( !($_=<$fh>) || !m/^\s*$/o ) {
 		$self->error("missing empty line after ======= at line $.");
 		return(-1);
 	    }
@@ -1166,7 +1171,7 @@ sub readMovies($$$)
     my $next_update=0;
 
     my $count=0;
-    while(<FD>) {
+    while(<$fh>) {
 	my $line=$_;
 	#print "read line $.:$line";
 
@@ -1181,7 +1186,7 @@ sub readMovies($$$)
 
 	    push(@{$self->{movies}}, $line);
 	    $count++;
-	    
+	
 	    if (Have_bar) {
 		# re-adjust target so progress bar doesn't seem too wonky
 		if ( $count > $countEstimate ) {
@@ -1199,7 +1204,11 @@ sub readMovies($$$)
 	}
     }
     $progress->update($countEstimate) if Have_bar;
-    close(FD);
+
+    # Would close($fh) but that causes segfaults on my system.
+    # Investigating, but in the meantime just leave it open.
+    #
+
     $self->status(sprintf("Parsed $count titles in %d seconds",time()-$startTime));
     return($count);
 }
@@ -1228,12 +1237,7 @@ sub readCastOrDirectors($$$)
 	die "why are we here ?";
     }
 
-    if ( $file=~m/\.gz$/o ) {
-	open(FD, "gzip -c -d $file |") || return(-2);
-    }
-    else {
-	open(FD, "< $file") || return(-2);
-    }
+    my $fh = openMaybeGunzip($file) || return(-2);
     my $progress=Term::ProgressBar->new({name  => "parsing $whichCastOrDirector",
 					 count => $castCountEstimate,
 					 ETA   => 'linear'})
@@ -1241,21 +1245,21 @@ sub readCastOrDirectors($$$)
     $progress->minor(0) if Have_bar;
     $progress->max_update_rate(1) if Have_bar;
     my $next_update=0;
-    while(<FD>) {
+    while(<$fh>) {
 	if ( m/^$header/ ) {
-	    if ( !($_=<FD>) || !m/^===========/o ) {
+	    if ( !($_=<$fh>) || !m/^===========/o ) {
 		$self->error("missing ======= after $header at line $.");
 		return(-1);
 	    }
-	    if ( !($_=<FD>) || !m/^\s*$/o ) {
+	    if ( !($_=<$fh>) || !m/^\s*$/o ) {
 		$self->error("missing empty line after ======= at line $.");
 		return(-1);
 	    }
-	    if ( !($_=<FD>) || !m/^Name\s+Titles\s*$/o ) {
+	    if ( !($_=<$fh>) || !m/^Name\s+Titles\s*$/o ) {
 		$self->error("missing name/titles line after ======= at line $.");
 		return(-1);
 	    }
-	    if ( !($_=<FD>) || !m/^[\s\-]+$/o ) {
+	    if ( !($_=<$fh>) || !m/^[\s\-]+$/o ) {
 		$self->error("missing name/titles suffix line after ======= at line $.");
 		return(-1);
 	    }
@@ -1270,7 +1274,7 @@ sub readCastOrDirectors($$$)
     my $cur_name;
     my $count=0;
     my $castNames=0;
-    while(<FD>) {
+    while(<$fh>) {
 	my $line=$_;
 	$line=~s/\n$//o;
 	#$self->status("read line $.:$line");
@@ -1350,7 +1354,7 @@ sub readCastOrDirectors($$$)
 	$count++;
     }
     $progress->update($castCountEstimate) if Have_bar;
-    close(FD);
+    # close($fh); # see earlier comment
     $self->status(sprintf("Parsed $castNames $whichCastOrDirector in $count titles in %d seconds",time()-$startTime));
     return($castNames);
 }
