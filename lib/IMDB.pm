@@ -716,7 +716,7 @@ sub new
     for ('imdbDir', 'verbose') {
 	die "invalid usage - no $_" if ( !defined($self->{$_}));
     }
-    if ( ! -d $self->{imdbDir} ) {
+    if ( ! -d "$self->{imdbDir}" ) {
 	die "$self->{imdbDir}:does not exist" ;
     }
     my $missingListFiles=0;
