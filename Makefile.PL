@@ -646,6 +646,7 @@ xmltv.exe :: $(EXE_FILES) lib/exe_wrap.pl lib/exe_opt.pl
 
 windows_dist ::
 	@perl -e "if (-e '$location') { print STDERR qq[To build a Windows distribution, please rerun Makefile.PL with\nPREFIX set to a new (nonexistent) directory then 'make windows_dist'.\n(Remember that only absolute paths work properly with MakeMaker.)\n]; exit 1 }"
+	@perl -e 'print "Have you updated doc/README.win32 for this release? "; exit 1 unless <STDIN> =~ /^[yY]/'
 	$(MAKE) install
 	perl -MExtUtils::Command -e mv $(INSTALLPLAINDOC) $location/doc/
 	perl -MExtUtils::Command -e rm_r $location/share/doc
