@@ -61,7 +61,7 @@ $cmd = shift || "";
 
 # --version (and abbreviations thereof)
 if (index('--version', $cmd) == 0 and length $cmd >= 3) {
-    print "xmltv 0.5.27\n";
+    print "xmltv 0.5.28\n";
     exit;
 }
 

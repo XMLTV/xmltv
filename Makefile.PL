@@ -35,7 +35,7 @@ Some installations of perl 5.6.0 are buggy and crash while running
 this script.  If you get 'segmentation fault' below, please report it
 to the xmltv-users mailing list so we can try to work around the bug.
 At present the only known fix is to upgrade to a newer perl version
-such as 5.6.1 or 5.8.0.
+such as 5.6.1 or 5.8.3.
 END
   ;
 }
@@ -49,7 +49,7 @@ my $opt_yes = 0;
 GetOptions('nodeps' => \$opt_nodeps, 'yes' => \$opt_yes);
 
 our $VERSION;
-$VERSION = '0.5.27';
+$VERSION = '0.5.28';
 
 # Fragment of Makefile text to give the directory where files should
 # be installed.  The extra '.' in the middle of the path is to avoid
