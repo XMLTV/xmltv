@@ -103,6 +103,12 @@ my %pl_files = ('filter/tv_grep.PL'     => 'filter/tv_grep',
 		'lib/XMLTV.pm.PL'       => 'lib/XMLTV.pm',
 	       );
 
+# Files to be installed in the system-wide share/ directory.
+my %share_files = ('grab/uk/channel_ids' => 'tv_grab_uk/channel_ids',
+		   'grab/uk_rt/channel_ids' => 'tv_grab_uk_rt/channel_ids',
+		   'grab/it/dud_channels' => 'tv_grab_it/dud_channels',
+		  );
+
 # There is something particularly broken about Date::Manip on Red Hat
 # 8.0, we check for that specially.
 #
@@ -248,7 +254,7 @@ are present.",
        blurb => 'Tv_grab_nl_wolf is an alternative listings grabber for the Netherlands.',
        exes => [ 'grab/nl_wolf/tv_grab_nl_wolf' ],
        prereqs => { 'HTML::TreeBuilder' => 0 } },
-     
+
      { name => 'tv_grab_hu',
        blurb => 'Tv_grab_hu is the listings grabber for Hungary.',
        exes => [ 'grab/hu/tv_grab_hu' ],
@@ -327,6 +333,8 @@ foreach my $info (@opt_components) {
 	%pm = (%pm, %{$info->{pm}})                   if $info->{pm};
 	%prereqs = (%prereqs, %{$info->{prereqs}})    if $info->{prereqs};
 	%pl_files = (%pl_files, %{$info->{pl_files}}) if $info->{pl_files};
+	%share_files = (%share_files, %{$info->{share_files}})
+	  if $info->{share_files};
     }
     print STDERR "\n";
 }
@@ -580,10 +588,6 @@ sub MY::installbin {
     foreach (@::docs) {
 	$doc_files{$_} = File::Basename::basename($_);
     }
-    my %share_files = ('grab/uk/channel_ids' => 'tv_grab_uk/channel_ids',
-		       'grab/uk_rt/channel_ids' => 'tv_grab_uk_rt/channel_ids',
-		       'grab/it/dud_channels' => 'tv_grab_it/dud_channels',
-		      );
     my $ch_pkgs_dir= 'grab/uk/channel_pkgs';
     my $wanted = sub {
 	return if -d;
