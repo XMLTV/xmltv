@@ -28,8 +28,19 @@ unless (exists $ENV{TZ})
     my $tz     = ($lhour - $ghour);
        $tz    -= 24 if $tz >  12;
        $tz    += 24 if $tz < -12;
-       $tz     = sprintf("%+03d00",$tz);
+       if    ($tz == -5 ) { $tz='EST5EDT' }
+#
+# this should not be necessary, but DATE::MANIP doesn't always deal with
+# numeric time zones correctly.  This should hold us until the fix is widely
+# distributed.
+#
+       elsif ($tz == -6 ) { $tz='CST6CDT' }
+       elsif ($tz == -7 ) { $tz='MST7MDT' }
+       elsif ($tz == -8 ) { $tz='PST8PDT' }
+       else               { $tz= sprintf("%+03d00",$tz) };
+
        $ENV{TZ}= $tz;
+
 } #timezone
 print STDERR "Timezone is $ENV{TZ}\n";
 
