@@ -589,17 +589,26 @@ sub special_multipart( $ ) {
     # FIXME doesn't handle multiparts bridging noon or midnight.
     #
     my $as_12h_am = sub {
-	clocks_poss($_[0])->[0] || return undef;
-	return time12to24("$_[0]am");
+	my $w = shift;
+	$w =~ s/[,;.]$//;
+	t "trying $w as 12 hour am time";
+	clocks_poss($w)->[0] || return undef;
+	return time12to24("$w am");
     };
     my $as_12h_pm = sub {
-	clocks_poss($_[0])->[0] || return undef;
-	return time12to24("$_[0]pm");
+	my $w = shift;
+	$w =~ s/[,;.]$//;
+	t "trying $w as 12 hour pm time";
+	clocks_poss($w)->[0] || return undef;
+	return time12to24("$w pm");
     };
     my $as_24h = sub {
-	clocks_poss($_[0])->[1] || return undef;
-	(my $tmp = $_[0]) =~ tr/./:/;
-	return $tmp;
+	my $w = shift;
+	$w =~ s/[,;.]$//;
+	t "trying $w as 24 hour time";
+	clocks_poss($w)->[1] || return undef;
+	$w =~ tr/./:/;
+	return $w;
     };
 
     if (defined $tz) { t "using timezone $tz for interpreting times" }
@@ -613,7 +622,9 @@ sub special_multipart( $ ) {
 	my $prev;
 	for (my $pos = 0; $pos < @words; $pos++) {
 	    t "testing word $words[$pos] at position $pos";
-	    my $i = $interp->($words[$pos]);
+	    my $w = $words[$pos];
+	    t "word is '$w'";
+	    my $i = $interp->($w);
 	    if (not defined $i) {
 		t "doesn't parse to a time with this interp.";
 		next;
@@ -632,11 +643,11 @@ sub special_multipart( $ ) {
 		t "not within time period, whole interpretation wrong";
 		next INTERP;
 	    }
-	    if (defined $prev and not (Date_Cmp($prev, $t) < 0)) {
-		# Not after the previous time.  Likewise.
-		t "not after previous time $prev, whole interpretation wrong";
-		next INTERP;
-	    }
+	    # Don't insist that times be in order, this isn't the case
+	    # for all listings (eg 'News at 0700 and 0730; Weather at
+	    # 0715').
+	    #
+
 	    $prev = $t;
 	    ++ $count;
 	    if ($pos == 0) {
@@ -672,8 +683,14 @@ sub special_multipart( $ ) {
     t 'at least three valid times, proceed';
 
     my $split = multipart_split_desc(\@words, $best_interp);
+    die if not defined $split->[0];
+    die if not defined $split->[2];
     use vars '@pps'; local *pps = $split->[0];
     t 'got list of pseudo-programmes: ' . d \@pps;
+    foreach (@pps) {
+	die if not defined;
+	die if not keys %$_;
+    }
     my $common = $split->[1];
     use vars '@errors'; local *errors = $split->[2];
 
@@ -690,18 +707,18 @@ sub special_multipart( $ ) {
     # 'time' instead of real start time+date.
     #
     foreach (@pps) {
-	my $time = delete $_->{time};
+	my $time = delete $_->{time}; die if not defined $time;
 	my $start = Date_SetTime($day, $time);
 	die if not defined $start;
 	$start = Date_ConvTZ($start, $tz, 'UTC') if defined $tz;
 	if (Date_Cmp($start, $p->{start}) < 0) {
 	    my $dump = dump_pseudo_programme($_);
-	    die "subprogramme ($dump) "
+	    die "subprogramme ($dump, has 'time' $time) "
 	      . "starts before main programme ($p->{start}, $p->{title}->[0]->[0])";
 	}
 	if (defined $p->{stop} and Date_Cmp($p->{stop}, $start) < 0) {
 	    my $dump = dump_pseudo_programme($_);
-	    die "subprogramme ($dump) starts after main one stops";
+	    die "subprogramme ($dump, has 'time' $time) starts after main one stops";
 	}
 
 	# Now we store the time in the official 'start' key.  But
@@ -714,7 +731,16 @@ sub special_multipart( $ ) {
 	    $_->{start} = ud($start);
 	}
 
-	die if not defined $_->{main_title};
+	if (not defined $_->{main_title}) {
+	    # A title is compulsory, normally splitting will find one,
+	    # but in case it didn't...
+	    #
+	    $_->{title} = $p->{title};
+	}
+
+	# Now deal with each of the main_X fields turning them into
+	# real X.
+	#
 	foreach my $key (qw(desc title sub-title)) {
 	    my $v = delete $_->{"main_$key"};
 	    next if not defined $v;
@@ -796,7 +822,43 @@ sub special_multipart( $ ) {
 #
 sub multipart_split_desc( $$ ) {
     use vars '@words'; local *words = shift;
-    foreach (@words) { die if not /\S/ }
+    my $interp = shift;
+
+    # We need to decide what style of multipart listing this is.
+    # There's the kind that has time - title - description for each
+    # subprogramme.  There's the kind that has 'News at time0, time1,
+    # time2; Weather at time3, time4'.  And then something more like a
+    # normal English sentence, which of course is the hardest to
+    # parse.  We use some heuristics to work out which it is and call
+    # the appropriate 'parsing' routine.
+    #
+    if (@words >= 4 and $words[0] =~ /^with$/i) {
+	return multipart_split_desc_rt(\@words, $interp);
+    }
+
+    # Look for two times in a row, or separated only by 'and'.
+    my $prev_was_time = 0;
+    foreach (@words) {
+	if (defined $interp->($_)) {
+	    # Found a time.
+	    if ($prev_was_time) {
+		return multipart_split_desc_simple(\@words, $interp);
+	    }
+	    $prev_was_time = 1;
+	}
+	elsif ($_ eq 'and') {
+	    # Skip.
+	}
+	else {
+	    $prev_was_time = 0;
+	}
+    }
+
+    return multipart_split_desc_ananova(\@words, $interp);
+}
+# And these routines handle the different styles.
+sub multipart_split_desc_ananova( $$ ) {
+    use vars '@words'; local *words = shift;
     my $interp = shift;
     my @r;
     my @errors;
@@ -854,7 +916,21 @@ sub multipart_split_desc( $$ ) {
 		    push @desc_words, $word;
 		}
 	    }
-	    die "no title words found in @words_orig" if not @title_words;
+	    if (not @title_words) {
+		warn "trouble finding title in multipart";
+		if (not @desc_words) {
+		    warn "cannot find title or description in multipart";
+		    @title_words = ('???');
+		}
+		else {
+		    # Use the description so far as the title.
+		    if ($desc_words[-1] eq 'at') {
+			pop @desc_words;
+		    }
+		    @title_words = @desc_words;
+		    @desc_words = ();
+		}
+	    }
 
 	    # The title sometimes looks like 'History in Action: Women
 	    # in the 20th Century'; this should be broken into main
@@ -916,12 +992,110 @@ sub multipart_split_desc( $$ ) {
     t '...and errors: ' . d \@errors;
     return [\@r, $common, \@errors];
 }
+sub multipart_split_desc_rt( $$ ) {
+    use vars '@words'; local *words = shift;
+    my $interp = shift;
+    my @errors;
+
+    my $with = shift @words;
+    die if not defined $with;
+    die if $with !~ /^with$/i;
+
+    my @got;
+    my @title = ();
+    my @times = ();
+    my $done_title = 0;
+    while (@words) {
+	my $w = shift @words;
+	if ($w eq 'at') {
+	    $done_title = 1;
+	    next;
+	}
+
+	my $i = $interp->($w);
+	if (defined $i) {
+	    # It's a time.
+	    if (not $done_title) {
+		warn "unexpected time $w in multipart description, before 'at'";
+		push @errors, $w;
+	    }
+	    else {
+		push @times, $i;
+	    }
+
+	    if ($w =~ /[.;]$/) {
+		# End of the list of times for this programme.
+		push @got, [ [ @title ], [ @times ] ];
+		@title = ();
+		@times = ();
+		$done_title = 0;
+	    }
+	    elsif ($w =~ /,$/) {
+		# List continues.
+	    }
+	    else {
+		warn "strange time $w";
+	    }
+		
+	    next;
+	}
+	
+	# Not a time, should be part of the title.
+	if ($done_title) {
+	    warn "strange word $w in multipart description, expected a time";
+	    push @errors, $w;
+	}
+	else {
+	    push @title, $w;
+	}
+    }
+
+    my @r;
+    foreach (@got) {
+	my ($title, $times) = @$_;
+	foreach (@$times) {
+	    push @r, { main_title => join(' ', @$title), time => $_ };
+	}
+    }
+
+    # There is no 'common text' with this splitter.
+    return [\@r, undef, \@errors];
+}
+sub multipart_split_desc_simple( $$ ) {
+    use vars '@words'; local *words = shift;
+    my $interp = shift;
+
+    my @common;
+    my @times;
+    foreach (@words) {
+	die if not defined;
+	my $i = $interp->($_);
+	if (defined $i) {
+	    push @times, $i;
+	    if (@common and ($common[-1] eq 'at' or $common[-1] eq 'and')) {
+		pop @common;
+	    }
+	}
+	else {
+	    push @common, $_;
+	}
+    }
+
+    my @r;
+    foreach (@times) {
+	die if not defined;
+	push @r, { time => $_ };
+    }
+
+    # No 'errors' but lots of 'common text'.
+    return [ \@r, join(' ', @common), [] ];
+}
 # Is a time string using the 12 hour or 24 hour clock?  Returns a pair
 # of two booleans: the first means it could be 12h, the seecond that
 # it could be 24h.  Expects an h.mm or hh.mm time string.  If the
 # string is not a valid time under either clock, returns [0, 0].
 #
-# Allows eg '5:30' to be a 24 hour time (05:30).
+# Allows eg '5.30' to be a 24 hour time (05:30).
 #
 sub clocks_poss( $ ) {
     local $_ = shift;
@@ -945,11 +1119,6 @@ sub dump_pseudo_programme( $ ) {
     foreach (qw(time main_title main_desc)) {
 	push @r, $pp->{$_} if defined $pp->{$_};
     }
-    if (not @r) {
-	local $Log::TraceMessages::On =  1;
-	t 'strange pseudo-programme: ' . d $pp;
-	die 'pseudo-programme without recognized keys';
-    }
     return join(' ', @r);
 }
 
@@ -969,7 +1138,7 @@ sub time12to24( $ ) {
     s/\Q$tz\E// if defined $tz;
 
     s/\s+//;
-    my ($hours, $mins, $ampm) = /^(\d\d?)[.:]?(\d\d)(am|pm)$/
+    my ($hours, $mins, $ampm) = /^(\d\d?)[.:]?(\d\d)\s*(am|pm)$/
       or die "bad time $_";
     if ($ampm eq 'am') {
 	if (1 <= $hours and $hours < 12) {
