@@ -1,0 +1,118 @@
+#!/usr/bin/perl -w
+# 
+# R. Nijlunsing <xmltv@tux.tmfweb.nl>
+# modified by Ed Avis <epa98@doc.ic.ac.uk>
+#
+# getlistings_nl
+#
+# Get Dutch TV listing for channels Nederland 1, 2 and 3
+# from www.omroep.nl, and output them in the format described by
+# xmltv.dtd to tv.xml .
+#
+# Like all programs which parse websites, this is likely to break if
+# the NOS changes site layout or Teletekst changes its layout.
+#
+# 20000926 Initial version 
+# 20001007 Some changes for XMLTV 0.2 -- Ed
+#
+# Please mail me if something could be done more logically in perl.
+# I don't speak it fluently yet ;-)
+# 
+# Ed: or you can mail me for general XMLTV-related stuff.
+#
+# TODO
+#   - Add end times to each program
+#   - Add description to each program
+#   - Add station (probably a Dutch invention; != channel) to DTD
+#   - Check if tv.xml complies to xmltv.dtd
+#   - Add other days besides today
+
+use strict;
+use POSIX 'tmpnam';
+
+my $VERSION = "1.1 xmltv-0.2";
+
+
+my $base = "http://portal.omroep.nl";
+# Fetch a cookie
+my $get = "curl -s";
+print STDERR "Fetching cookie...\n";
+my $cookie = `$get -i $base -s | grep Set-cookie:`;
+$cookie =~ s/.*: (.*);.*;.*/$1/;
+chomp($cookie);
+if ($cookie eq "") { die "Could not retrieve cookie from $base"; }
+my $header = "-A 'Mozilla/3.0 (Win95; I)' -s --referer www.omroep.nl --cookie \"$cookie\"";
+$get = $get . " $header";
+
+my @blocks = (
+    "NL1,NL2,NL3",
+    "RT4,RT5,VER",
+    "SBS,NT5,FOX",
+    "VRT,KET",
+    "ARD,ZDF",
+    "BB1,BB2",
+    "TMF,MTB"
+);
+
+my $tmp = tmpnam();
+
+my $relativeDay = 0;
+foreach my $block (@blocks) {
+    print STDERR "Fetching $block...\n";
+    system($get . " -F \"dag=$relativeDay\" -F \"zender=0\" -F \"blok=$block\" -F \"genre=0\" http://epg.omroep.nl/televisie.php >>$tmp");
+}
+
+open(FIN, "<$tmp") || die;
+print STDERR "Writing output...\n";
+my $channel;
+my $date = `date --date \"$relativeDay days\" +"%Y%m%d"`; # Not correct when date > 0:00am
+chomp($date);
+print <<END
+<?xml version="1.0" encoding="iso-8859-1"?>
+<!DOCTYPE tv SYSTEM "xmltv.dtd">
+<tv source="http://egp.omroep.nl" author="getlistings_nl-$VERSION">
+END
+  ;
+
+while (<FIN>) {
+    if (/TABLE/ && /\<B\>(.*)\<\/B\>/) {
+	$channel = $1;
+    }
+    if (/\<TR\>\<TD VALIGN="top" NOWRAP\>(.*)\<\/TD\>\<TD\>\<A HREF="javascript:PI\(\d+\)"\>(.*)\<\/A\>(.*)\<\/TD\>\<\/TR\>/) {
+	my $time = $1;
+	my $program = remove_entities($2);
+	my $station = $3;	# Not used yet
+	$time =~ tr/0-9//cd;	# Remove all non digits
+	print
+	    "  <programme start=\"$date$time CEST\" channel=\"$channel\">" .
+	    "    <title>$program</title>" .
+	    "  </programme>\n";
+    } elsif (/javascript:PI/) {
+	print;
+    }
+}
+print "</tv>\n";
+
+close(FIN);
+
+#unlink($tmp);
+
+
+# remove_entities()
+# 
+# Turn HTML entities (like &amp; and &szlig) in a string into Latin-1
+# characters.
+# 
+sub remove_entities($) {
+    die 'usage: remove_entities(string)' if @_ != 1;
+    local $_ = shift;
+
+    # Entities and the characters they stand for.
+    s/\Q\&amp\;\E/ + /g; # FIXME: how to write '&' in XML?
+    s/\Q\&auml\;\E/\344/g;
+    s/\Q\&uuml\;\E/\374/g;
+    s/\Q\&ouml\;\E/\366/g;
+    s/\Q\&szlig\;\E/\337/g;
+
+    return $_;
+}

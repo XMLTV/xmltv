@@ -9,53 +9,92 @@
 # XML listings data will be read from filename, or from stdin if no
 # filename is given.  LaTeX source will be written to stdout.
 # 
-# BUGS / REQUIREMENTS
-# 
-# I've made a small change to XML::Simple so that you can give the
-# filename '-' to read from stdin.  Hopefully this will be included in
-# the next version of XML::Simple - until then, reading from stdin
-# will not work (unless you download my version from
-# <http://www.doc.ic.ac.uk/~epa98/lib/perl5/site_perl/5.005/XML/Simple.pm>).
-# 
-# -- Ed Avis, epa98@doc.ic.ac.uk, 2000-06-27
+# -- Ed Avis, epa98@doc.ic.ac.uk, 2000-08-16
 # 
 
 use strict;
-use XML::Simple;
+use XML::DOM;
 use IO::File;
 use Date::Manip;
-require 'tz.pl';
+use POSIX 'tmpnam';
+require 'uk_tz.pl';
 
 die "usage: $0 [filename]" if @ARGV >= 2;
 
-my %ch_to_num = (bbc1 => 1, bbc2 => 2, carlton => 3, lwt => 3,
-		 ch4 => 4, ch5 => 5 );
+########
+# Configuration
+#
+
+# Channel names to numbers.  We use use DNS-style names as suggested
+# by RFC 2838,
+# <http://ietf.org/internet-drafts/draft-zigmond-tv-url-04.txt>.  The
+# output listings give number, not the channel's display name, so
+# reading channels.xml is not needed.  (We could have another
+# configuration file saying which channels are at which numbers, but
+# for the time being it's configured by editing this file.)
+# 
+# If the hash doesn't contain an entry for a particular channel name,
+# the name is left alone.  So just leave this empty if you want your
+# LaTeX output to have the internal channel names.
+# 
+my %ch_to_num = ();
+
+# British terrestrial television
+%ch_to_num = (%ch_to_num,
+	      'bbc1.bbc.co.uk' => 1,
+	      'bbc2.bbc.co.uk' => 2,
+	      'carlton.com'    => 3, # FIXME LWT, other ITV franchises
+	      'channel4.com'   => 4,
+	      'channel5.co.uk' => 5,
+	     );
 
 # Width of programme title
 my $WIDTH = '0.7\textwidth';
 
+# Number of programmes in each table (should fit onto a page)
+my $CHUNK_SIZE = 30;
+
+########
+# End of configuration
+# 
+
+# Memoize some subroutines if possible
+my $memoize_avail;
+eval { require Memoize };
+if ($@) {
+    warn "could not load Memoize module, things will run slowly";
+    $memoize_avail = 0;
+}
+else {
+    foreach (qw/start_date ParseDate UnixDate gettz/) {
+	Memoize::memoize($_) or die "cannot memoize $_: $!";
+    }
+    $memoize_avail = 1;
+}
+
+# Reference to sub converting UTF-8 to Latin-1
+my $u8_to_latin1 = get_u8_to_latin1();
+$u8_to_latin1 = Memoize::memoize($u8_to_latin1) if $memoize_avail;
+
+# Print the start of the LaTeX document
 print <<'END';
 \documentclass[a4paper]{article}
+\usepackage[latin1]{inputenc}
 \begin{document}
 \begin{flushleft}
 END
 
-my $xml;
-if (@ARGV == 1) {
-    $xml = XMLin($ARGV[0], cache => [ 'storable' ], searchpath => '.');
-}
-elsif (@ARGV == 0) {
-    $xml = XMLin('-');
-}
-else { die }
+# Parse the input and make it into chunks of programmes
+@ARGV = ('-') if not @ARGV;
+my $p = new XML::DOM::Parser;
+my $doc = $p->parsefile($ARGV[0]);
+my @chunks = @{chunk($CHUNK_SIZE, get_programmes($doc))};
 
-my @programmes = @{$xml->{programme}};
-my @chunks = chunk(30, @programmes);
-
+# Print each chunk as a table
 my ($curr_date, $curr_tz);
 foreach (@chunks) {
     my @programmes = @$_;
-
+    
     my $chunk_date = start_date($programmes[0]);
     if (not defined $curr_date or $curr_date ne $chunk_date) {
 	my $df = UnixDate($chunk_date, "%m-%d (%A)");
@@ -67,19 +106,17 @@ foreach (@chunks) {
     foreach (@programmes) {
 	my %h = %$_;
 	my ($start, $stop, $channel) = @h{qw(start stop channel)};
-	my $title = $h{title}->{content};
-	my $sub_title = $h{'sub-title'}->{content};
-	
-	die 'no start'   if not defined $start;
-	$stop = ''       if not defined $stop;
-	die 'no title'   if not defined $title;
-	die 'no channel' if not defined $channel;
 
+	# Title and sub-title can be multi-valued, so they're a list
+	my $title = join(' / ', @{$h{title}});
+	my $sub_title = join(' / ', @{$h{'sub-title'}});
+	
 	# Convert date-and-time to just hhmm, adding explicit timezone
 	# whenever it changes.
 	# 
 	foreach (\$start, \$stop) {
-	    my $p = ParseDate($$_) or die "bad date $$_";
+	    next if not defined $$_;
+	    my $p = ParseDate($$_) or die "bad date '$$_'";
 	    my $tz = gettz($$_) || 'UT';
 	    $$_ = UnixDate($p, '%R');
 	    
@@ -100,10 +137,12 @@ foreach (@chunks) {
 	}
 
 	# Hardcoded channel lookup
-	$channel = $ch_to_num{$channel};
-
-	# Join title and sub-title
-	$title .= " // $sub_title" if defined $sub_title;
+	my $ch_num = $ch_to_num{$channel};
+	$channel = $ch_num if defined $ch_num;
+	
+	$channel = quote($channel);
+	$title .= " // $sub_title" if $sub_title ne '';
+	$title = quote($u8_to_latin1->($title));
 
 	# Apparently, you have to put \smallskip _before_ each line
 	# (even the first) in order to get consistent spacing.  The
@@ -112,6 +151,11 @@ foreach (@chunks) {
 	# 
 	# Er, this needs fixing.  See my post to comp.text.tex.
 	# 
+	die 'no start'   if not defined $start;
+	$stop = '' if not defined $stop;
+	die 'no title'   if not defined $title;
+	die 'no channel' if not defined $channel;
+
 	print <<END;
 \\smallskip
 $start & $stop &
@@ -121,28 +165,36 @@ $title
 END
     }
 
-    print "\\end{tabular} \\\\ \n";
+print "\\end{tabular} \\\\ \n";
 }
 print "\\end{flushleft}\n";
 print "\\end{document}\n";
 
 
-sub chunk($@) {
-    my ($chunksize, @list) = @_;
+# chunk()
+# 
+# Split up a list of programmes into chunks of a certain maximum size,
+# also starting a new chunk for each day.
+# 
+sub chunk($$) {
+    die 'usage: chunk(chunk size, ref to list of programmes)'
+      if @_ != 2;
+    my ($chunksize, $list) = @_;
+
     my @r;
     my @currchunk = ();
-    while (@list) {
-	push @currchunk, scalar (shift @list);
+    while (@$list) {
+	push @currchunk, scalar (shift @$list);
 
 	if (@currchunk == $chunksize
-	    or @list == 0
-	    or start_date($currchunk[-1]) ne start_date($list[0]) )
+	    or @$list == 0
+	    or start_date($currchunk[-1]) ne start_date($list->[0]) )
         {
 	    push @r, [ @currchunk ];
 	    @currchunk = ();
 	}
     }
-    return @r;
+    return \@r;
 }
 
 
@@ -159,4 +211,138 @@ sub start_date($) {
     my $p = ParseDate($prog->{start});
     die "bad start date for programme" if not defined $p or $p eq '';
     return UnixDate($p, '%Q');
+}
+
+
+# get_u8_to_latin1()
+# 
+# Do some poking around and try to come up with a subroutine that
+# converts UTF-8 strings to Latin-1 encoded strings.  What gets used
+# will depend on what the user has installed.
+# 
+sub get_u8_to_latin1() {
+    die 'usage: get_u8_to_latin1()' if @_;
+    
+    # First preference is for Unicode::String.  With perl 5.6 we could
+    # probably use the internal Unicode support, but I'm still using
+    # an older version.
+    # 
+    unless ($u8_to_latin1) {
+	eval { require Unicode::String };
+	if ($@) {
+	    warn "could not load Unicode::String, trying alternatives";
+	}
+	else {
+	    $u8_to_latin1 = sub {
+		Unicode::String::utf8($_[0])->latin1()
+	    };
+	}
+    }
+    
+    # The next best thing is to run GNU recode.  Slow but it works.
+    unless ($u8_to_latin1) {
+	my $RECODE = 'recode UTF-8..ISO-8859-1';
+	chomp(my $r = `echo test | $RECODE`);
+	if ($r ne 'test') {
+	    warn "GNU recode doesn't seem to work, trying alternatives";
+	}
+	else {
+	    $u8_to_latin1 = sub {
+		my $tmp = tmpnam();
+		my $fh = new IO::File(">$tmp")
+		  or die  "cannot open $tmp for writing: $!";
+		print $fh $_[0] or die  "cannot write to $tmp: $!";
+		close $fh or warn "cannot close $tmp: $!";
+		
+		chomp(my $r = `$RECODE <$tmp`);
+		return $r;
+	    };
+	}
+    }
+    
+    # Finally we just strip non-ASCII characters.
+    unless ($u8_to_latin1) {
+	warn "stripping all non-ASCII characters";
+	$u8_to_latin1 = sub {
+	    local $_ = shift;
+	    tr/\000-\177//cd;
+	    return $_;
+	};
+    }
+}
+
+
+# get_programmes()
+# 
+# Read an XMLTV file and get out the relevant information for each
+# programme.
+# 
+# Parameters: Root element of document
+# Returns: ref to list of hashes with start, titles, etc.
+# 
+sub get_programmes($) {
+    die 'usage: get_programmes(root element from XML::DOM)' if @_ != 1;
+    my $doc = shift;
+    
+    my $nodes = $doc->getElementsByTagName('programme');
+    my $n = $nodes->getLength();
+
+    my @programmes = ();
+    for (my $i = 0; $i < $n; $i++) {
+	my $node = $nodes->item($i);
+	my %programme;
+	
+	foreach (qw<start stop channel>) {
+	    my $v = $node->getAttribute($_);
+	    $programme{$_} = $v unless $v eq '';
+	}
+	
+	my @titles = ();
+	foreach ($node->getElementsByTagName('title', 0)) {
+	    push @titles, $_->getFirstChild()->getData();
+	}
+	$programme{title} = \@titles;
+	
+	my @sub_titles = ();
+	foreach ($node->getElementsByTagName('sub-title', 0)) {
+	    push @sub_titles, $_->getFirstChild()->getData();
+	}
+	$programme{'sub-title'} = \@sub_titles;
+	
+	push @programmes, \%programme;
+    }
+    return \@programmes;
+}
+
+
+# quote()
+# 
+# Quote at least some characters which do funny things in LaTeX
+# 
+# Parameters: string to quote
+# Returns: quoted version
+# 
+# Copied from <http://www.doc.ic.ac.uk/~epa98/work/apps/dtd2latex/>;
+# should put something like this into a 'LaTeX' module some day.
+# 
+sub quote($) {
+    die 'usage: quote(string)' if @_ != 1;
+    local $_ = shift;
+
+    # Quote characters
+    s/\\/\\(\\backslash\\)/g;
+    foreach my $ch ('_', '#', '%', '{', '}', '&') {
+	s/$ch/\\$ch/g;
+    }
+    s/\$/\\\$/g;
+    foreach my $ch ('<', '>') {
+	s/$ch/\\($ch\\)/g;
+    }
+    s/~/\\(\\sim\\)/;
+    s/\^/\\(\\hat{}\\)/;
+
+    # Lines of dots
+    s/\.{3,}\s*$/\\dotfill/mg;
+
+    return $_;
 }

@@ -1,0 +1,170 @@
+#!/usr/bin/perl -w
+# 
+# sort_listings
+# 
+# Sort the programmes in an XMLTV file according to:
+#   - start time, or
+#   - stop time, or
+#   - internal channel name
+# 
+# and guess stop time for each programme if it isn't already given.
+# This converts an XMLTV listing into a kind of 'canonical form'.
+# 
+# Usage: sort_listings [filename]
+# 
+# -- Ed Avis, epa98@doc.ic.ac.uk, 2000-09-09
+# 
+
+use strict;
+use XML::DOM;
+use Date::Manip;
+Date_Init(); # because we call ParseDate() while sorting
+
+# Memoize some subroutines if possible
+eval { require Memoize };
+if ($@) {
+    warn "could not load Memoize module, things will run slowly";
+}
+else {
+    foreach (qw/Date_Cmp ParseDate/) {
+	Memoize::memoize($_) or die "cannot memoize $_: $!";
+    }
+}
+
+
+@ARGV = ('-') if not @ARGV;
+my $p = new XML::DOM::Parser or die;
+my $doc = $p->parsefile($ARGV[0]);
+
+# Get list of programmes
+my @tops = grep { $_->getNodeType() == ELEMENT_NODE }
+           $doc->getChildNodes();
+die "expected one top-level element" if @tops != 1;
+my $tv = $tops[0];
+my @progs = grep { $_->getNodeType() == ELEMENT_NODE }
+            $tv->getChildNodes();
+
+# Split up programmes according to channel
+my %chan;
+foreach (@progs) {
+    push @{$chan{$_->getAttribute('channel')}}, $_;
+}
+
+# Sort each channel individually, and guess stop times.
+foreach (keys %chan) {
+    @{$chan{$_}} = sort programme_cmp @{$chan{$_}};
+    add_stop($chan{$_});
+}
+
+# Mix the channels back into a big list and sort again (could use
+# merge sort)
+# 
+@progs = ();
+foreach (keys %chan) {
+    push @progs, @{$chan{$_}};
+}
+@progs = sort programme_cmp @progs;
+
+# Insert the sorted results into the document (replacing old contents)
+foreach (@progs) {
+    $tv->insertBefore($_, undef);
+}
+
+# Write out the new document
+$doc->printToFileHandle(\*STDOUT);
+
+exit();
+
+
+# Compare two XML::DOM::Elements representing two programmes.
+sub programme_cmp() {
+    (Date_Cmp(ParseDate($a->getAttribute('start')),
+	      ParseDate($b->getAttribute('start')) ))
+      ||
+    (Date_Cmp(ParseDate($a->getAttribute('stop')),
+	      ParseDate($b->getAttribute('stop')) ))
+      ||
+    (chan_cmp($a->getAttribute('channel'),
+	      $b->getAttribute('channel') ))
+      ||
+    (clumpidx_cmp($a->getAttribute('clumpidx'),
+		  $b->getAttribute('clumpidx') ))
+      || # Useful for catching duplicates
+    (warn('programmes at ' . $a->getAttribute('start') . ' on ' .
+	  $a->getAttribute('channel') . ' do not sort' ),
+     0);
+}
+
+
+# Compare internal channel names.  These can be numbers or strings.
+# 
+# We could try to convert these to pretty channel names and sort based
+# on those, but the ordering of channels is pretty arbitrary anyway.
+# 
+# FIXME: remove support for numbers at some point, since we're moving
+# to RFC2838-style channel names.
+# 
+sub chan_cmp($$) {
+    my ($a, $b) = @_;
+    if ($a =~ /^\d+$/ and $b =~ /^\d+$/) {
+	$a <=> $b;
+    }
+    else {
+	$a cmp $b;
+    }
+}
+
+
+# Compare indexes-within-clump
+sub clumpidx_cmp($$) {
+    my ($a, $b) = @_;
+    return 0 if $a eq '' and $b eq ''; # shortcut
+    $a = '0/1' if $a eq '';
+    $b = '0/1' if $b eq '';
+
+    $a =~ m!^(\d+)/(\d+)$! or die "bad clumpidx $a";
+    my ($ai, $num_in_clump) = ($1, $2);
+    $b =~ m!^(\d+)/(\d+)$! or die "bad clumpidx $b";
+    die "clumpidx's $a and $b don't match" if $2 != $num_in_clump;
+    my $bi = $1;
+
+    $ai <=> $bi;
+}
+
+
+# Add 'stop time' to a list of programmes (XML::DOM::Elements).  The
+# stop time of a programme is the start time of the next.
+# 
+# Parameters: reference to list of programmes
+# 
+# Modifies the list passed in.
+# 
+sub add_stop($) {
+    die 'usage: add_stop(ref to list of programme nodes)' if @_ != 1;
+    my $l = shift;
+
+    my $this_start; # Start time of current clump
+    my $next_start; # Start time of next clump
+    for (my $i = $#$l; $i >= 0; $i--) {
+	my $this = $l->[$i];
+	my $clumpidx = $this->getAttribute('clumpidx');
+	$clumpidx = '0/1' if $clumpidx eq '';
+	$clumpidx =~ s!/\d+$!!; # not interested in clump size
+	$clumpidx =~ m!^\d+$!
+	  or die "bad clumpidx '" . $this->getAttribute('clumpidx') . "'";
+	
+	$this_start = $this->getAttribute('start');
+	if ($this->getAttribute('stop') eq ''
+	    and defined $next_start )
+	{
+	    $this->setAttribute('stop', $next_start);
+	}
+
+	if ($clumpidx == 0) {
+	    # First programme in clump - we're going backwards, so
+	    # next time we will move on to the previous clump.
+	    # 
+	    $next_start = $this_start;
+	}
+    }
+}
