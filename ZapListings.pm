@@ -633,7 +633,12 @@ sub scrapehtml($$$)
 
     # declare known languages here so we can more precisely identify
     # them in program details
+
+    # currently we include, but fail to recognize hyphenated languages
+    # for instance i've seen "(English/Oji-Cree)", but parsing fails
+    # since sometimes we get languages declarations (English-French).
     my @knownLanguages=qw(
+			  Aboriginal
 			  Arabic
 			  Armenian
 			  Cambodian
@@ -1014,7 +1019,7 @@ sub scrapehtml($$$)
 			next;
 		    }
 		    # ignore (Cont'd.) and (Cont'd)
-		    elsif ( $i=~/^\(Cont'd\.*\)$/io ) {
+		    elsif ( $i=~/^\(Cont\'d\.*\)$/io ) {
 			print STDERR "understood program detail, on ignore list: $i\n" if ( $self->{Debug} );
 			# ignored
 			next;
@@ -1051,13 +1056,11 @@ sub scrapehtml($$$)
 		    else {
 			my $localmatch=0;
 
-			# 'English/French'
 			# 'Hindi, English'
 			# 'Hindi-English'
 			# 'Hindi and English'
 			# 'Hindi with English'
-			# not handled: "Hindi/Punjabi/Urdu", but I don't know what this means.
-			if ( $i=~/^\(([a-zA-Z]+)\s*[\/,\-]+\s*([a-zA-Z]+)\)$/io ||
+			if ( $i=~/^\(([a-zA-Z]+)\s*[,\-]+\s*([a-zA-Z]+)\)$/io ||
 			     $i=~/^\(([a-zA-Z]+)\s+and\s+([a-zA-Z]+)\)$/io ||
 			     $i=~/^\(([a-zA-Z]+)\s+with\s+([a-zA-Z]+)\)$/io ) {
 			    my $lang=$1;
@@ -1082,6 +1085,49 @@ sub scrapehtml($$$)
 				$localmatch++;
 			    }
 			}
+
+			# more language checks
+			# 'English/French'
+			# 'Hindi/Punjabi/Urdu', but I'm not sure what it means.
+			if ( ! $localmatch && $i=~m;/;o ) {
+			    my $declaration=$i;
+			    $declaration=~s/^\(\s*//o;
+			    $declaration=~s/\s*\)$//o;
+
+			    my @arr=split(/\//, $declaration);
+			    my @notfound;
+			    my $matches;
+			    for my $lang (@arr) {
+				# chop off start/end spaces
+				$lang=~s/^\s*//o;
+				$lang=~s/\s*$//o;
+
+				my $found=0;
+				for my $k (@knownLanguages) {
+				    if ( $k eq $lang ) {
+					$found++;
+					last;
+				    }
+				}
+				if ( !$found ) {
+				    push(@notfound, $lang);
+				}
+				$matches+=$found;
+			    }
+			    if ( $matches == scalar(@arr) ) {
+				# put "lang/lang/lang" in qualifier since we don't know
+				# what it really means.
+				$resultSure->{qualifiers}->{Language}=$i;
+				$localmatch++;
+			    }
+			    elsif ( $matches !=0  ) {
+				# matched 1 or more, warn about rest
+				for my $sub (@notfound) {
+				    print STDERR "identified possible candidate for new language $sub in $i\n";
+				}
+			    }
+			}
+
 			if ( ! $localmatch ) {
 			    # check for known languages 
 			    my $found;
