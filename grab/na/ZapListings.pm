@@ -1152,7 +1152,7 @@ sub scrapehtml($$$)
 			push(@sure, $i);
 			next;
 		    }
-		    elsif ( $i=~/^\(Acción\)$/io ) { # action in french :)
+		    elsif ( $i=~/^\(Acci\xf3n\)$/io ) { # action in french :)
 			push(@{$prog->{category}}, "Action");
 			push(@sure, $i);
 			next;
