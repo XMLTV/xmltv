@@ -95,6 +95,14 @@ my %prereqs
      'Memoize' => 0,
     );
 
+# Files which are run to generate source code.
+my %pl_files = ('filter/tv_grep.PL'     => 'filter/tv_grep',
+		'grab/uk/tv_grab_uk.PL' => 'grab/uk/tv_grab_uk',
+		'grab/uk_rt/tv_grab_uk_rt.PL' => 'grab/uk_rt/tv_grab_uk_rt',
+		'grab/it/tv_grab_it.PL' => 'grab/it/tv_grab_it',
+		'lib/XMLTV.pm.PL'       => 'lib/XMLTV.pm',
+	       );
+
 # There is something particularly broken about Date::Manip on Red Hat
 # 8.0, we check for that specially.
 #
@@ -314,10 +322,11 @@ foreach my $info (@opt_components) {
     }
 
     if (XMLTV::Ask::askBooleanQuestion($msg, $default)) {
-	push @exes, @{$info->{exes}}               if $info->{exes};
-	push @docs, @{$info->{docs}}               if $info->{docs};
-	%pm = (%pm, %{$info->{pm}})                if $info->{pm};
-	%prereqs = (%prereqs, %{$info->{prereqs}}) if $info->{prereqs};
+	push @exes, @{$info->{exes}}                  if $info->{exes};
+	push @docs, @{$info->{docs}}                  if $info->{docs};
+	%pm = (%pm, %{$info->{pm}})                   if $info->{pm};
+	%prereqs = (%prereqs, %{$info->{prereqs}})    if $info->{prereqs};
+	%pl_files = (%pl_files, %{$info->{pl_files}}) if $info->{pl_files};
     }
     print STDERR "\n";
 }
@@ -431,12 +440,7 @@ WriteMakefile
    'NAME'          => 'XMLTV',
    # No VERSION_FROM, it's set in this file
    'EXE_FILES'     => \@exes,
-   'PL_FILES'      => { 'filter/tv_grep.PL'     => 'filter/tv_grep',
-			'grab/uk/tv_grab_uk.PL' => 'grab/uk/tv_grab_uk',
-			'grab/uk_rt/tv_grab_uk_rt.PL' => 'grab/uk_rt/tv_grab_uk_rt',
-			'grab/it/tv_grab_it.PL' => 'grab/it/tv_grab_it',
-			'lib/XMLTV.pm.PL'       => 'lib/XMLTV.pm',
-		      },
+   'PL_FILES'      => \%pl_files,
    'PM'            => \%pm,
    'PREREQ_PM'     => \%prereqs,
     # No special parameters for 'make clean' or 'make dist'
