@@ -20,6 +20,8 @@
 # pages is the only use of it.
 #
 
+use strict;
+
 package XMLTV::Get_nice;
 use base 'Exporter';
 our @EXPORT = qw(get_nice);
@@ -29,6 +31,8 @@ $ua->agent("xmltv/$XMLTV::VERSION");
 our $Delay = 5; # in seconds
 
 our $get = \&LWP::Simple::get;
+
+init_cache();
 
 sub get_nice( $ ) {
     # This is to ensure scalar context, to work around weirdnesses
@@ -71,4 +75,61 @@ sub get_nice_aux( $ ) {
     $last_get_time = time();
     return $r;
 }
+
+# Initialize HTTP::TransparentCache if the file
+# ~/.xmltv/cache.conf exists.
+sub init_cache
+{
+    my $home = $ENV{HOME};
+    $home = '.' if not defined $home;
+    my $conffile = "$home/.xmltv/cache.conf";
+    
+    if (not -f($conffile)) {
+        # The configuration file doesn't exist. Don't use the cache.
+        # In the future, we may want to create a default configuration
+        # file here.
+        return;
+    }
+
+    open(IN, "< $conffile") 
+        or die "Failed to read from $conffile";
+  
+    my %data;
+    my $line;
+    
+    while ($line = <IN>) {
+        next if $line =~ /^\s*#/;
+        next if $line =~ /^\s*$/;
+        $line =~ tr/\n\r//d;
+
+        my($key, $value) = split(/\s+/, $line, 2);
+        if (index(" BasePath Verbose ", " $key ") == -1) {
+            print STDERR "Unknown configuration key $key in $conffile.\n";
+            close(IN);
+            exit 1;
+        }
+
+        $data{$key} = $value;
+    }
+
+    close(IN);
+
+    if (exists($data{DisableCache}) and $data{DisableCache}) {
+        return;
+    }
+
+    delete($data{DisableCache});
+
+    if (not defined($data{BasePath})) {
+        print STDERR "No BasePath specified in $conffile.\n";
+        exit 1;
+    }
+
+    (-d $data{BasePath}) or mkdir($data{BasePath}, 0777)
+      or die "cannot mkdir $data{BasePath}: $!";
+
+    require HTTP::TransparentCache;
+    HTTP::TransparentCache::init(\%data);
+}
+
 1;
