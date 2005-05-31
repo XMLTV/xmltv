@@ -179,6 +179,8 @@ my $date_today = UnixDate("today", '%Y-%m-%d');
 
 my @default_backends = ('lastampa', 'skytv', 'mytv');
 
+my %channels; #to store display names
+
 # backend configurations
 my %backend_info
   = ( 
@@ -432,7 +434,7 @@ foreach (XMLTV::Config_file::read_lines($config_file)) {
     ++ $line_num;
     next if not defined;
     if (/^channel:?\s*(.*\S+)\s*$/) {
-    push @channels, $1;
+	  push @channels, $1;
     }
     elsif (/^username:?\s+(\S+):(\S+)/){
         if (defined $backend_info{$1}) {    #esiste la configurazione
@@ -500,6 +502,22 @@ $w->start({ 'source-info-url'     => $source_info_str ,
         'generator-info-name' => 'XMLTV',
         'generator-info-url'  => 'http://membled.com/work/apps/xmltv/',
         });
+
+
+my %display_names;
+foreach my $back (@backends) {
+	foreach (keys %{$backend_info{$back}{site_ids}}) {
+		$display_names{$_} = $backend_info{$back}{site_ids}{$_}{site_id};
+	}
+}
+
+foreach my $xmltv_id (@channels) {
+    $w->write_channel({
+        id => $xmltv_id,
+        'display-name' => [ [ $display_names{$xmltv_id} ] ],
+#        icon => [{src => get_ch_icon($ch_id)}] #can't find it yet!
+        });
+}
 
 #make a list of channels and days to grab
 my @to_get;
@@ -642,6 +660,8 @@ sub mytv_get_channels_list {
 
     for my $t (0, 1) {
         my $content;
+
+        warn "VERBOSE: Getting channel list from $base?d=0&t=$t\n" if ($opt_verbose);
 
 		eval { $content = get_nice("$base?d=0&t=".$t); };
 		if ($@) {   #get_nice has died
@@ -817,6 +837,7 @@ sub lastampa_get_channels_list {
     my $base = shift;
     
     my $content;
+    warn "VERBOSE: Getting channel list from $base\n" if ($opt_verbose);
 
 	eval { $content = get_nice($base); };
 	if ($@) {   #get_nice has died
@@ -852,7 +873,7 @@ sub lastampa_fetch_data {
 
     my $site_id = $backend_info{lastampa}{site_ids}{$xmltv_id}{site_id};
 
-    if (not defined $site_id) {
+	if (not defined $site_id) {
         warn "VERBOSE: \tThis site doesn't know about $xmltv_id!\n" if ($opt_verbose);
         return (1, ());
     }
@@ -863,6 +884,14 @@ sub lastampa_fetch_data {
     my $channel_name  = $backend_info{lastampa}{site_ids}{$xmltv_id}{site_id};
     my $channel_num = $chan{$channel_name}; 
        $channel_name=~s/ /%20/g;
+
+	if (not defined $channel_num) {
+		# if we get here it means that the site should have the channel (it's in channel_ids)
+		# but for some reason we are missing it's site id (probably the site is down)
+		# we return an error so that another backend will by used, if possible
+        warn "VERBOSE: \tThis site appears to be down!\n" if ($opt_verbose);
+        return (1, ());
+	}
 
     my $date_grab = &DateCalc("today","+ ".$offset." days");
 
@@ -1195,14 +1224,19 @@ sub skytv_fetch_data {
 
     #we join the first prog of the page with the last of the previous page if they are the same
     my %programme = ();
-    my $num_date = UnixDate(&DateCalc("today","+ ".$offset." days"), '%d');
+
+    my $parse_date = &DateCalc("today 00:00","+ ".$offset." days");
+    my $next_day   = &DateCalc("today 00:00","+ ".($offset + 1)." days");
+
     foreach (@prog_to_check) {
         my ($title, $length, $id, $start, $stop) = @$_;
 
         if ($id != $oldid and $title ne $oldtitle) {
             #write data
             if ($oldid != 0) {
-                if (substr($oldstart, 6, 2) < $num_date){
+                #if (substr($oldstart, 6, 2) < $num_date){
+                if (Date_Cmp(ParseDate($oldstart), ParseDate($parse_date)) <= 0) {
+
                     #i get rid of yesterday's programmes, even if they end today (i.e. across midnight shows)
                     ($oldtitle, $oldlength, $oldid, $oldstart, $oldstop) = @$_;
                     next;
@@ -1219,7 +1253,7 @@ sub skytv_fetch_data {
             ($oldtitle, $oldlength, $oldid, $oldstart, $oldstop) = @$_;
             
             #we don't care about tomorrow's data
-            last if (substr($oldstart, 6, 2) > $num_date); #abbiamo cambiato giorno
+			last if (Date_Cmp(ParseDate($oldstart), ParseDate($next_day)) > 0); #abbiamo cambiato giorno
         }
         else {
             $oldstop = $_->[4];
@@ -1227,7 +1261,7 @@ sub skytv_fetch_data {
     }
 
     #the programme might end exactly at midnight
-    if (substr($oldstart, 6, 2) eq $num_date){
+    if (Date_Cmp(ParseDate($oldstart), ParseDate($parse_date)) == 0){
         $programme{title} = [[tidy($oldtitle), $LANG] ];
         $programme{start} = utc_offset(UnixDate($oldstart, '%Y%m%d%H%M').'00', '+0100');
         $programme{stop}  = utc_offset(UnixDate($oldstop, '%Y%m%d%H%M').'00', '+0100');
@@ -1261,6 +1295,8 @@ sub skytv_urldata {
     $str=~s/Thu/Gioved%C3%AC/;
     $str=~s/Fri/Venerd%C3%AC/;
     $str=~s/Sat/Sabato/;
+
+	$str=~s/ //;
 
     return $str;
 }
