@@ -76,10 +76,6 @@ that the data is incomplete.
 
 =head1 ENVIRONMENT VARIABLES
 
-The environment variable CACHE_CONF can be set to the name of
-the configuration file for the HTTP cache. If CACHE_CONF is not
-set, it defaults to $HOME/.xmltv/cache.conf.
-
 The environment variable HOME can be set to change where configuration
 files are stored. All configuration is stored in $HOME/.xmltv/. On Windows,
 it might be necessary to set HOME to a path without spaces in it.
@@ -104,7 +100,6 @@ use XMLTV;
 use XMLTV::Ask;
 use XMLTV::ProgressBar;
 use XMLTV::Config_file;
-use XMLTV::Get_nice;
 
 use XML::LibXML;
 use Getopt::Long;
@@ -115,6 +110,8 @@ use IO::Scalar;
 use File::Path;
 use File::Basename;
 use LWP::Simple;
+
+use HTTP::Cache::Transparent;
 
 # Although we use HTTP::Cache::Transparent, this undocumented --cache
 # option for debugging is still useful since it will _always_ use a
@@ -166,7 +163,7 @@ if ($opt->{help}) { print $usage; exit 0 }
 sub t;
 
 XMLTV::Ask::init($opt->{'gui'});
-check_cache();
+
 my @channel_list = ();
 my ($xmldecl, $channels);
 
@@ -186,6 +183,13 @@ if( $opt->{configure} ) {
 
 $opt->{'root-url'} = $default_root_url if (! defined ($opt->{'root-url'}));
 t "using $opt->{'root-url'}";
+
+if(not defined( $opt->{'cache-dir'} ) )
+{
+    load_old_cachedir();
+}
+
+HTTP::Cache::Transparent::init( { BasePath => $opt->{'cache-dir'} } );
 
 ($xmldecl, $channels) = load_channels( $opt->{'root-url' } );
 
@@ -303,16 +307,20 @@ sub load_config
     {
         next unless defined $line;
 
-        my( $command, $param ) = split( /\s+/, $line );
-        $param =~ tr/\n\r //d;
-		if ( $command =~ /^\s*root-url\s*$/) {
-		  $opt->{'root-url'} = $param if (! defined ($opt->{'root-url'}));
-		} elsif  ( $command =~ /^\s*channel\s*$/) {
-		  push @channel_list, $param;
-		} else {
-		  die "Unknown command $command in config-file $config_file"
-		}
-	  }
+        my( $command, $param ) = split( /\s+/, $line, 2 );
+        $param =~ tr/\n\r//d;
+        $param =~ s/\s+$//;
+
+        if ( $command =~ /^\s*root-url\s*$/) {
+            $opt->{'root-url'} = $param if (! defined ($opt->{'root-url'}));
+        } elsif  ( $command =~ /^\s*channel\s*$/) {
+            push @channel_list, $param;
+        } elsif ( $command eq 'cache-dir' ) {
+            $opt->{'cache-dir'} = $param;
+        } else {
+            die "Unknown command $command in config-file $config_file"
+        }
+    }
 }
 
 sub configure
@@ -324,8 +332,32 @@ sub configure
     mkpath(dirname($config_file));
     open(CONF, ">$config_file") or die "cannot write to $config_file: $!";
 
-    # Save the url of channels.xml.gx
-    print CONF "root-url $opt->{'root-url'}\n" if (defined($opt->{'root-url'}));
+    my $winhome = $ENV{HOMEDRIVE} . $ENV{HOMEPATH} 
+      if defined( $ENV{HOMEDRIVE} ) 
+        and defined( $ENV{HOMEPATH} ); 
+    
+    my $home = $ENV{HOME} || $winhome || ".";
+
+    my $path = ask( 
+                    "You need to decide where the cache should be stored.\n" . 
+                    "The cache must be stored in its own directory.\n" .
+                    "The directory should NOT be cleared when you reboot.\n" .
+                    "The default is $home/.xmltv/cache\n\n" .
+                    "Where should the cache be stored?\n" . 
+                    "Leave empty to use the default location:\n" );
+    
+    $path = "$home/.xmltv/cache" if( (not defined($path)) 
+                                     or $path eq "" );
+    if( not -d $path )
+    {
+        mkpath( $path ) or die "Failed to create cache-directory $path: $@";
+    }
+
+    print CONF "cache-dir $path\n";
+
+    # Save the url of channels.xml.gz
+    print CONF "root-url $opt->{'root-url'}\n" 
+        if (defined($opt->{'root-url'}));
 
     my @chan = sort { join( ".", reverse( split /\./, $a ) ) cmp 
                      join( ".", reverse( split /\./, $b ) ) } 
@@ -408,72 +440,49 @@ sub print_data
     return 1;
 }
 
-# Check that HTTP::Cache::Transparent is loaded. This is necessary
-# to save bandwidth for tv.swedb.se. Please do not disable this
-# check. 
-#
-
-sub check_cache
+# Load cachedir-configuration from the deprecated cache.conf-file.
+sub load_old_cachedir
 {
-    if( not defined( $HTTP::Cache::Transparent::VERSION ) )
-    {
-        eval { require HTTP::Cache::Transparent; };
-        if ( $@ )
-        {
-            say( << "EOERR" );
-            
-Please install the perl-module HTTP::Cache::Transparent. It can be 
-downloaded from http://search.cpan.org/dist/HTTP-Cache-Transparent
-                
-EOERR
+    my $winhome = $ENV{HOMEDRIVE} . $ENV{HOMEPATH} 
+    if defined( $ENV{HOMEDRIVE} ) and defined( $ENV{HOMEPATH} ); 
+    
+    my $home = $ENV{HOME} || $winhome || ".";
+    
+    my $conffile = $ENV{CACHE_CONF} || "$home/.xmltv/cache.conf"; 
+    
+    if( not open(IN, "< $conffile") ) {
+        print STDERR  "Please run tv_grab_se_swedb --configure " .
+                      "and specify a cache location.\n";
+        exit 1;
+    }
+
+    my %data;
+    my $line;
+    
+    while ($line = <IN>) {
+        next if $line =~ /^\s*#/;
+        next if $line =~ /^\s*$/;
+        $line =~ tr/\n\r//d;
+
+        my($key, $value) = split(/\s+/, $line, 2);
+        if (index(" BasePath Verbose ", " $key ") == -1) {
+            print STDERR "Unknown configuration key $key in $conffile.\n";
+            close(IN);
             exit 1;
         }
-        else
-        {
-            if( ask_boolean( "You need to configure the http cache.\n" . 
-                             "Do you want to do it now?", 1 ) )
-            {
-                my $winhome = $ENV{HOMEDRIVE} . $ENV{HOMEPATH} 
-                    if defined( $ENV{HOMEDRIVE} ) 
-                       and defined( $ENV{HOMEPATH} ); 
 
-                my $home = $ENV{HOME} || $winhome || ".";
-
-                my $path = ask( 
-                  "You need to decide where the cache should be stored.\n" . 
-                  "The cache must be stored in its own directory.\n" .
-                  "The directory should NOT be cleared when you reboot.\n" .
-                  "The default is $home/.xmltv/cache\n\n" .
-                  "Where should the cache be stored?\n" . 
-                  "Leave empty to use the default location:\n" );
-
-                $path = "$home/.xmltv/cache" if( (not defined($path)) 
-                                                 or $path eq "" );
-                if( not -d $path )
-                {
-                    if( ask_boolean( "$path does not exist.\n" .
-                                     "Do you want me to create it?", 1 ) )
-                    {
-                        mkpath( $path );
-                    }
-                }
-
-                my $conffile = $ENV{CACHE_CONF} || "$home/.xmltv/cache.conf"; 
-                open( OUT, "> $conffile" )
-                    or die "Failed to write to $conffile";
-                print OUT "BasePath $path\n";
-                print OUT "# Verbose 1\n";
-                close( OUT );
-                say( "Cache configuration written to $conffile." );
-                XMLTV::Get_nice::init_cache();
-            }
-            else
-            {
-                print STDERR "You must configure the cache.\n";
-                exit( 1 );
-            }
-        }
+        $data{$key} = $value;
     }
+
+    close(IN);
+
+    if (not defined($data{BasePath})) {
+        print STDERR  "Please run tv_grab_se_swedb --configure " .
+                      "and specify a cache location.\n";
+        exit 1;
+    }
+
+    $opt->{'cache-dir'} = $data{BasePath};
 }
 
 ### Setup indentation in Emacs
