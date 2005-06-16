@@ -267,6 +267,11 @@ my @opt_components
        prereqs => { 'HTML::Entities' => 1.27 } ,
      },
 
+     { name => 'tv_grab_is',
+       blurb => 'Grabber for Iceland',
+       exes => [ 'grab/is/tv_grab_is' ],
+     },
+
      { name => 'tv_grab_it',
        blurb => 'Grabber for Italy',
        exes => [ 'grab/it/tv_grab_it' ],

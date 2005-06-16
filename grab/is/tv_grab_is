@@ -1,0 +1,453 @@
+#!/usr/bin/perl -w
+
+=pod
+
+=head1 NAME
+
+tv_grab_is - Grab TV listings for Iceland.
+
+=head1 SYNOPSIS
+
+tv_grab_is --help
+
+tv_grab_is [--config-file FILE] --configure [--gui OPTION]
+
+tv_grab_is [--config-file FILE] [--output FILE] [--days N]
+           [--offset N] [--quiet]
+
+=head1 DESCRIPTION
+
+Output TV listings for several channels available in Iceland.  The
+data comes from www.sjonvarp.is. The grabber relies on parsing HTML so it
+might stop working at any time.
+
+First run B<tv_grab_is --configure> to choose, which channels you want
+to download. Then running B<tv_grab_is> with no arguments will output
+listings in XML format to standard output.
+
+B<--configure> Prompt for which channels,
+and write the configuration file.
+
+B<--config-file FILE> Set the name of the configuration file, the
+default is B<~/.xmltv/tv_grab_is.conf>.  This is the file written by
+B<--configure> and read when grabbing.
+
+B<--gui OPTION> Use this option to enable a graphical interface to be used.
+OPTION may be 'Tk', or left blank for the best available choice.
+Additional allowed values of OPTION are 'Term' for normal terminal output
+(default) and 'TermNoProgressBar' to disable the use of Term::ProgressBar.
+
+B<--output FILE> write to FILE rather than standard output.
+
+B<--days N> grab N days.  The default is as many as the source carries.
+
+B<--offset N> start N days in the future.  The default is to start
+from today.
+
+B<--quiet> suppress the progress messages normally written to standard
+error.
+
+B<--help> print a help message and exit.
+
+=head1 SEE ALSO
+
+L<xmltv(5)>.
+=head1 AUTHOR
+
+Yngvi Þór Sigurjónsson (yngvi@teymi.is). Heavily based on
+tv_grab_dk by Jesper Skov (jskov@zoftcorp.dk). tv_grab_dk
+originally based on tv_grab_nl by Guido Diepen and Ed Avis
+(ed@membled.com) and tv_grab_fi by Matti Airas.
+
+=head1 BUGS
+
+First release. Fails to recognize actors when actors names are abbrevated.
+
+=cut
+use strict;
+use Getopt::Long;
+use HTML::TreeBuilder;
+use HTML::Entities; # parse entities
+use IO::File;
+use URI;
+
+use Date::Manip;
+
+use XMLTV;
+use XMLTV::Version '$Id$ ';
+use XMLTV::Memoize;
+use XMLTV::ProgressBar;
+use XMLTV::Ask;
+use XMLTV::Mode;
+use XMLTV::Config_file;
+use XMLTV::DST;
+use XMLTV::Get_nice;
+use XMLTV::Date;
+use XMLTV::Usage <<END
+$0: get Icelandic television listings in XMLTV format
+To configure: $0 --configure [--config-file FILE]
+To grab listings: $0 [--config-file FILE] [--output FILE] [--days N]
+        [--offset N] [--quiet]
+END
+  ;
+# Use Log::TraceMessages if installed.
+BEGIN {
+    eval { require Log::TraceMessages };
+    if ($@) {
+	*t = sub {};
+	*d = sub { '' };
+    }
+    else {
+	*t = \&Log::TraceMessages::t;
+	*d = \&Log::TraceMessages::d;
+	Log::TraceMessages::check_argv();
+    }
+}
+
+# Whether zero-length programmes should be included in the output.
+my $WRITE_ZERO_LENGTH = 0;
+
+# default language
+my $LANG = 'is';
+
+# In Iceland we constantly on summer time, so we always on GMT
+my $TZ = '+0000';
+
+
+sub process_summary_page( $$$ );
+sub process_listings_page( $$$$$ );
+
+# Get options
+XMLTV::Memoize::check_argv('XMLTV::Get_nice::get_nice_aux');
+my ($opt_days, $opt_offset, $opt_help, $opt_output,
+    $opt_configure, $opt_config_file, $opt_gui,
+    $opt_quiet, $opt_list_channels);
+$opt_days   = 7; # default
+$opt_offset = 0; # default
+GetOptions('days=i'        => \$opt_days,
+           'offset=i'      => \$opt_offset,
+           'help'          => \$opt_help,
+           'configure'     => \$opt_configure,
+           'config-file=s' => \$opt_config_file,
+           'gui:s'         => \$opt_gui,
+           'output=s'      => \$opt_output,
+           'quiet'         => \$opt_quiet,
+           'list-channels' => \$opt_list_channels,
+          )
+  or usage(0);
+die 'number of days must not be negative'
+  if (defined $opt_days && $opt_days < 0);
+usage(1) if $opt_help;
+
+XMLTV::Ask::init($opt_gui);
+
+my $mode = XMLTV::Mode::mode('grab', # default
+                             $opt_configure => 'configure',
+                             $opt_list_channels => 'list-channels',
+                            );
+
+# File that stores which channels to download.
+my $config_file
+  = XMLTV::Config_file::filename($opt_config_file, 'tv_grab_is', $opt_quiet);
+
+if ($mode eq 'configure') {
+    XMLTV::Config_file::check_no_overwrite($config_file);
+    open(CONF, ">$config_file") or die "cannot write to $config_file: $!";
+    # find list of available channels
+    my $bar = new XMLTV::ProgressBar('getting list of channels', 1)
+      if not $opt_quiet;
+    my %channels = get_channels();
+    die 'no channels could be found' if (scalar(keys(%channels)) == 0);
+    update $bar if not $opt_quiet;
+    $bar->finish() if not $opt_quiet;
+my @chs = sort keys %channels;
+    my @names = map { $channels{$_} } @chs;
+    my @qs = map { "add channel $_?" } @names;
+    my @want = ask_many_boolean(1, @qs);
+    foreach (@chs) {
+        my $w = shift @want;
+        warn("cannot read input, stopping channel questions"), last
+          if not defined $w;
+        # No need to print to user - XMLTV::Ask is verbose enough.
+
+        # Print a config line, but comment it out if channel not wanted.
+        print CONF '#' if not $w;
+        my $name = shift @names;
+        print CONF "channel $_ $name\n";
+        # TODO don't store display-name in config file.
+    }
+
+    close CONF or warn "cannot close $config_file: $!";
+    say("Finished configuration.");
+
+    exit();
+}
+
+# Not configuring, we will need to write some output.
+die if $mode ne 'grab' and $mode ne 'list-channels';
+
+# If we are grabbing, check we can read the config file before doing
+# anything else.
+#
+my @config_lines;
+if ($mode eq 'grab') {
+    @config_lines = XMLTV::Config_file::read_lines($config_file);
+}
+
+my %w_args;
+if (defined $opt_output) {
+    my $fh = new IO::File(">$opt_output");
+    die "cannot write to $opt_output: $!" if not defined $fh;
+    $w_args{OUTPUT} = $fh;
+}
+$w_args{encoding} = 'ISO-8859-1';
+my $writer = new XMLTV::Writer(%w_args);
+# TODO: standardize these things between grabbers.
+$writer->start
+  ({ 'source-info-url'     => 'http://www.sjonvarp.is/',
+     'source-data-url'     => 'http://www.sjonvarp.is/tv',
+     'generator-info-name' => 'XMLTV',
+     'generator-info-url'  => 'http://membled.com/work/apps/xmltv/',
+   });
+
+if ($opt_list_channels) {
+    my $bar = new XMLTV::ProgressBar('getting list of channels', 1)
+      if not $opt_quiet;
+    my %channels = get_channels();
+    die 'no channels could be found' if (scalar(keys(%channels)) == 0);
+    update $bar if not $opt_quiet;
+
+    foreach my $ch_did (sort(keys %channels)) {
+        my $ch_name = $channels{$ch_did};
+        my $ch_xid = "$ch_did.sjonvarp.is";
+       $writer->write_channel({ id => $ch_xid,
+                                 'display-name' => [ [ $ch_name ] ],
+                                 'icon' => [{'src' => get_icon($ch_did)}]
+                                });
+    }
+    $bar->finish() if not $opt_quiet;
+    $writer->end();
+    exit();
+}
+# Not configuring or writing channels, must be grabbing listings.
+die if $mode ne 'grab';
+my (%channels, @channels, $ch_did, $ch_name);
+my $line_num = 1;
+foreach (@config_lines) {
+    ++ $line_num;
+    next if not defined;
+
+    # FIXME channel data should be read from the site, and then the
+    # config file only gives the XMLTV ids that are interesting.
+    #
+    if (/^channel:?\s+(\S+)\s+([^\#]+)/) {
+	$ch_did = $1;
+	$ch_name = $2;
+	$ch_name =~ s/\s*$//;
+	push @channels, $ch_did;
+	$channels{$ch_did} = $ch_name;
+    } 
+    else {
+	warn "$config_file:$.: bad line\n";
+    }
+}
+
+######################################################################
+# begin main program
+
+my $now = parse_date('now');
+die if not defined $now;
+
+Date_Init('TZ=UTC');
+
+my @to_get;
+
+# the order in which we fetch the channels matters
+my $today = UnixDate($now, '%Y-%m-%d'); die if not defined $today;
+
+
+foreach $ch_did (@channels) {
+    $ch_name = $channels{$ch_did};
+    my $ch_xid = "$ch_did.sjonvarp.is";
+    $writer->write_channel({ id => $ch_xid,
+			     'display-name' => [ [ $ch_name ] ],
+				 'icon' => [{'src' => get_icon($ch_did)}]
+				 });
+    for (my $i = $opt_offset;$i<($opt_offset + $opt_days);$i++) {
+	# Request day when constructing URL since it is represented as
+	# an integere offset from today. Still pass in the computed
+	# date - may need it sometime...
+	my $day = UnixDate(DateCalc($today, "+ $i days"), '%Y-%m-%d');
+	t "turned offset $i (from $today) into date $day";
+	push @to_get, [ $i, $day, $ch_xid, $ch_did ];
+    }
+}
+
+my %warned_ch_name; # suppress duplicate warnings
+
+my $bar = new XMLTV::ProgressBar('fetching data', scalar @to_get)
+  if not $opt_quiet;
+my @to_get_detailed;
+my $num_detailed = 0;
+foreach (@to_get) {
+    my ($tv2date, $date, $ch_xmltv_id, $ch_tvgids_id) = @$_;
+    t "going to get $ch_xmltv_id for $date";
+    process_listings_page($writer, $ch_xmltv_id, $tv2date, $ch_tvgids_id , $date);
+    update $bar if not $opt_quiet;
+}
+$bar->finish() if not $opt_quiet;
+$writer->end();
+
+
+######################################################################
+# subroutine definitions
+
+# arguments:
+#   XMLTV::Writer object to write to
+#   XMLTV id of channel
+#   URL to fetch
+#   Date::Manip object giving day for programmes in page (at least
+#     until they cross midnight)
+
+my ($warned_discarding_parts, $commented_episode_num);
+sub process_listings_page ( $$$$$ ){
+#    local $Log::TraceMessages::On = 1;
+    my ($writer, $ch_xmltv_id, $tv2date, $tv2chan, $day_obj) = @_;
+    my $next_day = 0;
+    my $day = UnixDate($day_obj, '%Q');
+    my $laststart=$day_obj;
+    #my $dayOffset = 0;
+
+    t "getting channel $ch_xmltv_id, date $day";
+    
+    my ($y,$m,$d) = UnixDate($day_obj,"%Y","%m","%d");
+    
+    # We make an HTML::TreeBuilder object, get the information
+    # from it and them delete it.
+    #
+    my $t = new HTML::TreeBuilder();
+    $t->parse(get_nice("http://www.sjonvarp.is/php/mToday.php?txt_Channel=$tv2chan&txt_DateYYYY=$y&txt_DateMM=$m&txt_DateDD=$d&senda=true"));
+    #$t->parse_file("mToday.php");
+    
+    #$t->dump();
+    my @tables = $t->look_down("cellpadding"=>"2");
+    while ( my $tab = shift (@tables)) {
+	#$tab->dump;
+	my @lines= $tab->look_down("_tag" => "tr");
+	while (my $line = shift (@lines)) {
+	    # Process the list of [ heading, data ] pairs.
+	    my ($start, $stop, # exactly one
+		$title, $sub_title, $genre, $date,               #
+		$episode_num, $actors, $writers, $commentators, #
+		$director, $previously_shown, $orig_title,      # at most one
+		$aspect, $colour, $stereo, $texted,
+		@presenter, @url # zero or more
+		);
+	    
+	    #$line->dump;
+	    my $time = $line->address(".2.0.0")->as_text;
+	    $title = $line->address(".3.0.0")->as_text;
+	    #my $orgname = $line->address(".4.0.0")->as_text;
+	    #my $time = $e->as_text;
+	    #print "$time $title\n";
+	    $line = shift @lines;
+	    #$line -> dump;
+	    my $desc = $line->address(".3.0")->as_text;
+	    #print "$desc\n";
+	    
+	    $start = parse_local_date("$day $time",$TZ);
+	    # Try to detect if we have crossed midnigth
+	    if ( Date_Cmp($start , $laststart) < 0 ) {
+		$start = DateCalc($start,"+ 1 day");
+	    }
+	    $laststart = $start;
+		
+	    my ($start_base, $start_tz) = @{date_to_local($start, $TZ)};
+	    
+	    #print "$start\n";
+	    $episode_num="0.$1/$2.0" if ($title =~ s/\s*\((\d+):(\d+)\)//);
+	   
+	    $title =~ s/\s*\(e\)//; # remove rerun indication
+	    my @title_data = ([ $title, $LANG]);
+	    if($desc =~ s/Leikstjóri:\s*([^.]*)\.// ) {
+		$director = $1;
+	    }
+	    if($desc =~ s/\s*(Aðalhlutverk:|[mM]eðal leikenda eru|Aðalhlutverk leika|[íÍ] aðalhulverkum eru|[Ll]eikendur eru)\s*([^.]*)\.// ) {
+		my @a = split(/, | og /, $2);
+		s/[.]$// foreach @a;
+		push @$actors, @a;
+	    }
+	    my %prog
+		= (channel  => $ch_xmltv_id,
+		   title    => \@title_data,
+		   start    => UnixDate($start_base, '%q') . " $start_tz",
+		   );
+	    $prog{desc} = [ [ $desc ,$LANG ] ] if $desc; 
+	    $prog{'episode-num'} = [ [ $episode_num,'xmltv_ns' ] ] if $episode_num;
+	    my %c;
+	    $c{actor} = $actors if $actors;
+	    $c{writer} = $writers if $writers;
+	    $c{commentator} = $commentators if $commentators;
+	    $c{director} = [ $director ] if $director;
+	    $prog{credits} = \%c if %c;
+
+	    $writer->write_programme(\%prog);
+	}
+
+    }
+    $t->delete; undef $t;
+}
+
+# get channel listing
+sub get_channels {
+    my %channels;
+    my $url = 'http://www.sjonvarp.is/php/mListing.php';
+
+    my $t = new HTML::TreeBuilder();
+    $t->parse(get_nice($url));
+    #$t->parse_file('mListing.php');
+
+    # The channels and their IDs are defined in javascript arrays
+    #$t->dump();
+    my @elements = $t->look_down("_tag" => "table");
+    foreach my $i (@elements) {
+	#print "$i\n";
+	#$i->dump;
+        #my @children = $i->content_list();
+
+        #if (scalar(@children) != 1 || ref($children[0])) {
+        #    next;
+        #}
+
+        my @lines = $i->look_down("_tag"=>"a");
+
+        foreach my $a (@lines) {
+	    #$a->dump();
+	    my $href=$a->attr("href");
+	    $href =~ /\?c=(\w+)\&/;
+	    my $channel  = $1;
+	    print "$channel\n";
+
+	    my @imgs = $a->look_down("_tag"=>"img");
+	    foreach my $m (@imgs) {
+		#$m->dump();
+		my $mo=$m->attr("onmouseover");
+		#print "$mo\n";
+		$mo =~ /Skoða dagskránna á (.+) í dag/;
+		my $name = $1;
+		#print "$name\n";
+		$channels{$channel}=$name;
+	    }
+	}
+    }
+    $t->delete(); undef $t;
+    return %channels;
+}
+
+# Icon URL for a given channel.
+sub get_icon {
+	my ($url) = @_;
+	$url= lc($url);
+
+	return "http://www.sjonvarp.is/php/images/logos/".$url.".gif";
+}
