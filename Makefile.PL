@@ -233,6 +233,15 @@ my @opt_components
 #       exes => [ 'grab/de/tv_grab_de' ],
 #     },
 
+     { name     => 'tv_grab_au',
+       blurb    => 'Grabber for Australia',
+       exes     => [ 'grab/au/tv_grab_au' ],
+       deps     => [ 'grab/au/tv_grab_au' => [ 'grab/au/tv_grab_au.in' ] ],
+       pl_files => { 'grab/au/tv_grab_au.PL' => 'grab/au/tv_grab_au' },
+       to_clean => [ 'grab/au/tv_grab_au' ],
+       grab_need_share => [ 'au' ],
+     },
+
      { name => 'tv_grab_uk_rt',
        blurb => 'Alternative grabber for Britain',
        exes => [ 'grab/uk_rt/tv_grab_uk_rt' ],
