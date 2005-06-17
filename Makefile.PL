@@ -333,6 +333,14 @@ my @opt_components
      { name => 'tv_grab_huro',
        blurb => 'Grabber for Hungary and Romania',
        exes => [ 'grab/huro/tv_grab_huro' ],
+       pl_files => { 'grab/huro/tv_grab_huro.PL'
+		     => 'grab/huro/tv_grab_huro' },
+       share_files => { 'grab/huro/jobmap'
+			=> 'tv_grab_huro/jobmap' },
+       to_clean => [ 'grab/huro/tv_grab_huro' ],
+       deps => [ 'grab/huro/tv_grab_huro'
+		 => [ 'grab/huro/tv_grab_huro.in' ] ],
+       grab_need_share => [ 'huro' ],
        prereqs => { 'HTML::TreeBuilder' => 0 } },
 
      { name => 'tv_grab_dk',

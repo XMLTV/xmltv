@@ -14,6 +14,7 @@ tv_grab_huro [--config-file FILE] --configure [--gui OPTION]
 
 tv_grab_huro [--config-file FILE] [--output FILE] [--days N]
            [--offset N] [--quiet]
+           [--slow] [--get-full-description]
 
 tv_grab_huro --list-channels --loc [hu | ro]
 
@@ -49,6 +50,16 @@ from today.
 B<--quiet> suppress the progress messages normally written to standard
 error.
 
+B<--slow> enables long strategy run: port.hu publishes only some (vital)
+information on the actual listing pages, the rest is shown in a separate
+popup window. If you'd like to parse the data from these popups as well,
+supply this flag. But consider that the grab process takes much longer when
+doing so, since many more web pages have to be retrieved.
+
+B<--get-full-description> is quite like B<--slow> but doesn't always download
+data from popup window.  Instead this is only requested if description in
+overview is truncated.
+
 B<--list-channels> write output giving <channel> elements for every
 channel available (ignoring the config file), but no programmes.
 
@@ -61,9 +72,7 @@ L<xmltv(5)>.
 =head1 AUTHOR
 
 Attila Szekeres and Zsolt Varga.  Based on tv_grab_fi by Matti Airas.
-Patched by Stefan Siegl <ssiegl@gmx.de>.
-
-Maintained by Ed Avis ed@membled.com.
+Heavily patched and now maintained by Stefan siegl <stesie@brokenpipe.de>.
 
 =head1 BUGS
 
@@ -98,7 +107,7 @@ use XMLTV::Usage <<END
 $0: get Hungarian or Romanian television listings in XMLTV format
 To configure: $0 --configure [--config-file FILE] [--gui OPTION]
 To grab listings: $0 [--config-file FILE] [--output FILE] [--days N]
-        [--offset N] [--quiet]
+        [--offset N] [--quiet] [--slow] [--get-full-description]
 To list channels: $0 --list-channels --loc [hu | ro]
 END
   ;
@@ -114,6 +123,7 @@ sub get_time( @ );
 sub get_title( @ );
 sub get_desc( @ );
 sub get_channels( $ );
+sub get_infourl_data( $$ );
 sub nextday( $ );
 
 # Attributes of the root element in output.
@@ -142,9 +152,11 @@ our @ch_all;
 
 # Get options, including undocumented --cache option.
 XMLTV::Memoize::check_argv('XMLTV::Get_nice::get_nice_aux');
-my ($opt_days, $opt_offset, $opt_help, $opt_output,
+my ($opt_days, $opt_offset, $opt_help, $opt_output, $opt_share,
     $opt_configure, $opt_config_file, $opt_gui, $opt_quiet,
-    $opt_list_channels, $opt_loc);
+    $opt_list_channels, $opt_loc, $opt_slow, $opt_full_desc);
+$opt_slow = 0;
+$opt_full_desc = 0;
 $opt_days = 8; # default
 $opt_offset = 0; # default
 $opt_quiet = 0; # default
@@ -156,8 +168,11 @@ GetOptions('days=i'        => \$opt_days,
        'config-file=s' => \$opt_config_file,
 	   'output=s'      => \$opt_output,
 	   'quiet'         => \$opt_quiet,
+	   'slow'          => \$opt_slow,
+	   'get-full-description' => \$opt_full_desc,
 	   'list-channels' => \$opt_list_channels,
 	   'loc=s'         => \$opt_loc,
+	   'share=s'       => \$opt_share,
 	  )
   or usage(0);
 die 'number of days must not be negative'
@@ -299,6 +314,44 @@ for ($country) {
 	warn "country not seen in $config_file, assuming '$_'\n";
     }
 }
+
+######################################################################
+# read jobmap file
+# (this is a file, where we store translations of job names from 
+#  Hungarian or Romanian language to English.  However we leave some
+#  translations blank, namely these that have no field in the credits
+#  structure)
+
+# share/ directory for storing channel mapping files.  This next line
+# is altered by processing through tv_grab_huro.PL.  But we can
+# use the current directory instead of share/tv_grab_huro for
+# development.
+#
+# The 'source' file tv_grab_huro.in has $SHARE_DIR undef, which
+# means use the current directory.  In any case the directory can be
+# overridden with the --share option (useful for testing).
+#
+my $SHARE_DIR = undef;
+$SHARE_DIR = $opt_share if defined $opt_share;
+my $OUR_SHARE_DIR = (defined $SHARE_DIR) ? "$SHARE_DIR/tv_grab_huro" : '.';
+
+# Read the file with channel mappings.
+(my $JOBMAP_FILE = "$OUR_SHARE_DIR/jobmap") =~ tr#/#/#s;
+my %jobmap;
+$line_num = 0;
+foreach (XMLTV::Config_file::read_lines($JOBMAP_FILE, 1)) {
+    ++ $line_num;
+    next unless defined;
+    my $where = "$JOBMAP_FILE:$line_num";
+    my @fields = split m/:/;
+    die "$where: wrong number of fields"
+      if @fields > 2;
+
+    my ($huro_job, $credits_id) = @fields;
+    $jobmap{$huro_job} = defined($credits_id) ? $credits_id : "";
+}
+
+
 
 ######################################################################
 # begin main program
@@ -488,6 +541,8 @@ sub process_table( $$$$$ ) {
 	last unless($lasttime); # we found at least some data => continue.
     }
 
+    $tree->delete; # get rid of HTML::TreeBuilder's in memory representation
+
     if (not @program_data) {
 	warn "no programs found, skipping\n";
 	return ();
@@ -541,7 +596,19 @@ sub make_programme_hash( $$$$$$ ) {
     $prog{start}=UnixDate($start_base, '%q') . " $start_tz";
 
     # FIXME: parse description field further
-    $prog{desc}=[ [ $cur->{desc}, $lang ] ] if defined $cur->{desc};
+    $prog{desc}=[ [ $cur->{desc}{desc}, $lang ] ] if defined $cur->{desc}{desc};
+
+    if($cur->{desc}{infourl}) {
+	# always read data from linked page (in --slow mode)
+	if($opt_slow) {
+	    get_infourl_data(\%prog, $cur->{desc}{infourl});
+	}
+	
+	# in --get-full-description mode read if description ends in '...'
+	elsif($opt_full_desc && ($prog{desc})->[0]->[0] =~ m/\.\.\.$/) {
+	    get_infourl_data(\%prog, $cur->{desc}{infourl});
+	}
+    }
 
     return \%prog;
 }
@@ -647,7 +714,14 @@ sub get_desc( @ ) {
 	if (@alltext) {
 	    $joined = join(".  ", @alltext);
 	}
-	push @txt_elem, $joined; # maybe undef
+
+	my $infourl;
+	if(my $tag = $txt->look_down("_tag"=>"a")) {
+	    $infourl = $tag->attr(q(href));
+	}
+	push @txt_elem, { "desc" => $joined,
+			  "infourl" => $infourl
+			};
     }
     return @txt_elem;
 }
@@ -698,6 +772,165 @@ sub get_channels( $ ) {
     update $bar if not $opt_quiet;
     $bar->finish() if not $opt_quiet;
     return %channels;
+}
+
+
+# merge data from linked info page into programme hash
+sub get_infourl_data( $$ ) {
+    my $prog = shift;
+    my $d = domain($country);
+    my $url = "http://www.$d" . shift;
+    #print STDERR "slow url: $url\n";
+
+    my $voting_regexp;
+
+    if($country eq "hu") {
+	$voting_regexp = "Erre a filmre eddig";
+    }
+    elsif($country eq "ro") {
+	$voting_regexp = "prezent acest program";
+    }
+    else {
+	die "line not reached";
+    }
+
+    my $tree = HTML::TreeBuilder->new();
+    my $data = get_nice($url);
+    warn "could not fetch $url (infopage), trying to continue.\n"
+	unless(defined $data);
+    $tree->parse($data);
+
+    # get rid of existing description field
+    delete($prog->{q(desc)});
+
+    # extract long description text which is located in the first <font>
+    # tag, after voting option
+    my @fonts = $tree->look_down("_tag"=>"font", size=>"2");
+    for(0..(scalar(@fonts)-1)) {
+	next unless(ref($fonts[$_]));
+
+	if($fonts[$_]->as_text() =~ m/$voting_regexp/o) {
+	    $_ = $fonts[$_+1];
+
+	    # join the presented text, replacing <br>s by spaces.
+	    my $desc = "";
+	    foreach($_->content_list()) { $desc .= ref($_) ?
+					      $_->as_text() . " " : $_; }
+	    for($desc) { s/^\s+//; s/\s+$//; }
+
+	    $prog->{q(desc)} = [[ $desc, $country ]]
+		if(length($desc));
+	    last;
+	}
+    }
+
+    # now parse credits data block
+    my @tds = $tree->look_down("_tag"=>"td", "valign"=>"top", "width"=>"100%");
+    my $infoline_match = 0;
+    #$tds[1]->dump();
+    if(my $root = $tds[1]) {
+	#print STDERR "credits data block parsing entered.\n";
+	#foreach($tds[1]->look_down("_tag"=>"font")) {
+	foreach($tds[1]->content_list()) {
+	    # there are many <strong> tags, if not, it is just not important
+	    next unless($_->look_down("_tag"=>"strong"));
+
+	    my $text = $_->as_text();
+	    my($category, $foo, $episode, $length, $bar, $year, $film_country);
+
+	    next if($text =~ m/^\s*$/); # skip empty lines ...
+
+	    # possibility 1: amerikai filmdráma, 90 perc, 2000
+	    # which is: <category>, \d+ minutes, <year>  (hungarian)
+	    if(($category, $foo, $episode, $length, $bar, $year) =
+	       $text =~ m/^([^0-9,;]+)?(,\s+([0-9\/]+)\. rész)?,?\s*(\d+) perc(,\s+([12][0-9]{3}))?\s*$/o) {}
+
+            # color means just color in Hungarian and Romanian
+            # 'alb-negru' means white/black in Romanian
+            #  -> Italia, 1999, serial, color
+	    # 'color' and 'alb-negru' may appear for one and the same show!
+	    elsif(($film_country, $year, $category, $bar, $length) =
+		  $text =~ m/^([^0-9,;\:]+)?,?\s*([12][0-9]{3})?,?\s*(?:([^0-9,]*))(,\s+(\d+) minute)?(?:,\s*(?:color|alb-negru))*$/o) {
+		if(defined($category) && $category eq "color") {
+		    undef $category
+		}
+		else {
+		    s/\s*$// for($category); # on port.ro there's sometimes some
+					     # extra spacing after the category
+		}
+	    }
+	    else {
+		goto infoline_store_skip;
+	    }
+
+	    goto infoline_store_skip
+		if($infoline_match ++); # don't match two times, ...
+	    
+	    $prog->{q(country)} = [[ $film_country, $country ]]
+		if defined $film_country;
+
+            $prog->{q(category)} = [[ $category, $country ]]
+		if defined $category and length $category;
+
+	    $prog->{q(length)} = $length * 60
+		if defined $length;
+
+	    $prog->{q(date)} = $year
+		if defined $year ;
+
+	    if(defined($episode)) {
+		if($episode =~ m#(\d+)/(\d+)#) {
+		    # episode-num spec with the total number specified.
+		    # however XMLTV counts from 0 on ...
+		    $prog->{q(episode-num)} = [[
+			sprintf("%d/%d", $1 - 1, $2), "xmltv-ns" ]];
+		}
+		else {
+		    $prog->{q(episode-num)} = [[ $episode, "onscreen" ]];
+		}
+	    }
+
+	    next;
+
+	  infoline_store_skip:
+	    # match & warn for everything else containing perc (= minutes)
+	    if($text =~ m/ (perc|minute)/ or $text =~ m/ color$/) {
+		warn "infourl-reader didn't match '$text'.\n";
+	    }
+
+	    # last chance: list of credits ...
+	    else {
+		my %credits;
+		my $job = "foobar";
+
+		foreach($_->content_list()) {
+		    next unless ref;
+
+		    if($_->tag eq "strong") {
+			($job) = $_->as_text() =~ m/^(.+):/;
+		    }
+		    elsif($_->tag eq "a") {
+			# okay, new person ..
+			if(defined($jobmap{$job})) {
+			    push @{$credits{$jobmap{$job}}}, $_->as_text()
+				if(length $jobmap{$job});
+			} else {
+			    warn "don't know what job '$job' is ...\n";
+			}
+		    }
+		    elsif($_->tag eq "p") {
+			# actors are listed in a separate paragraph 
+			push @{$credits{q(actor)}}, $_->as_text()
+			    foreach($_->look_down("_tag"=>"a"));
+		    }
+		}
+		$prog->{q(credits)} = \%credits;
+	    }
+	}
+    }
+
+    #exit; # DEBUG
+    $tree->delete;
 }
 
 
