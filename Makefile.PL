@@ -239,7 +239,18 @@ my @opt_components
        deps     => [ 'grab/au/tv_grab_au' => [ 'grab/au/tv_grab_au.in' ] ],
        pl_files => { 'grab/au/tv_grab_au.PL' => 'grab/au/tv_grab_au' },
        to_clean => [ 'grab/au/tv_grab_au' ],
+       share_files => { 'grab/au/channel_ids' => 'tv_grab_au/channel_ids' },
        grab_need_share => [ 'au' ],
+     },
+
+     { name     => 'tv_grab_ch',
+       blurb    => 'Grabber for Switzerland',
+       exes     => [ 'grab/ch/tv_grab_ch' ],
+       deps     => [ 'grab/ch/tv_grab_ch' => [ 'grab/ch/tv_grab_ch.in' ] ],
+       pl_files => { 'grab/ch/tv_grab_ch.PL' => 'grab/ch/tv_grab_ch' },
+       to_clean => [ 'grab/ch/tv_grab_ch' ],
+       share_files => { 'grab/ch/channel_ids' => 'tv_grab_ch/channel_ids' },
+       grab_need_share => [ 'ch' ],
      },
 
      { name => 'tv_grab_uk_rt',
