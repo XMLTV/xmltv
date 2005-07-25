@@ -52,6 +52,8 @@ L<xmltv(5)>.
 
 Bruno Tavares, gawen@users.sourceforge.net, based on tv_grab_es, from Ramon Roca.
 
+Grabber Site : http://bat.is-a-geek.com/tiki-index.php?page=XMLGrabPt
+
 =head1 BUGS
 
 =cut
@@ -70,6 +72,7 @@ use HTML::Entities; # parse entities
 use IO::File;
 use File::Path;
 use File::Basename;
+use LWP::UserAgent;
 
 use XMLTV;
 use XMLTV::Memoize;
@@ -83,14 +86,14 @@ use XMLTV::Mode;
 use XMLTV::Usage <<END
 $0: get Portuguese television listings in XMLTV format
 To configure: $0 --configure [--config-file FILE] [--gui OPTION]
-To grab listings: $0 [--config-file FILE] [--output FILE] [--quiet]
+To grab listings: $0 [--config-file FILE] [--output FILE] [--quiet] [--offset OFFSET] [--days DAYS] [--quick]
 To list channels: $0 --list-channels
 END
   ;
 
 # Attributes of the root element in output.
 my $HEAD = { 'source-info-url'     => 'http://tvcabo.pt',
-	     'source-data-url'     => "http://tvcabo.pt/tv_cabo_progr_canal.asp",
+	     'source-data-url'     => "http://www.tvcabo.pt/TV/ProgramacaoTv.aspx",
 	     'generator-info-name' => 'XMLTV',
 	     'generator-info-url'  => 'http://membled.com/work/apps/xmltv/',
 	   };
@@ -106,9 +109,9 @@ our @ch_all;
 
 # Get options, including undocumented --cache option.
 XMLTV::Memoize::check_argv('XMLTV::Get_nice::get_nice_aux');
-my ($opt_help, $opt_output,
+our ($opt_help, $opt_output,
     $opt_configure, $opt_config_file, $opt_gui, $opt_quiet,
-    $opt_list_channels);
+    $opt_list_channels,$opt_offset,$opt_days,$opt_fullinfo);
 $opt_quiet  = 0; # default
 GetOptions('help'          => \$opt_help,
 	   'configure'     => \$opt_configure,
@@ -117,8 +120,9 @@ GetOptions('help'          => \$opt_help,
 	   'output=s'      => \$opt_output,
 	   'quiet'         => \$opt_quiet,
 	   'list-channels' => \$opt_list_channels,
-	   'offset=i'      => \ my $opt_offset,        # ignored
-           'days=i'        => \ my $opt_days,          # ignored
+	   'offset=i'      => \$opt_offset, 
+           'days=i'        => \$opt_days,
+           'fullinfo'      => \$opt_fullinfo,
 	  )
   or usage(0);
 usage(1) if $opt_help;
@@ -128,10 +132,9 @@ XMLTV::Ask::init($opt_gui);
 # requested) but at least check the user didn't ask for something
 # impossible.
 #
-my $first_day = ($opt_offset || 0) + ($opt_days || 0);
-die 'cannot grab more than one week ahead' if $first_day >= 7;
-warn "ignoring --offset\n" if defined $opt_offset;
-warn "ignoring --days\n" if defined $opt_days;
+our $first_day = ($opt_offset || 0);
+our $last_day  = $first_day + ($opt_days || 0);
+die 'cannot grab more than one week ahead' if $first_day >= 7 || $last_day >= 7;
 
 my $mode = XMLTV::Mode::mode('grab', # default
 			     $opt_configure => 'configure',
@@ -156,6 +159,7 @@ elsif ($mode eq 'list-channels') {
 else { die }
 
 # Whatever we are doing, we need the channels data.
+my $token;
 my %channels = get_channels(); # sets @ch_all
 my @channels;
 
@@ -226,7 +230,7 @@ foreach (@config_lines) {
     # ensures we don't have a config file left over from the old
     # grabber.
     #
-    if (/^channel:?\s+(\d+).tvcabo.pt\s*$/) {
+    if (/^channel:?\s+(.+)\.tvcabo\.pt\s*$/) {
 	my $ch_did = $1;
 	die if not defined $ch_did;
 	push @channels, $ch_did;
@@ -316,29 +320,57 @@ sub process_table {
 
     t "Getting channel $ch_xmltv_id\n";
 
-    my $url = $HEAD->{'source-data-url'}."?identificadorCanal=$ch_xmltv_id&l1.x=1&l1.y=2";
-    #print STDERR "Getting url : $url"; 
+    my $url = $HEAD->{"source-data-url"};
     t $url;
-    my $data=tidy(get_nice($url));
-    if (not defined $data) {
-	die "could not fetch $url, aborting\n";
-    }
-    local $SIG{__WARN__} = sub {
-	warn "$url: $_[0]";
-    };
+    use LWP::UserAgent;
 
-    # parse the page to a document object
-    my $tree = HTML::TreeBuilder->new();
-    $tree->parse($data);
-    my @program_data = get_program_data($tree);
-    if (not @program_data) {
-	warn "$url: no programmes found\n";
-	return ();
+    my $ua = LWP::UserAgent->new;
+    $ua->timeout(30);
+
+    $ch_xmltv_id =~ /(.+?)\.tvcabo\.pt/;
+    my @all_programs = ();
+   
+    for (my $k=$first_day; $k <= $last_day; $k++) {
+        my $form ={
+                    "_ctl0:_ctl5:channels"=>"$ch_xmltv_id",
+                    "_ctl0:_ctl5:days"=>"$k",
+                    "_ctl0:_ctl5:ImageButton1.x"=>1,
+                    "_ctl0:_ctl5:ImageButton1.y"=>1,
+                    "__VIEWSTATE" => $token
+                  };
+
+    	my $r = $ua->post($url, $form);
+	      
+
+    	if (! $r->is_success) {
+            die "Could not fetch $url: ".$r->status_line;
+    	}
+
+    
+    	my $data=tidy($r->content);
+
+    	if (not defined $data) {
+		die "could not fetch $url, aborting\n";
+    	}
+
+    	local $SIG{__WARN__} = sub {
+		warn "$url: $_[0]";
+    	};
+
+    	# parse the page to a document object
+    	my $tree = HTML::TreeBuilder->new();
+   	$tree->parse($data);
+    	my @program_data = get_program_data($tree);
+    	if (not @program_data) {
+		warn "$url: no programmes found\n";
+		return ();
+    	}
+	@all_programs = (@all_programs,@program_data);
     }
 
-    my $first = $program_data[0];
+    my $first = $all_programs[0];
     my @r;
-    foreach my $p (@program_data) {
+    foreach my $p (@all_programs) {
 	push @r, make_programme_hash($ch_xmltv_id, $p, $first);
     }
     return @r;
@@ -412,71 +444,67 @@ sub get_program_data {
 		'Dez' => 'Dec',
     );
 
-    my @tables = $tree->find_by_tag_name("_tag"=>"table");
 
-
+    my $table = $tree->find_by_attribute('id','_ctl0__ctl5_Datagrid1');
     # Actually time and title are required, but we don't check that.
-    my $table_n = 0;
-    foreach my $table (@tables) {
-	my @trs = $table->find_by_tag_name("_tag"=>"tr");
-	next unless $trs[2];
-	my @tds = $trs[2]->find_by_tag_name("_tag"=>"td");
-	next unless (scalar(@tds) == 1);
-	my $should_be_hour = trim($tds[0]->as_trimmed_text())."\n";
-	next unless ($should_be_hour =~ /.* - (\d+) de (.*) de (\d+)/);
-	#print STDERR "\n*".$should_be_hour."*\n";
-	my ($day, $month, $year) = ($1, $2, $3);
-	$month =~ s/^(\w{3}).*$/$1/;
-	$month = $month_conv{$month};
-	
-	#print STDERR "Parsed date to $day, $month, $year -> ".ParseDate("$day $month $year")."\n";
-	my $parsed_date = ParseDate(sprintf("%02d %3s %04d",$day, $month, $year));
-	die "Parse error, could not parse date" unless $parsed_date;
-	my $f_date = $parsed_date;
-	$f_date =~ s/^(\d{4})(\d{2})(\d{2}).*/$1$2$3/; 
-	#print "Final date found : $f_date\n";
-	#print "--- $f_date matched\n";
+   
+    #lets get the day
+    my $span = $tree->find_by_attribute('id','_ctl0__ctl5_textBoxInfoResults');
+    my $date = trim($span->as_trimmed_text());
+    $date =~ /.*, (\d+) de (.*) de (\d+)/;
+    my ($day, $month, $year) = ($1,$2,$3);
+    $month =~ s/^(\w{3}).*$/$1/;
+    $month = $month_conv{$month};
+    my $parsed_date = ParseDate(sprintf("%02d %3s %04d",$day, $month, $year));
+    die "Parse error, could not parse date" unless $parsed_date;
+    my $f_date = $parsed_date;
+    $f_date =~ s/^(\d{4})(\d{2})(\d{2}).*/$1$2$3/;
 
-	my $index = 3;
-	while ($trs[$index]) {
-		my @tds = $trs[$index]->find_by_tag_name("_tag"=>"td");
+    if ($table) {
+      my @trs = $table->find_by_tag_name("_tag"=>"tr");
+      foreach my $tr (@trs) {
+		my @tds = $tr->find_by_tag_name("_tag"=>"td");
 		last unless( $tds[0] && $tds[1] );
 		my $time = trim($tds[0]->as_trimmed_text());
 		my $title = trim($tds[1]->as_trimmed_text());
 		my $sub_t = "";
 		my $episode = "";
+		my $desc = "";
 
-		if ( my $i =  $tds[1]->find_by_tag_name("_tag"=>"i") ) {
-			my $tmp = trim($i->as_trimmed_text());	
-			$tmp =~ s/\(/\\\(/g;
-			$tmp =~ s/\)/\\\)/g;
-			$title =~ s/$tmp//;
-			$tmp =~ s/^\s*?(.*?)\s*?/$1/;
-			if ($tmp =~ /(Epis..io\s+\d+)/) {
-				my $ep = $1;
-				$tmp =~ s/$ep//;
-				$ep =~ s/^Epis..io\s+//;
-				$episode = "";
-
-			}
-			if ($tmp) {
-				$sub_t = $tmp;
-			}
-		}	
+		if ($title =~ /^(.*?)\:(.*?)$/) {
+		  $title = $1;
+		  $sub_t = $2;
+		}
 
 		$time =~ s/://g;
-		#print STDERR "Found $time | $title\n";
+		$time = sprintf("%04d",$time);
+
+		if ($opt_fullinfo) {
+		     #lets get the description
+		     my $href = $tr->find_by_tag_name("_tag"=>"a");
+		     my $pid = $href->attr('href');
+		     $pid =~ /.*?\((\d+)\,\"(.*?)\"\).*$/;
+		     my ($id, $ch) = ($1,$2);
+                     my $data=tidy(get_nice($HEAD->{"source-data-url"}."?programId=$id&channelSigla=$ch")); 
+		     if ($data) {
+			my $ptree = HTML::TreeBuilder->new();
+        		$ptree->parse($data);
+			my $d = $ptree->find_by_attribute('id','_ctl0__ctl4_lblSynopsis');
+		 	if ($d) {
+			  $desc = $d->as_trimmed_text();
+			}	
+		     }
+		}
 
 		for ($title) { s/^\s+$//; s/\s+$// }
                 my %h = (       time =>         $time,
                                 title=>         $title,
 				date =>         $f_date,
-				"episode-num" =>      $episode,
+				"episode-num" =>$episode,
                                 subtitle=>      $sub_t,
-                                desc =>         "");
+                                desc =>         $desc);
                 push @data, \%h;
-        	$index = $index + 1;
-	}
+      }
     }
     return @data;
 }
@@ -498,11 +526,12 @@ sub get_channels {
     
     foreach my $elem (@menus) {
 	my $cname = $elem->attr('name');
-	next unless $cname eq 'identificadorCanal';	
+	next unless $cname eq '_ctl0:_ctl5:channels';	
         my @ocanals = $elem->find_by_tag_name("_tag"=>"option");
         @ocanals = sort @ocanals;
 	foreach my $opt (@ocanals) {
 		    my $channel_id  = $opt->attr('value');
+		    next if $channel_id eq 'ALL';
 		    my $channel_name= trim($opt->content->[0]);
 		    $channels{$channel_id}=$channel_name;
 		    push @ch_all, { 'display-name' => [ [ $channel_name,
@@ -511,6 +540,12 @@ sub get_channels {
 	} #foreach
     } #while
     die "no channels could be found" if not keys %channels;
+
+    #we need a token 
+    my $t = $tree->find_by_attribute('name', '__VIEWSTATE'); 
+    $token = $t->attr('value');
+    die "Could not get the token\n" unless $token;
+
     update $bar if not $opt_quiet;
     return %channels;
 }
