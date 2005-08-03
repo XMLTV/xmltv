@@ -94,20 +94,19 @@ END
 BEGIN {
     eval { require Log::TraceMessages };
     if ($@) {
-	*t = sub {};
-	*d = sub { '' };
+			*t = sub {};
+			*d = sub { '' };
     }
     else {
-	*t = \&Log::TraceMessages::t;
-	*d = \&Log::TraceMessages::d;
-	Log::TraceMessages::check_argv();
+			use Log::TraceMessages qw(t d trace dmp);
+			Log::TraceMessages::check_argv();
     }
 }
 
 # Function prototypes.
 sub time_to_str( $ );
 sub get_channels();
-sub process_summary_page( $$$$ );
+sub process_summary_page( $$$$$ );
 sub parse_dutch_date( $ );
 sub process_details_page( $$$ );
 
@@ -145,8 +144,20 @@ GetOptions('days=i'        => \$opt_days,
 	   'share=s'       => \$opt_share,         # undocumented
 	  )
   or usage(0);
-die 'number of days must not be negative'
-  if (defined $opt_days && $opt_days < 0);
+
+if( defined $opt_offset && ( $opt_offset < 0 || $opt_offset > 2 ) ) {
+	print '!! Offset must be between 0-2 (0 is today), using default (0)',"\n";
+	$opt_offset = 0;
+}
+
+if( defined $opt_days && ( $opt_days < 1 || $opt_days > 7 ) ) {
+	print '!! Days must be between 1-7, using default (7)',"\n";
+	$opt_days = 7;
+}
+
+# Days excludes the current day
+$opt_days--;
+
 usage(1) if $opt_help;
 
 XMLTV::Ask::init($opt_gui);
@@ -303,32 +314,32 @@ my $now = parse_date('now');
 
 my @to_get;
 
-# the order in which we fetch the channels matters
+# We now fetch a complete page per channel
+# This page contains all the program links for the specified days
 foreach $ch_did (@channels) {
     my $ch_xid = "$ch_did.tvgids.nl";
-    for (my $i = $opt_offset;$i<($opt_offset + $opt_days);$i++) {
-    	my $url = 'http://www.tvgids.nl/zoeken/'
-    	  . "?station=$ch_did&genre=&interval=$i&timeslot=0";
-     	my $day = UnixDate(DateCalc($now, "+ $i days"), '%Y-%m-%d');
-    	die if not defined $day;
-    	die if ref $url;
-    	push @to_get, [ $url, $day, $ch_xid, $ch_did ];
-    }
+   	my $url = 'http://www.tvgids.nl/zoeken/'.
+			"?trefwoord=Titel+of+trefwoord&interval=$opt_offset&timeslot=&station=$ch_did&periode=$opt_days&genre=&order=0";
+   	push @to_get, [ $url, $ch_xid, $ch_did ];
 }
 
 my %warned_ch_name; # suppress duplicate warnings
 
 my @summary_page_data;
-my $bar = new XMLTV::ProgressBar('downloading summary', scalar @to_get)
+my $bar = new XMLTV::ProgressBar('Downloading summary...', scalar @to_get)
   if not $opt_quiet;
 
 foreach (@to_get) {
-    my ($url, $day, $ch_xmltv_id, $ch_tvgids_id) = @$_;
+    my ($url, $ch_xmltv_id, $ch_tvgids_id) = @$_;
     die if ref $url;
+
+		my $start_day = UnixDate(DateCalc($now, "+ $opt_offset days"), '%Y-%m-%d');
+		
+		print "Fetching ",$url," ...\n" if not $opt_quiet;
+
     push @summary_page_data,
-      [ $url, $ch_xmltv_id,
-	[ process_summary_page($url, $day, $day, \$channels{$ch_tvgids_id}) ] ];
-    update $bar if not $opt_quiet;
+			process_summary_page($url, $start_day, $start_day, $ch_xmltv_id, \$channels{$ch_tvgids_id});
+ 	  update $bar if not $opt_quiet;
 }
 $bar->finish() if not $opt_quiet;
 
@@ -347,8 +358,8 @@ my @summary_programmes;
 my %detail_url_to_summary_url;
 
 foreach (@summary_page_data) {
-    my ($summary_url, $ch_xmltv_id, $data) = @$_;
-
+    my ($summary_url, $ch_xmltv_id, @data) = @$_;
+		
     # Try to do something with the programmes that have no start
     # time.  Put them into a clump with the preceding valid
     # programme.
@@ -356,7 +367,7 @@ foreach (@summary_page_data) {
     my $clump;			# [ start, stop, programmes ].  stop may be undef.
     my @clumps;
 
-    foreach (@$data) {
+    foreach (@data) {
     	my ($start, $stop, $title, $url) = @$_;
     	die if ref $url;
     	local $SIG{__WARN__} = sub { warn "$url: $_[0]" };
@@ -1089,8 +1100,8 @@ sub get_channels() {
 #
 my %warned_bad_channel_name;
 
-sub process_summary_page( $$$$ ) {
-    my ($url, $day, $official_day, $ch_name_ref) = @_;
+sub process_summary_page( $$$$$ ) {
+    my ($url, $day, $official_day, $ch_xmltv_id, $ch_name_ref) = @_;
     die if not defined $url; die if ref $url;
     die if not defined $day; die if ref $day;
     die if not defined $official_day; die if ref $official_day;
@@ -1113,69 +1124,71 @@ sub process_summary_page( $$$$ ) {
     }
 
     my @bits;
-
+		
     foreach my $e (@elems) {
     	my @cont = $e->look_down('_tag' => 'tr');
-        my @elems = $t->look_down('_tag' => 'table', 'class' => 'overzicht');
-
-        if (not @elems) {
-        	warn 'did not find any programmes in page';
-        	return ();
-        }
-    }
-
-    foreach my $e (@elems) {
-       	my @h4elems = $e->look_down('_tag' => 'h4');
-        if (not @h4elems) {
-            warn 'did not find any date in page';
-            return ();
-        }
-        else {
-            push @bits, [ $h4elems[0]->as_text(), $_ ];
-        }
-
-    	my @cont = $e->look_down('_tag' => 'tr');
-        foreach my $tr (@cont) {
-            # Fetch the time
-            my @ths = $tr->look_down('_tag' => 'th');
-            my @tds = $tr->look_down('_tag' => 'td');
-            
-            if( @ths == 1 and @tds > 1 ) {
-                my $th = $ths[0]; my $td1 = $tds[0]; my $td2 = $tds[1];
-                my @ahs = $td1->look_down('_tag' => 'a');
-                if( @ahs == 1 ) {
-                    push @bits, [ $th->as_text(), $td1->as_text(), $td2->as_text(), $ahs[0]->attr('href'), $_ ];
-                }
-            }
-        }
-
+      foreach my $tr (@cont) {
+	     	my @h4elems = $tr->look_down('_tag' => 'h4');
+	      if (@h4elems) {
+	        push @bits, [ 1, $h4elems[0]->as_text(), $_ ];
+				}
+				else {
+	        my @ths = $tr->look_down('_tag' => 'th');
+	        my @tds = $tr->look_down('_tag' => 'td');
+				
+	        if( @ths == 1 and @tds == 3 ) {
+		        my $th = $ths[0]; my $td1 = $tds[0]; my $td2 = $tds[1];
+	          my @ahs = $td1->look_down('_tag' => 'a');
+						if( @ahs == 1 ) {
+							push @bits, [ 0, $th->as_text(), $td1->as_text(), $td2->as_text(), $ahs[0]->attr('href'), $_ ];
+	          }
+	        }
+				}
+      }
     }
 
     $t->delete();
     undef $t;
     
     if (not @bits) {
-    	warn "did not see any content, skipping page";
+    	warn 'Did not see any content, skipping page';
     	return ();
     }
     
     t 'got bits: ' . d @bits;
-    
-   	my $date_str = $bits[0]->[0];
-   	my $d = parse_dutch_date($date_str);
-   	if (defined $d) {
-   	    my ($d_base, $d_tz) = @{date_to_local($d, $TZ)};
-   	    die "date in page $d_base ($date_str) doesn't match expected $official_day"
-   	      if UnixDate($d_base, '%Q') ne UnixDate($official_day, '%Q');
-   	    shift @bits;
-   	}
-
+		
     my @todo;
+		my @data;
+		
+		$day = $official_day;
+		
+		while (@bits > 0) {
+			my $bit = shift @bits;
+			
+			if( $bit->[0] == 1 ) {
+		   	my $date_str = $bit->[1];
+	  	 	my $d = parse_dutch_date($date_str);
+		   	if (defined $d) {
+	   	    my ($d_base, $d_tz) = @{date_to_local($d, $TZ)};
+#					print UnixDate($d_base, '%Q'),"\n";
+#					print UnixDate($day, '%Q'),"\n";
+					if( UnixDate($d_base, '%Q') eq UnixDate( DateCalc($day, '+ 1 day'), '%Q') ) {
+						# We found our next day!
+						# Add the existing @todo to the data
+						push @data, [ UnixDate($day, '%Y-%m-%d'), @todo ]
+							if (@todo);
+						@todo = [];
+						$day = UnixDate( DateCalc($day, '+ 1 day'), '%Y-%m-%d');
+					}
+				}
+				else {
+					die "Cannot parse date '$date_str'";						
+				}
 
-    while (@bits > 0) {
-    	my $bit = shift @bits;
-
-    	my $ch = $bit->[2];
+				next;
+	   	}
+			
+    	my $ch = $bit->[3];
     	t 'shifted bit to get $ch=' . d $ch;
     	for ($$ch_name_ref) {
     	    if (not defined) { $_ = $ch }
@@ -1187,14 +1200,14 @@ sub process_summary_page( $$$$ ) {
     	    }
     	}
 	
-    	my $times = $bit->[0];
+    	my $times = $bit->[1];
     	t 'shifted bit to get $times=' . d $times;
-    	
-    	my $title_href = $bit->[3];
-    	my $title = $bit->[1];
+			
+    	my $title_href = $bit->[4];
+    	my $title = $bit->[2];
     	t 'shifted bit to get $title_href=' . d $title_href . ', '
     	  . '$title=' . d $title;
-          
+				
     	if ($title =~ /^Ieder heel uur .+, tenzij anders vermeld$/) {
     	    # A certain programme on the hour.  But it isn't worth
     	    # adding this to the output, ignore it.
@@ -1209,7 +1222,8 @@ sub process_summary_page( $$$$ ) {
     	    next;
     	}
 	
-       	my ($start_hhmm, $stop_hhmm);
+     	my ($start_hhmm, $stop_hhmm);
+
     	if ($times =~ /^(\d\d):(\d\d) - /
     	    and 0 <= $1 and $1 < 24 and 0 <= $2 and $2 < 60) {
     	    $start_hhmm = "$1:$2";
@@ -1222,11 +1236,16 @@ sub process_summary_page( $$$$ ) {
     	# Right, got channel name, times, and title.
     	# FIXME should check channel name (among other things).
     	#
-       	my $title_url = URI->new_abs($title_href, $url);
-        
-       	# We prefer to handle URLs as strings.
-       	push @todo, [ $start_hhmm, $stop_hhmm, $title, "$title_url" ];
+     	my $title_url = URI->new_abs($title_href, $url);
+       
+     	# We prefer to handle URLs as strings.
+     	push @todo, [ $start_hhmm, $stop_hhmm, $title, "$title_url" ];
     }
+
+		# Add the remaining data to the @todo array
+		push @data, [ $day, @todo ]
+			if (@todo);
+		@todo = [];
 
     # Now we need to make some sense of the times.  When stop time
     # appears before start time this could mean we have crossed
@@ -1234,128 +1253,125 @@ sub process_summary_page( $$$$ ) {
     # one such potential crossing we pick the one with the shortest
     # resulting programme length and assume the others are mistakes.
     #
-    my @crossings;
-    my $shortest;
-    my $next_day = UnixDate(DateCalc($day, '+ 1 day'), '%Y-%m-%d');
-    my $crossing_at;
-#    local $Log::TraceMessages::On = 1;
+		my @page;
+		
+		for (my $c = 0; $c < @data; ++$c) {
+			my($day, @todo) = @{$data[$c]};
+		
+	    my @crossings;
+	    my $shortest;
+	    my $next_day = UnixDate(DateCalc($day, '+ 1 day'), '%Y-%m-%d');
+	    my $crossing_at;
+	    # ${Log::TraceMessages::On} = 1;
+	
+	    t 'looking at raw times and searching for midnight crossing: ' . d \@todo;
+	
+	    for (my $i = 0; $i < @todo; ++$i) {
+	    	my ($start_hhmm, $stop_hhmm) = @{$todo[$i]};
+	    	t '$start_hhmm=' . d $start_hhmm;
+	    	t '$stop_hhmm=' . d $stop_hhmm;
+	    	next if not defined $start_hhmm;
+	    	next if not defined $stop_hhmm;
 
-    t 'looking at raw times and searching for midnight crossing: ' . d \@todo;
+  	  	my $start = parse_local_date("$day $start_hhmm", $TZ);
+	    	my $stop = parse_local_date("$day $stop_hhmm", $TZ);
+	    	t "checking if $start -> $stop goes backwards";
+	    	next if Date_Cmp($start, $stop) <= 0;
+	    	t "yup, it's a candidate";
 
-    for (my $i = 0; $i < @todo; ++$i) {
-    	my ($start_hhmm, $stop_hhmm) = @{$todo[$i]};
-    	t '$start_hhmm=' . d $start_hhmm;
-    	t '$stop_hhmm=' . d $stop_hhmm;
-    	next if not defined $start_hhmm;
-    	next if not defined $stop_hhmm;
+	    	my $stop_next_day = parse_local_date("$next_day $stop_hhmm", $TZ);
+	    	die if Date_Cmp($stop_next_day, $start) <= 0;
+	    	t 'if it were, stop time on next day would be: ' . d $stop_next_day;
 
-    	my $start = parse_local_date("$day $start_hhmm", $TZ);
-    	my $stop = parse_local_date("$day $stop_hhmm", $TZ);
-    	t "checking if $start -> $stop goes backwards";
-    	next if Date_Cmp($start, $stop) <= 0;
-    	t "yup, it's a candidate";
-
-    	my $stop_next_day = parse_local_date("$next_day $stop_hhmm", $TZ);
-    	die if Date_Cmp($stop_next_day, $start) <= 0;
-    	t 'if it were, stop time on next day would be: ' . d $stop_next_day;
-
-    	my $distance = Delta_Format(DateCalc($start, $stop_next_day), 0, '%st');
-    	t '...and length of programme: ' . d $distance;
-    	t 'shortest length so far: ' . d $shortest;
+  	  	my $distance = Delta_Format(DateCalc($start, $stop_next_day), 0, '%st');
+	    	t '...and length of programme: ' . d $distance;
+	    	t 'shortest length so far: ' . d $shortest;
     
-    	if (not defined $shortest or $distance < $shortest) {
-    	    t 'this is the best so far';
-    	    $shortest = $distance;
-    	    $crossing_at = $i;
-    	}
-    }
+	    	if (not defined $shortest or $distance < $shortest) {
+	    	    t 'this is the best so far';
+	    	    $shortest = $distance;
+	    	    $crossing_at = $i;
+	    	}
+  	  }
 
-    t '@todo=' . d \@todo;
+	    t '@todo=' . d \@todo;
 
-    # Now given the place at which we cross from $day to $next_day we
-    # can add the appropriate days to the hh:mm times.
-    #
-    if (not defined $crossing_at) {
-    	push @$_, $day, $day foreach @todo;
-    }
-    else {
-    	for (my $i = 0; $i < $crossing_at; ++$i) {
-    	    push @{$todo[$i]}, $day, $day;
+	    # Now given the place at which we cross from $day to $next_day we
+	    # can add the appropriate days to the hh:mm times.
+	    #
+	    if (not defined $crossing_at) {
+  	  	push @$_, $day, $day foreach @todo;
     	}
-    	for (my $i = $crossing_at) {
-    	    push @{$todo[$i]}, $day, $next_day;
-    	}
-    	for (my $i = $crossing_at + 1; $i < @todo; ++$i) {
-    	    push @{$todo[$i]}, $next_day, $next_day;
-    	}
-    }
+	    else {
+	    	for (my $i = 0; $i < $crossing_at; ++$i) {
+	    	    push @{$todo[$i]}, $day, $day;
+	    	}
+	    	for (my $i = $crossing_at) {
+	    	    push @{$todo[$i]}, $day, $next_day;
+	    	}
+	    	for (my $i = $crossing_at + 1; $i < @todo; ++$i) {
+	    	    push @{$todo[$i]}, $next_day, $next_day;
+	    	}
+  	  }
 
-    # Now we can parse the dates into Date::Manip objects.
-    my @r;
-    foreach (@todo) {
-    	my ($start_hhmm, $stop_hhmm, $title, $title_url, $start_day, $stop_day) = @$_;
-    	my ($start, $stop);
-    	if (defined $start_hhmm) {
-    	    $start = parse_local_date("$start_day $start_hhmm", $TZ);
+	    # Now we can parse the dates into Date::Manip objects.
+	    my @parsed;
+
+  	  foreach (@todo) {
+	    	my ($start_hhmm, $stop_hhmm, $title, $title_url, $start_day, $stop_day) = @$_;
+	    	my ($start, $stop);
+	    	if (defined $start_hhmm && defined $start_day) {
+	    	    $start = parse_local_date("$start_day $start_hhmm", $TZ);
+		    }
+	    	if (defined $stop_hhmm && defined $stop_day) {
+	    	    $stop = parse_local_date("$stop_day $stop_hhmm", $TZ);
+	    	}
+	    	push @parsed, [ $start, $stop, $title, $title_url ]
+					if (defined $title);
 	    }
-    	if (defined $stop_hhmm) {
-    	    $stop = parse_local_date("$stop_day $stop_hhmm", $TZ);
-    	}
-    	push @r, [ $start, $stop, $title, $title_url ];
-    }
 
-    t 'after parsing dates: ' . d \@r;
+	 	  t 'after parsing dates: ' . d \@parsed;
 
-    # Check the dates and weed out those which are obviously wrong.
-    my $last_start;
-    foreach (@r) {
-    	our ($start, $stop);
-    	local (*start, *stop) = \ ($_->[0], $_->[1]);
-    	t 'checking dates, $last_start=' . d $last_start;
-    	t '$start=' . d $start;
-    	t '$stop=' . d $stop;
-
-    	if (defined $start and defined $stop
-	      and Date_Cmp($start, $stop) > 0) {
-    	    # Appears to stop before it starts.  Assume the stop time
-    	    # is bogus but the start time might be okay.
-    	    #
-    	    undef $stop;
-    	}
+	    # Check the dates and weed out those which are obviously wrong.
+	    my $last_start;
+	    foreach (@parsed) {
+	    	our ($start, $stop);
+	    	local (*start, *stop) = \ ($_->[0], $_->[1]);
+	    	t 'checking dates, $last_start=' . d $last_start;
+	    	t '$start=' . d $start;
+	    	t '$stop=' . d $stop;
+	
+  	  	if (defined $start and defined $stop
+		      and Date_Cmp($start, $stop) > 0) {
+	   	    # Appears to stop before it starts.  Assume the stop time
+	   	    # is bogus but the start time might be okay.
+	   	    #
+	   	    undef $stop;
+	    	}
     
-    	if (defined $last_start) {
-    	    if (defined $start and Date_Cmp($start, $last_start) < 0) {
-    		# Appears to start before previous start.
-    		undef $start;
-        }
-	    if (defined $stop and Date_Cmp($stop, $last_start) < 0) {
-    		# Stops before previous start - that's just as bad.
-    		undef $stop;
+	    	if (defined $last_start) {
+	   	    if (defined $start and Date_Cmp($start, $last_start) < 0) {
+		    		# Appears to start before previous start.
+		    		undef $start;
+  	      }
+
+			    if (defined $stop and Date_Cmp($stop, $last_start) < 0) {
+		    		# Stops before previous start - that's just as bad.
+		    		undef $stop;
+			    }
+				}
+
+				$last_start = $start if defined $start;
 	    }
-	}
-	$last_start = $start if defined $start;
-    }
-    t 'removed bad dates, now: ' . d \@r;
 
-    # If there is a 'next page' link do a recursive call to handle it.
-    foreach (@bits) {
-        my ($type, $href, $text) = @$_;
-       	if ($type eq 'lijst_zender' and $text eq 'Volgende') {
-       	    # Next page for this day.
-            my $next_url = URI->new_abs($href, $url);
-      	    # Turn URL back into a string.
-       	    push @r, process_summary_page("$next_url", $day, $official_day, $ch_name_ref)
-       	}
-       	elsif ($type eq 'lijst_zender' and $text eq 'Vorige') {
-       	    # Previous page for this day, assume already fetched.
-       	}
-       	else {
-          	    warn "discarding leftover $type: $text";
-       	}
-    }
+	    t 'removed bad dates, now: ' . d \@parsed;
+			
+			push @page, [ $url, $ch_xmltv_id, @parsed ];
+		}
+		
+    t 'returning tuples: ' . d \@page;
 
-    t 'returning tuples: ' . d \@r;
-    return @r;
+    return @page;
 }
 
 # Parse date strings that are in Dutch.  'Why not just call
