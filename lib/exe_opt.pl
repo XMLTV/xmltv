@@ -9,6 +9,8 @@
 # Robert Eden rmeden@yahoo.com
 #
 
+use File::Spec;
+
 #
 # output constants
 #
@@ -29,6 +31,22 @@ print '-nologo
 -info LegalCopyright="GNU General Public License http://www.gnu.org/licenses/gpl.txt"
 ';
 
+#
+# Add XML\Parser\encodings
+#
+@Encoding_Path = (grep(-d $_,
+                         map(File::Spec->catdir($_, qw(XML Parser Encodings)),
+                             @INC)
+                      ));
+foreach $dir (@Encoding_Path) {
+    opendir DIR,$dir || die "Can't open encoding path directory\n";
+    while ($file = readdir DIR)
+    {
+       next unless $file =~ /.enc$/i;
+       print "-bind=XML/Parser/Encodings/${file}[file=$dir/${file},extract]\n";
+    }
+}
+       
 #
 # put date in file version field
 #
