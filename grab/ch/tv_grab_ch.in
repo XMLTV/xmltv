@@ -55,18 +55,27 @@ channel available (ignoring the config file), but no programmes.
 
 B<--help> print a help message and exit.
 
+Some channels, like for example SAT.1 and RTL-2, sometimes broadcast
+different programmes in different regions, i.e. the programmes broadcast
+in Switzerland differ from the programmes shown in Germany.
+Unfortunately fernsehen.ch tends to supply both programmes in one
+channel listing, making it hard for the grabber to decide which
+programme to write out. By default it tends to write the first, however
+you can overwrite this in the configuration file. Simply add a line telling
+B<last> plus the channel id, e.g. "last RT2" for RTL-2.
+
 =head1 SEE ALSO
 
 L<xmltv(5)>.
 
 =head1 AUTHOR
 
-Stefan Siegl, ssiegl@gmx.de. Inspired by tv_grab_fi by Matti Airas.
+Stefan Siegl <stesie@brokenpipe.de>. Inspired by tv_grab_fi by Matti Airas.
 
 =head1 BUGS
 
 If you happen to find a bug, you're requested to send a mail to me
-at B<ssiegl@gmx.de> or to one of the XMLTV mailing lists, see webpages
+at B<stesie@brokenpipe.de> or to one of the XMLTV mailing lists, see webpages
 at http://sourceforge.net/projects/xmltv/.
 
 =cut
@@ -224,7 +233,7 @@ my $OUR_SHARE_DIR = (defined $SHARE_DIR) ? "$SHARE_DIR/tv_grab_ch" : '.';
 
 # Read the file with channel mappings.
 (my $CHANNEL_NAMES_FILE = "$OUR_SHARE_DIR/channel_ids") =~ tr!/!/!s;
-my (%chid_mapping, %seen);
+my (%chid_mapping, %seen, %first_last);
 my $line_num = 0;
 foreach (XMLTV::Config_file::read_lines($CHANNEL_NAMES_FILE, 1)) {
     ++ $line_num;
@@ -232,12 +241,17 @@ foreach (XMLTV::Config_file::read_lines($CHANNEL_NAMES_FILE, 1)) {
     my $where = "$CHANNEL_NAMES_FILE:$line_num";
     my @fields = split m/:/;
     die "$where: wrong number of fields"
-      if @fields != 2;
+      if(@fields < 2 || @fields > 3);
 
-    my ($xmltv_id, $fernsehen_ch_id) = @fields;
+    my ($xmltv_id, $fernsehen_ch_id, $writelast) = @fields;
     warn "$where: fernsehen.ch id $fernsehen_ch_id seen already\n"
       if defined $chid_mapping{$fernsehen_ch_id};
     $chid_mapping{$fernsehen_ch_id} = $xmltv_id;
+    $writelast = "first" 
+      unless defined $writelast;
+    die "$where: first-last selector of $fernsehen_ch_id `$writelast' invalid"
+      if($writelast ne "first" and $writelast ne "last");
+    $first_last{$fernsehen_ch_id} = $writelast;
     warn "$where: XMLTV id $xmltv_id seen already\n"
       if $seen{$xmltv_id}++;
 }
@@ -259,12 +273,16 @@ foreach(@config_lines) {
 	# Override anything set in the channel_ids file.
 	$chid_mapping{$1} = $2;
     } 
+    elsif (/^first:?\s+(\S+)/) {
+        $first_last{$1} = "first";
+    }
+    elsif (/^last:?\s+(\S+)/) {
+        $first_last{$1} = "last";
+    }
     else {
 	warn "$config_file:$line: bad line\n";
     }
 }
-
-
 
 #-- if we're requested to do so, write out a new config file ...
 if ($mode eq 'configure') {
@@ -456,6 +474,7 @@ sub grab_channel($) {
                       #    == 1 means allow either forward or backward
                       #    == 2 is allow backw. only (when already stepped back)
     my $limit = $opt_offset * 27; # assume 27 shows a day (average)
+    my %programmes;
 
   grab_channel_loop:
     my $tb = HTML::TreeBuilder->new();
@@ -602,15 +621,33 @@ sub grab_channel($) {
             
             $show{desc} = [[ $desc, $lang ]] if(length($desc));
 
-            # last but not least, write out the show ...
-            unless(defined($laststop)
-                   && Date_Cmp($start, $laststop) < 0) {
-                # don't write the programme out, if there already is a show
-                # right in this timeslot. e.g. SAT 1 tends to sometimes 
-                # broadcast different shows for Switzerland and Germany.
-                # However information on Switzerland is always listed first,
-                # therefore simply discard later information.
-                $writer->write_programme(\%show);
+            if(defined($laststop) && Date_Cmp($start, $laststop) < 0) {
+                # there's already a programme in this timeslot, this
+                # sometimes happens since fernsehen.ch supplies the programme
+                # for Switzerland and Germany.
+
+                if(($first_last{$channel} eq "last")
+                   && (defined($programmes{$start}))) {
+                    # the user wants the latter show written out ...
+                    #print STDERR "using LAST strategy at $start/$channel\n";
+                   
+                    # eliminate already stored shows first
+                    foreach(keys(%programmes)) {
+                        next if Date_Cmp($_, $start) < 0;
+
+                        #print STDERR "eliminating $_/$channel\n";
+                        delete $programmes{$_};
+                    }
+                    
+                    $programmes{$start} = \%show;
+                    $laststop = $stop;
+                } 
+                #else {
+                #    print STDERR "using FIRST strategy at $start/$channel\n";
+                #}
+            }
+            else {
+                $programmes{$start} = \%show;
                 $laststop = $stop;
             }
 
@@ -628,12 +665,14 @@ sub grab_channel($) {
 
     $tb->delete();
 
-    return if($got < 10); # reached end of data stream
-
-    if(Date_Cmp($start, $grab_stop) <= 0) {
+    if(($got == 10) && (Date_Cmp($start, $grab_stop) <= 0)) {
         # starttime not beyond grab_stop, therefore grab another bunch ...
         $limit += 10;
         goto grab_channel_loop;
+    }
+
+    foreach(sort(keys(%programmes))) {
+        $writer->write_programme($programmes{$_});
     }
 
 }
