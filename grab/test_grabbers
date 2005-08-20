@@ -1,0 +1,95 @@
+#!/usr/bin/perl
+#
+# Run each of the grabbers in turn and do some checks on the output.
+# This is a tool for xmltv developers to run only occasionally -
+# because it does network fetches it can't be part of 'make test'!
+# Run it giving the root of the xmltv source tree, after 'make'.
+# It needs a test.conf file in each grabber directory.
+#
+# -- Ed Avis, ed@membled.com, 2005-08-20
+#
+use warnings;
+use strict;
+use File::Copy;
+use File::Slurp;
+use List::Util qw(min);
+use File::chdir;
+
+# Run grabbers with these args.
+my ($offset, $days) = (1, 2);
+
+die "usage: $0 xmltv-source-root-dir\n" if @ARGV != 1;
+my $root = shift;
+die "$root not a directory" if not -d $root;
+my $dtd = 'xmltv.dtd';
+my $dtd_in_root = "$root/$dtd";
+die "$dtd_in_root not there" if not -e $dtd_in_root;
+
+if (not -e $dtd) {
+    my $symlink_exists = eval { symlink("",""); 1 };
+    my $word = $symlink_exists ? 'symlink' : 'copy';
+    print "${word}ing $dtd_in_root to $dtd\n";
+    my $sub = $symlink_exists ? sub { symlink $_[0], $_[1] } : \&copy;
+    $sub->($dtd_in_root, $dtd) or die "cannot $word: $!";
+}
+
+my @grabbers;
+{
+    local $CWD = "$root/grab";
+    @grabbers = grep { -d } <[a-z]*>;
+}
+
+foreach (@grabbers) {
+    /^[a-z_]+$/ or die "bad grabber name $_";
+    my $exe = "tv_grab_$_";
+    my $exe_with_path = "$root/blib/script/$exe";
+    my $config = "$root/grab/$_/test.conf";
+    my $output = "${_}_${offset}_$days.xml";
+    if (-e $output) {
+	print "$output already there, not rerunning $exe\n";
+    }
+    else {
+	warn("$config does not exist, run:\n$exe_with_path --cache --config-file $config --configure\n"), next
+	  if not -f $config;
+	my $cmd = "$exe_with_path --cache --config-file $config --offset $offset --days $days >$output";
+	if (system $cmd) {
+	    warn "$cmd failed: $?, $!";
+	    next;
+	}
+    }
+
+    # Okay, it ran, and we have the result in $output.  Validate.
+    if (system 'nsgmls', '-wxml', '-s', $output) {
+	warn "$output not valid XML\n";
+	next;
+    }
+    print "$output validates ok\n";
+
+    # Run through tv_cat, which makes sure the data looks like XMLTV,
+    # but also lets us compare before and after to check whitespace
+    # etc.
+    #
+    if (system "tv_cat $output >$output.catted") {
+	warn "$output makes tv_cat choke, so probably has semantic errors\n";
+	next;
+    }
+    if (system("diff -us $output $output.catted | head")) {
+	die "diff failed: $?, $!";
+    }
+
+    # Do tv_sort sanity checks.  One day it would be better to put
+    # this stuff in a Perl library.
+    #
+    my $sort_errors = "$output.sort_errors";
+    if (system "tv_sort $output >$output.sorted 2>$sort_errors") {
+	# This would indicate a bug in tv_sort.
+	warn "tv_sort failed on $output for some reason, see $sort_errors\n";
+	next;
+    }
+    print "$output looks like XMLTV\n";
+    if (my @lines = read_file $sort_errors) {
+	warn "$output has funny start or stop times: some errors are:\n"
+	  . join('', @lines[0 .. min(9, $#lines)]);
+	next;
+    }
+}
