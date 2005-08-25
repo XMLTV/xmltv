@@ -270,14 +270,14 @@ if ($^O eq 'MSWin32') {
 else {
     $LANG_STR = $ENV{LANG};
 }
-warn ' $ENV{LANG} is '.$LANG_STR."\n";
+#warn ' $ENV{LANG} is '.$LANG_STR."\n";
 
 $LANG = 'ita' if (defined $LANG_STR and $LANG_STR=~/^it[-_]/i);
 #warn ' LANG is '.$LANG."\n";
 my $out = 'grab/it/tv_grab_it.in2';
 my $in  = 'grab/it/tv_grab_it.in';
 
-warn "lang e' $LANG deflang e' $LANG_STR\n";
+#warn "lang e' $LANG deflang e' $LANG_STR\n";
 
 open(OUT_FH, ">$out") or die "cannot write to $out: $!";
 open(IN_FH, $in) or die "cannot read $in: $!";
@@ -306,5 +306,5 @@ close IN_FH or die "cannot close $in: $!";
 # stuff for setting share dir
 die "usage: $_ output_file share_dir" if @ARGV != 2;
 require 'lib/set_share_dir.pl';
-warn "faccio $ARGV[0] $ARGV[1]\n";
+#warn "faccio $ARGV[0] $ARGV[1]\n";
 set_share_dir('grab/it/tv_grab_it.in2', $ARGV[0], $ARGV[1]);
