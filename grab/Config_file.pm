@@ -45,9 +45,9 @@ sub filename( $$;$$ ) {
 #
 sub check_no_overwrite( $ ) {
     my $f = shift;
-    if (-e $f) {
+    if (-s $f) {
 	if (not ask_boolean <<END
-The configuration file $f
+A nonempty configuration file $f
 already exists.  There is currently no support for altering an
 existing configuration: you have to reconfigure from scratch.
 
