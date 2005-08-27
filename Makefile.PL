@@ -420,7 +420,10 @@ my @opt_components
      { name => 'tv_grab_pt',
        blurb => 'Grabber for Portugal',
        exes => [ 'grab/pt/tv_grab_pt' ],
-       prereqs => { 'HTML::TreeBuilder' => 0 } },
+       prereqs => { 'HTML::TreeBuilder' => 0,
+		    'Unicode::UTF8simple' => 0,
+		  }
+     },
 
      { name => 'tv_grab_za',
        blurb => 'Grabber for South Africa',
