@@ -243,6 +243,13 @@ my @opt_components
        grab_need_share => [ 'au' ],
      },
 
+     { name => 'tv_grab_br',
+       blurb => 'Grabber for Brazil',
+       exes => [ 'grab/br/tv_grab_br' ],
+       prereqs => { 'HTML::TreeBuilder' => 0 ,
+                    'HTML::Entities' => 1.27 , }
+     },
+
      { name     => 'tv_grab_ch',
        blurb    => 'Grabber for Switzerland',
        exes     => [ 'grab/ch/tv_grab_ch' ],
