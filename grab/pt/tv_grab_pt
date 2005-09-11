@@ -112,7 +112,7 @@ our @ch_all;
 XMLTV::Memoize::check_argv('XMLTV::Get_nice::get_nice_aux');
 our ($opt_help, $opt_output,
     $opt_configure, $opt_config_file, $opt_gui, $opt_quiet,
-    $opt_list_channels,$opt_offset,$opt_days,$opt_fullinfo);
+    $opt_list_channels,$opt_offset,$opt_days,$opt_fullinfo,$opt_icons);
 $opt_quiet  = 0; # default
 GetOptions('help'          => \$opt_help,
 	   'configure'     => \$opt_configure,
@@ -124,6 +124,7 @@ GetOptions('help'          => \$opt_help,
 	   'offset=i'      => \$opt_offset,
            'days=i'        => \$opt_days,
            'fullinfo'      => \$opt_fullinfo,
+	   'icons' 	   => \$opt_icons,
 	  )
   or usage(0);
 usage(1) if $opt_help;
@@ -165,6 +166,10 @@ else { die }
 my $token;
 my %channels = get_channels(); # sets @ch_all
 my @channels;
+
+my %icons = ();
+%icons = get_icons() if $opt_icons;
+
 
 ######################################################################
 # write configuration
@@ -214,6 +219,9 @@ sub start_writing() { ($writer = new XMLTV::Writer(%w_args))->start($HEAD) }
 
 if ($mode eq 'list-channels') {
     start_writing;
+    foreach (@ch_all) {
+		    $_{'icon'} = [{'src' => $icons{$_}}] if(defined($icons{$_}));
+    }
     $writer->write_channel($_) foreach @ch_all;
     $writer->end();
     exit();
@@ -271,8 +279,12 @@ my $bar = new XMLTV::ProgressBar('getting listings',
 foreach my $ch_did (@channels) {
     die if not defined $ch_did;
     my $ch_name=$channels{$ch_did};
-    $writer->write_channel({ id => $ch_did.'.tvcabo.pt',
-                             'display-name' => [ [ $ch_name ] ] });
+    my $channel = { id => $ch_did.'.tvcabo.pt',
+                    'display-name' => [ [ $ch_name ] ],
+		  };
+    $channel->{'icon'} = [{'src' => $icons{$ch_did}}] if(defined($icons{$ch_did}));
+
+    $writer->write_channel($channel);
 }
 
 
@@ -578,4 +590,40 @@ sub nextday {
     my $p = ParseDate($d);
     my $n = DateCalc($p, '+ 1 day');
     return UnixDate($n, '%Q');
+}
+
+sub get_icons {
+    my %icons;
+    my $url="http://www.tvcabo.pt/Tv/ProgramacaoTv.aspx?programId=0&channelSigla=";
+    my $chan;
+    my $tag;
+    my $addr;
+
+    my $bar = new XMLTV::ProgressBar('grabbing icons', scalar(keys(%channels)))
+      if not $opt_quiet;
+
+    foreach (keys %channels) {
+        my $tb = new HTML::TreeBuilder();
+        my $htmldata=tidy(get_nice($HEAD->{"source-data-url"}."?programId=0&channelSigla=$_"));
+        next unless(defined($htmldata));
+        $tb->parse($htmldata);
+
+        $tag = $tb->look_down('_tag' => 'img',
+
+        sub {
+            return ($_[0]->attr('src') =~ m/\/Shared\/Presentation\/BackofficeImages\//);
+        });
+        update $bar if not $opt_quiet;
+
+        unless(ref($tag) eq "HTML::Element") {
+                $tb->delete;
+                next;
+        };
+
+        $icons{$_} = $tag->attr('src');
+        $tb->delete;
+    }
+    $bar->finish() if not $opt_quiet;
+
+    return %icons;
 }
