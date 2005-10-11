@@ -117,6 +117,25 @@ if ($cmd eq 'tv_grab_uk_rt'
 }
 
 #
+# special hack, allow "exec" to execute an arbitrary script
+# This will be used to allow XMLTV.EXE modules to be used on beta code w/o an alpha exe
+#
+# Note, no extra modules are included in the EXE.  There is no guarantee this will work
+# it is an unsupported hack.
+#
+# syntax XMLTV.EXE exec filename --options
+#
+if ($cmd eq 'exec')
+{
+   my $exe=shift;
+   $0=$exe;
+   do $exe;
+   print STDERR $@ if length($@);
+   exit 1 if length($@);
+   exit 0;
+}
+  
+#
 # scan through attached files and execute program if found
 #
 $files=PerlApp::get_bound_file("exe_files.txt");
