@@ -454,6 +454,12 @@ my @opt_components
        prereqs => { 'CGI' => 0 },
        type => 'run',
      },
+
+     { name => 'tv_grab_ee',
+       blurb => 'Grabber for Estonia',
+       exes => [ 'grab/ee/tv_grab_ee' ],
+       prereqs => { 'LWP::Simple' => 0 } },
+
     );
 
 # Now we need to prompt about each optional component.  The style of

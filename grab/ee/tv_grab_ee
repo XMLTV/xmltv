@@ -1,0 +1,293 @@
+#!/usr/bin/perl -w
+
+=pod
+
+=head1 NAME
+
+tv_grab_ee - Grab TV listings for Estonia.
+
+=head1 SYNOPSIS
+
+tv_grab_ee --help
+
+tv_grab_ee [--config-file FILE] --configure [--gui OPTION]
+
+tv_grab_ee [--config-file FILE] [--output FILE] [--days N]
+           [--offset N] [--quiet]
+
+tv_grab_ee --list-channels
+
+=head1 DESCRIPTION
+
+Output TV listings for several channels available in Estonia.
+The data comes from http://ajaviide.delfi.ee/events/tv/.
+
+First run B<tv_grab_ee --configure> to choose, which channels you want
+to download. Then running B<tv_grab_ee> with no arguments will output
+listings in XML format to standard output.
+
+B<--configure> Prompt for which channels,
+and write the configuration file.
+
+B<--config-file FILE> Set the name of the configuration file, the
+default is B<~/.xmltv/tv_grab_ee.conf>.  This is the file written by
+B<--configure> and read when grabbing.
+
+B<--gui OPTION> Use this option to enable a graphical interface to be used.
+OPTION may be 'Tk', or left blank for the best available choice.
+Additional allowed values of OPTION are 'Term' for normal terminal output
+(default) and 'TermNoProgressBar' to disable the use of XMLTV::ProgressBar.
+
+B<--output FILE> write to FILE rather than standard output.
+
+B<--days N> grab N days.  The default is -1 which means everything
+
+B<--offset N> start N days in the future.  The default is to start
+from today.
+
+B<--quiet> suppress the progress messages normally written to standard
+error.
+
+B<--list-channels> write output giving <channel> elements for every
+channel available (ignoring the config file), but no programmes.
+
+B<--help> print a help message and exit.
+
+=head1 SEE ALSO
+
+L<xmltv(5)>.
+
+=head1 AUTHOR
+
+Cougar < cougar at random.ee >
+
+=head1 BUGS
+
+The data source does not include full channels information and the
+channels are identified by short names rather than the RFC2838 form
+recommended by the XMLTV DTD.
+
+=cut
+
+my $xmlurl = 'http://glen.alkohol.ee/xmltv.xml';
+
+my $langs = ['et', 'en', 'ru'];
+
+use strict;
+use Getopt::Long;
+use LWP::Simple;
+use Time::Local;
+
+use XMLTV;
+use XMLTV::Ask;
+use XMLTV::Config_file;
+use XMLTV::Mode;
+use XMLTV::Date;
+
+my $xmlstr;
+my $xmldata;
+
+my %channels;
+my ($encoding, $credits, $ch, $progs);
+
+my $ds1;		# start timestamp YYYYMMDD
+my $ds2;		# end + 1 day
+
+my $opt_days = -1;	# return all data
+my $opt_offset = 0;
+my $opt_help;
+my $opt_configure;
+my $opt_config_file;
+my $opt_gui;
+my $opt_output;
+my $opt_quiet = 0;
+my $opt_list_channels;
+
+my $bar;
+
+use XMLTV::Usage <<END
+$0: get Estonian television listings in XMLTV format
+To configure: $0 --configure [--config-file FILE]
+To grab listings: $0 [--config-file FILE] [--output FILE] [--days N]
+        [--offset N]
+To list channels: $0 --list-channels
+END
+;
+
+sub get_xmlstr
+{
+	$xmlstr = get($xmlurl);
+	die "get_xmldata: could not open \"$xmlurl\": $!" unless defined $xmlstr;
+}
+
+sub parse_xmlstr
+{
+	$xmldata = XMLTV::parse($xmlstr);
+	($encoding, $credits, $ch, $progs) = @$xmldata;
+}
+
+sub filter_xmldata
+{
+	my %w_args;
+	$w_args{encoding} = $encoding;
+	if (defined $opt_output) {
+		my $fh = new IO::File(">$opt_output");
+		die "cannot write to $opt_output: $!" if not defined $fh;
+		$w_args{OUTPUT} = $fh;
+	}
+
+	$bar = new XMLTV::ProgressBar('writing XMLTV data', 1) if not $opt_quiet;
+
+	my $writer = new XMLTV::Writer(%w_args);
+
+	$writer->start($credits);
+
+	foreach (sort keys %$ch) {
+		next unless ((defined $channels{$ch->{$_}->{'id'}}) ||
+		             (defined $opt_list_channels));
+		$writer->write_channel($ch->{$_});
+	}
+
+	if (! defined $opt_list_channels) {
+		foreach (@$progs) {
+			next unless (defined $channels{$_->{'channel'}});
+			next unless (&checktime($_->{'start'}));
+			$writer->write_programme($_);
+		}
+	}
+
+	$writer->end();	
+
+	update $bar if not $opt_quiet;
+	$bar->finish() if not $opt_quiet;
+}
+
+sub get_begin_and_end_ds
+{
+	my ($offset, $num) = @_;
+	my ($sec, $min, $hour, $mday, $mon, $year, $wday, $yday, $isdst);
+	my ($ds1, $ds2);
+	my $time = time();
+	($sec, $min, $hour, $mday, $mon, $year, $wday, $yday, $isdst)
+		= localtime($time + ($offset * 86400));
+	$ds1 = sprintf("%04d%02d%02d", $year + 1900, $mon + 1, $mday);
+	if ($num == -1) {
+		$ds2 = "99999999";
+	} else {
+		($sec, $min, $hour, $mday, $mon, $year, $wday, $yday, $isdst)
+			= localtime($time + (($offset + $num) * 86400));
+		$ds2 = sprintf("%04d%02d%02d", $year + 1900, $mon + 1, $mday);
+	}
+	return ($ds1, $ds2);
+}
+
+sub checktime
+{
+	my ($d) = @_;
+
+	my $dp = XMLTV::Date::parse_date($d);
+	$dp =~ s/^(\d\d\d\d\d\d\d\d).*/$1/;	# keep only YYYYMMDD
+	my $r = (($dp >= $ds1) && ($dp < $ds2));
+	return $r;
+}
+
+GetOptions(
+	'days=i'	=> \$opt_days,
+	'offset=i'	=> \$opt_offset,
+	'help'		=> \$opt_help,
+	'configure'	=> \$opt_configure,
+	'config-file=s'	=> \$opt_config_file,
+	'gui:s'		=> \$opt_gui,
+	'output=s'	=> \$opt_output,
+	'quiet'		=> \$opt_quiet,
+	'list-channels'	=> \$opt_list_channels,
+	) or usage(0);
+
+usage(1) if $opt_help;
+
+XMLTV::Ask::init($opt_gui);
+
+my $mode = XMLTV::Mode::mode('grab',	# default
+                             $opt_configure => 'configure',
+                             $opt_list_channels => 'list-channels',);
+
+my $config_file
+	= XMLTV::Config_file::filename($opt_config_file, 'tv_grab_ee', $opt_quiet);
+
+my @config_lines;			# used only in grab mode
+if ($mode eq 'configure') {
+	XMLTV::Config_file::check_no_overwrite($config_file);
+} elsif ($mode eq 'grab') {
+	@config_lines = XMLTV::Config_file::read_lines($config_file);
+} elsif ($mode eq 'list-channels') {
+	# Config file not used
+} else {
+	die
+}
+
+$bar = new XMLTV::ProgressBar('getting XMLTV data', 1) if not $opt_quiet;
+&get_xmlstr();
+update $bar if not $opt_quiet;
+$bar->finish() if not $opt_quiet;
+
+$bar = new XMLTV::ProgressBar('parsing XMLTV data', 1) if not $opt_quiet;
+&parse_xmlstr();
+update $bar if not $opt_quiet;
+$bar->finish() if not $opt_quiet;
+
+if ($mode eq 'configure') {
+	my @chs;
+	my @names;
+
+	open(CONF, ">$config_file") or die "cannot write to $config_file: $!";
+
+	foreach (values %$ch) {
+		my ($text, $lang) = @{XMLTV::best_name($langs, $_->{'display-name'})};
+		push @chs, $_->{id};
+		push @names, $text;
+	}
+	my @qs = map { "add channel $_?" } @names;
+	my @want = ask_many_boolean(1, @qs);
+
+	foreach (@chs) {
+		my $w = shift @want;
+		warn("cannot read input, stopping channel questions"), last if not defined $w;
+		# No need to print to user - XMLTV::Ask is verbose enough.
+
+		# Print a config line, but comment it out if channel not wanted.
+		print CONF '#' if not $w;
+		my $name = shift @names;
+		print CONF "channel $_ $name\n";
+	}
+
+	close CONF or warn "cannot close $config_file: $!";
+	say("Finished configuration.");
+	exit();
+} elsif ($mode eq 'list-channels') {
+	&filter_xmldata();
+	exit();
+} elsif ($mode eq 'grab') {
+	$bar = new XMLTV::ProgressBar('reading configuration data', 1) if not $opt_quiet;
+	my $line_num = 1;
+	foreach (@config_lines) {
+		++ $line_num;
+		next if not defined;
+		if (/^channel:?\s+(\S+)\s+([^\#]+)/) {
+			my $ch_did = $1;
+			my $ch_name = $2;
+			$ch_name =~ s/\s*$//;
+			$channels{$ch_did} = $ch_name;
+		} else {
+			warn "$config_file:$line_num: bad line\n";
+		}
+	}
+	update $bar if not $opt_quiet;
+	$bar->finish() if not $opt_quiet;
+
+	die "No channels specified, run me with --configure\n" if not keys %channels;
+
+	($ds1, $ds2) = get_begin_and_end_ds($opt_offset, $opt_days);
+	&filter_xmldata();
+} else {
+	die
+}
