@@ -236,10 +236,10 @@ sub basicVerificationOfIndexes($)
 	return("basic verification of indexes failed\n".
 	       "movie details didn't show Bruce Campbell as the main actor in movie \"$title, $year\" (id=$id)\n");
     }
-    if ( $res->{genres}[0] ne "Adventure" ||
-	 $res->{genres}[1] ne "Fantasy" ||
-	 $res->{genres}[2] ne "Action" ||
-	 $res->{genres}[3] ne "Comedy" ||
+    if ( $res->{genres}[0] ne "Action" ||
+	 $res->{genres}[1] ne "Adventure" ||
+	 $res->{genres}[2] ne "Comedy" ||
+	 $res->{genres}[3] ne "Fantasy" ||
 	 $res->{genres}[4] ne "Horror" ) {
 	$self->closeMovieIndex();
 	return("basic verification of indexes failed\n".
@@ -1465,14 +1465,21 @@ sub readMoviesOrGenres($$$$)
 	last if ( $line=~m/^\-\-\-\-\-\-\-+/o );
 
 	$line=~s/\n$//o;
-	
+
 	my $tab=index($line, "\t");
 	if ( $tab != -1 ) {
 	    my $mkey=substr($line, 0, $tab);
 
 	    if ( $whatAreWeParsing == 2 ) {
+		# don't see what these are...?
+		# ignore {{SUSPENDED}}
+		$mkey=~s/\s*\{\{SUSPENDED\}\}//o;
+
+		# ignore {Twelve Angry Men (1954)}
+		$mkey=~s/\s*\{[^\}]+\}//go;
+	
 		# skip enties that have {} in them since they're tv episodes
-		next if ( $mkey=~s/\s*\{[^\}]+\}$//o );
+		#next if ( $mkey=~s/\s*\{[^\}]+\}$//o );
 
 		my $genre=substr($line, $tab);
 
@@ -1642,10 +1649,12 @@ sub readCastOrDirectors($$$)
 		# ignore character name
 	    }
 	}
-	if ( $line=~s/\s*\{[^\}]+\}//o ) {
-	    # ignore {Twelve Angry Men (1954)}
-	    # don't see what these are...?
-	}
+	# don't see what these are...?
+	# ignore {{SUSPENDED}}
+	$line=~s/\s*\{\{SUSPENDED\}\}//o;
+
+	# ignore {Twelve Angry Men (1954)}
+	$line=~s/\s*\{[^\}]+\}//o;
 
 	if ( $whatAreWeParsing < 3 ) {
 	    if ( $line=~s/\s*\(aka ([^\)]+)\).*$//o ) {
@@ -1830,7 +1839,7 @@ sub invokeStage($$)
     my $startTime=time();
     if ( $stage == 1 ) {
 	$self->status("parsing Movies list for stage $stage..");
-	my $countEstimate=420000;
+	my $countEstimate=480000;
 	my $num=$self->readMoviesOrGenres("Movies", $countEstimate, "$self->{imdbListFiles}->{movies}");
 	if ( $num < 0 ) {
 	    if ( $num == -2 ) {
@@ -1881,7 +1890,7 @@ sub invokeStage($$)
     elsif ( $stage == 2 ) {
 	$self->status("parsing Directors list for stage $stage..");
 
-	my $countEstimate=95000;
+	my $countEstimate=108000;
 	my $num=$self->readCastOrDirectors("Directors", $countEstimate, "$self->{imdbListFiles}->{directors}");
 	if ( $num < 0 ) {
 	    if ( $num == -2 ) {
@@ -1948,7 +1957,7 @@ sub invokeStage($$)
 	$self->status("parsing Actors list for stage $stage..");
 
 	#print "re-reading movies into memory for reverse lookup..\n";
-	my $countEstimate=550000;
+	my $countEstimate=630000;
 	my $num=$self->readCastOrDirectors("Actors", $countEstimate, "$self->{imdbListFiles}->{actors}");
 	if ( $num < 0 ) {
 	    if ( $num == -2 ) {
@@ -1999,7 +2008,7 @@ sub invokeStage($$)
     elsif ( $stage == 4 ) {
 	$self->status("parsing Actresses list for stage $stage..");
 
-	my $countEstimate=340000;
+	my $countEstimate=380000;
 	my $num=$self->readCastOrDirectors("Actresses", $countEstimate, "$self->{imdbListFiles}->{actresses}");
 	if ( $num < 0 ) {
 	    if ( $num == -2 ) {
@@ -2049,7 +2058,7 @@ sub invokeStage($$)
     }
     elsif ( $stage == 5 ) {
 	$self->status("parsing Genres list for stage $stage..");
-	my $countEstimate=290000;
+	my $countEstimate=360000;
 	my $num=$self->readMoviesOrGenres("Genres", $countEstimate, "$self->{imdbListFiles}->{genres}");
 	if ( $num < 0 ) {
 	    if ( $num == -2 ) {
@@ -2099,7 +2108,7 @@ sub invokeStage($$)
     }
     elsif ( $stage == 6 ) {
 	$self->status("parsing Ratings list for stage $stage..");
-	my $countEstimate=90000;
+	my $countEstimate=112000;
 	my $num=$self->readRatings($countEstimate, "$self->{imdbListFiles}->{ratings}");
 	if ( $num < 0 ) {
 	    if ( $num == -2 ) {
@@ -2395,7 +2404,7 @@ sub invokeStage($$)
 
 		my $val=$movies{$dbkey};
 		if ( !defined($val) ) {
-		    $self->error("genres list references unidentified title '$1'");
+		    $self->error("ratings list references unidentified title '$1'");
 		    next;
 		}
 		$movies{$dbkey}.=$tab.$ratingDist.$tab.$ratingVotes.$tab.$ratingRank;
