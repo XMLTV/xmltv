@@ -463,6 +463,12 @@ my @opt_components
        exes => [ 'grab/ee/tv_grab_ee' ],
        prereqs => { 'LWP::Simple' => 0 } },
 
+    { name => 'tv_grab_re',
+       blurb => 'Grabber for Reunion Island (France)',
+       exes => [ 'grab/re/tv_grab_re' ],
+       prereqs => { 'HTML::TreeBuilder' => 0 ,
+                    'HTML::Entities'    => 0 } },
+
     );
 
 # Now we need to prompt about each optional component.  The style of

@@ -1,0 +1,741 @@
+#!/usr/bin/perl -w
+=head1 NAME
+
+tv_grab_re - Grab TV listings for Reunion Island (France).
+
+=head1 SYNOPSIS
+
+To configure: tv_grab_re --configure [--config-file FILE]
+To grab channels listing: tv_grab_re --list-channels [--output FILE]
+To grab programmes listings: tv_grab_re [--output FILE] [--days N] [--quiet]
+Slower, detailed grab: tv_grab_re --slow [--output FILE] [--days N] [--quiet]
+Help: tv_grab_fr --help
+
+=head1 DESCRIPTION
+
+Output TV listings for Canal Satellite Reunion and Parabole Reunion channels 
+available in Reunion Island. The data comes from www.canalsatellite-reunion.com
+for Canal Satellite Reunion and from www.parabolereunion.com for Parabole
+Reunion. The default is to grab listing only for the current day.
+By default program descriptions are not downloaded, so if you want description
+and credits, you should activate the --slow option. To grab listing for 
+hertzian channels, select them in Canal Satellite Reunion grid.
+
+B<--configure> Grab channels informations and ask for channel type and names.
+
+B<--output FILE> write to FILE rather than standard output.
+
+B<--days N> grab N days starting from today, rather than only for the current
+day.
+
+B<--slow> Get additional information from the website, like program
+description and credits.
+
+B<--quiet> suppress the progress messages normally written to standard
+error.
+
+B<--help> print a help message and exit.
+
+=head1 SEE ALSO
+
+L<xmltv(5)>
+
+=head1 AUTHOR
+
+Eric Castelnau, eric.castelnau@free.fr
+Inspired by tv_grab_fr written by Sylvain Fabre, centraladmin@lahiette.com
+
+=cut
+
+use XMLTV::Usage <<END
+$0: get Reunion Island television listings in XMLTV format
+To configure: tv_grab_re --configure [--config-file FILE]
+To grab channels listing: tv_grab_re --list-channels [--output FILE]
+To grab programmes listings: tv_grab_re [--output FILE] [--days N] [--quiet]
+Slower, detailed grab: tv_grab_re --slow [--output FILE] [--days N] [--quiet]
+END
+  ;
+
+use warnings;
+use strict;
+use XMLTV::Version '0.2';
+use Getopt::Long;
+use HTML::TreeBuilder;
+use HTML::Entities; # parse entities
+use IO::File;
+use URI;
+use Date::Manip;
+use XMLTV;
+use XMLTV::Memoize;
+use XMLTV::Ask;
+use XMLTV::ProgressBar;
+use XMLTV::Mode;
+use XMLTV::Config_file;
+use XMLTV::DST;
+use XMLTV::Get_nice;
+
+###
+### Main declarations
+###
+my %BROADCASTERS = (
+	'CANALSAT' => "Canal Satellite",
+	'PARABOLE' => "Parabole"
+);
+my $CANALSAT_BASE_URL = "http://srv1.media-overseas.com/";
+my $CANALSAT_ICON_URL = "http://www.canalsatellite-reunion.com/lebouquet/leschaines/pageschaines/images_chaines";
+my $PARABOLE_BASE_URL = "http://www.parabolereunion.com/";
+my $PARABOLE_ICON_URL = "http://www.parabolereunion.com/images/tmp";
+
+###
+### Options processing
+###
+my $opt_days;
+my $opt_help;
+my $opt_output;
+my $opt_quiet;
+my $opt_config_file;
+my $opt_configure;
+my $opt_list_channels;
+my $opt_slow;
+
+GetOptions( 'days=i'       => \$opt_days,
+			'help'          => \$opt_help,
+		    'output=s'      => \$opt_output,
+			'quiet'         => \$opt_quiet,
+			'configure'     => \$opt_configure,
+			'config-file=s' => \$opt_config_file,
+			'list-channels' => \$opt_list_channels,
+			'slow'			=> \$opt_slow,
+) or usage(0);
+
+# need help
+usage(1) if $opt_help;
+
+# verbose by default
+$opt_quiet = 0;
+
+# number of day to process
+die 'Number of days must not be negative' if (defined $opt_days && $opt_days < 0);
+die 'Number of days must not be more than 5' if (defined $opt_days && $opt_days > 5);
+$opt_days = 1 if not defined $opt_days;
+
+# output file
+$opt_output = '-' if not defined $opt_output;
+
+# slow mode off by default
+$opt_slow = 0 if not defined $opt_slow;
+
+# Now detects if we are in configure mode
+my $mode = XMLTV::Mode::mode('grab', 
+							 $opt_configure => 'configure',
+                        	 $opt_list_channels => 'list-channels');
+
+# File that stores which channels to download.
+my $config_file = XMLTV::Config_file::filename($opt_config_file, 
+											   'tv_grab_re',
+											   $opt_quiet);
+
+# Content of $config_file
+my @config_lines;
+
+###
+### Global variables
+###
+
+# channels list
+my @channels;
+
+###
+### Sub sections
+###
+sub dprint($) {
+	print STDERR "debug: $_\n";
+}
+
+sub dump_channel($) {
+	my $c = shift;
+	print "type: $c->{'type'}\n";
+	print "id  : $c->{'id'}\n";
+	print "name: $c->{'name'}\n";
+	print "icon: $c->{'icon'}\n";
+}
+
+sub dump_programme($) {
+	my $c = shift;
+	print "channel  : $c->{'channel'}\n";
+	print "title    : $c->{'title'}[0][0]\n";
+	print "start    : $c->{'start'}\n";
+	print "stop     : $c->{'stop'}\n";
+	print "length   : $c->{'length'}sec.\n";
+	print "category : $c->{'category'}[0][0]\n" if defined $c->{'category'};
+}
+
+sub new_xmltv_writer() {
+	my %writer_args;
+	my $file = new IO::File(">$opt_output");
+	die "Cannot write to $opt_output: $!" if not defined $file;
+    $writer_args{OUTPUT} = $file;
+	$writer_args{'encoding'}  = 'ISO-8859-1';
+	return new XMLTV::Writer(%writer_args);
+}
+
+sub get_channels_list($) {
+	my $arg = shift;
+	my @channels;
+
+	if ($arg eq 'CANALSAT') {
+		my $url = "http://srv1.media-overseas.com/FMPro?-db=reunion.fp5&-lay=M1&-format=recherchereunion.htm&-view";
+		my $page = get_nice($url);
+		my $html = new HTML::TreeBuilder;
+		$html->parse($page);
+		$html->eof();
+	
+		my $chaines = $html->look_down('_tag', 'select', 'name', 'idchaine');
+		foreach my $chaine ($chaines->look_down('_tag', 'option')) {
+			my %channel;
+
+			my $id = $chaine->attr_get_i('value');
+			next if ($id eq "0...999");
+			my $title = $chaine->as_text();
+	
+			$channel{'type'} = "CANALSAT";
+			$channel{'id'} = $id;
+			$channel{'name'} = $title;
+			$channel{'icon'} = "$CANALSAT_ICON_URL/$id.gif";
+
+			push @channels,\%channel;
+		}
+	
+		$html->delete();
+		undef $html;
+	}
+
+	if ($arg eq 'PARABOLE') {
+		my $url = "http://www.parabolereunion.com/index.jsp?childUrl=epg/epg0.jsp";
+		my $page = get_nice($url);
+		my $html = new HTML::TreeBuilder;
+		$html->parse($page);
+		$html->eof();
+
+		my $chaines = $html->look_down('_tag', 'select', 'name', 'sel_channel');
+		foreach my $chaine ($chaines->look_down('_tag', 'option')) {
+			my %channel;
+
+			my $id = $chaine->attr_get_i('value');
+			next if ($id == -1);
+			my $title = $chaine->as_text();
+			$title =~ s/\d+\.//;
+			$title =~ s/(\s)*$//;
+	
+			$channel{'type'} = "PARABOLE";
+			$channel{'id'} = $id;
+			$channel{'name'} = $title;
+			$channel{'icon'} = "$PARABOLE_ICON_URL/channel_logo_small$id.jpg";
+
+			push @channels,\%channel;
+		}
+	
+		$html->delete();
+		undef $html;
+	}
+	
+	return @channels;
+}
+
+sub get_canalsat_programmes_list_slow($%) {
+	my $url = shift(@_);
+	my $p = shift(@_);
+
+	# get request
+	my $page = get_nice($url);
+
+	# parse the html
+	my $html = new HTML::TreeBuilder;
+	$html->parse($page);
+	$html->eof();
+
+	# look for the table of description
+	my $table = $html->look_down('_tag', 'table', 'border', '0', 'cellpadding', '0', 'cellspacing', '0', 'width', '643');
+	$table->objectify_text();
+
+	# look for the résumé
+	my $td = $table->look_down('_tag', 'td', 'bgcolor', '#dddddd', 'width', '445');
+	my @text = $td->look_down('_tag', '~text');
+
+	foreach (@text) {
+		my $t = $_->attr_get_i('text');
+
+		next if ($t =~ /^ /);
+
+		next if (length $t < 7);
+
+		$p->{'desc'} = [ [ $t, "fr" ] ];
+	}
+
+	# look for director/actors
+	$td = $table->look_down('_tag', 'td', 'colspan', '3', 'bgcolor', '#999999');
+	@text = $td->look_down('_tag', '~text');
+	my (@directors, @actors);
+	foreach (@text) {
+		my $t = $_->attr_get_i('text');
+
+		if ($t =~ /^.*\(.*\) r.alis. en \d{4} de (.*) Avec (.*)/) {
+			push @directors, $1;
+
+			my @a = split(',', $2);
+			foreach (@a) {
+				if ($_ =~ /(.*) \(.*\)/) {
+					push @actors, $1;
+				}
+			}
+		}
+	}
+
+	$p->{credits}{director} = \@directors if @directors;
+    $p->{credits}{actor}    = \@actors if @actors;
+
+	$html->delete();
+	undef $html;
+}
+
+sub get_canalsat_programmes_list($$$) {
+	my ($idchaine, $firstday, $lastday) = @_;
+
+	my $url_base = "http://srv1.media-overseas.com/FMPro?-DB=reunion.fp5&-Lay=M1&-format=rechercheresultatsreunion.htm&-error=rechercheerreurreunion.htm&-SortField=jourdate&-SortField=presseheuretri&-SortOrder=Ascending";
+	my $url_idchaine = "-op=cn&idchaine=".$idchaine."&";
+	my $url_start = "-op=gte&jourdate=".$firstday."&"; 
+	my $url_stop = "-op=lte&jourdate=".$lastday."&";
+	my $url_end = "-op=cn&periodejour=a...z&-max=1000&-skip=0&-find=";
+	my $url = $url_base.$url_idchaine.$url_start.$url_stop.$url_end;
+
+	# get request
+	my $page = get_nice($url);
+
+	# parse the html
+	my $html = new HTML::TreeBuilder;
+	$html->parse($page);
+	$html->eof();
+
+	# look for the table of programmes
+	my $table = $html->look_down('_tag', 'table', 'border' , '0', 'width', '80%', 'align', 'center', 'cellspacing', '2', 'height', '1%');
+	$table->objectify_text();
+
+	# look for the list of rows of the table
+	my @rows = $table->look_down('_tag', 'tr');
+
+	# the progs list to return
+	my @progs = ();
+
+	# scan each row
+	foreach my $r (@rows) {
+		# the current prog being processed
+		my %prog;
+		my ($tt, $start, $stop);
+
+		$prog{'channel'} = "c".$idchaine;
+
+		# look for every column
+		my @td = $r->look_down('_tag', 'td');
+
+		# scan each cellule of the row
+		foreach my $cell (@td) {
+			my @b = $cell->look_down('_tag', '~text');
+			foreach my $tag (@b) {
+				$tt = $tag->attr_get_i('text');
+#$tag->dump();
+				# here is the date
+				if ( $tt =~ /(\d{1,2})\/(\d{1,2})\/(\d\d\d\d)/ ) {
+					my $a = $1;
+					$a = "0".$1 if (length $1 == 1);
+					$start = ParseDate("$3$2$a");
+				}
+	
+				# here is the start hour
+				if ( $tt =~ /(\d\d):(\d\d)/ ) {
+					$start = Date_SetTime($start, $1, $2, 0);
+					$start = UnixDate($start, "%Y%m%d%H%M%S");
+					#$start = utc_offset($start, "+0200");
+					$prog{'start'} = $start;
+				}
+	
+				# here is the title with the duration in minutes
+				if ( $tt =~ /(.*)\s\((\d+)\'\)/ ) {
+					# sometimes title doesn't exist for the first programme
+					next if ($1 eq "");
+
+					my $title = $1;
+
+					$prog{'title'} = [ [ $title ] ];
+	
+					$stop = DateCalc($start, "+$2 min");
+					$stop = UnixDate($stop, "%Y%m%d%H%M%S");
+					#$stop = utc_offset($stop, "+0200");
+					$prog{'stop'} = $stop;
+
+					$prog{'length'} = $2 * 60;
+	
+					# sometime there is also the category
+					my $i = $cell->look_down('_tag', 'i');
+					if (defined $i) {
+						my $ii = $i->look_down('_tag', '~text');
+						if (defined $ii) {
+							my $category = $ii->attr_get_i('text');
+							utf8::encode($category)  if (utf8::is_utf8($category));
+							$prog{'category'} = [ [ $category, "fr" ] ];
+						}
+					}
+				}
+	
+				# Year of the prog (if present)
+				if ( $tt =~ / - (\d\d\d\d)/ ) {
+					$prog{'date'} = $1;
+				}
+			}
+
+			# get director/actors if --slow was asked
+			if ($opt_slow) {
+				@b = $cell->look_down('_tag', 'a', 'class', 'liennoir');
+				foreach (@b) {
+					my $href = "http://srv1.media-overseas.com/".$_->attr_get_i('href');
+					get_canalsat_programmes_list_slow($href, \%prog);
+				}
+			}
+		}
+	
+		# add the current prog to the list if it is valid
+		if (defined $prog{'title'}) {
+			push @progs,\%prog;
+		}
+	}
+
+	$html->delete();
+	undef $html;
+
+	return @progs;
+}
+
+sub get_parabole_programmes_list_slow($%) {
+	my $url = shift(@_);
+	my $p = shift(@_);
+
+	# get request
+	my $page = get_nice($url);
+
+	# parse the html
+	my $html = new HTML::TreeBuilder;
+	$html->parse($page);
+	$html->eof();
+
+	my $t;
+	
+	# get the résumé
+	my $resume_tag = $html->look_down('_tag', 'font', 'class', 'commonText');
+	if (defined $resume_tag) {
+		$t = $resume_tag->as_text();
+		$p->{'desc'} = [ [ $t, "fr" ] ];
+	}
+
+	# get actors list
+	my @actors;
+	my $actors_tag = $html->look_down('_tag', 'font', 'class', 'highlightCasting');
+	if (defined $actors_tag) {
+		$t = $actors_tag->as_text();
+		
+		my @a = split(',', $t);
+		foreach (@a) {
+			if ($_ =~ /(.*) \(.*\)/) {
+				push @actors, $1;
+				next;
+			}
+
+			push @actors, $_;
+		}
+	}
+
+	$p->{credits}{actor} = \@actors if @actors;
+
+}
+
+sub get_parabole_programmes_list($$) {
+	my ($channel, $days) = @_;
+
+	my $url_base = "http://www.parabolereunion.com/index.jsp?childUrl=epg/epg0.jsp&mode=1&search_title=&sel_time=-1&sel_type=-1&";
+	my $url_channel = "sel_channel=".$channel."&";
+
+	# the progs list to return
+	my @progs = ();
+
+	for (1 .. $days) {
+		my $url_day;
+		my $start;
+
+		if ($_ == 1) { $url_day = "sel_day=-1";	}
+		else { $url_day = "sel_day=".($_ - 1); }
+
+		my $n = $_ - 1;
+		$start = DateCalc("today", "+ $n days");
+
+		my $url = $url_base.$url_channel.$url_day;
+
+		# get request
+		my $page = get_nice($url);
+
+		# parse the html
+		my $html = new HTML::TreeBuilder;
+		$html->parse($page);
+		$html->eof();
+		$html->objectify_text();
+		# look for the table of programmes
+		my @tables = $html->look_down('_tag', 'table', 'border' , '0', 'width', '100%');
+
+		# the two first tables is not necessary
+		shift @tables;
+		shift @tables;
+
+		# sometime the previous day appear in today's listing
+		# there could be more than 1 table left
+		shift @tables if (@tables > 1);
+
+		# sometimes there is no programme for a channel
+		# Reality show 24h/24 for example
+		next if (@tables == 0);
+
+		# Here is the good table
+		my $table = shift @tables;
+		#$table->dump();
+
+		# look for the list of rows of the table
+		my @rows = $table->look_down('_tag', 'tr');
+
+		# scan each row
+		foreach my $r (@rows) {
+			# the current prog being processed
+			my %prog;
+	
+			# look for every column
+			my @td = $r->look_down('_tag', 'td');
+	
+			$prog{'channel'} = "p".$channel;
+	
+			# scan each cellule of the row
+			foreach my $cell (@td) {
+				my @b = $cell->look_down('_tag', '~text');
+				foreach my $tag (@b) {
+					#$tag->dump();
+					my $tt = $tag->attr_get_i('text');
+	
+					if ($tt =~ /(\d+):(\d+)/) {
+						$start = Date_SetTime($start, $1, $2, 0);
+						$start = UnixDate($start, "%Y%m%d%H%M%S");
+						$prog{'start'} = $start;
+						next;
+					}
+						
+					if ($tt =~ /^\s*(\d+)h(\d+)/) {
+						my $length = $1 * 60 + $2;
+						$prog{'length'} = $length * 60;
+
+						my $stop = DateCalc($start, "+ $length min");
+						$stop = UnixDate($stop, "%Y%m%d%H%M%S");
+						$prog{'stop'} = $stop;
+						next;
+					}
+	
+					next if ($tt =~ /^\s+/);
+					next if ($tt =~ /\s+$/);
+					$prog{'title'} = [ [ $tt ] ];
+				}
+
+				# get director/actors if --slow was asked
+				if ($opt_slow) {
+					my $a = $cell->look_down('_tag', 'a');
+					if (defined $a) {
+						my $href = "http://www.parabolereunion.com/".$a->attr_get_i('href');
+						get_parabole_programmes_list_slow($href, \%prog);
+					}
+				}
+
+			}
+
+			# add the current prog to the list if it is valid
+			if (defined $prog{'title'}) {
+				#dump_programme(\%prog);
+				push @progs,\%prog;
+			}
+		}
+	}
+
+	return @progs;
+}
+
+###
+### Configure mode
+###
+if ($mode eq 'configure') {
+	XMLTV::Config_file::check_no_overwrite($config_file);
+	
+	# ask user to select his broadcasters
+	my @id = sort keys %BROADCASTERS;
+	my @questions = map { "Select '$BROADCASTERS{$_}' ?" } @id;
+	my @responses = ask_many_boolean(1, @questions);
+
+	# retrieve the channels list for each broadcasters
+	foreach (0..$#id) {
+		if ($responses[$_]) {
+			my @ch = get_channels_list($id[$_]);
+			@channels = (@channels, @ch) if @ch;
+		}
+	}
+
+	# ask user to add or not each channel
+	@questions = map { "Add channel $_->{'name'} ?" } @channels;
+	@responses = ask_many_boolean(1, @questions);
+
+	# create configuration file
+    open(CONF, ">$config_file") or die "Cannot write to $config_file: $!";
+
+	foreach (@channels) {
+		my $r = shift @responses;
+	
+		if ($r) {
+			print CONF "channel:";
+		}
+		else {
+			print CONF "#channel:";
+		}
+	
+		print CONF "$_->{'type'};$_->{'id'};$_->{'name'}\n";
+	}
+
+	close CONF or warn "Cannot close $config_file: $!";
+    say("Finished configuration.");
+    exit();
+}
+
+###
+### List channels
+###
+if ($mode eq 'list-channels') {
+	# init the XMLTV writer
+	my $writer = new_xmltv_writer();
+
+	# ask user to select his broadcasters
+	my @id = sort keys %BROADCASTERS;
+	my @questions = map { "Select '$BROADCASTERS{$_}' ?" } @id;
+	my @responses = ask_many_boolean(1, @questions);
+
+	# retrieve the channels list for each broadcasters
+	foreach (0..$#id) {
+		if ($responses[$_]) {
+			my @ch = get_channels_list($id[$_]);
+			@channels = (@channels, @ch) if @ch;
+		}
+	}
+
+	# write the XML header
+	$writer->start({
+		'generator-info-name' => 'XMLTV',
+		'generator-info-url'  => 'http://membled.com/work/apps/xmltv/',
+	});
+
+	foreach (@channels) {
+		my $id = "id";
+		$id = "c".$_->{'id'} if ($_->{'type'} eq "CANALSAT");
+		$id = "p".$_->{'id'} if ($_->{'type'} eq "PARABOLE");
+
+		$writer->write_channel({
+			'id'           => $id,
+	        'display-name' => [[ $_->{'name'} ]],
+	        'icon'         => [{ 'src' => $_->{'icon'} }]
+		});
+	}
+
+	$writer->end();
+	exit();
+}
+
+###
+### Grab programmes listing
+###
+die if $mode ne 'grab';
+
+# Now let's do it
+Date_Init("TZ=UTC");
+
+# read tv_grab_re conf file...
+@config_lines = XMLTV::Config_file::read_lines($config_file);
+
+# ...and parse its content
+my $n = 0;
+foreach (@config_lines) {
+	++$n;
+	next if not defined;
+
+	if ( /^channel:(.*);(.*);(.*)/ ) {
+		my %channel;
+
+		$channel{'type'} = $1;
+		$channel{'id'}   = $2;
+		$channel{'name'} = $3;
+
+		if ($channel{'type'} eq 'CANALSAT') {
+			$channel{'icon'} = "$CANALSAT_ICON_URL/".$channel{'id'}.".gif";
+		}
+		
+		if ($channel{'type'} eq 'PARABOLE') {
+			$channel{'icon'} = "$PARABOLE_ICON_URL/channel_logo_small".$channel{'id'}.".jpg";
+		}
+
+		push @channels,\%channel;
+	}
+	else {
+		die "$config_file:$n - Bad line channel";
+	}
+}
+
+die "No working channels configured, so no grabing" if not @channels;
+
+# init the XMLTV writer
+my $writer = new_xmltv_writer();
+
+# write the XML header
+$writer->start({
+	'generator-info-name' => 'XMLTV',
+	'generator-info-url'  => 'http://membled.com/work/apps/xmltv/',
+});
+
+# first, write channels
+foreach (@channels) {
+	my $id = "id";
+	$id = "c".$_->{'id'} if ($_->{'type'} eq "CANALSAT");
+	$id = "p".$_->{'id'} if ($_->{'type'} eq "PARABOLE");
+
+	$writer->write_channel({ 
+		'id'           => $id,
+		'display-name' => [ [ $_->{'name'} ] ],
+        'icon'         => [ { 'src' => $_->{'icon'} } ]
+	});
+}
+
+
+# then, programmes
+foreach (@channels) {
+	my @progs;
+
+	if ($_->{'type'} eq 'CANALSAT') {
+		my $first_day = UnixDate(ParseDate("today"), "%d%%2f%m%%2f%Y");
+		my $n = $opt_days - 1;
+		my $last_day = UnixDate(DateCalc("today", "+ $n days"), "%d%%2f%m%%2f%Y");
+		@progs = get_canalsat_programmes_list($_->{'id'}, $first_day, $last_day);
+	}
+
+	if ($_->{'type'} eq 'PARABOLE') {
+		@progs = get_parabole_programmes_list($_->{'id'}, $opt_days);
+	}
+
+	foreach my $prog (@progs) {
+		$writer->write_programme(\%$prog);
+	}
+}
+
+$writer->end();
