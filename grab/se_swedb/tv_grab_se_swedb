@@ -10,13 +10,17 @@ tv_grab_se_swedb - Grab TV listings for Sweden.
 
 tv_grab_se_swedb --help
 
-tv_grab_se_swedb [--config-file FILE] [--root-url URL] --configure 
+tv_grab_se_swedb --configure [--config-file FILE] [--root-url URL] 
                  [--gui OPTION]
 
-tv_grab_se_swedb [--config-file FILE] [--root-url URL] [--output FILE] 
-                 [--days N] [--offset N] [--quiet] [--debug]
-                 [--channel xmltvid,xmltvid,...]
+tv_grab_se_swedb [--config-file FILE] [--root-url URL] 
+                 [--days N] [--offset N] [--channel xmltvid,xmltvid,...]
+                 [--output FILE] [--quiet] [--debug]
 
+tv_grab_se_swedb --list-channels [--config-file FILE] [--root-url URL] 
+                 [--output FILE] [--quiet] [--debug]
+                 
+                
 =head1 DESCRIPTION
 
 Output TV and listings in XMLTV format for many stations
@@ -57,6 +61,9 @@ debugging.
 B<--channel xmltvid>  Disregard configuration file and only grab data for
                       the specified channel(s). The parameter is a 
                       commaseparated list of xmltv channel-ids.
+
+B<--list-channels>    Output a list of all channels that data is available
+                      for. The list is in xmltv-format.
 
 B<--root-url url>     Specify the url of the file describing all 
                       available channels. The default is
@@ -134,15 +141,21 @@ my $opt = { days => 5,
             debug => 0,
             channel => undef,
             'root-url' => undef,
+            'list-channels' => 0,
           };
 
 my $usage = <<EOH
 tv_grab_se_swedb --help
 
-tv_grab_se_swedb [--config-file FILE] --configure [--gui OPTION]
+tv_grab_se_swedb --configure [--config-file FILE] [--root-url URL] 
+                 [--gui OPTION]
 
-tv_grab_se_swedb [--config-file FILE] [--output FILE] [--days N]
-[--offset N] [--quiet] [--debug] [--channel xmltvid,xmltvid,...]
+tv_grab_se_swedb [--config-file FILE] [--root-url URL] 
+                 [--days N] [--offset N] [--channel xmltvid,xmltvid,...]
+                 [--output FILE] [--quiet] [--debug]
+
+tv_grab_se_swedb --list-channels [--config-file FILE] [--root-url URL] 
+                 [--output FILE] [--quiet] [--debug]
 
 EOH
   ;
@@ -158,6 +171,7 @@ my $res = GetOptions( $opt, qw/
                       debug
                       channel=s
                       root-url=s
+                      list-channels
                       / );
 die $usage if (not $res) || @ARGV;
 if ($opt->{help}) { print $usage; exit 0 }
@@ -175,25 +189,45 @@ my $config_file
                                  'tv_grab_se_swedb', not $opt->{debug} );
 
 if( $opt->{configure} ) {
-	$opt->{'root-url'} = $default_root_url if (! defined( $opt->{'root-url'}));
- 	($xmldecl, $channels) = load_channels( $opt->{'root-url' } );
-	configure( $config_file );
-	exit;
+    $opt->{'root-url'} = $default_root_url 
+        if(! defined( $opt->{'root-url'}));
+    ($xmldecl, $channels) = load_channels( $opt->{'root-url' } );
+    configure( $config_file );
+    exit;
 } else {
-    load_config( $config_file );
+    if( -f( $config_file ) ) {
+        load_config( $config_file );
+    } elsif( (not $opt->{channel}) and (not $opt->{"list-channels"}) ) {
+        print "You must run tv_grab_se_swedb --configure " .
+              "to select channels.\n";
+        exit 1;
+    }
 }
 
-$opt->{'root-url'} = $default_root_url if (! defined ($opt->{'root-url'}));
+$opt->{'root-url'} = $default_root_url 
+    if (! defined ($opt->{'root-url'}));
+
 t "using $opt->{'root-url'}";
 
 if(not defined( $opt->{'cache-dir'} ) )
 {
-    load_old_cachedir();
+    $opt->{'cache-dir'} = get_default_cachedir();
 }
 
+init_cachedir( $opt->{'cache-dir'} );
 HTTP::Cache::Transparent::init( { BasePath => $opt->{'cache-dir'} } );
 
 ($xmldecl, $channels) = load_channels( $opt->{'root-url' } );
+
+if( $opt->{'list-channels'} )
+{
+    my $fh = start_output();
+    write_header( $fh, $xmldecl );
+    write_channel_list( $fh, [sort keys %{$channels}] );
+    write_footer( $fh );
+    end_output( $fh );
+    exit;
+}
 
 # List of the ids of all channels that should be loaded.
 # This is loaded from the configuration file.
@@ -205,41 +239,11 @@ if( defined( $opt->{channel} ) )
 my( $odoc, $root );
 my $warnings = 0;
 
-my $fh;
+my $fh = start_output();
 
-if (defined $opt->{output})
-{
-    t "Sending output to $opt->{output}.";
-    $fh = new IO::File "> $opt->{output}";
-    die "cannot write to $opt->{output}" if not $fh;
-}
-else
-{
-    $fh = wraphandle('STDOUT');
-}
+write_header( $fh, $xmldecl );
 
-# Use the same xml declaration as the one in
-# channels.xml
-$fh->print( $xmldecl );
-$fh->print( '<!DOCTYPE tv SYSTEM "xmltv.dtd">' . "\n" );
-$fh->print( "<tv>\n" );
-
-# Write list of channels.
-t 'Writing list of channels.';
-
-foreach my $channel_id (@channel_list)
-{
-    if( not exists $channels->{$channel_id} )
-    {
-        print STDERR "Unknown channel $channel_id. See http://tv.swedb.se" . 
-            " for a list of available channels or run" . 
-            " tv_grab_se_swedb --configure to reconfigure.\n";
-        next;
-    }
-
-    my( $channel_name, $url, $def ) = @{$channels->{$channel_id}};
-   $fh->print( "  $def\n" );
-}
+write_channel_list( $fh, \@channel_list );
 
 my $now = ParseDate( 'now' );
 my $date =$now;
@@ -272,8 +276,10 @@ for( my $i=0; $i < $opt->{days}; $i++ )
 }
 
 $bar->finish() if defined $bar;
-$fh->print( "</tv>\n" );
-$fh->close();
+
+write_footer( $fh );
+
+end_output( $fh );
 
 # Signal that something went wrong if there were warnings.
 exit(1) if $warnings;
@@ -334,26 +340,20 @@ sub configure
     mkpath(dirname($config_file));
     open(CONF, ">$config_file") or die "cannot write to $config_file: $!";
 
-    my $winhome = $ENV{HOMEDRIVE} . $ENV{HOMEPATH} 
-      if defined( $ENV{HOMEDRIVE} ) 
-        and defined( $ENV{HOMEPATH} ); 
-    
-    my $home = $ENV{HOME} || $winhome || ".";
+    my $defcache = get_default_cachedir();
 
     my $path = ask( 
                     "You need to decide where the cache should be stored.\n" . 
                     "The cache must be stored in its own directory.\n" .
                     "The directory should NOT be cleared when you reboot.\n" .
-                    "The default is $home/.xmltv/cache\n\n" .
+                    "The default is $defcache\n\n" .
                     "Where should the cache be stored?\n" . 
                     "Leave empty to use the default location:\n" );
     
-    $path = "$home/.xmltv/cache" if( (not defined($path)) 
-                                     or $path eq "" );
-    if( not -d $path )
-    {
-        mkpath( $path ) or die "Failed to create cache-directory $path: $@";
-    }
+    $path = $defcache if( (not defined($path)) 
+                          or $path eq "" );
+    
+    init_cache_dir( $path );
 
     print CONF "cache-dir $path\n";
 
@@ -377,6 +377,25 @@ sub configure
     }
     close CONF or warn "cannot close $config_file: $!";
     say("Finished configuration.");
+}
+
+sub get_default_cachedir
+{
+    my $winhome = $ENV{HOMEDRIVE} . $ENV{HOMEPATH} 
+    if defined( $ENV{HOMEDRIVE} ) 
+        and defined( $ENV{HOMEPATH} ); 
+    
+    my $home = $ENV{HOME} || $winhome || ".";
+    return "$home/.xmltv/cache";
+}
+
+sub init_cachedir
+{
+    my( $path ) = @_;
+    if( not -d $path )
+    {
+        mkpath( $path ) or die "Failed to create cache-directory $path: $@";
+    }
 }
 
 sub load_channels
@@ -442,49 +461,66 @@ sub print_data
     return 1;
 }
 
-# Load cachedir-configuration from the deprecated cache.conf-file.
-sub load_old_cachedir
+sub start_output
 {
-    my $winhome = $ENV{HOMEDRIVE} . $ENV{HOMEPATH} 
-    if defined( $ENV{HOMEDRIVE} ) and defined( $ENV{HOMEPATH} ); 
-    
-    my $home = $ENV{HOME} || $winhome || ".";
-    
-    my $conffile = $ENV{CACHE_CONF} || "$home/.xmltv/cache.conf"; 
-    
-    if( not open(IN, "< $conffile") ) {
-        print STDERR  "Please run tv_grab_se_swedb --configure " .
-                      "and specify a cache location.\n";
-        exit 1;
+    my $fh;
+    if (defined $opt->{output})
+    {
+        t "Sending output to $opt->{output}.";
+        $fh = new IO::File "> $opt->{output}";
+        die "cannot write to $opt->{output}" if not $fh;
+    }
+    else
+    {
+        $fh = wraphandle('STDOUT');
     }
 
-    my %data;
-    my $line;
-    
-    while ($line = <IN>) {
-        next if $line =~ /^\s*#/;
-        next if $line =~ /^\s*$/;
-        $line =~ tr/\n\r//d;
+    return $fh;
+}
+sub write_header
+{
+    my( $fh, $xmldecl ) = @_;
 
-        my($key, $value) = split(/\s+/, $line, 2);
-        if (index(" BasePath Verbose ", " $key ") == -1) {
-            print STDERR "Unknown configuration key $key in $conffile.\n";
-            close(IN);
-            exit 1;
+    # Use the same xml declaration as the one in
+    # channels.xml
+    $fh->print( $xmldecl );
+    $fh->print( '<!DOCTYPE tv SYSTEM "xmltv.dtd">' . "\n" );
+    $fh->print( "<tv>\n" );
+}
+
+sub write_channel_list
+{
+    my( $fh, $channel_list ) = @_;
+
+    # Write list of channels.
+    t 'Writing list of channels.';
+
+    foreach my $channel_id (@{$channel_list})
+    {
+        if( not exists $channels->{$channel_id} )
+        {
+            print STDERR "Unknown channel $channel_id." .
+                " See http://tv.swedb.se" . 
+                " for a list of available channels or run" . 
+                " tv_grab_se_swedb --configure to reconfigure.\n";
+            next;
         }
-
-        $data{$key} = $value;
+        
+        my( $channel_name, $url, $def ) = @{$channels->{$channel_id}};
+        $fh->print( "  $def\n" );
     }
+}
 
-    close(IN);
+sub write_footer
+{
+    my( $fh ) = @_;
+    $fh->print( "</tv>\n" );
+}
 
-    if (not defined($data{BasePath})) {
-        print STDERR  "Please run tv_grab_se_swedb --configure " .
-                      "and specify a cache location.\n";
-        exit 1;
-    }
-
-    $opt->{'cache-dir'} = $data{BasePath};
+sub end_output
+{
+    my( $fh ) = @_;
+    $fh->close();
 }
 
 ### Setup indentation in Emacs
