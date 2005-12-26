@@ -16,7 +16,7 @@ tv_grab_za --help
 tv_grab_za [--config-file FILE] --configure [--gui OPTION]
 
 tv_grab_za [--config-file FILE] [--output FILE] [--days N]
-		   [--offset N] [--quiet] [--opentime] [--opentime-combined]
+	   [--quiet] [--opentime] [--opentime-combined]
 
 =head1 DESCRIPTION
 
@@ -75,6 +75,7 @@ Does not automatically update itself, when DSTV changes their site
 use strict;
 use XMLTV::Version '$Id$ ';
 use Getopt::Long;
+use List::Util qw(min);
 use Date::Manip;
 use HTML::TreeBuilder;
 use HTML::Entities; # parse entities
@@ -188,16 +189,16 @@ $ua->timeout(240);
 
 ######################################################################
 # Get options.
-XMLTV::Memoize::check_argv('XMLTV::Get_nice::get_nice_aux');
+#XMLTV::Memoize::check_argv('XMLTV::Get_nice::get_nice_aux');
 my ($opt_days, $opt_offset, $opt_help, $opt_output,
 	$opt_configure, $opt_config_file, $opt_gui,
 	$opt_quiet, $opt_list_channels, $opt_opentime, 
     $opt_opentime_combined, $opt_retries, $opt_mnet_fallback,
     $opt_dstv_fallback, $opt_cache);
 $opt_days  = 14; # default
-$opt_offset = 0; # default
 $opt_quiet  = 0; # default
 GetOptions('days=i'		=> \$opt_days,
+	   'offset=i'           => \$opt_offset,
 		   'help'		  => \$opt_help,
 		   'configure'	 => \$opt_configure,
 		   'opentime'	  => \$opt_opentime,
@@ -211,10 +212,27 @@ GetOptions('days=i'		=> \$opt_days,
 		   'cache'		 => \$opt_cache,
 		  )
   or usage(0);
-die 'number of days must not be negative' 
-	if (defined $opt_days && $opt_days < 0);
-die 'number of days can only be 1, 7, 14 or 30' 
-	if (defined $opt_days && $opt_days !~ /^(1|7|14|30)$/);
+
+# For this grabber, we can only grab one of a few fixed day ranges and
+# they all start from today.  For compatibility with other grabbers,
+# try to decipher --days and --offset options and make sure we
+# download a range that includes that.  (It's allowed to get a bit
+# more data than the user asked for.)
+#
+my @allowed_days = qw(1 7 14 30);
+die "--offset cannot be negative" if defined $opt_offset and $opt_offset < 0;
+die "--days must be positive" if defined $opt_days and $opt_days <= 0;
+if ($opt_offset) {
+    $opt_days += $opt_offset;
+    warn "--offset is not really supported; getting at least $opt_days days to cover the range requested\n";
+}
+my $use_days = min grep { $_ >= $opt_days } @allowed_days;
+die "cannot get $opt_days days; choose one of @allowed_days\n"
+  if not defined $use_days;
+warn "rounding up to $use_days days (must be one of @allowed_days)\n"
+  if $use_days != $opt_days;
+# OK, now $use_days has the number of days to grab starting from now.
+
 die '--opentime and --opentime-combined are mutually exclusive' 
 	if (defined $opt_opentime && $opt_opentime_combined);
 usage(1) if $opt_help;
@@ -285,15 +303,25 @@ foreach (@config_lines) {
     	my (undef, $conf_option, $conf_value) = split(/\s+/, $_, 3);
 	    if ($conf_option eq 'opentime') {$opt_opentime = 1;}
 	    if ($conf_option eq 'opentime-combined') {$opt_opentime_combined = 1;}
-	    if ($conf_option eq 'days') {$opt_days = $conf_value;}
+	    if ($conf_option eq 'days') {
+		if (defined $opt_days or defined $opt_offset) {
+		    # Day stuff was given on the command line.  This
+		    # should override whatever's in the config file.
+		    #
+		}
+		else {
+		    # Set the number of days from the config file.  It
+		    # must be one of the numbers allowed by the site.
+		    #
+		    $use_days = $conf_value;
+		    die "bad number of days $use_days in config file\n"
+		      if not grep { $_ == $use_days } @allowed_days;
+		}
+	    }
 	    if ($conf_option eq 'retries') {$opt_retries = $conf_value;}
 	    if ($conf_option eq 'mnet-fallback') {$opt_mnet_fallback = 1;}
 	    if ($conf_option eq 'dstv-fallback') {$opt_dstv_fallback = 1;}
 
-        die 'config file: number of days must not be negative' 
-        	if (defined $opt_days && $opt_days < 0);
-        die 'config file: number of days can only be 1, 7, 14 or 30' 
-        	if (defined $opt_days && $opt_days !~ /^(1|7|14|30)$/);
         die 'config file: --opentime and --opentime-combined are mutually exclusive' 
         	if (defined $opt_opentime && $opt_opentime_combined);
         die 'config file: --mnet-fallback and --dstv-fallback are mutually exclusive' 
@@ -302,8 +330,6 @@ foreach (@config_lines) {
 
     }
 }
-if ($opt_days == 1) {$opt_days = 0;}
-
 
 # Prepare channel maps
 
@@ -417,24 +443,40 @@ sub process_html {
   
 }
 
-
+# The URI to get listings for a given channel.
+sub channel_uri( $ ) {
+    my $ch = shift;
+    my $mapped = $dstvchannelmap{$ch};
+    die "cannot look up '$ch' in map" if not defined $mapped;
+    my $days_param = $use_days == 1 ? 0 : $use_days;
+    return "http://www.dstv.com/DStv_Guide/print.aspx?Channel=$mapped&time=$days_param&submit=true&Channels";
+}
 
 sub process_dstv_html {
-	my $inhash = shift;
-	my $chanid = $inhash->{'id'};
-	my $name = $inhash->{'name'};
-	my $now = time();
-	my $data;
+    my $inhash = shift;
+    my $chanid = $inhash->{'id'};
+    my $name = $inhash->{'name'};
+    my $now = time();
+    my $data;
     my $tries = 0;
 
+    # URI just for error reporting.
+    my $uri = channel_uri $name;
+    local $SIG{__DIE__} = sub { die "$uri:$_[0]\n" };
+
     if ($opt_cache) {
+	# FIXME this is a security hole: symlink attack in /tmp means
+	# you could be tricked into overwriting arbitrary file.
+	#
         my $cachefile = "/tmp/tv_grab_za-cache-$chanid";
     	if (! -f $cachefile) {
     		$data=tidy(get_dstv($name));
+		warn "writing $cachefile\n";
     		open CACHE, ">$cachefile";
     		print CACHE $data;
     		close CACHE;
     	} else {
+	        warn "using $cachefile\n";
     		open CACHE, $cachefile;
     		my @data = <CACHE>;
     		close CACHE;
@@ -463,35 +505,34 @@ sub process_dstv_html {
 	# Find the date headers on the page
 	my @date_headers = $tree->look_down(_tag => "td", class => 'srch_date_chnl_head');
 	foreach my $td (@date_headers) {
-		my $date = $td->as_text();
-		$date =~ s/^[^\w]+//g;
+	    my $date = $td->as_text();
+	    $date =~ s/^[^\w]+//g;
 		
+	    my $table = $td->look_up(_tag => "table");
+	    my @times = $table->look_down(_tag => "td", class => 'srch_rslt1');
+	    foreach my $result (@times) {
+		$result = $result->parent();
 		
-		my $table = $td->look_up(_tag => "table");
-		my @times = $table->look_down(_tag => "td", class => 'srch_rslt1');
-		foreach my $result (@times) {
-			$result = $result->parent();
-			
-			my $temp;
-            my $time;
-			$temp = $result->look_down(_tag => "td", class => 	'srch_rslt1');
-			my @time_images = $temp->look_down(_tag => "img", vspace => '4');
-    		foreach my $time_section (@time_images) {
-                my $time_temp = $time_section->attr('src');
-                $time_temp =~ /^get\.aspx\?GUID=(.*)$/;
-                $time .= $dstvtimehashes{$1};
-            }
-            $time =~ /^(\d)(\d)(\d)(\d)$/;
-            $time = "$1$2:$3$4";
+		my $temp;
+		$temp = $result->look_down(_tag => "td", class => 	'srch_rslt1');
+		my $time = $temp->look_down(_tag => 'b');
+		die 'no <b> thing (for time) found' if not defined $time;
+		$time = $time->as_text;
+		$time =~ /^(\d)(\d):(\d)(\d)$/ or die "bad time '$time'";
 			
 			my $title = $result->look_down(_tag => "td", class => 'srch_rslt2')->look_down(_tag => "b")->as_text;
 
+			my ($rating, $duration);
 			$temp = $result->look_down(_tag => "td", class => 'srch_rslt2')->as_HTML;
-			$temp =~ /Rating: \((.+)\)\<br\>/;
-			my $rating = $1;
-			$temp =~ /Duration: ([0-9:]+)/;
-			my $duration = $1;
-			
+			if (defined $temp) {
+			    if ($temp =~ /Rating: \((.+)\)\<br\>/) {
+				$rating = $1;
+			    }
+			    if ($temp =~ /Duration: ([0-9:]+)/) {
+				$duration = $1;
+			    }
+			}
+
 			t "$title: $rating: $duration\n";
 			
 			$temp = $result->look_down(_tag => "td", class => 	'srch_rslt4');
@@ -1149,15 +1190,14 @@ sub get_dstv_time_mappings() {
 
 # Download listings for a channel name - refresh mappings if necessary
 sub get_dstv() {
-	my $channame = shift;
+    my $channame = shift;
+    my $url = channel_uri $channame;
     my $data;
     my $tries = 0;
     my $req;
     my $res;
     while ($tries < $opt_retries && not defined $data) {
         $tries++;
-        my $url = "http://www.dstv.com/DStv_Guide/print.aspx?Channel=$dstvchannelmap{$channame}&time=$opt_days&submit=true&Channels";
-#        my $url = "http://cptdc1/mnet.htm";
     	t "getting URL: $url";
         $req = GET $url;
         $req->header('Accept-Encoding','gzip');
@@ -1208,15 +1248,8 @@ sub get_mnet() {
         my $url = "http://www.mnet.co.za/schedules/default.asp";
         t "getting channel: $channame (ID = ".$mnetchannelmap{$channame}.")";
 
-        my $clockdays;
-        if ($opt_days == 0) {
-            $clockdays = 1;
-        } else {
-            $clockdays = $opt_days;
-        }
-            
-	    my $start_date = POSIX::strftime("%Y/%m/%d", localtime(time()));
-        my $end_date = POSIX::strftime("%Y/%m/%d", localtime(time()+(($clockdays-1)*86400)));
+	my $start_date = POSIX::strftime("%Y/%m/%d", localtime(time()));
+        my $end_date = POSIX::strftime("%Y/%m/%d", localtime(time()+(($use_days-1)*86400)));
 
         $res = $ua->post( $url,
             [  'startDate' => $start_date,
