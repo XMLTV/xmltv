@@ -104,7 +104,7 @@ my $ROOT_URL  = "http://telepoche.guidetele.com";
 my $LANG = "fr";
 my $MAX_STARS = 4;
 my $MAX_RETRY = 5;
-my $VERSION   = "130405-01";
+my $VERSION   = "010106-01";
 
 # Temporary avoid XML warnings (to be investigated)
 no warnings;
@@ -277,20 +277,13 @@ sub tidy {
       s/&oelig;/oe/g;
       s//oe/g;
 
-      if ( s/(&\#[0-9]{4,};)//g ) {
-        print STDERR "removing unknown UNICODE characters: '$1'\n" unless $warned_unicode_chars++;
-      }
-      if ( s/(&\#x[0-9a-zA-Z]{3,};)//g ) {
-        print STDERR "removing unknown UNICODE characters: '$1'\n" unless $warned_unicode_chars++;
-      }
+      s/(&\#[0-9]{4,};)//g;
+      s/(&\#x[0-9a-zA-Z]{3,};)//g;
       # Not strictly a bad character but it does get in the way.
       s/&nbsp;/ /g;
       tr/\240/ /;
       tr/\t/ /;
-
-      if (s/([^\012\015\040-\176\240-\377])//g) {
-        print STDERR "removing bad characters: '$1'" unless $warned_bad_chars++;
-      }
+      s/([^\012\015\040-\176\240-\377])//g;
       return $_;
     }
 }
@@ -472,10 +465,12 @@ sub get_channels( $ ) {
     my $gridid = shift;
     my %channels;
     my $url = $GRID_BASE_URL.$gridid;
-
+    my $CHANNEL_FILE = "/tmp/xmltv_channel.html";
+    
+    LWP::Simple::getstore($url, $CHANNEL_FILE);
     my $t = HTML::TreeBuilder->new;
-    $t->parse(tidy(get_page($url)));
-    $t->eof;
+    $t->parse_file($CHANNEL_FILE);
+    
     debug_print( "URL  : " . $url ."\n");
     foreach my $cellTree ( $t->look_down( "_tag", "td", "width", "50", "height", "62" ) ) {
       my $chid = $cellTree->look_down( "_tag", "a", 'href', '#' )->attr('onclick');
@@ -497,12 +492,15 @@ sub process_channel_grid_page( $$$$ ) {
     my ($writer, $chid, $url, $slot) = @_;
     my ($genre, $showview, $hours, $starthour, $endhour, $date, $dateindex) = 0;
     my ($title, $subgenre, $footext, $star_rating, $datecreate) = 0;
+    my $PROG_FILE = "/tmp/xmltv_prog.html";    
+    my $FIC_FILE = "/tmp/xmltv_fic.html";    
 
     # Get the current page
+    system("rm -f " . $PROG_FILE);
+    LWP::Simple::getstore($url, $PROG_FILE);
     my $t = HTML::TreeBuilder->new;
+    $t->parse_file($PROG_FILE);   
     debug_print("Now getting page : " . $url . "\n");
-    $t->parse(tidy(get_page($url)));
-    $t->eof;
 
     # Reset some working variables
     my $cont = 0;
@@ -539,8 +537,7 @@ sub process_channel_grid_page( $$$$ ) {
           $date = DateCalc($month."/".$day."/".$year, "+".$nbdays." days");
           $dateindex = UnixDate($date, "%Y%m%d");
           $nbloop += 1;
-          # We need to limit the number of days fetched in slow
-          # mode, but in fast mode no limit is needed since
+          # We need to limit the number of days fetched in slow mode, but in fast mode no limit is needed since
           # there is a single fetch for all days.
           if ($opt_slow) {
             next if Date_Cmp($dateindex, UnixDate(DateCalc("today", "+$opt_offset days"),"%Y%m%d")) < 0;
@@ -551,52 +548,40 @@ sub process_channel_grid_page( $$$$ ) {
           foreach my $progTree ($tabDay->look_down('_tag', 'a', 'onMouseout', 'hidemenu()') ) {
             my $text = $progTree->as_text();
             my $line = $progTree->attr('onMouseover');
-            $line =~ (!m/drc\(([^""]+)\)/);
+            $line =~ (!m/showmenu\(([^""]+)\)/);
             $line =~ m/\'(.*)\',\'(.*)\'/;
-            $title = $2;
+            $title = tidy($2);
             my $mydata = $1;
-          next if ( $title eq 'Fin des programmes');
-          ($hours, $genre, $showview) = split (/<br>/, $mydata);
-          next if ( !$hours );
-          # Process the title, sometimes a showview field is shown
-          $title =~ s/^\d{7,8} //;
-          $title =~ s/\\//g;
-          if ($title =~ s/\s*([*]+)\s*$//) {
-          my $n = length $1;
-          if (0 < $n and $n <= $MAX_STARS) {
-            $star_rating = $n;
-          } elsif ($MAX_STARS < $n) {
-            warn "too many stars ($n), expected at most $MAX_STARS\n";
-          } else { die }
-        }
-        die if $title =~ /[*]$/;
-        my ($language, $subtitles_language);
-        for ($title) {
-          s/\s+$//;
-          if (s/\s+\(VO\)$//) {
-            # Version originale - language is unknown but not
-            # French.  There is no way to represent this in
-            # the DTD.
-            #
-          }
-          elsif (s/\s+\(VO sous-titr.e\)$//) {
-            # Language unknown, but we know it has French
-            # subtitles.
-            #
-            $subtitles_language = 'fr';
-          }
-          elsif (s/\s+\(VF\)$//) {
-            # Version francaise.  The title may or may not be
-            # translated.
-            #
-            $language = 'fr';
-          }
-        }
-        # At this point, $title contains title and subtitle (if any),
-        # separated by a '-'. We will try to split off the subtitle
-        # further down
-
-        # Process hours, there are like HHhMM
+            next if ( $title eq 'Fin des programmes');
+            ($hours, $genre, $showview) = split (/<br>/, $mydata);
+            next if ( !$hours );
+            # Process the title, sometimes a showview field is shown
+            $title =~ s/^\d{7,8} //;
+            $title =~ s/\\//g;
+            if ($title =~ s/\s*([*]+)\s*$//) {
+              my $n = length $1;
+              if (0 < $n and $n <= $MAX_STARS) {
+                $star_rating = $n;
+              } elsif ($MAX_STARS < $n) {
+                warn "too many stars ($n), expected at most $MAX_STARS\n";
+              } else { die }
+            }
+            die if $title =~ /[*]$/;
+            my ($language, $subtitles_language);
+            for ($title) {
+              s/\s+$//;
+              if (s/\s+\(VO\)$//) {
+              # Version originale - language is unknown but not French.  There is no way to represent this in the DTD.
+              } elsif (s/\s+\(VO sous-titr.e\)$//) {
+              # Language unknown, but we know it has French subtitles.
+              $subtitles_language = 'fr';
+              } elsif (s/\s+\(VF\)$//) {
+                # Version francaise.  The title may or may not be translated.
+                $language = 'fr';
+              }
+            }
+        # At this point, $title contains title and subtitle (if any), separated by a '-'. We will try to split off the subtitle
+        # further down. Process hours, there are like HHhMM
         ($starthour, $endhour)  = split("-", $hours);
         $starthour =~ s/h//g
           or die "Cannot detect start hour from website : $starthour \n";
@@ -681,24 +666,25 @@ sub process_channel_grid_page( $$$$ ) {
             or die "expected fiche(x), got: $id";
           $id = $1;
           debug_print("Calling sheet URL : " . $SHEET_URL . $id . "\n");
+          system("rm -f " . $FIC_FILE);
+          LWP::Simple::getstore($url, $FIC_FILE);
           my $tfic = HTML::TreeBuilder->new;
-          $tfic->parse(tidy(get_page($SHEET_URL . $id)));
-          $tfic->eof;
+          $tfic->parse_file($FIC_FILE);
 
           # This page's title tag contains the program title without
           # the sub-title. Use it to separate the two.
           my $ttitle;
           if ( $ttitle = $tfic->look_down('_tag', 'title') ) {
-            my $htmltitle=$ttitle->as_text();
+            my $htmltitle = tidy($ttitle->as_text());
             if ($title =~ s/^\Q$htmltitle\E\s+-\s+//) {
-              $prog{'title'} = [ [ $htmltitle ] ];
-              $prog{'sub-title'} = [ [ $title ] ];
+              $prog{'title'} = [ [ tidy($htmltitle) ] ];
+              $prog{'sub-title'} = [ [ tidy($title) ] ];
             }
           }
           # Get the duration and the year
           my ($length, $hour, $min, $year);
           if ( $tdesc = $tfic->look_down('_tag', 'td', 'width', '250', 'class', 'txt') ) {
-            $length = $tdesc->as_text();
+            $length = tidy($tdesc->as_text());
             if ( $length =~ s/ Dur� : (\d+)h(\d+) AM - (\d+)// ) {
               $hour = $1; $min = $2; $year = $3;
               # guidetele.com si full of bugs ...
@@ -719,92 +705,87 @@ sub process_channel_grid_page( $$$$ ) {
             }
             my @children = $tdesc->content_list();
             foreach my $desc (@children)  {
-          # Remove leading and trailing spaces
-          $desc =~ s/^ ://;
-          $desc =~ s/ $//;
-          if ($nextIsDirector == 1 ) {
-            push @director, tidy($desc);
-            $nextIsDirector = 0;
-            debug_print "FOUND DIRECTOR : " . tidy($desc) . " - $title - $id\n";
+              # Remove leading and trailing spaces
+              $desc =~ s/^ *://;
+              $desc =~ s/ *$//;
+              if ($nextIsDirector == 1 ) {
+                push @director, tidy($desc);
+                $nextIsDirector = 0;
+                debug_print "FOUND DIRECTOR : " . tidy($desc) . " - $title - $id\n";
+              }
+              if ($nextIsResume == 1) {
+                warn "RESUME seen twice\n" if defined $resume;
+                $resume = tidy($desc);
+                $nextIsResume = 0;
+                debug_print "FOUND RESUME : $resume \n";
+              }
+              if ($nextIsHistory == 1 ) {
+                warn "HISTOIRE seen twice\n" if defined $histoire;
+                $histoire = tidy($desc);
+                $nextIsHistory = 0;
+                debug_print "FOUND HISTOIRE : $histoire \n";
+              }
+              if ($nextIsAvis == 1 ) {
+                warn "AVIS seen twice\n" if defined $avis;
+                $avis = tidy($desc);
+                $nextIsAvis = 0;
+                debug_print "FOUND AVIS : $avis \n";
+              }
+              if ( ref($desc) ) {
+                $nextIsResume = 1 if ( tidy($desc->as_text()) eq "RESUME" );
+                $nextIsHistory = 1 if  ( tidy($desc->as_text()) eq "HISTOIRE" );
+                $nextIsAvis = 1 if  ( tidy($desc->as_text()) eq "AVIS" );
+                $nextIsDirector = 1 if (tidy($desc->as_text()) eq "R�lisateur" );
+              }
+            }
           }
-          if ($nextIsResume == 1) {
-            warn "RESUME seen twice\n" if defined $resume;
-            $resume = tidy($desc);
-            $nextIsResume = 0;
-            debug_print "FOUND RESUME : $resume \n";
+          # RESUME is main definition, HISTOIRE shorter.
+          foreach ($resume, $histoire) {
+            push @{$prog{desc}}, [ $_, $LANG ] if defined and length;
           }
-          if ($nextIsHistory == 1 ) {
-            warn "HISTOIRE seen twice\n" if defined $histoire;
-            $histoire = tidy($desc);
-            $nextIsHistory = 0;
-            debug_print "FOUND HISTOIRE : $histoire \n";
+          # Add AVIS to the main description, or make a new desc for it if there are none.
+          if (defined $avis and length($avis) ) {
+            if ($prog{desc}) {
+              $prog{desc}->[0]->[0] .= "Critique : " . tidy($avis);
+            } else {
+              push @{$prog{desc}}, [ $avis, $LANG ];
+            }
           }
-          if ($nextIsAvis == 1 ) {
-            warn "AVIS seen twice\n" if defined $avis;
-            $avis = tidy($desc);
-            $nextIsAvis = 0;
-            debug_print "FOUND AVIS : $avis \n";
+
+        if ($idesc = $tfic->look_down('_tag', 'table',  'width', '190', 'height', '100%') ) {
+          if ($tdesc = $idesc->look_down('_tag', 'td', 'valign', 'top', 'align', 'center' ) ) {
+            if ($imgdesc = $tdesc->look_down('_tag', 'img') ) {
+              $prog{icon} = [ {'src' => $ROOT_URL.$imgdesc->attr('src') } ];
+            }
           }
-          if ( ref($desc) ) {
-            $nextIsResume = 1 if ( $desc->as_text() eq "RESUME" );
-            $nextIsHistory = 1 if  ( $desc->as_text() eq "HISTOIRE" );
-            $nextIsAvis = 1 if  ( $desc->as_text() eq "AVIS" );
-            $nextIsDirector = 1 if ($desc->as_text eq "R�lisateur" );
+        }
+        # Now push the credits section, if exists
+        $prog{credits}{director } = \@director if @director;
+        $prog{credits}{actor}     = \@actor if @actor;
+      } else {
+        # The text for the <a> tag contains the title without the sub-title so we can use that to separate the two. However
+        # the text for the <a> tag may have been truncated so it fits the slot on the page. Also some titles may contain
+        # a ' - '. Still the heuristic works very well.
+        my $subtitle;
+        if ($text =~ s/\.\.\.$//) {
+          if ($title =~ s/^\Q$text\E([^-]+)\s+-\s+//) {
+            $prog{'title'} = [ [ "$text$1" ] ];
+            $prog{'sub-title'} = [ [ tidy($title) ] ];
           }
+        }
+        elsif ($title =~ s/^\Q$text\E\s+-\s+//) {
+          $prog{'title'} = [ [ tidy($text) ] ];
+          $prog{'sub-title'} = [ [ tidy($title) ] ];
         }
       }
 
-      # RESUME is main definition, HISTOIRE shorter.
-      foreach ($resume, $histoire) {
-        push @{$prog{desc}}, [ $_, $LANG ] if defined and length;
-      }
-
-      # Add AVIS to the main description, or make a new desc
-      # for it if there are none.
-      if (defined $avis and length($avis) ) {
-        if ($prog{desc}) {
-          $prog{desc}->[0]->[0] .= "Critique : " . $avis;
-        } else {
-          push @{$prog{desc}}, [ $avis, $LANG ];
+      if ( !$results{$prog{start}.$chid} ) {
+        $results{$prog{start}.$chid} = "1";
+        $writer->write_programme(\%prog);
         }
-      }
-
-      if ($idesc = $tfic->look_down('_tag', 'table',  'width', '190', 'height', '100%') ) {
-        if ($tdesc = $idesc->look_down('_tag', 'td', 'valign', 'top', 'align', 'center' ) ) {
-          if ($imgdesc = $tdesc->look_down('_tag', 'img') ) {
-            $prog{icon} = [ {'src' => $ROOT_URL.$imgdesc->attr('src') } ];
-          }
-        }
-      }
-      # Now push the credits section, if exists
-      $prog{credits}{director } = \@director if @director;
-      $prog{credits}{actor}     = \@actor if @actor;
-    } else {
-      # The text for the <a> tag contains the title without the
-      # sub-title so we can use that to separate the two. However
-      # the text for the <a> tag may have been truncated so it
-      # fits the slot on the page. Also some titles may contain
-      # a ' - '. Still the heuristic works very well.
-      my $subtitle;
-      if ($text =~ s/\.\.\.$//) {
-        if ($title =~ s/^\Q$text\E([^-]+)\s+-\s+//) {
-          $prog{'title'} = [ [ "$text$1" ] ];
-          $prog{'sub-title'} = [ [ $title ] ];
-        }
-      }
-      elsif ($title =~ s/^\Q$text\E\s+-\s+//) {
-        $prog{'title'} = [ [ $text ] ];
-        $prog{'sub-title'} = [ [ $title ] ];
       }
     }
-
-    if ( !$results{$prog{start}.$chid} ) {
-      $results{$prog{start}.$chid} = "1";
-      $writer->write_programme(\%prog);
-      }
-      }
     }
-  }
   }
   $t->delete(); undef $t;
 }
