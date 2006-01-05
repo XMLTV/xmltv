@@ -63,6 +63,8 @@ Neil <neil@mailbox.co.za>
 
 Based on tv_grab_fi by Matti Airas.
 
+Latest version always available at http://www.tangent.co.za/~chrisp/tv_grab_za
+
 =head1 BUGS
 
 Does not automatically update itself, when DSTV changes their site
@@ -73,16 +75,27 @@ Does not automatically update itself, when DSTV changes their site
 # initializations
 
 use strict;
+
 use XMLTV::Version '$Id$ ';
+
 use Getopt::Long;
 use List::Util qw(min);
 use Date::Manip;
 use HTML::TreeBuilder;
 use HTML::Entities; # parse entities
 use IO::File;
-#use String::CRC32;
 use Digest::MD5 qw(md5 md5_hex);
-#use Date::Parse;
+
+use POSIX qw(strftime);
+
+
+#use LWP::Simple qw($ua);
+use LWP::Simple;
+use LWP::UserAgent;
+use HTTP::Request::Common qw(GET);
+use HTTP::Cookies;
+
+
 
 use XMLTV;
 use XMLTV::Memoize;
@@ -102,8 +115,6 @@ To grab listings: $0 [--config-file FILE] [--output FILE] [--days N]
 END
   ;
 
-use POSIX qw(strftime);
-
 # Attributes of the root element in output.
 my $HEAD = { 'source-info-url'	 => 'http://www.dstv.com/',
 			 'source-data-url'	 => "http://www.dstv.com/dstv-guide/default.asp",
@@ -111,94 +122,78 @@ my $HEAD = { 'source-info-url'	 => 'http://www.dstv.com/',
 			 'generator-info-url'  => 'http://membled.com/work/apps/xmltv/',
 		   };
 
-# Whether zero-length programmes should be included in the output.
-my $WRITE_ZERO_LENGTH = 0;
-
 # The timezone in South Africa.
 my $TZ="+0200";
 
 # default language
 my $LANG="en";
 
-# Global channel data.
-our @ch_all;
-
 our %dstvchannelmap;
 our %mnetchannelmap;
 
 my %mnetchannelfixups = (
-    'Channel O - Sound Television' => 'Channel O',
-    'CNN International' => 'CNN',
-    'Discovery Channel' => 'Discovery',
-    'E!  Entertainment' => 'E! Entertainment',
-    'e tv' => 'e-TV',
-    'Hallmark Entertainment Network' => 'Hallmark',
-    'History Channel PAS7 (Ku-Band)' => 'History Channel',
-    'K World' => 'K-World',
-    'M-Net Domestic' => 'M-Net',
-    'Movie Magic' => 'mnetmovies1',
-    'Movie Magic 2' => 'mnetmovies2',
-    'National Geographic' => 'Nat Geographic',
-    'SuperSport' => 'SuperSport 1',
-    'The Series Channel' => 'M-Net Series',
-    'Turner Classic Movies' => 'TCM',
-    'VH1' => 'VH-1',
-    );
+	'Channel O - Sound Television' => 'Channel O',
+	'CNN International' => 'CNN',
+	'Discovery Channel' => 'Discovery',
+	'E!  Entertainment' => 'E! Entertainment',
+	'e tv' => 'e-TV',
+	'Hallmark Entertainment Network' => 'Hallmark',
+	'History Channel PAS7 (Ku-Band)' => 'History Channel',
+	'K World' => 'K-World',
+	'M-Net Domestic' => 'M-Net',
+	'Movie Magic' => 'mnetmovies1',
+	'Movie Magic 2' => 'mnetmovies2',
+	'National Geographic' => 'Nat Geographic',
+	'SuperSport' => 'SuperSport 1',
+	'The Series Channel' => 'M-Net Series',
+	'Turner Classic Movies' => 'TCM',
+	'VH1' => 'VH-1',
+	);
 
 #my %dstvfilehashes = (
-#    '1494729404' => '0',
-#    '3139098187' => '1',
-#    '2091571851' => '2',
-#    '2860538121' => '3',
-#    '3348398793' => '4',
-#    '1813599985' => '5',
-#    '1153776246' => '6',
-#    '1367985183' => '7',
-#    '3033721747' => '8',
-#    '2699942871' => '9',
-#    );
+#	'1494729404' => '0',
+#	'3139098187' => '1',
+#	'2091571851' => '2',
+#	'2860538121' => '3',
+#	'3348398793' => '4',
+#	'1813599985' => '5',
+#	'1153776246' => '6',
+#	'1367985183' => '7',
+#	'3033721747' => '8',
+#	'2699942871' => '9',
+#	);
 my %dstvfilehashes = (
-    '937c943580ac202fc64a80dbd3be3aab' => '0',
-    '40154b2e17f12abc83304910e8b2c184' => '1',
-    '261d6eeefee8ee6f398e8d4bef8b51df' => '2',
-    'f0e730108d788a4fef7966157d223e12' => '3',
-    '309cad2597b2273ecda6614169e79a78' => '4',
-    '675fd8104b6fa3ae317cbdc7cb301400' => '5',
-    '1d8960a26dce4fd9172a06154d66f692' => '6',
-    '479765dcd17d683a3fdbcd5740e11c15' => '7',
-    '6eeba41c618fdba24c8fd554023385a9' => '8',
-    'f888465466ffa7c7c3cc6c5f12414ad3' => '9',
+	'937c943580ac202fc64a80dbd3be3aab' => '0',
+	'40154b2e17f12abc83304910e8b2c184' => '1',
+	'261d6eeefee8ee6f398e8d4bef8b51df' => '2',
+	'f0e730108d788a4fef7966157d223e12' => '3',
+	'309cad2597b2273ecda6614169e79a78' => '4',
+	'675fd8104b6fa3ae317cbdc7cb301400' => '5',
+	'1d8960a26dce4fd9172a06154d66f692' => '6',
+	'479765dcd17d683a3fdbcd5740e11c15' => '7',
+	'6eeba41c618fdba24c8fd554023385a9' => '8',
+	'f888465466ffa7c7c3cc6c5f12414ad3' => '9',
 );
 
 our %dstvtimehashes = ();
 
-# Initialize cookie_jar
-use LWP::Simple qw($ua);
-use LWP::UserAgent;
-use HTTP::Request::Common qw(GET);
-use HTTP::Cookies;
-my $cookies = HTTP::Cookies->new;
-#my $ua = LWP::UserAgent->new(keep_alive => 1);
-my $ua = LWP::UserAgent->new;
-# Cookies
-$ua->cookie_jar($cookies);
-# Define user agent type
-$ua->agent('Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US)');
-# Define timouts
-$ua->timeout(240);
+
+my $ua = initialise_ua();
+
+# Set up cache if needed
+XMLTV::Memoize::check_argv('get_url');
 
 ######################################################################
 # Get options.
-#XMLTV::Memoize::check_argv('XMLTV::Get_nice::get_nice_aux');
 my ($opt_days, $opt_offset, $opt_help, $opt_output,
 	$opt_configure, $opt_config_file, $opt_gui,
 	$opt_quiet, $opt_list_channels, $opt_opentime, 
-    $opt_opentime_combined, $opt_retries, $opt_mnet_fallback,
-    $opt_dstv_fallback, $opt_cache);
+	$opt_opentime_combined, $opt_retries, $opt_mnet_fallback,
+	$opt_dstv_fallback);
 $opt_days  = 14; # default
 $opt_quiet  = 0; # default
 GetOptions('days=i'		=> \$opt_days,
-	   'offset=i'           => \$opt_offset,
+	   'offset=i'		   => \$opt_offset,
 		   'help'		  => \$opt_help,
 		   'configure'	 => \$opt_configure,
 		   'opentime'	  => \$opt_opentime,
@@ -209,7 +204,7 @@ GetOptions('days=i'		=> \$opt_days,
 		   'quiet'		 => \$opt_quiet,
 		   'retries'		 => \$opt_retries,
 		   'mnet-fallback'		 => \$opt_mnet_fallback,
-		   'cache'		 => \$opt_cache,
+		   'list-channels'		 => \$opt_list_channels,
 		  )
   or usage(0);
 
@@ -223,8 +218,8 @@ my @allowed_days = qw(1 7 14 30);
 die "--offset cannot be negative" if defined $opt_offset and $opt_offset < 0;
 die "--days must be positive" if defined $opt_days and $opt_days <= 0;
 if ($opt_offset) {
-    $opt_days += $opt_offset;
-    warn "--offset is not really supported; getting at least $opt_days days to cover the range requested\n";
+	$opt_days += $opt_offset;
+	warn "--offset is not really supported; getting at least $opt_days days to cover the range requested\n";
 }
 my $use_days = min grep { $_ >= $opt_days } @allowed_days;
 die "cannot get $opt_days days; choose one of @allowed_days\n"
@@ -233,14 +228,21 @@ warn "rounding up to $use_days days (must be one of @allowed_days)\n"
   if $use_days != $opt_days;
 # OK, now $use_days has the number of days to grab starting from now.
 
+# Default retries = 3;
+$opt_retries = 3 if !$opt_retries;
+
+
 die '--opentime and --opentime-combined are mutually exclusive' 
 	if (defined $opt_opentime && $opt_opentime_combined);
 usage(1) if $opt_help;
 
+
+
 XMLTV::Ask::init($opt_gui);
 
 my $mode = XMLTV::Mode::mode('grab', # default
-							 $opt_configure => 'configure'
+							 $opt_configure => 'configure',
+							 $opt_list_channels => 'list-channels',
 							);
 
 # File that stores which channels to download.
@@ -253,18 +255,20 @@ my $config_file
 
 if ($mode eq 'configure') {
 	mode_configure();
+	exit();
 }
-my @config_lines; # used only in grab mode
-@config_lines = XMLTV::Config_file::read_lines($config_file);
 
 # Whatever we are doing, we need the channels data.
-my @channels;
 my %channels;
+my %options;
+
+read_config(\%channels);
+
+$opt_mnet_fallback = 1 if !(defined $opt_mnet_fallback  || defined $opt_dstv_fallback);
+
+
 
 #######################################
-# Ignore the mess for now - will be sorted out soon
-die if $mode ne 'grab' and $mode ne 'list-channels';
-
 # Options to be used for XMLTV::Writer.
 my %w_args;
 if (defined $opt_output) {
@@ -278,7 +282,9 @@ $writer->start($HEAD);
 
 if ($mode eq 'list-channels') {
 	# Write channels mode.
-	$writer->write_channel($_) foreach @ch_all;
+	foreach my $id (keys %channels) {
+		$writer->write_channel({id => $id, 'display-name' => [ [ $channels{$id}, 'en' ] ]});
+	}
 	$writer->end();
 	exit();
 }
@@ -287,58 +293,15 @@ if ($mode eq 'list-channels') {
 # We are producing full listings.
 die if $mode ne 'grab';
 
-# Read configuration.
-my $line_num = 1;
-foreach (@config_lines) {
-	++ $line_num;
-	next if not defined;
-	s/#.*//g;
-	next if /^\s+$/;
-	s/\s+$//g;
-    if (/^channel/) {
-    	my (undef, $chanid, $name) = split(/\s+/, $_, 3);
-	    $channels{$chanid} = {'name' => $name, 'id' => $chanid};
-    }
-    if (/^option/) {
-    	my (undef, $conf_option, $conf_value) = split(/\s+/, $_, 3);
-	    if ($conf_option eq 'opentime') {$opt_opentime = 1;}
-	    if ($conf_option eq 'opentime-combined') {$opt_opentime_combined = 1;}
-	    if ($conf_option eq 'days') {
-		if (defined $opt_days or defined $opt_offset) {
-		    # Day stuff was given on the command line.  This
-		    # should override whatever's in the config file.
-		    #
-		}
-		else {
-		    # Set the number of days from the config file.  It
-		    # must be one of the numbers allowed by the site.
-		    #
-		    $use_days = $conf_value;
-		    die "bad number of days $use_days in config file\n"
-		      if not grep { $_ == $use_days } @allowed_days;
-		}
-	    }
-	    if ($conf_option eq 'retries') {$opt_retries = $conf_value;}
-	    if ($conf_option eq 'mnet-fallback') {$opt_mnet_fallback = 1;}
-	    if ($conf_option eq 'dstv-fallback') {$opt_dstv_fallback = 1;}
-
-        die 'config file: --opentime and --opentime-combined are mutually exclusive' 
-        	if (defined $opt_opentime && $opt_opentime_combined);
-        die 'config file: --mnet-fallback and --dstv-fallback are mutually exclusive' 
-        	if (defined $opt_mnet_fallback && $opt_dstv_fallback);
-
-
-    }
-}
 
 # Prepare channel maps
 
-get_mnet_channel_mappings() if defined $opt_mnet_fallback || $opt_dstv_fallback;
+#get_mnet_channel_mappings() if defined $opt_mnet_fallback || $opt_dstv_fallback;
 
-get_dstv_channel_mappings();
-if (keys %dstvchannelmap == 0) {
- die "error: can't open channel map (http://www.dstv.com/DStv_Guide/default.aspx)";
-}
+#get_dstv_channel_mappings();
+#if (keys %dstvchannelmap == 0) {
+# die "error: can't open channel map (http://www.dstv.com/DStv_Guide/default.aspx)";
+#}
 ######################################################################
 # begin main program
 
@@ -348,21 +311,21 @@ die "No channels specified, run me with --configure first\n"
   if not keys %channels;
 
 foreach my $chanid (keys %channels) {
-	my $n=$channels{$chanid}->{'name'};
+	my $n=$channels{$chanid};
 	my $ch_xid="$chanid.dstv.com";
-	$writer->write_channel({ id => $ch_xid, 'display-name' => [ [ $n ] ] });
+	$writer->write_channel({ id => $ch_xid, 'display-name' => [ [ $n , 'en' ] ] });
 	if ($n eq 'M-Net' && $opt_opentime_combined) {
-    	$ch_xid="$chanid-o.dstv.com";
-        $n.=" Opentime";
-    	$writer->write_channel({ id => $ch_xid, 'display-name' => [ [ $n ] ] });
-    }
+		$ch_xid="$chanid-o.dstv.com";
+		$n.=" Opentime";
+		$writer->write_channel({ id => $ch_xid, 'display-name' => [ [ $n, 'en' ] ] });
+	}
 }
 
 my $bar = new XMLTV::ProgressBar('getting listings', (scalar keys %channels))
   if not $opt_quiet;
 
 foreach (keys %channels) {
-	process_html($channels{$_});
+	process_html($_);
 	update $bar if not $opt_quiet;
 }
 $bar->finish() if not $opt_quiet;
@@ -388,129 +351,77 @@ BEGIN {
 sub tidy( $ ) {
 	for (my $tmp = shift) {
 		if (not defined $tmp) { return };
-        tr/\t\205/ /d;
+		tr/\t\205/ /d;
 		s/([^\012\015\040-\176\240-\377]+)//g;
 		return $_;
 	}
 }
 
-####
-# process_table: fetch a URL and process it
-#
-# arguments:
-#	Date::Manip object giving the day to grab
-#	xmltv id of channel
-#	katso id of channel
-#
-# returns: list of programme hashes to write
-#
-sub process_html {
-	my $inhash = shift;
-	my $name = $inhash->{'name'};
-    my $result;
-    if (!$opt_mnet_fallback && !$opt_dstv_fallback) {
-
-        $result = process_dstv_html($inhash);
-       	if ($result =~ /^:error:(.*):/) {
-           	    say("\nskipping $name ($1)");
-        }
-    } else {
-    # Fallback support
-        if ($opt_mnet_fallback) {
-            $result = process_dstv_html($inhash);
-            t "result: $result";
-        	if ($result =~ /^:error:(.*):/) {
-                say("\nattempting mnet fallback for $name ($1)...");
-                $result = process_mnet_html($inhash);
-                t "result: $result";
-                if ($result =~ /^:error:(.*):/) {
-                    say("failed, skipping ($1)");
-                } 
-            }
-        } else {
-            $result = process_mnet_html($inhash);
-            t "result: $result";
-            if ($result =~ /^:error:(.*):/) {
-                say("\nattempting dstv fallback for $name ($1)...");
-                $result = process_dstv_html($inhash);
-                t "result: $result";
-                if ($result =~ /^:error:(.*):/) {
-                    say("failed, skipping ($1)");
-                } 
-            }
-        }   
-    }
-  
+# The URI to get listings for a given channel.
+sub dstv_channel_uri( $ ) {
+	my $ch = shift;
+	my $mapped = dstv_channel_map($ch);
+	die "cannot look up '$ch' in map" if not defined $mapped;
+	my $days_param = $use_days == 1 ? 0 : $use_days;
+	return "http://www.dstv.com/DStv_Guide/print.aspx?Channel=$mapped&time=$days_param&submit=true&Channels";
 }
 
-# The URI to get listings for a given channel.
-sub channel_uri( $ ) {
-    my $ch = shift;
-    my $mapped = $dstvchannelmap{$ch};
-    die "cannot look up '$ch' in map" if not defined $mapped;
-    my $days_param = $use_days == 1 ? 0 : $use_days;
-    return "http://www.dstv.com/DStv_Guide/print.aspx?Channel=$mapped&time=$days_param&submit=true&Channels";
+# Returns the option ID on the DSTV site for a given channel name
+sub dstv_channel_map ($) {
+	my $ch = shift;
+	if (!defined %dstvchannelmap) {
+		get_dstv_channel_mappings()	;
+	}
+	return $dstvchannelmap{$ch};
+}
+
+sub mnet_channel_map ($) {
+	my $ch = shift;
+	if (!defined %mnetchannelmap) {
+		get_mnet_channel_mappings()	;
+	}
+	return $mnetchannelmap{$ch};
 }
 
 sub process_dstv_html {
-    my $inhash = shift;
-    my $chanid = $inhash->{'id'};
-    my $name = $inhash->{'name'};
-    my $now = time();
-    my $data;
-    my $tries = 0;
+	my $chanid = shift;
+	my $name = $channels{$chanid};
+	
+	my $now = time();
+	my $data;
+	my $tries = 0;
 
-    # URI just for error reporting.
-    my $uri = channel_uri $name;
-    local $SIG{__DIE__} = sub { die "$uri:$_[0]\n" };
+	# URI just for error reporting.
+	my $uri = dstv_channel_uri $name;
+	local $SIG{__DIE__} = sub { die "$uri:$_[0]\n" };
 
-    if ($opt_cache) {
-	# FIXME this is a security hole: symlink attack in /tmp means
-	# you could be tricked into overwriting arbitrary file.
-	#
-        my $cachefile = "/tmp/tv_grab_za-cache-$chanid";
-    	if (! -f $cachefile) {
-    		$data=tidy(get_dstv($name));
-		warn "writing $cachefile\n";
-    		open CACHE, ">$cachefile";
-    		print CACHE $data;
-    		close CACHE;
-    	} else {
-	        warn "using $cachefile\n";
-    		open CACHE, $cachefile;
-    		my @data = <CACHE>;
-    		close CACHE;
-    		$data = join("", @data);
-    	}
-    } else {
-        $data = tidy(get_dstv($name));
-    }
+	$data = tidy(get_dstv($name));
 
 	if ($data =~ /:error:(.*):/) {
-        return $data;
+		return $data;
 	}
 
 
 
-    # Get time mappings
-    get_dstv_time_mappings($data);
+	# Get time mappings
+#	get_dstv_time_mappings($data);
 
 	# parse the page to a document object
 	my $tree = HTML::TreeBuilder->new();
 	$tree->parse($data);
 	my ($prev_r, $r, $prev_time);
 	
-   	my @array_ot;
+   my @array_ot;
 
 	# Find the date headers on the page
 	my @date_headers = $tree->look_down(_tag => "td", class => 'srch_date_chnl_head');
 	foreach my $td (@date_headers) {
-	    my $date = $td->as_text();
-	    $date =~ s/^[^\w]+//g;
+		my $date = $td->as_text();
+		$date =~ s/^[^\w]+//g;
 		
-	    my $table = $td->look_up(_tag => "table");
-	    my @times = $table->look_down(_tag => "td", class => 'srch_rslt1');
-	    foreach my $result (@times) {
+		my $table = $td->look_up(_tag => "table");
+		my @times = $table->look_down(_tag => "td", class => 'srch_rslt1');
+		foreach my $result (@times) {
 		$result = $result->parent();
 		
 		my $temp;
@@ -525,12 +436,12 @@ sub process_dstv_html {
 			my ($rating, $duration);
 			$temp = $result->look_down(_tag => "td", class => 'srch_rslt2')->as_HTML;
 			if (defined $temp) {
-			    if ($temp =~ /Rating: \((.+)\)\<br\>/) {
+				if ($temp =~ /Rating: \((.+)\)\<br\>/) {
 				$rating = $1;
-			    }
-			    if ($temp =~ /Duration: ([0-9:]+)/) {
+				}
+				if ($temp =~ /Duration: ([0-9:]+)/) {
 				$duration = $1;
-			    }
+				}
 			}
 
 			t "$title: $rating: $duration\n";
@@ -622,10 +533,10 @@ sub process_dstv_html {
 			$subtitle =~ s/(^\s+|\s+$)//g if $subtitle;
 
 			# Fix "Press 'i'" entries
-            if ($title =~ /^Press .i.$/) {
-                $title = $subtitle;
-                $subtitle = undef;
-            }
+			if ($title =~ /^Press .i.$/) {
+				$title = $subtitle;
+				$subtitle = undef;
+			}
 
 			$r = undef;
 			$r->{title} = [[$title]];
@@ -655,7 +566,7 @@ sub process_dstv_html {
 				my ($hr, $min) = split(/:/, $time);
 				my ($prev_hr, $prev_min) = split(/:/, $prev_time);
 				if ($name eq 'M-Net' && ($opt_opentime || 
-                        $opt_opentime_combined)) {
+						$opt_opentime_combined)) {
 					if ($hr <= 17) { # $prev ends before 17:00
 						$write = 0;
 					}
@@ -664,11 +575,11 @@ sub process_dstv_html {
 					}
 				}
 				if ($name eq 'M-Net' && $opt_opentime_combined) {
-                    $writer->write_programme($prev_r);
-                    if ($write == 1) {
-                        $prev_r->{channel} = "$chanid-o.dstv.com";
-                        push @array_ot, $prev_r;
-                    }
+					$writer->write_programme($prev_r);
+					if ($write == 1) {
+						$prev_r->{channel} = "$chanid-o.dstv.com";
+						push @array_ot, $prev_r;
+					}
 				} elsif ($write == 1) {
 					$writer->write_programme($prev_r);
 				}
@@ -678,47 +589,32 @@ sub process_dstv_html {
 
 		}
 	}
-    # Write opentime-combined data
-    if (@array_ot) {
-        for my $ot_prog ( @array_ot ) {
-            $writer->write_programme($ot_prog);
-        }
-        @array_ot = undef;
-        
-    }
-    $data = "success";
-    $tree->delete;
-    return $data;
+	# Write opentime-combined data
+	if (@array_ot) {
+		for my $ot_prog ( @array_ot ) {
+			$writer->write_programme($ot_prog);
+		}
+		@array_ot = undef;
+		
+	}
+	$data = "success";
+	$tree->delete;
+	return $data;
 
 }
 
 
 sub process_mnet_html {
-	my $inhash = shift;
-	my $chanid = $inhash->{'id'};
-	my $name = $inhash->{'name'};
-    my $now = time();
+	my $chanid = shift;
+	my $name = $channels{$chanid};
+	
+	my $now = time();
 	my $data;
-    my $tries = 0;
-    if ($opt_cache) {
-        my $cachefile = "/tmp/tv_grab_za-cache-$chanid";
-    	if (! -f $cachefile) {
-    		$data=tidy(get_mnet($name));
-    		open CACHE, ">$cachefile";
-    		print CACHE $data;
-    		close CACHE;
-    	} else {
-    		open CACHE, $cachefile;
-    		my @data = <CACHE>;
-    		close CACHE;
-    		$data = join("", @data);
-    	}
-    } else {
-        $data = tidy(get_mnet($name));
-    }
+	my $tries = 0;
+	$data = tidy(get_mnet($name));
 
 	if ($data =~ /:error:(.*):/) {
-        return $data;
+		return $data;
 	}
 
 	# parse the page to a document object
@@ -730,53 +626,53 @@ sub process_mnet_html {
 
 	# Find the date headers on the page
 
-    my @tags = $tree->look_down(
-      sub {
-        # the lcs are to fold case
-        lc($_[0]->attr('_tag')) eq 'font' and lc($_[0]->attr('class')) eq 'date' 
-        or lc($_[0]->attr('_tag')) eq 'font' and lc($_[0]->attr('class')) eq 'time' 
-        or lc($_[0]->attr('_tag')) eq 'font' and lc($_[0]->attr('class')) eq 'title' 
-        or lc($_[0]->attr('_tag')) eq 'p'
-        or lc($_[0]->attr('_tag')) eq 'a'
-      }
-    );
+	my @tags = $tree->look_down(
+	  sub {
+		# the lcs are to fold case
+		lc($_[0]->attr('_tag')) eq 'font' and lc($_[0]->attr('class')) eq 'date' 
+		or lc($_[0]->attr('_tag')) eq 'font' and lc($_[0]->attr('class')) eq 'time' 
+		or lc($_[0]->attr('_tag')) eq 'font' and lc($_[0]->attr('class')) eq 'title' 
+		or lc($_[0]->attr('_tag')) eq 'p'
+		or lc($_[0]->attr('_tag')) eq 'a'
+	  }
+	);
 
 
-    my ($date,$time,$title,$rating);
-    foreach my $tag (@tags) {
-        my $tag_text = $tag->as_text;
-        if ($tag->attr('class') && $tag->attr('class') eq 'date') {
-        # Date
-            $tag_text =~ s/\240/ /g;
-            $tag_text =~ /(\d+) (.*) (\d{4})/;
-            $date = "$2 $1";
-            next;
-        }
-        if ($tag->attr('class') && $tag->attr('class') eq 'time') {
-        # Time
-            $tag_text =~ /^\s?(\d\d:\d\d)$/;
-            $time = "$1";
-            next;
-        }
-        if ($tag->attr('class') && $tag->attr('class') eq 'title') {
-        # Title
-            $tag_text =~ s/[\302\240]//g;
-            $title = $tag_text;
-            next;
-        }
-        
-        if ($tag->attr('_tag') && $tag->attr('_tag') eq 'a' &&
-            $tag->attr('onclick') && $tag->attr('onclick') =~ /OpenAgeRestriction/) {
-        # Rating
-                $rating = $tag_text;
-                next;
-        }
-        
-        if ($tag->attr('_tag') && $tag->attr('_tag') eq 'p' &&
-            $date && $time && $title) {
-        # Description
+	my ($date,$time,$title,$rating);
+	foreach my $tag (@tags) {
+		my $tag_text = $tag->as_text;
+		if ($tag->attr('class') && $tag->attr('class') eq 'date') {
+		# Date
+			$tag_text =~ s/\240/ /g;
+			$tag_text =~ /(\d+) (.*) (\d{4})/;
+			$date = "$2 $1";
+			next;
+		}
+		if ($tag->attr('class') && $tag->attr('class') eq 'time') {
+		# Time
+			$tag_text =~ /^\s?(\d\d:\d\d)$/;
+			$time = "$1";
+			next;
+		}
+		if ($tag->attr('class') && $tag->attr('class') eq 'title') {
+		# Title
+			$tag_text =~ s/[\302\240]//g;
+			$title = $tag_text;
+			next;
+		}
+		
+		if ($tag->attr('_tag') && $tag->attr('_tag') eq 'a' &&
+			$tag->attr('onclick') && $tag->attr('onclick') =~ /OpenAgeRestriction/) {
+		# Rating
+				$rating = $tag_text;
+				next;
+		}
+		
+		if ($tag->attr('_tag') && $tag->attr('_tag') eq 'p' &&
+			$date && $time && $title) {
+		# Description
 
-    		my $desc = $tag_text;
+			my $desc = $tag_text;
 			$desc =~ s/(^\s+|\s+$)//g;
 			t "---\n$desc\n---\n";
 			
@@ -862,12 +758,12 @@ sub process_mnet_html {
 			$subtitle =~ s/(^\s+|\s+$)//g if $subtitle;
 
 			# Fix "Press 'i'" entries
-            if ($title =~ /^Press .i.$/) {
-                $title = $subtitle;
-                $subtitle = undef;
-            }
-            
-            if (not $rating) { $rating = "Family"; }
+			if ($title =~ /^Press .i.$/) {
+				$title = $subtitle;
+				$subtitle = undef;
+			}
+			
+			if (not $rating) { $rating = "Family"; }
 
 			$r = undef;
 			$r->{title} = [[$title]];
@@ -899,7 +795,7 @@ sub process_mnet_html {
 				my ($hr, $min) = split(/:/, $time);
 				my ($prev_hr, $prev_min) = split(/:/, $prev_time);
 				if ($name eq 'M-Net' && ($opt_opentime || 
-                        $opt_opentime_combined)) {
+						$opt_opentime_combined)) {
 					if ($hr <= 17) { # $prev ends before 17:00
 						$write = 0;
 					}
@@ -907,64 +803,118 @@ sub process_mnet_html {
 						$write = 0;
 					}
 				}
-    			if ($name eq 'M-Net' && $opt_opentime_combined) {
-                    $writer->write_programme($prev_r);
-                    if ($write == 1) {
-                        $prev_r->{channel} = "$chanid-o.dstv.com";
-                        push @array_ot, $prev_r;
-                    }
+				if ($name eq 'M-Net' && $opt_opentime_combined) {
+					$writer->write_programme($prev_r);
+					if ($write == 1) {
+						$prev_r->{channel} = "$chanid-o.dstv.com";
+						push @array_ot, $prev_r;
+					}
 				} elsif ($write == 1) {
 					$writer->write_programme($prev_r);
 				}
 			}
 			$prev_time = $time;
 			$prev_r = $r;
-            undef $title;
-            undef $time;
-        }
+			undef $title;
+			undef $time;
+		}
 
-    }
-    
-    # Write opentime-combined data
-    if (@array_ot) {
-        for my $ot_prog ( @array_ot ) {
-            $writer->write_programme($ot_prog);
-        }
-        @array_ot = undef;
-        
-    }
-    $data = "success";
-    $tree->delete;
-    return $data;
+	}
+	
+	# Write opentime-combined data
+	if (@array_ot) {
+		for my $ot_prog ( @array_ot ) {
+			$writer->write_programme($ot_prog);
+		}
+		@array_ot = undef;
+		
+	}
+	$data = "success";
+	$tree->delete;
+	return $data;
 
 }
 
 
+
+####
+# process_table: fetch a URL and process it
+#
+# arguments:
+#	Date::Manip object giving the day to grab
+#	xmltv id of channel
+#	katso id of channel
+#
+# returns: list of programme hashes to write
+#
+sub process_html {
+	my $id = shift;
+	my $name = $channels{$id};
+	
+	t "Getting Channel $id";
+	
+	my $result;
+	
+	my @order = ('mnet', 'dstv');
+	if ($opt_mnet_fallback) {
+		@order = ('dstv', 'mnet');
+	}
+	my %processfuncs = (
+		'dstv' => \&process_dstv_html,
+		'mnet' => \&process_mnet_html,
+		);
+	
+	foreach my $site (@order) {
+		my $func = $processfuncs{$site};
+		$result = &{$func}($id);
+		t "result: $result";
+		if ($result !~ /^:error:(.*):/) {
+			return;
+		}
+		say("\nSite $site failed - attempting next site for $name");
+	}
+	say("\nskipping channel '$name'. All sites failed");
+}
+
+
+
+
 # get channel listing
 sub get_channels {
-	my $bar;
 
-
-	$bar = new XMLTV::ProgressBar('getting list of channels', 1)
-	  if not $opt_quiet;
-	my %channels;
-	my $url="http://www.dstv.com/main.aspx?ID=136";
-	my $local_data=get_nice($url);
-	die "could not get channel listing $url, aborting\n"
-	  if not defined $local_data;
-
-	# FIXME commonize this
-	local $SIG{__WARN__} = sub {
-		warn "$url: $_[0]";
-	};
-	local $SIG{__DIE__} = sub {
-		die "$url: $_[0]";
-	};
+	my $channels = shift;
 	
+	my @urls = (
+		'Backup' , 'http://www.tangent.co.za/~chrisp/dstv.channels.html',
+		'DSTV'   , 'http://www.dstv.com/main.aspx?ID=136', 
+	);
+	
+	my $local_data;
+	my $i=0;
+	my $bar;
+	for ($i=0; $i < $#urls; $i+=2) {
+		my $key = $urls[$i];
+		my $url = $urls[$i+1];
+		$bar = new XMLTV::ProgressBar("Getting list of channels from $key site", 1) if not $opt_quiet;
+		t "Getting $key from $url";
+		
+		$local_data = get_url('GET', $url);
+		if (!defined $local_data || $local_data =~ /^:error/) {
+			$bar->finish() if not $opt_quiet;		
+			print STDERR "Unable to get channel listing from $key site\n";
+			next;
+		}
+		last;
+	}
+	if (!defined $local_data || $local_data =~ /^:error/) {
+		print STDERR "Unable to get channel listing from any site\n.  Please check your connectivity or try again later\n";
+		die;
+	}
+	
+	t "Got channel data ".length($local_data)." bytes - about to parse";
+
 	my $tree = HTML::TreeBuilder->new();
 	$tree->parse($local_data);
-
-	# all channel elements are options inside the ChannelID select
 
 	my @list = $tree->look_down(
 		_tag   => 'img',
@@ -977,18 +927,18 @@ sub get_channels {
 		my $temp   = $table->look_down(_tag => 'a', class => 'img_btn') or next;
 		my $name   = $temp->look_down(_tag => 'b')->as_text();
 		my $chanid = $temp->parent->look_down(_tag => 'i')->as_text();
-#        next;
-		my $tempopt  = $table->look_down(_tag => 'select') or next;
-#		$tempopt->attr('onchange') =~ /GoToSchedule\((\d+),this\.value\)/;
-#		my $optid = $1;
+		$chanid =~ s/(^\s*|\s*$)//g;
 		
-		$channels{$chanid} = {'name' => $name, 'id' => $chanid};
+		# Skip radio channels;
+		next if $chanid =~ /^\s*Channel:\s*/;
+
+		t "Channel $chanid = $name";
+		$channels->{$chanid} = $name;
 	}
 	$tree->delete;
-	die "no channels could be found" if not keys %channels;
+	die "no channels could be found" if not keys %$channels;
 	update $bar if not $opt_quiet;
 	$bar->finish() if not $opt_quiet;
-	return %channels;
 }
 
 # Bump a YYYYMMDD date by one.
@@ -1002,15 +952,15 @@ sub nextday {
 sub mode_configure {
 
 	XMLTV::Config_file::check_no_overwrite($config_file);
-	%channels = get_channels();
+	get_channels(\%channels);
 
 	open(CONF, ">$config_file") or die "cannot write to $config_file: $!";
 
 	# Ask about each channel.
-	my @chs = sort {uc($channels{$a}->{'name'}) cmp uc($channels{$b}->{'name'})} keys %channels;
-	my @qs = map { "add channel '$channels{$_}->{name}'?" } @chs;
+	my @chs = sort {uc($channels{$a}) cmp uc($channels{$b})} keys %channels;
+	my @qs = map { "add channel '$channels{$_}'? " } @chs;
 	my @want = ask_many_boolean(1, @qs);
-    my $handle_mnet;
+	my $handle_mnet;
 	foreach (@chs) {
 		my $w = shift @want;
 			warn("cannot read input, stopping channel questions"), last
@@ -1018,42 +968,41 @@ sub mode_configure {
 
 			# Print a config line, but comment it out if channel not wanted.
 			print CONF '#' if not $w;
-			my $name = $channels{$_}->{'name'};
+			my $name = $channels{$_};
 			print CONF "channel $_ $name\n";
-            if ($name eq 'M-Net' && $w) {
-                $handle_mnet = 1
-            }
+			if ($name eq 'M-Net' && $w) {
+				$handle_mnet = 1
+			}
 	}
 
-    if ($handle_mnet) {
-        if (ask_boolean( "Retrieve Opentime and full M-Net schedule?")) {
-        	print CONF "option opentime-combined 1\n";
-        } 
-        elsif (ask_boolean( "Retrieve only Opentime?")) {
-        	print CONF "option opentime 1\n";
-        }
-    }
-    my @choices = (1,7,14,30);
-    my $days = ask_choice("Number of days to retrieve",$choices[2], @choices);
-    print CONF "option days $days\n";
-    
-    my $retries;
-    $retries = ask("Number of retries for failed downloads? ",$retries);
-    print CONF "option retries $retries\n";
+	if ($handle_mnet) {
+		if (ask_boolean( "Create limited M-Net Opentime Schedule?")) {
+			if (ask_boolean( "Retrieve only Opentime?")) {
+				print CONF "option opentime 1\n";
+			} else {
+				print CONF "option opentime-combined 1\n";
+			}
+		}
+	}
+	my @choices = (1,7,14,30);
+	my $days = ask_choice("Number of days to retrieve",$choices[2], @choices);
+	print CONF "option days $days\n";
+	
+	my $retries;
+	$retries = ask("Number of retries for failed downloads? ",$retries);
+	print CONF "option retries $retries\n";
 
-    say ("Some channels currently have no data on the dstv.com site");
-    say ("Until this has been fixed, you can retrieve missing channels from mnet.co.za");
-    if (ask_boolean( "Would you like to enable fallback support?")) {
-        @choices = ('dstv','mnet');
-        my $fallback_option = ask_choice("Primary data source?",$choices[0], @choices);
-        if ($fallback_option eq 'dstv') {
-            print CONF "option mnet-fallback 1\n";
-        } else {
-            print CONF "option dstv-fallback 1\n";
-        }
-    }
+	say ("This grabber can get the listings from either mnet.co.za, or dstv.com");
+	say ("Which site would you like to use as the main site");
+	@choices = ('dstv','mnet');
+	my $fallback_option = ask_choice("Select one of: ",$choices[1], @choices);
+	if ($fallback_option eq 'dstv') {
+		print CONF "option mnet-fallback 1\n";
+	} else {
+		print CONF "option dstv-fallback 1\n";
+	}
 	close CONF or warn "cannot close $config_file: $!";
-	say("Finished configuration.");
+	say("Finished configuration. ");
 
 	exit();
 }
@@ -1061,225 +1010,200 @@ sub mode_configure {
 # Initialize cookies and retrieve current channel ID's
 sub get_dstv_channel_mappings {
 
-    t "refreshing dstv channel mappings";
-    my $req = GET 'http://www.dstv.com/DStv_Guide/default.aspx';
-#    my $req = GET 'http://cptdc1/ddefault.htm';
-    $req->header('Accept-Encoding','gzip');
+	t "refreshing dstv channel mappings";
+	
+	my $data	= get_url("GET", "http://www.dstv.com/DStv_Guide/default.aspx");
+	
+	if ($data =~ /^:error:/) {
+		print STDERR  "Error Getting dstv channel mappings: $data\n";
+		return;
+	}
+	my $chantree = HTML::TreeBuilder->new();
+	$chantree->parse($data);
+	
+	t "Data = $data";
 
-    # Make the request
-    my $res = $ua->request($req);
-
-    # Unpack
-    if (($res->headers()->header('Content-Encoding')) && 
-        ($res->headers()->header('Content-Encoding') eq 'gzip')) {
-            $res->content(Compress::Zlib::memGunzip($res->content));
-    }
-
-    # Check the response
-    if ($res->is_success) {
-    	my $chantree = HTML::TreeBuilder->new();
-    	$chantree->parse($res->content);
-
-    	my $chanselect = $chantree->look_down(_tag => 'select', id => 'Channel');
-      	my @chan_list = $chanselect->look_down(_tag => "option");
-    	foreach my $chanentry (@chan_list) {
-            $dstvchannelmap{$chanentry->as_text} = $chanentry->attr('value') if ($chanentry->as_text =~ /^[^-]/);
-        }
-        $chantree->delete;
-    }
+	my $chanselect = $chantree->look_down(_tag => 'select', id => 'Channel');
+  	my @chan_list = $chanselect->look_down(_tag => "option");
+	foreach my $chanentry (@chan_list) {
+		$dstvchannelmap{$chanentry->as_text} = $chanentry->attr('value') if ($chanentry->as_text =~ /^[^-]/);
+	}
+	$chantree->delete;
+	t "Refresh successful";
 }
 
 # Initialize cookies and retrieve current channel ID's
 sub get_mnet_channel_mappings {
 
-    t "refreshing mnet channel mappings";
-    my $req = GET 'http://www.mnet.co.za/schedules/default.asp';
-    $req->header('Accept-Encoding','gzip');
+	t "refreshing mnet channel mappings";
+	
+	my $result = get_url("GET", 'http://www.mnet.co.za/schedules/default.asp');
+	if ($result =~ /^:error:/) {
+		print STDERR  "Error Getting mnet channel mappings: $result\n";
+		return;
+	}	
+	
+	my $chantree = HTML::TreeBuilder->new();
+	$chantree->parse($result);
 
-    # Make the request
-    my $res = $ua->request($req);
-
-    # Unpack
-    if (($res->headers()->header('Content-Encoding')) && 
-        ($res->headers()->header('Content-Encoding') eq 'gzip')) {
-            $res->content(Compress::Zlib::memGunzip($res->content));
-    }
-
-    # Check the response
-    if ($res->is_success) {
-    	my $chantree = HTML::TreeBuilder->new();
-    	$chantree->parse($res->content);
-
-    	my $chanselect = $chantree->look_down(_tag => 'select', name => 'channelid');
-      	my @chan_list = $chanselect->look_down(_tag => "option");
-    	foreach my $chanentry (@chan_list) {
-            my $chantemp = $chanentry->as_text;
-			$chantemp =~ s/(^\s+|\s+$)//g;
-            if ($chanentry->attr('value') =~ /^\d+$/) {        
-                foreach my $fixup (keys %mnetchannelfixups) {
-                    if ($fixup eq $chantemp) {
-                        $mnetchannelmap{$mnetchannelfixups{$fixup}} = $chanentry->attr('value');
-                    } else {
-                        $mnetchannelmap{$chantemp} = $chanentry->attr('value');
-                    }
-                }
-            }
-        }
-        $chantree->delete;
-    }
+	my $chanselect = $chantree->look_down(_tag => 'select', name => 'channelid');
+  	my @chan_list = $chanselect->look_down(_tag => "option");
+	foreach my $chanentry (@chan_list) {
+		my $chantemp = $chanentry->as_text;
+		$chantemp =~ s/(^\s+|\s+$)//g;
+		if ($chanentry->attr('value') =~ /^\d+$/) {		
+			foreach my $fixup (keys %mnetchannelfixups) {
+				if ($fixup eq $chantemp) {
+					$mnetchannelmap{$mnetchannelfixups{$fixup}} = $chanentry->attr('value');
+				} else {
+					$mnetchannelmap{$chantemp} = $chanentry->attr('value');
+				}
+			}
+		}
+	}
+	$chantree->delete;
 }
 
 sub get_dstv_time_mappings() {
 	my $data = shift;
-    my ($res,$req);
+	my ($res,$req);
 
 	my $tree = HTML::TreeBuilder->new();
 	$tree->parse($data);
 
-    my @tags = $tree->look_down(
-      sub {
-        # the lcs are to fold case
-        lc($_[0]->attr('_tag')) eq 'img' and lc($_[0]->attr('src')) =~ /^get\.aspx\?guid/
-      }
-    );
+	my @tags = $tree->look_down(
+	  sub {
+		# the lcs are to fold case
+		lc($_[0]->attr('_tag')) eq 'img' and lc($_[0]->attr('src')) =~ /^get\.aspx\?guid/
+	  }
+	);
 
-    our %dstvtimehashes = ();
-    foreach my $tag (@tags) {
-        my $temptag = $tag->attr('src');
-        $tag->attr('src') =~ /^get\.aspx\?GUID=(.*)$/;
-        my $guid = $1;
-        if (not defined $dstvtimehashes{$guid}) {
-            # unique guid - get data
-            my $url = "http://www.dstv.com/DStv_Guide/get.aspx?GUID=$1";
-        	t "getting time mapping for GUID: $1";
-            $req = GET $url;
-            $req->header('Accept-Encoding','gzip');
-            $req->header('Referer','http://www.dstv.com/DStv_Guide/default.aspx');
-            $res = $ua->request($req);
-            if ($res->is_success) {
-                if (($res->headers()->header('Content-Encoding')) && 
-                    ($res->headers()->header('Content-Encoding') eq 'gzip')) {
-                        $res->content(Compress::Zlib::memGunzip($res->content));
-                }
-                # hash
-                my $imagehash = md5_hex($res->content);
-                # compare
-                if (defined $dstvfilehashes{$imagehash}) {
-                    $dstvtimehashes{$guid} = $dstvfilehashes{$imagehash};
-                } else {
-                   if (! -f "$guid.gif") {
-                       print STDERR "Undefined image mapping for GUID=$guid\n";
-                       print STDERR "MD5 = $imagehash\n";
-                       print STDERR "Saving to file $guid.gif\n";
-                       if (!open GIF, ">$guid.gif") {
-                           print STDERR "Cannot write file: $!\n";
-                           next;
-                       }
-                       print GIF $res->content;
-                       close GIF;
-                    }
-                }
-              
-            }
-    	}
-    }
+	our %dstvtimehashes = ();
+	foreach my $tag (@tags) {
+		my $temptag = $tag->attr('src');
+		$tag->attr('src') =~ /^get\.aspx\?GUID=(.*)$/;
+		my $guid = $1;
+		if (not defined $dstvtimehashes{$guid}) {
+			# unique guid - get data
+			my $url = "http://www.dstv.com/DStv_Guide/get.aspx?GUID=$1";
+			t "getting time mapping for GUID: $1";
+			$req = GET $url;
+			$req->header('Accept-Encoding','gzip');
+			$req->header('Referer','http://www.dstv.com/DStv_Guide/default.aspx');
+			$res = $ua->request($req);
+			if ($res->is_success) {
+				if (($res->headers()->header('Content-Encoding')) && 
+					($res->headers()->header('Content-Encoding') eq 'gzip')) {
+						$res->content(Compress::Zlib::memGunzip($res->content));
+				}
+				# hash
+				my $imagehash = md5_hex($res->content);
+				# compare
+				if (defined $dstvfilehashes{$imagehash}) {
+					$dstvtimehashes{$guid} = $dstvfilehashes{$imagehash};
+				} else {
+				   if (! -f "$guid.gif") {
+					   print STDERR "Undefined image mapping for GUID=$guid\n";
+					   print STDERR "MD5 = $imagehash\n";
+					   print STDERR "Saving to file $guid.gif\n";
+					   if (!open GIF, ">$guid.gif") {
+						   print STDERR "Cannot write file: $!\n";
+						   next;
+					   }
+					   print GIF $res->content;
+					   close GIF;
+					}
+				}
+			  
+			}
+		}
+	}
 
-    $tree->delete;
+	$tree->delete;
 
 }
 
 # Download listings for a channel name - refresh mappings if necessary
 sub get_dstv() {
-    my $channame = shift;
-    my $url = channel_uri $channame;
-    my $data;
-    my $tries = 0;
-    my $req;
-    my $res;
-    while ($tries < $opt_retries && not defined $data) {
-        $tries++;
-    	t "getting URL: $url";
-        $req = GET $url;
-        $req->header('Accept-Encoding','gzip');
-        $req->header('Referer','http://www.dstv.com/DStv_Guide/default.aspx');
-        $res = $ua->request($req);
-        if ($res->status_line =~ /302/) {
-            # Invalid channel code - refresh mappings
-            t "302 error - refreshing Data";
-            get_dstv_channel_mappings();
-        }
-            
-        if ($res->is_success) {
-            if (($res->headers()->header('Content-Encoding')) && 
-                ($res->headers()->header('Content-Encoding') eq 'gzip')) {
-                    $res->content(Compress::Zlib::memGunzip($res->content));
-            }
-            if ($res->content =~ /No Results Found/) {
-                if ($tries == 0) {
-                    # Cookie may have expired - refresh mappings
-                    t "No results found - refreshing mappings";
-                    get_dstv_channel_mappings();
-                } else {
-                    # Second failure - assume no data
-                    t "No results found - skipping";
-                    $data = ":error:no data:";   
-                }
-            } else {
-                $data = $res->content;
-            }
-    	}
-    }
-    if (not $data) {$data = ":error:maximum retries:"};   
-    return $data;
+	my $channame = shift;
+	my $url = dstv_channel_uri $channame;
+	
+	t "Getting Listings for '$channame' from $url";
+	
+	my $result = get_url("GET", $url, 'http://www.dstv.com/DStv_Guide/default.aspx');
+	if ($result =~ /^:error:/) {
+		# Always attempt a refresh of channel mappings once
+		get_dstv_channel_mappings();
+		$url = dstv_channel_uri $channame;
+		$result = get_url("GET", $url, 'http://www.dstv.com/DStv_Guide/default.aspx');
+	}
+	
+	return $result;
 }
 
 
 
 sub get_mnet() {
 	my $channame = shift;
-    my $data;
-    my $tries = 0;
-    my $req;
-    my $res;
+	my $data;
+	my $tries = 0;
+	my $req;
+	my $res;
  
-    while ($tries < $opt_retries && not defined $data) {
-        $tries++;
-
-        my $url = "http://www.mnet.co.za/schedules/default.asp";
-        t "getting channel: $channame (ID = ".$mnetchannelmap{$channame}.")";
-
+	my $chanid = mnet_channel_map($channame); 
 	my $start_date = POSIX::strftime("%Y/%m/%d", localtime(time()));
-        my $end_date = POSIX::strftime("%Y/%m/%d", localtime(time()+(($use_days-1)*86400)));
+	my $end_date = POSIX::strftime("%Y/%m/%d", localtime(time()+(($use_days-1)*86400)));
+	my %info = (
+		'startDate' => $start_date,
+		'EndDate' => $end_date, 
+		'sType' => '5', 
+		'channelid' => $chanid, 
+		'searchstring' => '', 
+		'channel' => $chanid, 
+		'theType' => 'today', 
+		'firstRun' => 'false', 
+	);
+	t "getting channel: $channame (ID = $chanid)";
+ 	$data = get_url("POST", "http://www.mnet.co.za/schedules/default.asp", 'http://www.mnet.co.za/schedules/default.asp', undef, \%info);
+ 	
+#	while ($tries < $opt_retries && not defined $data) {
+#		$tries++;
+#		my $chanid = mnet_channel_map($channame);
+#		my $url = "http://www.mnet.co.za/schedules/default.asp";
+#		t "getting channel: $channame (ID = $chanid)";
+#
+#	my $start_date = POSIX::strftime("%Y/%m/%d", localtime(time()));
+#		my $end_date = POSIX::strftime("%Y/%m/%d", localtime(time()+(($use_days-1)*86400)));
 
-        $res = $ua->post( $url,
-            [  'startDate' => $start_date,
-               'EndDate' => $end_date, 
-               'sType' => '5', 
-               'channelid' => $mnetchannelmap{$channame}, 
-               'searchstring' => '', 
-               'channel' => '$mnetchannelmap{$channame}', 
-               'theType' => 'today', 
-               'firstRun' => 'false', 
-            ],
-            'Accept-Encoding' => 'gzip',
-            'Referer' => 'http://www.mnet.co.za/schedules/default.asp',
-            );
+#		$res = $ua->post( $url,
+#			[  'startDate' => $start_date,
+#			   'EndDate' => $end_date, 
+#			   'sType' => '5', 
+#			   'channelid' => $chanid, 
+#			   'searchstring' => '', 
+#			   'channel' => $chanid, 
+#			   'theType' => 'today', 
+#			   'firstRun' => 'false', 
+#			],
+#			'Accept-Encoding' => 'gzip',
+#			'Referer' => 'http://www.mnet.co.za/schedules/default.asp',
+#			);
 
-        if ($res->is_success) {
-            if (($res->headers()->header('Content-Encoding')) && 
-                ($res->headers()->header('Content-Encoding') eq 'gzip')) {
-                    $res->content(Compress::Zlib::memGunzip($res->content));
-            }
-            if ($res->content =~ /did not return any results/) {
-                t "No results found - skipping";
-                $data = ":error:no data:";   
-            } else {
-                $data = $res->content;
-            }
-    	}
-    }
-    if (not $data) {$data = ":error:maximum retries:"};   
-    return $data;
+#		if ($res->is_success) {
+#			if (($res->headers()->header('Content-Encoding')) && 
+#				($res->headers()->header('Content-Encoding') eq 'gzip')) {
+#					$res->content(Compress::Zlib::memGunzip($res->content));
+#			}
+#			if ($res->content =~ /did not return any results/) {
+#				t "No results found - skipping";
+#				$data = ":error:no data:";   
+#			} else {
+#				$data = $res->content;
+#			}
+#		}
+#	}
+#	if (not $data) {$data = ":error:maximum retries:"};   
+	return $data;
 }
 
 
@@ -1287,7 +1211,7 @@ sub init_cookies {
 	get_nice('http://www.dstv.com');
 	my $bar = new XMLTV::ProgressBar('Initialising cookies', 1)
 	  if not $opt_quiet;
-    update $bar if not $opt_quiet;
+	update $bar if not $opt_quiet;
 	$bar->finish() if not $opt_quiet;
 }
 
@@ -1309,3 +1233,118 @@ sub gen_start_time {
 	return POSIX::strftime("%Y%m%d%H%M", localtime($timestamp));
 }
 
+
+
+
+sub initialise_ua {
+	my $cookies = HTTP::Cookies->new;
+	#my $ua = LWP::UserAgent->new(keep_alive => 1);
+	my $ua = LWP::UserAgent->new;
+	# Cookies
+	$ua->cookie_jar($cookies);
+	# Define user agent type
+	$ua->agent('Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US)');
+	# Define timouts
+	$ua->timeout(240);
+	
+	return $ua;
+}
+
+
+
+sub read_config {
+	my $channels = shift;
+	my $options = shift;
+	
+	my @config_lines = XMLTV::Config_file::read_lines($config_file);
+	
+	
+	# Read configuration.
+	my $line_num = 1;
+	foreach (@config_lines) {
+		++ $line_num;
+		next if not defined;
+		s/#.*//g;
+		next if /^\s+$/;
+		s/\s+$//g;
+		if (/^channel/) {
+			my (undef, $chanid, $name) = split(/\s+/, $_, 3);
+			$channels->{$chanid} = $name;
+		}
+		if (/^option/) {
+			my (undef, $conf_option, $conf_value) = split(/\s+/, $_, 3);
+			
+			$opt_opentime = 1 if $conf_option eq 'opentime';
+			$opt_opentime_combined = 1 if $conf_option eq 'opentime-combined';
+			$opt_mnet_fallback = 1 if $conf_option eq 'mnet-fallback';
+			$opt_dstv_fallback = 1 if $conf_option eq 'dstv-fallback';
+			$opt_retries = $conf_value if $conf_option eq 'retries';
+			
+			if ($conf_option eq 'days') {
+				if (defined $opt_days or defined $opt_offset) {
+					# Day stuff was given on the command line.  This
+					# should override whatever's in the config file.
+					#
+				} else {
+					# Set the number of days from the config file.  It
+					# must be one of the numbers allowed by the site.
+					$use_days = $conf_value;
+					die "bad number of days $use_days in config file\n"
+						if not grep { $_ == $use_days } @allowed_days;
+				}
+			}
+		}
+	}
+	die 'config file: --opentime and --opentime-combined are mutually exclusive' 
+		if (defined $opt_opentime && $opt_opentime_combined);
+	die 'config file: --mnet-fallback and --dstv-fallback are mutually exclusive' 
+		if (defined $opt_mnet_fallback && $opt_dstv_fallback);
+
+}
+
+sub get_url($$$$$) {
+
+	my $method = shift;
+	my $url = shift;
+	my $referrer = shift;
+	my $agent = shift;
+	my $varhash = shift;
+	
+
+	t "Downloading URL: $url";
+	my $req = GET "$url";
+	$req->header('Accept-Encoding','gzip');
+	$req->header('Referer',$referrer) if defined $referrer;
+	$req->agent($agent) if defined $agent;
+
+	my $tries = 0;
+	my $data;
+	while ($tries < $opt_retries && not defined $data) {
+		$tries++;
+		my $res;
+		
+		t "Attempt $tries";
+		
+		if (lc($method) eq 'post') {
+			$res = $ua->post($url, $varhash);
+		} else {
+			$res = $ua->request(GET "$url");
+		}
+		if ($res->is_success) {
+			if (($res->headers()->header('Content-Encoding')) && 
+			 ($res->headers()->header('Content-Encoding') eq 'gzip')) {
+				$res->content(Compress::Zlib::memGunzip($res->content));
+			}
+			if ($res->content =~ /did not return any results/) {
+				t "No results found - skipping";
+				$data = ":error:no data:";   
+			} else {
+				$data = $res->content;
+			}
+		} else {
+			t "Failed"
+		}
+	}
+	if (not $data) {$data = ":error:maximum retries:"};   
+	return $data;
+}
