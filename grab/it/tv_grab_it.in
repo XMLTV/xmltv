@@ -44,6 +44,7 @@ use XMLTV::Config_file;
 use XMLTV::ProgressBar;
 use XMLTV::DST;
 use XMLTV::Get_nice;
+use XMLTV::Mode;
 
 # Todo: perhaps we should internationalize messages and docs?
 use XMLTV::Usage <<END
@@ -52,6 +53,7 @@ To configure: $0 --configure [--config-file FILE]
 To grab listings: $0 [--config-file FILE] [--output FILE] [--days N]
         [--offset N] [--quiet] [--slow] [--verbose] [--backend]
         [--errors-in-xml] 
+To list available channels: $0 [--output FILE] [--quiet] --list-channels
 END
   ;
 
@@ -137,6 +139,7 @@ my ($opt_days,
     $opt_share,
     $opt_errors_in_xml,
     @opt_backends,
+    $opt_list_channels,
    );
 
 # server only holds 7 days, so if there is an offset days must be
@@ -160,6 +163,7 @@ GetOptions('days=i'       => \$opt_days,
        'share=s'          => \$opt_share,       # undocumented
        'errors-in-xml'    => \$opt_errors_in_xml,
        'backend=s'        => \@opt_backends,
+       'list-channels'    => \$opt_list_channels,
       )
   or usage(0);
 
@@ -179,6 +183,10 @@ if ($opt_quiet) {
 }
 
 $opt_days = $opt_days || $MAX_DAYS;
+
+my $mode = XMLTV::Mode::mode('grab',
+			     $opt_list_channels => 'list-channels',
+			     $opt_configure => 'configure');
 
 # parse the --backend option
 @opt_backends = split(/,/,join(',',@opt_backends)); #we allow both multiple --backend and --backend=name1,name2
@@ -268,13 +276,32 @@ foreach (XMLTV::Config_file::read_lines($CHANNEL_NAMES_FILE, 1)) {
           if $seen{$backend.$xmltv_id}++;
     }
 }
-# File that stores which channels to download.
-my $config_file
-  = XMLTV::Config_file::filename($opt_config_file, 'tv_grab_it', $opt_quiet);
 
-if ($opt_configure) {
-    XMLTV::Config_file::check_no_overwrite($config_file);
+# File that stores which channels to download.  Not needed for
+# list-channels mode.
+#
+my $config_file;
+unless ($mode eq 'list-channels') {
+    $config_file = XMLTV::Config_file::filename($opt_config_file, 'tv_grab_it', $opt_quiet);
 }
+
+XMLTV::Config_file::check_no_overwrite($config_file) if $mode eq 'configure';
+
+# Arguments for XMLTV::Writer.
+my %w_args;
+if (defined $opt_output) {
+    die($DEF_LANG eq 'eng' ?
+	"cannot give --output with --configure" :
+	"non e' possibile specificare --output con --configure")
+	if $mode eq 'configure';
+    my $fh = new IO::File(">$opt_output");
+    die ($DEF_LANG eq 'eng' ?
+                 "cannot write to $opt_output: $!" : 
+                 "impossibile scrivere su $opt_output") if not defined $fh;
+    $w_args{OUTPUT} = $fh;
+}
+$w_args{encoding} = 'ISO-8859-1';
+
 
 $line_num = 0;
 
@@ -299,7 +326,7 @@ warn ($DEF_LANG eq 'eng' ?
 
 ######################################################################
 # write configuration
-if ($opt_configure) {
+if ($mode eq 'configure') {
     open(CONF, ">$config_file") or die ($DEF_LANG eq 'eng' ? 
                                                 "cannot write to $config_file: $!" :
                                                 "impossibile scrivere su $config_file: $!");
@@ -349,6 +376,40 @@ if ($opt_configure) {
 
     exit();
 }
+
+# Not configuring, must be writing some XML.
+my $w = new XMLTV::Writer(%w_args);
+
+my $source_info_str = join ",", map {'http://'.$backend_info{$_}{domain}} @backends;
+my $source_data_str = join ",", map {$backend_info{$_}{rturl}} @backends;
+
+$w->start({ 'source-info-url'     => $source_info_str ,
+        'source-data-url'     => $source_data_str,
+        'generator-info-name' => 'XMLTV',
+        'generator-info-url'  => 'http://membled.com/work/apps/xmltv/',
+        });
+
+
+my %display_names;
+foreach my $back (@backends) {
+        foreach (keys %{$backend_info{$back}{site_ids}}) {
+                $display_names{$_} = $backend_info{$back}{site_ids}{$_}{site_id};
+        }
+}
+
+if ($mode eq 'list-channels') {
+    # Write all known channels then finish.
+    foreach my $xmltv_id (sort keys %display_names) {
+        $w->write_channel({
+            id => $xmltv_id,
+            'display-name' => [ [ $display_names{$xmltv_id} ] ],
+#            icon => [{src => get_ch_icon($ch_id)}] #can't find it yet!
+        });
+    }
+    $w->end;
+    exit;
+}
+
 
 ######################################################################
 # read configuration
@@ -420,34 +481,7 @@ t "will get $days2get days from $opt_offset onwards";
 #    }
 
 ######################################################################
-# begin main program
-my %w_args;
-if (defined $opt_output) {
-    my $fh = new IO::File(">$opt_output");
-    die ($DEF_LANG eq 'eng' ?
-                 "cannot write to $opt_output: $!" : 
-                 "impossibile scrivere su $opt_output") if not defined $fh;
-    $w_args{OUTPUT} = $fh;
-}
-$w_args{encoding} = 'ISO-8859-1';
-my $w = new XMLTV::Writer(%w_args);
-
-my $source_info_str = join ",", map {'http://'.$backend_info{$_}{domain}} @backends;
-my $source_data_str = join ",", map {$backend_info{$_}{rturl}} @backends;
-
-$w->start({ 'source-info-url'     => $source_info_str ,
-        'source-data-url'     => $source_data_str,
-        'generator-info-name' => 'XMLTV',
-        'generator-info-url'  => 'http://membled.com/work/apps/xmltv/',
-        });
-
-
-my %display_names;
-foreach my $back (@backends) {
-        foreach (keys %{$backend_info{$back}{site_ids}}) {
-                $display_names{$_} = $backend_info{$back}{site_ids}{$_}{site_id};
-        }
-}
+# grabbing listings
 
 foreach my $xmltv_id (@channels) {
     next if not defined $display_names{$xmltv_id};
