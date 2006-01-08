@@ -14,6 +14,8 @@ tv_grab_be [--config-file FILE] --configure [--slow] [--gui OPTION]
 tv_grab_be [--config-file FILE] [--output FILE] [--days N]
            [--offset N] [--quiet] [--slow] [--gui OPTION]
 
+tv_grab_be [--output FILE] [--quiet] [--config-file FILE] --list-channels
+
 =head1 DESCRIPTION
 
 Output TV and radio listings in XMLTV format for many stations
@@ -79,6 +81,10 @@ B<--gui OPTION> Use this option to enable a graphical interface to be used.
 OPTION may be 'Tk', or left blank for the best available choice.
 Additional allowed values of OPTION are 'Term' for normal terminal output
 (default) and 'TermNoProgressBar' to disable the use of Term::ProgressBar.
+
+B<--list-channels> Dump channel information for all channels but no
+programmes.  This grabber needs a config file first before the
+channels can be dumped.
 
 =head1 WARNING
 
@@ -278,6 +284,7 @@ use XMLTV::Usage <<END
 To configure:     $0 --configure [--config-file FILE] [--slow] [--gui OPTION]
 To grab listings: $0 [--config-file FILE] [--output FILE] 
                      [--days N] [--offset N] [--quiet] [--slow] [--gui OPTION]
+To list channels: $0 [--output FILE] [--quiet] [--config-file FILE] --list-channels
 END
   ;
 
@@ -352,6 +359,7 @@ my ($opt_days,
     $opt_config_file,
     $opt_offset,
     $opt_quiet,
+    $opt_list_channels,
    );
 # No default for $opt_days, we determine it from the site.
 $opt_offset = 0; # default today
@@ -364,6 +372,7 @@ GetOptions('days=i'        => \$opt_days,
            'config-file=s' => \$opt_config_file,
            'output=s'      => \$opt_output,
            'offset=i'      => \$opt_offset,
+	   'list-channels' => \$opt_list_channels,
            'quiet'         => \$opt_quiet,
            'input=s'       => \$opt_input, # undocumented -- debug mode: 
 	                                   # read data from html file,
@@ -443,24 +452,69 @@ t 'be_to_xmltv: ' . d \%be_to_xmltv;
 t 'extra_dn: ' . d \%extra_dn;
 t 'ch_warn: ' . d \%ch_warn;
 
-# File that stores which channels to download.
+# Arguments for XMLTV::Writer.
+my %g_args = ();
+if (defined $opt_output) {
+    die "cannot have both --output and --configure\n" if $opt_configure;
+    my $fh = new IO::File ">$opt_output";
+    die "cannot write to $opt_output\n" if not $fh;
+    %g_args = (OUTPUT => $fh);
+}
+
+# Find the configuration file.  This grabber needs it even for listing
+# channels since the channels available depend on the language.
+#
 my $config_file
   = XMLTV::Config_file::filename($opt_config_file, 'tv_grab_be', $opt_quiet);
 
 if ($opt_configure) {
     configure();
+    exit;
+}
+
+# Not configuring - need to read an existing config file.
+my @config_lines = XMLTV::Config_file::read_lines($config_file);
+
+# Read the configuration file for language option
+# language <F|D>
+foreach (@config_lines) {
+    ++ $line_num;
+    next if not defined;
+    my $where = "$config_file:$line_num";
+    if (/^language\s+(.+)/) {
+	if ( $1 eq $LANG_FR || $1 eq $LANG_NL) {
+	    $LANG=$1;
+	}
+	else {
+	    die "$where: invalid language defined in conf file\n";
+	}
+    }
+}
+die "language not defined in $config_file" if (not defined $LANG );
+
+# Stuff at the top of any output XML.
+my $metadata = { 'source-info-url'     => "$BASE_URL{$LANG}$SUMMARY_PATH",
+		 'source-info-name'    => "$DOMAIN{$LANG}",
+		 'generator-info-name' => 'XMLTV',
+		 'generator-info-url'  =>
+		 'http://membled.com/work/apps/xmltv/',
+	       };
+
+if ($opt_list_channels) {
+    # Could check usage here to see --days etc. were not specified but
+    # I can't be bothered.
+    #
+    my %channels = get_channels; # uses $LANG
+    my $writer = new XMLTV::Writer(%g_args, encoding => 'ISO-8859-1');
+    $writer->start($metadata);
+    $writer->write_channels(\%channels);
+    $writer->end;
 }
 else {
     if ($opt_input) {
 	warn "grabbing from source HTML file: $opt_input for dummy channel ID la1.rtbf.be\n";
     }
-    my %g_args = ();
-    if (defined $opt_output) {
-        my $fh = new IO::File ">$opt_output";
-        die "cannot write to $opt_output\n" if not $fh;
-        %g_args = (OUTPUT => $fh);
-    }
-    grab(\%g_args, [ XMLTV::Config_file::read_lines($config_file) ]);
+    grab(\%g_args, \@config_lines);
 }
 
 printf (STDERR "Accessed %d web pages, downloaded %d Kb, duration %d secs\n",$numwebgets,$kbwebgets,time()-$statstarttime) unless $opt_quiet;
@@ -476,24 +530,6 @@ sub grab( $$ ) {
     my ($w_args, $config_lines) = @_;
     my $writer = new XMLTV::Writer(%$w_args, encoding => 'ISO-8859-1');
     my %write_channels; # to be written as <channel> elements
-
-    # Read the configuration file for language option
-    # language <F|D>
-    foreach (@$config_lines) {
-        ++ $line_num;
-        next if not defined;
-        my $where = "$config_file:$line_num";
-        if (/^language\s+(.+)/) {
-            if ( $1 eq $LANG_FR || $1 eq $LANG_NL) {
-                $LANG=$1;
-            }
-            else {
-                die "$where: invalid language defined in conf file\n";
-            }
-        }
-    }
-    die "language not defined in $config_file" if (not defined $LANG );
-
 
     # FIXME turn into progress bar.
     print STDERR "finding channels:\t" unless $opt_quiet;
@@ -656,13 +692,7 @@ END
 	unless ($opt_quiet || ! $opt_slow);
     t 'getting dates:' . d \@dates_to_get;
 
-    $writer->start({ 'source-info-url'     => "$BASE_URL{$LANG}$SUMMARY_PATH",
-                     'source-info-name'    => "$DOMAIN{$LANG}",
-                     'generator-info-name' => 'XMLTV',
-                     'generator-info-url'  =>
-                     'http://membled.com/work/apps/xmltv/',
-                   });
-
+    $writer->start($metadata);
 
     # get the listings for each date
     my %categories;
