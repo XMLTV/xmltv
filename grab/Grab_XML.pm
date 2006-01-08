@@ -191,24 +191,26 @@ sub go( $ ) {
     my ($opt_days,
 	$opt_help,
 	$opt_output,
-    $opt_share,
-    $opt_gui,
+	$opt_share,
+	$opt_gui,
 	$opt_offset,
 	$opt_quiet,
 	$opt_configure,
 	$opt_config_file,
+	$opt_list_channels,
        );
     $opt_offset = 0;		# default
     $opt_quiet = 0;		# default
     GetOptions('days=i'        => \$opt_days,
 	       'help'          => \$opt_help,
 	       'output=s'      => \$opt_output,
-           'share=s'       => \$opt_share, # undocumented
-           'gui:s'         => \$opt_gui,
+	       'share=s'       => \$opt_share, # undocumented
+	       'gui:s'         => \$opt_gui,
 	       'offset=i'      => \$opt_offset,
 	       'quiet'         => \$opt_quiet,
 	       'configure'     => \$opt_configure,
 	       'config-file=s' => \$opt_config_file,
+	       'list-channels' => \$opt_list_channels,
 	      )
       or usage(0, $pkg->usage_msg());
     die 'number of days must not be negative'
@@ -225,7 +227,7 @@ sub go( $ ) {
             print STDERR "share directory not in use\n";
         }
     }
-    
+
     my $has_config = $pkg->can('configure');
     if ($opt_configure) {
         if ($has_config) {
@@ -254,23 +256,42 @@ sub go( $ ) {
     t 'URLs by date: ' . d \%urls;
 
     my @to_get;
-    my $days_left = $opt_days;
-    t '$days_left starts at ' . d $days_left;
-    t '$today=' . d $today;
-    for (my $day = $today; defined $urls{$day}; $day = $pkg->nextday($day)) {
-	t "\$urls{$day}=" . d $urls{$day};
-	if (defined $days_left and $days_left-- == 0) {
-	    t 'got to last day';
-	    last;
+    if ($opt_list_channels) {
+	# We won't bother to do an exhaustive check for every option
+	# that is ignored with --list-channels.
+	#
+	die "useless to give --days or --offset with --list-channels\n"
+	    if defined $opt_days or $opt_offset != 0;
+
+	# For now, assume that the upstream site doesn't provide any
+	# way to get just the channels, so we'll have to pick a
+	# listings file and then discard most of it.
+	#
+	my @dates = sort keys %urls;
+	die 'no dates found on site' if not @dates;
+	my $latest = $dates[-1];
+	@to_get = $urls{$latest};
+    }
+    else {
+	# Getting programme listings.
+	my $days_left = $opt_days;
+	t '$days_left starts at ' . d $days_left;
+	t '$today=' . d $today;
+	for (my $day = $today; defined $urls{$day}; $day = $pkg->nextday($day)) {
+	    t "\$urls{$day}=" . d $urls{$day};
+	    if (defined $days_left and $days_left-- == 0) {
+		t 'got to last day';
+		last;
+	    }
+	    push @to_get, $urls{$day};
 	}
-	push @to_get, $urls{$day};
-    }
-    if (defined $days_left and $days_left > 0) {
-	warn "couldn't get all of $opt_days days, only "
-	  . ($opt_days - $days_left) . "\n";
-    }
-    elsif (not @to_get) {
-	warn "couldn't get any listings from the site for today or later\n";
+	if (defined $days_left and $days_left > 0) {
+	    warn "couldn't get all of $opt_days days, only "
+		. ($opt_days - $days_left) . "\n";
+	}
+	elsif (not @to_get) {
+	    warn "couldn't get any listings from the site for today or later\n";
+	}
     }
 
     my $bar = new XMLTV::ProgressBar('downloading listings', scalar @to_get)
@@ -318,7 +339,16 @@ sub go( $ ) {
 	die "cannot write to $opt_output\n" if not $fh;
 	%w_args = (OUTPUT => $fh);
     }
-    XMLTV::write_data(XMLTV::cat(@listingses), %w_args);
+
+    if ($opt_list_channels) {
+	die if @listingses != 1;
+	my $l = $listingses[0];
+	undef $l->[3];                  # blank out programme data
+	XMLTV::write_data($l, %w_args);
+    }
+    else {
+	XMLTV::write_data(XMLTV::cat(@listingses), %w_args);
+    }
 }
 
 =item XMLTV::Grab_XML->cachables()
@@ -355,7 +385,7 @@ sub remove_early_stop_times( $$ ) {
 	    # First change to numeric timezones.
 	    s{(start|stop)="(\d+) ([A-Z]+)"}
 	    {qq'$1="$2 ' . tz_to_num($3) . '"'}eg;
-	    
+
 	    # Now remove stop times before start.  Only worry about
 	    # cases where the timezone is the same - we hope the
 	    # upstream data will be fixed by the next TZ changeover.
@@ -364,7 +394,7 @@ sub remove_early_stop_times( $$ ) {
 	    my ($start, $tz) = ($1, $2);
 	    /stop="(\d+) \Q$tz\E"/ or next;
 	    my $stop = $1;
-        
+
 	    if ($stop lt $start) {
 		warn "removing stop time before start time: $_"
 		  unless $warned_bad_stop_time++;
