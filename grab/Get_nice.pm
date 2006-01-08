@@ -11,7 +11,8 @@
 #
 # get_nice() is the function to call, however
 # XMLTV::Get_nice::get_nice_aux() is the one to cache with
-# XMLTV::Memoize or whatever.
+# XMLTV::Memoize or whatever.  If you want an HTML::Tree object use
+# get_nice_tree().
 #
 # If you want to change what function is called to get pages, set
 # $XMLTV::Get_nice::get to a code reference that takes a URL and
@@ -24,7 +25,7 @@ use strict;
 
 package XMLTV::Get_nice;
 use base 'Exporter';
-our @EXPORT = qw(get_nice);
+our @EXPORT = qw(get_nice get_nice_tree);
 use LWP::Simple qw($ua);
 use XMLTV;
 $ua->agent("xmltv/$XMLTV::VERSION");
@@ -38,6 +39,21 @@ sub get_nice( $ ) {
     # LIST_CACHE relate to each other, with or without MERGE).
     #
     return scalar get_nice_aux($_[0]);
+}
+
+# Fetch page and return as HTML::Tree object.  Optional argument is a
+# function to put the page data through (eg, to clean up bad
+# characters) before parsing.
+#
+sub get_nice_tree( $;$ ) {
+    my ($uri, $filter) = @_;
+    require HTML::TreeBuilder;
+    my $content = get_nice $uri;
+    $content = $filter->($content) if $filter;
+    my $t = new HTML::TreeBuilder;
+    $t->parse($content) or die "cannot parse content of $uri\n";
+    $t->eof;
+    return $t;
 }
 
 my $last_get_time;
