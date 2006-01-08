@@ -9,8 +9,8 @@ tv_grab_re - Grab TV listings for Reunion Island (France).
 
 To configure: tv_grab_re --configure [--config-file FILE]
 To grab channels listing: tv_grab_re --list-channels [--output FILE]
-To grab programmes listings: tv_grab_re [--output FILE] [--days N] [--quiet]
-Slower, detailed grab: tv_grab_re --slow [--output FILE] [--days N] [--quiet]
+To grab programmes listings: tv_grab_re [--output FILE] [--offset N] [--days N] [--quiet]
+Slower, detailed grab: tv_grab_re --slow [--output FILE] [--offset N] [--days N] [--quiet]
 Help: tv_grab_fr --help
 
 =head1 DESCRIPTION
@@ -27,8 +27,10 @@ B<--configure> Grab channels informations and ask for channel type and names.
 
 B<--output FILE> write to FILE rather than standard output.
 
-B<--days N> grab N days starting from today, rather than only for the current
-day.
+B<--days N> grab N days, rather than only for the current day.
+
+B<--offset N> start grabbing for N days in the future, eg offset 1
+means start with tomorrow.
 
 B<--slow> Get additional information from the website, like program
 description and credits.
@@ -53,8 +55,8 @@ use XMLTV::Usage <<END
 $0: get Reunion Island television listings in XMLTV format
 To configure: tv_grab_re --configure [--config-file FILE]
 To grab channels listing: tv_grab_re --list-channels [--output FILE]
-To grab programmes listings: tv_grab_re [--output FILE] [--days N] [--quiet]
-Slower, detailed grab: tv_grab_re --slow [--output FILE] [--days N] [--quiet]
+To grab programmes listings: tv_grab_re [--output FILE] [--days N] [-offset N] [--quiet]
+Slower, detailed grab: tv_grab_re --slow [--output FILE] [--days N] [--offset N] [--quiet]
 END
   ;
 
@@ -75,6 +77,7 @@ use XMLTV::Mode;
 use XMLTV::Config_file;
 use XMLTV::DST;
 use XMLTV::Get_nice;
+use XMLTV::Memoize; XMLTV::Memoize::check_argv 'get_nice';
 
 ###
 ### Main declarations
@@ -91,7 +94,7 @@ my $PARABOLE_ICON_URL = "http://www.parabolereunion.com/images/tmp";
 ###
 ### Options processing
 ###
-my $opt_days;
+my ($opt_offset, $opt_days);
 my $opt_help;
 my $opt_output;
 my $opt_quiet;
@@ -101,6 +104,7 @@ my $opt_list_channels;
 my $opt_slow;
 
 GetOptions( 'days=i'       => \$opt_days,
+            'offset=i'     => \$opt_offset,
 			'help'          => \$opt_help,
 		    'output=s'      => \$opt_output,
 			'quiet'         => \$opt_quiet,
@@ -120,6 +124,10 @@ $opt_quiet = 0;
 die 'Number of days must not be negative' if (defined $opt_days && $opt_days < 0);
 die 'Number of days must not be more than 5' if (defined $opt_days && $opt_days > 5);
 $opt_days = 1 if not defined $opt_days;
+
+# offset - zero (default) means start from today
+die 'Offset must not be negative' if (defined $opt_offset && $opt_offset < 0);
+$opt_offset = 0 if not defined $opt_offset;
 
 # output file
 $opt_output = '-' if not defined $opt_output;
@@ -302,6 +310,8 @@ sub get_canalsat_programmes_list_slow($%) {
 
 sub get_canalsat_programmes_list($$$) {
 	my ($idchaine, $firstday, $lastday) = @_;
+	die if not defined $firstday;
+	die if not defined $lastday;
 
 	my $url_base = "http://srv1.media-overseas.com/FMPro?-DB=reunion.fp5&-Lay=M1&-format=rechercheresultatsreunion.htm&-error=rechercheerreurreunion.htm&-SortField=jourdate&-SortField=presseheuretri&-SortOrder=Ascending";
 	my $url_idchaine = "-op=cn&idchaine=".$idchaine."&";
@@ -458,8 +468,10 @@ sub get_parabole_programmes_list_slow($%) {
 
 }
 
-sub get_parabole_programmes_list($$) {
-	my ($channel, $days) = @_;
+sub get_parabole_programmes_list( $$$ ) {
+	my ($channel, $offset, $days) = @_;
+	die if $offset < 0;
+	die if $days < 1;
 
 	my $url_base = "http://www.parabolereunion.com/index.jsp?childUrl=epg/epg0.jsp&mode=1&search_title=&sel_time=-1&sel_type=-1&";
 	my $url_channel = "sel_channel=".$channel."&";
@@ -467,7 +479,7 @@ sub get_parabole_programmes_list($$) {
 	# the progs list to return
 	my @progs = ();
 
-	for (1 .. $days) {
+	for ($offset + 1 .. $offset + $days) {
 		my $url_day;
 		my $start;
 
@@ -725,14 +737,18 @@ foreach (@channels) {
 	my @progs;
 
 	if ($_->{'type'} eq 'CANALSAT') {
-		my $first_day = UnixDate(ParseDate("today"), "%d%%2f%m%%2f%Y");
-		my $n = $opt_days - 1;
-		my $last_day = UnixDate(DateCalc("today", "+ $n days"), "%d%%2f%m%%2f%Y");
-		@progs = get_canalsat_programmes_list($_->{'id'}, $first_day, $last_day);
+	    my $today = ParseDate 'today';
+	    die if not $today;
+	    my $first_day = UnixDate(DateCalc($today, "+ $opt_offset days"), "%d%%2f%m%%2f%Y");
+	    die if not defined $first_day;
+	    my $n = $opt_offset + $opt_days - 1;
+	    my $last_day = UnixDate(DateCalc($today, "+ $n days"), "%d%%2f%m%%2f%Y");
+	    die if not defined $last_day;
+	    @progs = get_canalsat_programmes_list($_->{'id'}, $first_day, $last_day);
 	}
 
 	if ($_->{'type'} eq 'PARABOLE') {
-		@progs = get_parabole_programmes_list($_->{'id'}, $opt_days);
+		@progs = get_parabole_programmes_list($_->{'id'}, $opt_offset, $opt_days);
 	}
 
 	foreach my $prog (@progs) {
