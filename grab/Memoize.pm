@@ -53,8 +53,12 @@ sub check_argv( @ ) {
     my $p = new Getopt::Long::Parser(config => ['passthrough']);
     die if not $p;
     my $opt_cache;
-    my $result = $p->getoptions('cache:s' => \$opt_cache);
+    my $opt_quiet = 0;
+    my $result = $p->getoptions('cache:s' => \$opt_cache,
+                                'quiet' => \$opt_quiet );
     die "failure processing --cache option" if not $result;
+    unshift @ARGV, "--quiet" if $opt_quiet;
+
     return undef if not defined $opt_cache;
     my $filename;
     if ($opt_cache eq '') {
@@ -65,7 +69,7 @@ sub check_argv( @ ) {
     else {
 	$filename = $opt_cache;
     }
-    print STDERR "using cache $filename\n";
+    print STDERR "using cache $filename\n" unless $opt_quiet;
 
     require POSIX;
     require Memoize;
