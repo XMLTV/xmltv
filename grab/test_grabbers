@@ -16,6 +16,8 @@ use File::Slurp;
 use List::Util qw(min);
 use File::chdir;
 
+sub run;
+
 # Run grabbers with these args.
 my ($offset, $days) = (1, 2);
 
@@ -56,7 +58,7 @@ my @grabbers;
 foreach (@grabbers) {
     /^[a-z_]+$/ or die "bad grabber name $_";
     my $exe = "tv_grab_$_";
-    my $exe_with_path = "$root/blib/script/$exe";
+    my $exe_with_path = "perl -I $root/blib/lib $root/blib/script/$exe";
     my $config = "$root/grab/$_/test.conf";
 
     my $output = $opt_list_channels ? "${_}_channels.xml" : "${_}_${offset}_$days.xml";
@@ -70,7 +72,7 @@ foreach (@grabbers) {
 	    my $config_cmd = "$exe_with_path --cache --config-file $config --configure";
 	    warn "$config does not exist\n";
 	    warn("you should run: $config_cmd\n"), next if not $opt_configure;
-	    if (system $config_cmd) {
+	    if (run $config_cmd) {
 		warn "$config_cmd failed: $?, $!\n";
 		next;
 	    }
@@ -78,21 +80,77 @@ foreach (@grabbers) {
 	    goto TEST_CONFIG_EXISTS;
 	}
 
-	$cmd = "$exe_with_path --cache --config-file $config --offset $offset --days $days >$output";
+	$cmd = "$exe_with_path --cache --config-file $config --offset $offset --days $days ";
     }
     else {
-	$cmd = "$exe_with_path --cache --list-channels >$output";
+	$cmd = "$exe_with_path --cache --list-channels ";
     }
 
     if (defined $cmd) {
-	if (system $cmd) {
+	if (run "$cmd > $output 2>$exe.log") {
 	    warn "$cmd failed: $?, $!";
 	    next;
 	}
+
+	# Run the same command again to see that --output and --quiet works.
+	my $cmd2 = "$cmd --output ${output}2 2>$exe.log2";
+	my $cmd3 = "$cmd --quiet > ${output}3 2>$exe.log3";
+	my $cmd4 = "$cmd --quiet --output ${output}4 2>$exe.log4";
+
+	if (run $cmd2) {
+	    warn "$cmd2 failed: $?, $!";
+	    next;
+	}
+
+	if (run $cmd3 ) {
+	    warn "$cmd3 failed: $?, $!";
+	    next;
+	}
+
+	if (run $cmd4 ) {
+	    warn "$cmd4 failed: $?, $!";
+	    next;
+	}
+        
+	# Check that the grabber was quiet when it should have been.
+	if( -s "$exe.log3" )
+	{
+	    warn( "$cmd3 produced output to STDERR when it shouldn't have:" );
+	    next;
+	}
+
+	if( -s "$exe.log4" )
+	{
+	    warn( "$cmd4 produced output to STDERR when it shouldn't have:" );
+	    next;
+        }
+
+	if( ! compare_files( $output, "${output}2" ) )
+	{
+	    warn "$output and ${output}2 differ.";
+	    next;
+	}
+
+	if( ! compare_files( $output, "${output}3" ) )
+	{
+	    warn "$output and ${output}3 differ.";
+	    next;
+	}
+
+	if( ! compare_files( $output, "${output}4" ) )
+	{
+	    warn "$output and ${output}4 differ.";
+	    next;
+	}
+
+	# The output files were all equal. Remove all but one of them.
+	unlink( "${output}2" );
+	unlink( "${output}3" );
+	unlink( "${output}4" );
     }
 
     # Okay, it ran, and we have the result in $output.  Validate.
-    if (system 'nsgmls', '-wxml', '-s', $output) {
+    if (run "nsgmls -wxml -s $output") {
 	warn "$output not valid XML\n";
 	next;
     }
@@ -102,11 +160,11 @@ foreach (@grabbers) {
     # but also lets us compare before and after to check whitespace
     # etc.
     #
-    if (system "tv_cat $output >$output.catted") {
+    if (run "tv_cat $output >$output.catted") {
 	warn "$output makes tv_cat choke, so probably has semantic errors\n";
 	next;
     }
-    if (system("diff -us $output $output.catted | head")) {
+    if (run("diff -us $output $output.catted | head")) {
 	die "diff failed: $?, $!";
     }
 
@@ -115,7 +173,7 @@ foreach (@grabbers) {
 	# this stuff in a Perl library.
 	#
 	my $sort_errors = "$output.sort_errors";
-	if (system "tv_sort $output >$output.sorted 2>$sort_errors") {
+	if (run "tv_sort $output >$output.sorted 2>$sort_errors") {
 	    # This would indicate a bug in tv_sort.
 	    warn "tv_sort failed on $output for some reason, see $sort_errors\n";
 	    next;
@@ -128,3 +186,29 @@ foreach (@grabbers) {
 	}
     }
 }
+
+# Compare two files. Return true if they have the same contents.
+sub compare_files {
+    my( $file1, $file2 ) = @_;
+
+    run("diff $file1 $file2 > /dev/null");
+    return $? ? 0 : 1;
+}
+
+# Run an external command. Exit if the command is interrupted with ctrl-c.
+sub run {
+    my( $cmd ) = @_;
+
+    system( $cmd );
+    
+    if ($? == -1) {
+	print STDERR "Failed to execute $cmd: $!\n";
+	exit 1;
+    }
+    elsif ($? & 127) {
+	print "Terminated by signal " . ($? & 127) . "\n";
+	exit 1;
+    }
+    return $? >> 8;
+}
+
