@@ -15,8 +15,10 @@ use File::Copy;
 use File::Slurp;
 use List::Util qw(min);
 use File::chdir;
+use XML::LibXML;
 
 sub run;
+sub w;
 
 # Run grabbers with these args.
 my ($offset, $days) = (1, 2);
@@ -24,23 +26,46 @@ my ($offset, $days) = (1, 2);
 our $opt_configure;     # try to --configure grabbers if necessary
 our $opt_only;          # run just one grabber
 our $opt_list_channels; # run with --list-channels
-GetOptions('configure' => \$opt_configure,
-	   'only=s' => \$opt_only,
-	   'list-channels' => \$opt_list_channels,
-	  ) && @ARGV == 1
-  or die "usage: $0 [--configure] [--only grabber] [--list-channels] xmltv-source-root-dir\n";
+our $opt_validate_file; # validate that a file is valid xmltv data.
+
+my $result = GetOptions('configure' => \$opt_configure,
+			'only=s' => \$opt_only,
+			'list-channels' => \$opt_list_channels,
+			'validate-file=s' => \$opt_validate_file,
+			);
+
+if( scalar( @ARGV ) != 1 or not $result )
+{
+    print << "EOH";
+usage: $0 [options] xmltv-source-root-dir
+    
+Valid options:
+--only <grabber>  Only test the specified grabber.
+--configure       Configure all/the selected grabber(s).
+--list-channels   Test that the --list-channels option is supported.
+
+--validate-file <filename> 
+                  Test that the contents of a file is valid xmltv.
+
+EOH
+
+   exit 1;
+}
+
 my $root = shift;
 die "$root not a directory" if not -d $root;
-my $dtd = 'xmltv.dtd';
-my $dtd_in_root = "$root/$dtd";
+my $dtd_in_root = "$root/xmltv.dtd";
 die "$dtd_in_root not there" if not -e $dtd_in_root;
 
-if (not -e $dtd) {
-    my $symlink_exists = eval { symlink("",""); 1 };
-    my $word = $symlink_exists ? 'symlink' : 'copy';
-    print "${word}ing $dtd_in_root to $dtd\n";
-    my $sub = $symlink_exists ? sub { symlink $_[0], $_[1] } : \&copy;
-    $sub->($dtd_in_root, $dtd) or die "cannot $word: $!";
+my $dtd_str = read_file($dtd_in_root);
+my $dtd = XML::LibXML::Dtd->parse_string($dtd_str);
+
+my $parser = XML::LibXML->new();
+$parser->line_numbers(1);
+
+if( defined( $opt_validate_file ) )
+{
+    exit validate_file( $opt_validate_file );
 }
 
 my @grabbers;
@@ -58,6 +83,7 @@ my @grabbers;
 foreach (@grabbers) {
     /^[a-z_]+$/ or die "bad grabber name $_";
     my $exe = "tv_grab_$_";
+    print "Testing $exe\n";
     my $exe_with_path = "perl -I $root/blib/lib $root/blib/script/$exe";
     my $config = "$root/grab/$_/test.conf";
 
@@ -98,48 +124,48 @@ foreach (@grabbers) {
 	my $cmd4 = "$cmd --quiet --output ${output}4 2>$exe.log4";
 
 	if (run $cmd2) {
-	    warn "$cmd2 failed: $?, $!";
+	    w "$cmd2 failed: $?, $!";
 	    next;
 	}
 
 	if (run $cmd3 ) {
-	    warn "$cmd3 failed: $?, $!";
+	    w "$cmd3 failed: $?, $!";
 	    next;
 	}
 
 	if (run $cmd4 ) {
-	    warn "$cmd4 failed: $?, $!";
+	    w "$cmd4 failed: $?, $!";
 	    next;
 	}
         
 	# Check that the grabber was quiet when it should have been.
 	if( -s "$exe.log3" )
 	{
-	    warn( "$cmd3 produced output to STDERR when it shouldn't have:" );
-	    next;
+	    w "$cmd3 produced output to STDERR when it shouldn't have. " 
+		. "See $exe.log3";
 	}
 
 	if( -s "$exe.log4" )
 	{
-	    warn( "$cmd4 produced output to STDERR when it shouldn't have:" );
-	    next;
+	    w "$cmd4 produced output to STDERR when it shouldn't have. " 
+		. "See $exe.log4";
         }
 
 	if( ! compare_files( $output, "${output}2" ) )
 	{
-	    warn "$output and ${output}2 differ.";
+	    w "$output and ${output}2 differ.";
 	    next;
 	}
 
 	if( ! compare_files( $output, "${output}3" ) )
 	{
-	    warn "$output and ${output}3 differ.";
+	    w "$output and ${output}3 differ.";
 	    next;
 	}
 
 	if( ! compare_files( $output, "${output}4" ) )
 	{
-	    warn "$output and ${output}4 differ.";
+	    w "$output and ${output}4 differ.";
 	    next;
 	}
 
@@ -150,8 +176,7 @@ foreach (@grabbers) {
     }
 
     # Okay, it ran, and we have the result in $output.  Validate.
-    if (run "nsgmls -wxml -s $output") {
-	warn "$output not valid XML\n";
+    if (validate_file( $output )) {
 	next;
     }
     print "$output validates ok\n";
@@ -161,7 +186,7 @@ foreach (@grabbers) {
     # etc.
     #
     if (run "tv_cat $output >$output.catted") {
-	warn "$output makes tv_cat choke, so probably has semantic errors\n";
+	w "$output makes tv_cat choke, so probably has semantic errors";
 	next;
     }
     if (run("diff -us $output $output.catted | head")) {
@@ -175,12 +200,12 @@ foreach (@grabbers) {
 	my $sort_errors = "$output.sort_errors";
 	if (run "tv_sort $output >$output.sorted 2>$sort_errors") {
 	    # This would indicate a bug in tv_sort.
-	    warn "tv_sort failed on $output for some reason, see $sort_errors\n";
+	    w "tv_sort failed on $output for some reason, see $sort_errors";
 	    next;
 	}
 	print "$output looks like XMLTV\n";
 	if (my @lines = read_file $sort_errors) {
-	    warn "$output has funny start or stop times: some errors are:\n"
+	    w "$output has funny start or stop times: some errors are:\n"
 	      . join('', @lines[0 .. min(9, $#lines)]);
 	    next;
 	}
@@ -199,16 +224,101 @@ sub compare_files {
 sub run {
     my( $cmd ) = @_;
 
+#    print "Running $cmd\n";
+
     system( $cmd );
     
     if ($? == -1) {
-	print STDERR "Failed to execute $cmd: $!\n";
+	w "Failed to execute $cmd: $!";
 	exit 1;
     }
     elsif ($? & 127) {
-	print "Terminated by signal " . ($? & 127) . "\n";
+	w "Terminated by signal " . ($? & 127);
 	exit 1;
     }
     return $? >> 8;
 }
 
+sub validate_file
+{
+    my( $file ) = @_;
+    my $errors = 0;
+    
+    my $doc;
+    
+    eval { $doc = $parser->parse_file( $file ); };
+    
+    if( $@ )
+    {
+	w "The file is not well-formed xml:\n$@ ";
+	return 1;
+    }
+    
+    eval { $doc->validate( $dtd ) };  
+    if( $@ )
+    {
+	w "The file is not valid according to the xmltv dtd:\n $@";
+	return 1;
+    }
+    
+    my %channels;
+    
+    my $ns = $doc->find( "//channel" );
+    foreach my $ch ($ns->get_nodelist)
+    {
+	my $channelid = $ch->findvalue('@id');
+	my $display_name = $ch->findvalue('display-name/text()');
+	
+	$channels{$channelid} = $display_name;
+	w "Illegal channel-id $channelid\n"
+	    if( $channelid !~ /^[-a-zA-Z0-9]+(\.[-a-zA-Z0-9]+)+$/ );
+    }
+    
+    $ns = $doc->find( "//programme" );
+    
+    foreach my $p ($ns->get_nodelist)
+    {
+	my $channelid = $p->findvalue('@channel');
+	my $start = $p->findvalue('@start');
+	my $stop = $p->findvalue('@stop');
+	my $title = $p->findvalue('title/text()');
+	my $desc = $p->findvalue('desc/text()');
+	
+	my $w = sub 
+	{ 
+	    w "Line " . $p->line_number() . " $_[0]";
+	    $errors++;
+	};
+	
+	if( not defined( $channels{$channelid} ))
+	{
+	    $w->("Channel $channelid does not have a <channel>-entry." );
+	    $channels{$channelid} = "auto";
+	    $errors++;
+	}
+	
+	
+	$w->( "Empty title" )    
+	    if( $title =~ /^\s*$/ );
+	
+	$w->( "Illegal start-time $start" )
+	    if( not verify_time( $start ) );
+	
+	$w->( "Illegal stop-time $stop" )
+	    if( $stop ne "" and not verify_time( $stop ) );
+    }
+    
+    return $errors;
+}
+
+sub verify_time
+{
+    my( $time ) = @_;
+
+    return $time =~ /^\d{12,14}(\s+([A-Z]+|[+-]\d{4}))$/;
+}
+
+sub w
+{
+    print "$_[0]\n";
+}
