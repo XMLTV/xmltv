@@ -72,6 +72,7 @@ END
 
 use warnings;
 use strict;
+use utf8;
 use XMLTV::Version '$Id$ ';
 use Getopt::Long;
 use HTML::TreeBuilder;
@@ -234,9 +235,23 @@ sub xmlencoding {
     return $_[0];
 }
 
-sub tidy {
+sub tidy2 {
     # clean bad characters from HTML
     for (my $s = shift) {
+      s/&#8212;/--/g;
+      s/&#8230;/.../g;
+      decode_entities $_;
+      tr/\207\211\200\224/\347\311\055\055/; # bad characters
+      return $_;            
+    }
+}
+
+sub tidy {    
+    for (my $s = shift) {
+      s/&#8212;/--/g;
+      s/&#8230;/.../g;
+      decode_entities $_;
+      tr/\207\211\200\224/\347\311\055\055/; # bad characters
       tr/\205//d;
       tr/\222/''/;
       s/\234/oe/g;
@@ -249,8 +264,7 @@ sub tidy {
       s/&\#821[0123];|&\#x201[2-5];/-/g;
       s/&OElig;/OE/g;
       s/&oelig;/oe/g;
-      s//oe/g;
-
+      s/&\#x0027/\'/g;
       s/(&\#[0-9]{4,};)//g;
       s/(&\#x[0-9a-zA-Z]{3,};)//g;
       # Not strictly a bad character but it does get in the way.
@@ -368,7 +382,7 @@ if ($mode eq 'list-channels') {
                 $writer->write_channel({ id => $ch_xid,
                                          'display-name' => [ [ $channels{$ch_did}{name} ] ],
                                          'icon' => [{src=>$ROOT_URL.$channels{$ch_did}{icon}}] })
-		    unless $seen{$ch_xid}++;
+                unless $seen{$ch_xid}++;
             }
        }
      }
@@ -590,10 +604,8 @@ sub process_channel_grid_page( $$$$ ) {
         die if not $start; die if not $stop;
         $start = utc_offset( $start, "+0100");
         $stop  = utc_offset( $stop , "+0100");
-        # Now use the utf8 conversion (???)
-        utf8::encode($title)  if (utf8::is_utf8($title) );
         my %prog = (channel  => "C".$chid.".telepoche.com",
-              title    => [ [ $title ] ],             # lang unknown
+              title    => [ [ tidy($title) ] ],             # lang unknown
               start    => $start,
               stop     => $stop
             );
@@ -618,9 +630,6 @@ sub process_channel_grid_page( $$$$ ) {
           for ($genre) { s/^\s+//; s/\s+$//; s/\xA0//; }
           if (defined $subgenre) {
             for ($subgenre) { s/^\s+//; s/\s+$//; s/\xA0//; }
-            # utf8 conversion...
-            utf8::encode($genre) if (utf8::is_utf8($genre));
-            utf8::encode($subgenre) if (utf8::is_utf8($subgenre));
             $prog{category} = [ [ xmlencoding(lc($genre)), $LANG ], [ xmlencoding(lc($subgenre)), $LANG ] ];
           } else {
             $prog{category} = [ [ xmlencoding(lc($genre)), $LANG ] ];
@@ -646,13 +655,18 @@ sub process_channel_grid_page( $$$$ ) {
           $id =~ /fiche\('(\d+)'\)/ or die "expected fiche(x), got: $id";
           $id = $1;
           debug_print("Calling sheet URL : " . $SHEET_URL . $id . "\n");
-
-	  my $uri = $SHEET_URL . $id;
-	  my $page = get $uri;
-	  die "could not get $uri\n" if not defined $page;
+          
+          my $ficpage;
+          my $nbretryfic = 0;
+          my $uri = $SHEET_URL . $id;
+          while (not defined($ficpage = get $uri)) {
+            ++$nbretryfic;
+            die "cannot get $uri after $MAX_RETRY tries\n" if $nbretryfic == $MAX_RETRY;
+            sleep 1;
+          }
           my $tfic = HTML::TreeBuilder->new;
-          $tfic->parse($page) or die "cannot parse content of $uri\n";
-	  $tfic->eof;
+          $tfic->parse($ficpage) or die "cannot parse content of $uri\n";
+          $tfic->eof;
 
           # This page's title tag contains the program title without the sub-title. Use it to separate the two.
           my $ttitle;
@@ -752,7 +766,7 @@ sub process_channel_grid_page( $$$$ ) {
           my $subtitle;
           if ($text =~ s/\.\.\.$//) {
             if ($title =~ s/^\Q$text\E([^-]+)\s+-\s+//) {
-              $prog{'title'} = [ [ "$text$1" ] ];
+              $prog{'title'} = [ [ tidy($text).tidy($1) ] ];
               $prog{'sub-title'} = [ [ tidy($title) ] ];
             }
           }
