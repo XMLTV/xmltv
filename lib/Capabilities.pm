@@ -7,7 +7,7 @@ package XMLTV::Capabilities;
 
 my $opt = '--capabilities';
 sub import( $$ ) {
-    die "usage: use $_[0] <version-string>" if @_ < 2;
+    die "usage: use $_[0] qw/<capabilities>/" if @_ < 2;
     my $seen = 0;
     foreach (@ARGV) {
 	# This doesn't handle abbreviations in the GNU style.
@@ -19,7 +19,8 @@ sub import( $$ ) {
     return if not $seen;
 
     eval {
-	print join "\n", @_[1,];
+	print join "\n", @_[1..$#_];
+        print "\n";
     };
 
     exit();
