@@ -25,6 +25,9 @@ sub w;
 # Run grabbers with these args.
 my ($offset, $days) = (1, 2);
 
+# How many seconds can a grabber take to download data
+my $CMD_TIMEOUT = 600;
+
 # Find the root directory.
 my( $vol, $dir, $file ) = File::Spec->splitpath( $FindBin::Bin );
 my( @dirs ) = File::Spec->splitdir( $dir );
@@ -105,8 +108,29 @@ my @grabbers;
 foreach (@grabbers) {
     /^[a-z_]+$/ or die "bad grabber name $_";
     my $exe = "tv_grab_$_";
-    print "Testing $exe\n";
+    if ( -f "$root/blib/script/$exe" )
+    {
+	w "Testing $exe";
+    }
+    else
+    {
+	w "No such grabber $exe.";
+	next;
+    }
+
     my $exe_with_path = "perl -I $root/blib/lib $root/blib/script/$exe";
+    if (run( "$exe_with_path --version > /dev/null 2>&1" ))
+    {
+      w "$exe_with_path --version failed: $?, $!";
+      next;
+    }
+
+    if (run( "$exe_with_path --capabilities > /dev/null 2>&1" ))
+    {
+      w "$exe_with_path --capabilities failed: $?, $!";
+      next;
+    }
+
     my $config = "$root/grab/$_/test.conf";
 
     my $output = $opt_list_channels ? "${_}_channels.xml" : "${_}_${offset}_$days.xml";
@@ -136,7 +160,7 @@ foreach (@grabbers) {
 
     if (defined $cmd) {
 	if (run "$cmd > $output 2>$exe.log") {
-	    warn "$cmd failed: $?, $!";
+	    w "$cmd failed: $?, $!";
 	    next;
 	}
 
@@ -166,12 +190,20 @@ foreach (@grabbers) {
 	    w "$cmd3 produced output to STDERR when it shouldn't have. " 
 		. "See $exe.log3";
 	}
+	else
+	{
+	    unlink( "$exe.log3" );
+	}
 
 	if ( -s "$exe.log4" )
 	{
 	    w "$cmd4 produced output to STDERR when it shouldn't have. " 
 		. "See $exe.log4";
         }
+	else
+	{
+	    unlink( "$exe.log4" );
+	}
 
 	if ( ! compare_files( $output, "${output}2" ) )
 	{
@@ -199,9 +231,10 @@ foreach (@grabbers) {
 
     # Okay, it ran, and we have the result in $output.  Validate.
     if (validate_file( $output )) {
+	w "Errors found in $output";
 	next;
     }
-    print "$output validates ok\n";
+    w "$output validates ok";
 
     # Run through tv_cat, which makes sure the data looks like XMLTV,
     # but also lets us compare before and after to check whitespace
@@ -248,16 +281,38 @@ sub run {
 
 #    print "Running $cmd\n";
 
-    system( $cmd );
-    
+    my $killed = 0;
+
+    # Set a timer and run the real du.
+    eval {
+	local $SIG{ALRM} =
+            sub {
+		# ignore SIGHUP here so the kill only affects children.
+		local $SIG{HUP} = 'IGNORE';
+		kill 1,(-$$);
+		$killed = 1;
+	    };
+	alarm $CMD_TIMEOUT;
+	system ( $cmd );
+	alarm 0;
+    };
+    $SIG{HUP} = 'DEFAULT';    
+
+    if( $killed )
+    {
+	w "Timeout";
+	return 1;
+    }
+
     if ($? == -1) {
 	w "Failed to execute $cmd: $!";
-	exit 1;
+	return 1;
     }
     elsif ($? & 127) {
 	w "Terminated by signal " . ($? & 127);
 	exit 1;
     }
+
     return $? >> 8;
 }
 
@@ -282,6 +337,12 @@ sub validate_file
 	w "The file is not valid according to the xmltv dtd:\n $@";
 	return 1;
     }
+
+    my $w = sub 
+    { 
+	w "Line " . $_[0]->line_number() . " $_[1]";
+	$errors++;
+    };
     
     my %channels;
     
@@ -291,9 +352,14 @@ sub validate_file
 	my $channelid = $ch->findvalue('@id');
 	my $display_name = $ch->findvalue('display-name/text()');
 	
-	$channels{$channelid} = $display_name;
-	w "Illegal channel-id $channelid\n"
+	
+	$w->( $ch, "Illegal channel-id $channelid" )
 	    if $channelid !~ /^[-a-zA-Z0-9]+(\.[-a-zA-Z0-9]+)+$/;
+	
+	$w->( $ch, "Duplicate channel-tag for $channelid" )
+	    if defined( $channels{$channelid} );
+	
+	$channels{$channelid} = $display_name;
     }
     
     $ns = $doc->find( "//programme" );
@@ -305,28 +371,21 @@ sub validate_file
 	my $stop = $p->findvalue('@stop');
 	my $title = $p->findvalue('title/text()');
 	my $desc = $p->findvalue('desc/text()');
-	
-	my $w = sub 
-	{ 
-	    w "Line " . $p->line_number() . " $_[0]";
-	    $errors++;
-	};
-	
+		
 	if ( not defined( $channels{$channelid} ))
 	{
-	    $w->("Channel $channelid does not have a <channel>-entry." );
+	    $w->( $p, "Channel $channelid does not have a <channel>-entry." );
 	    $channels{$channelid} = "auto";
 	    $errors++;
 	}
 	
-	
-	$w->( "Empty title" )    
+	$w->( $p, "Empty title" )    
 	    if $title =~ /^\s*$/;
 	
-	$w->( "Illegal start-time $start" )
+	$w->( $p, "Illegal start-time $start" )
 	    if not verify_time( $start );
 	
-	$w->( "Illegal stop-time $stop" )
+	$w->( $p, "Illegal stop-time $stop" )
 	    if $stop ne "" and not verify_time( $stop );
     }
     
@@ -344,3 +403,4 @@ sub w
 {
     print "$_[0]\n";
 }
+
