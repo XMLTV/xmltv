@@ -61,7 +61,7 @@ Utility class that helps grabbers write configuration descriptions.
                 [ 'Västkusten', 'sv' ] ] 
   } );
 
-  $writer->end_option();
+  $writer->end_selectone();
 
   $writer->end();
 

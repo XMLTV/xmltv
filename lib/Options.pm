@@ -179,7 +179,7 @@ sub ParseOptions
     if( $opt->{configure} )
     {
 	Configure( $p->{stage_sub}, $p->{listchannels_sub},
-		   $opt->{"config-file"} );
+		   $opt->{"config-file"}, $opt );
 	exit 0;
     }
     
@@ -195,7 +195,7 @@ sub ParseOptions
 	
 	if( $opt->{stage} eq 'select-channels' )
 	{
-	    my $chanxml = &{$p->{listchannels_sub}}($conf);
+	    my $chanxml = &{$p->{listchannels_sub}}($conf, $opt);
 	    print SelectChannelsStage( $chanxml, $p->{grabber_name} );
 	}
 	else
@@ -215,7 +215,7 @@ sub ParseOptions
 	    exit 1;
 	}
 	
-	print &{$p->{listchannels_sub}}($conf);
+	print &{$p->{listchannels_sub}}($conf,$opt);
 	
 	exit 0;
     }

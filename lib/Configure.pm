@@ -148,7 +148,8 @@ xml-string that describes the configuration necessary for that stage.
 The xml-string shall follow the xmltv-configuration.dtd.
 
 listsub shall be a coderef that takes a configuration hash as returned
-by LoadConfig as the only parameter and returns an xml-string
+by LoadConfig as the first parameter and an option hash as returned by
+ParseOptions as the second parameter and returns an xml-string
 containing a list of all the channels that the grabber can deliver
 data for using the supplied configuration. Note that the listsub
 shall not use any channel-configuration from the hashref.
@@ -157,7 +158,7 @@ shall not use any channel-configuration from the hashref.
 
 sub Configure
 {
-    my( $stagesub, $listsub, $conffile ) = @_;
+    my( $stagesub, $listsub, $conffile, $opt ) = @_;
     
     # How can we read the language from the environment?
     my $lang = 'en'; 
@@ -175,7 +176,7 @@ sub Configure
     } while ($nextstage ne "select-channels" );
 
     # No more nextstage. Let the user select channels.
-    my $channels = &$listsub( LoadConfig( $conffile ) );
+    my $channels = &$listsub( LoadConfig( $conffile ), $opt );
     select_channels( $channels, $conffile, $lang )
 }
 
@@ -231,15 +232,12 @@ sub configure_stage
 
 	my( @optionvalues, @optiontexts );
 
-	my $ns2 = $p->find( "option[\@lang='$lang']" );
-	if( $ns2->size() == 0 )
-	{
-	    $ns2 = $p->find( "option[\@lang='en']" );
-	}            
+	my $ns2 = $p->find( "option" );
+
 	foreach my $p2 ($ns2->get_nodelist)
 	{
 	    push @optionvalues, $p2->findvalue( '@value' );
-	    push @optiontexts, $p2->findvalue( '.' );
+	    push @optiontexts, getvalue( $p2, 'text', $lang );
 	}
 
 	if( $tag eq "selectone" )
