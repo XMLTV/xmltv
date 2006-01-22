@@ -138,6 +138,7 @@ my %pm
      'lib/Configure.pm'           => '$(INST_LIBDIR)/XMLTV/Configure.pm',
      'lib/Configure/Writer.pm'    => '$(INST_LIBDIR)/XMLTV/Configure/Writer.pm',
      'lib/Options.pm'             => '$(INST_LIBDIR)/XMLTV/Options.pm',
+     'lib/ValidateFile.pm'        => '$(INST_LIBDIR)/XMLTV/ValidateFile.pm',
      'filter/Grep.pm'             => '$(INST_LIBDIR)/XMLTV/Grep.pm',
      'grab/Memoize.pm'            => '$(INST_LIBDIR)/XMLTV/Memoize.pm',
      'grab/Grab_XML.pm'           => '$(INST_LIBDIR)/XMLTV/Grab_XML.pm',

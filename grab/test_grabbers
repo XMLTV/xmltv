@@ -15,10 +15,11 @@ use File::Copy;
 use File::Slurp;
 use List::Util qw(min);
 use File::chdir;
-use File::Spec;
 use XML::LibXML;
-use FindBin;
-
+use FindBin qw($Bin);
+use lib "$Bin/../blib/lib";
+    
+use XMLTV::ValidateFile qw/LoadDtd ValidateFile/;
 sub run;
 sub w;
 
@@ -28,17 +29,12 @@ my ($offset, $days) = (1, 2);
 # How many seconds can a grabber take to download data
 my $CMD_TIMEOUT = 600;
 
-# Find the root directory.
-my( $vol, $dir, $file ) = File::Spec->splitpath( $FindBin::Bin );
-my( @dirs ) = File::Spec->splitdir( $dir );
-pop @dirs;
-my $root = File::Spec->catdir( @dirs );
-
 our $opt_configure;     # try to --configure grabbers if necessary
 our $opt_only;          # run just one grabber
 our $opt_list_channels; # run with --list-channels
 our $opt_validate_file; # validate that a file is valid xmltv data.
 our $opt_help=0;
+our $root = "$Bin/..";
 
 my $result = GetOptions('configure' => \$opt_configure,
 			'only=s' => \$opt_only,
@@ -71,8 +67,6 @@ EOH
    exit 1;
 }
 
-w "Using $root as xmltv distribution dir.";
- 
 my $dtd_in_root = "$root/xmltv.dtd";
 if (not -e $dtd_in_root)
 {
@@ -82,15 +76,11 @@ if (not -e $dtd_in_root)
     exit 1;
 }
 
-my $dtd_str = read_file($dtd_in_root);
-my $dtd = XML::LibXML::Dtd->parse_string($dtd_str);
-
-my $parser = XML::LibXML->new();
-$parser->line_numbers(1);
+LoadDtd( $dtd_in_root );
 
 if ( defined( $opt_validate_file ) )
 {
-    exit validate_file( $opt_validate_file );
+    exit ValidateFile( $opt_validate_file );
 }
 
 my @grabbers;
@@ -237,7 +227,7 @@ foreach (@grabbers) {
     }
 
     # Okay, it ran, and we have the result in $output.  Validate.
-    if (validate_file( $output )) {
+    if (ValidateFile( $output )) {
 	w "Errors found in $output";
 	next;
     }
@@ -323,91 +313,7 @@ sub run {
     return $? >> 8;
 }
 
-sub validate_file
-{
-    my( $file ) = @_;
-    my $errors = 0;
-    
-    my $doc;
-    
-    eval { $doc = $parser->parse_file( $file ); };
-    
-    if ( $@ )
-    {
-	w "The file is not well-formed xml:\n$@ ";
-	return 1;
-    }
-    
-    eval { $doc->validate( $dtd ) };  
-    if ( $@ )
-    {
-	w "The file is not valid according to the xmltv dtd:\n $@";
-	return 1;
-    }
-
-    my $w = sub 
-    { 
-	w "Line " . $_[0]->line_number() . " $_[1]";
-	$errors++;
-    };
-    
-    my %channels;
-    
-    my $ns = $doc->find( "//channel" );
-    foreach my $ch ($ns->get_nodelist)
-    {
-	my $channelid = $ch->findvalue('@id');
-	my $display_name = $ch->findvalue('display-name/text()');
-	
-	
-	$w->( $ch, "Illegal channel-id $channelid" )
-	    if $channelid !~ /^[-a-zA-Z0-9]+(\.[-a-zA-Z0-9]+)+$/;
-	
-	$w->( $ch, "Duplicate channel-tag for $channelid" )
-	    if defined( $channels{$channelid} );
-	
-	$channels{$channelid} = $display_name;
-    }
-    
-    $ns = $doc->find( "//programme" );
-    
-    foreach my $p ($ns->get_nodelist)
-    {
-	my $channelid = $p->findvalue('@channel');
-	my $start = $p->findvalue('@start');
-	my $stop = $p->findvalue('@stop');
-	my $title = $p->findvalue('title/text()');
-	my $desc = $p->findvalue('desc/text()');
-		
-	if ( not defined( $channels{$channelid} ))
-	{
-	    $w->( $p, "Channel $channelid does not have a <channel>-entry." );
-	    $channels{$channelid} = "auto";
-	    $errors++;
-	}
-	
-	$w->( $p, "Empty title" )    
-	    if $title =~ /^\s*$/;
-	
-	$w->( $p, "Illegal start-time $start" )
-	    if not verify_time( $start );
-	
-	$w->( $p, "Illegal stop-time $stop" )
-	    if $stop ne "" and not verify_time( $stop );
-    }
-    
-    return $errors;
-}
-
-sub verify_time
-{
-    my( $time ) = @_;
-
-    return $time =~ /^\d{12,14}(\s+([A-Z]+|[+-]\d{4}))$/;
-}
-
 sub w
 {
     print "$_[0]\n";
 }
-
