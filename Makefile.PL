@@ -113,6 +113,8 @@ my @exes
        filter/tv_split
        filter/tv_imdb
        filter/tv_remove_some_overlapping
+       tools/tv_validate_grabber
+       tools/tv_validate_file
       );
 
 # Libraries to be installed.
@@ -139,6 +141,7 @@ my %pm
      'lib/Configure/Writer.pm'    => '$(INST_LIBDIR)/XMLTV/Configure/Writer.pm',
      'lib/Options.pm'             => '$(INST_LIBDIR)/XMLTV/Options.pm',
      'lib/ValidateFile.pm'        => '$(INST_LIBDIR)/XMLTV/ValidateFile.pm',
+     'lib/ValidateGrabber.pm'     => '$(INST_LIBDIR)/XMLTV/ValidateGrabber.pm',
      'filter/Grep.pm'             => '$(INST_LIBDIR)/XMLTV/Grep.pm',
      'grab/Memoize.pm'            => '$(INST_LIBDIR)/XMLTV/Memoize.pm',
      'grab/Grab_XML.pm'           => '$(INST_LIBDIR)/XMLTV/Grab_XML.pm',

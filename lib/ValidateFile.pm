@@ -14,7 +14,7 @@ our @EXPORT_OK;
 use XML::LibXML;
 use File::Slurp;
 
-my $dtd, $parser;
+my( $dtd, $parser );
 
 =head1 NAME
 
@@ -38,13 +38,20 @@ sub w;
 
 =item LoadDtd
 
+Load the xmltv dtd. Takes a single parameter which is the name of
+the xmltv dtd file.
+
+LoadDtd must be called before ValidateFile can be called.
+
 =cut
 
 sub LoadDtd
 { 
     my( $dtd_file ) = @_;
-    
-    my $dtd_str = read_file($dtd_file);
+
+    my $dtd_str = read_file($dtd_file) 
+	or die "Failed to read $dtd_file";
+
     $dtd = XML::LibXML::Dtd->parse_string($dtd_str);
     
     $parser = XML::LibXML->new();
@@ -52,6 +59,28 @@ sub LoadDtd
     
 }
 
+=item ValidateFile
+
+Validate that a file is valid according to the XMLTV dtd and try to check
+that it contains valid information. ValidateFile takes a filename as parameter
+and returns the number of errors found in the file. Error messages are printed
+to STDERR.
+
+ValidateFile checks the following:
+
+  File is well-formed XML.
+  File follows the XMLTV DTD.
+  There is exactly one channel-entry for each channel mentioned in a 
+  programme-entry.
+  All xmltvids look like proper ids, i.e. they match 
+  /^[-a-zA-Z0-9]+(\.[-a-zA-Z0-9]+)+$/.
+  Each programme entry has a valid channel id.
+  Each programme entry has a non-empty title.
+  Each programme entry has a valid start-time. 
+  If a programme has a stop-time, it must be valid.  
+
+=cut 
+  
 sub ValidateFile
 {
     my( $file ) = @_;
@@ -87,6 +116,12 @@ sub ValidateFile
     my %channels;
     
     my $ns = $doc->find( "//channel" );
+    if( $ns->size() == 0 )
+    {
+	w "No channel entries found.";
+	$errors++;
+    }
+
     foreach my $ch ($ns->get_nodelist)
     {
 	my $channelid = $ch->findvalue('@id');
@@ -99,11 +134,11 @@ sub ValidateFile
 	$w->( $ch, "Duplicate channel-tag for $channelid" )
 	    if defined( $channels{$channelid} );
 	
-	$channels{$channelid} = $display_name;
+	$channels{$channelid} = 0;
     }
     
     $ns = $doc->find( "//programme" );
-    
+
     foreach my $p ($ns->get_nodelist)
     {
 	my $channelid = $p->findvalue('@channel');
@@ -118,6 +153,8 @@ sub ValidateFile
 	    $channels{$channelid} = "auto";
 	    $errors++;
 	}
+
+	$channels{$channelid}++;
 	
 	$w->( $p, "Empty title" )    
 	    if $title =~ /^\s*$/;
@@ -128,7 +165,16 @@ sub ValidateFile
 	$w->( $p, "Illegal stop-time $stop" )
 	    if $stop ne "" and not verify_time( $stop );
     }
-    
+
+    foreach my $channel (keys %channels)
+    {
+	if( $channels{$channel} == 0 )
+	{
+	    w "No programme entries found for $channel";
+	    $errors++;
+	}
+    }
+
     return $errors;
 }
 
@@ -145,6 +191,28 @@ sub w
 }
 
 1;
+
+=back 
+   
+=head1 COPYRIGHT
+
+Copyright (C) 2005 Mattias Holmlund.
+
+This program is free software; you can redistribute it and/or
+modify it under the terms of the GNU General Public License
+as published by the Free Software Foundation; either version 2
+of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program; if not, write to the Free Software
+Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+
+=cut
 
 ### Setup indentation in Emacs
 ## Local Variables:
