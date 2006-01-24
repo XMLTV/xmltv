@@ -104,16 +104,13 @@ Ed Avis, ed -at- membled -dot- com.
 use strict;
 
 use XMLTV;
-use XMLTV::Ask;
 use XMLTV::ProgressBar;
-use XMLTV::Config_file;
+use XMLTV::Options qw/ParseOptions/;
+use XMLTV::Configure::Writer;
 
 use XML::LibXML;
-use Getopt::Long;
 use Date::Manip;
 use Compress::Zlib;
-use IO::Wrap qw/wraphandle/;
-use IO::Scalar;
 use File::Path;
 use File::Basename;
 use LWP::Simple qw($ua get);
@@ -128,121 +125,30 @@ use HTTP::Cache::Transparent;
 #
 use XMLTV::Memoize; XMLTV::Memoize::check_argv('get');
 
-my $default_root_url = 'http://tv.swedb.se/xmltv/channels.xml.gz';
-
-my $opt = { days => 5,
-            offset => 0,
-            "config-file" => undef,
-            gui => undef,
-            configure => 0,
-            help => 0,
-            quiet => 0,
-            output => undef,
-            debug => 0,
-            channel => undef,
-            'root-url' => undef,
-            'list-channels' => 0,
-          };
-
-my $usage = <<EOH
-tv_grab_se_swedb --help
-
-tv_grab_se_swedb --configure [--config-file FILE] [--root-url URL] 
-                 [--gui OPTION]
-
-tv_grab_se_swedb [--config-file FILE] [--root-url URL] 
-                 [--days N] [--offset N] [--channel xmltvid,xmltvid,...]
-                 [--output FILE] [--quiet] [--debug]
-
-tv_grab_se_swedb --list-channels [--config-file FILE] [--root-url URL] 
-                 [--output FILE] [--quiet] [--debug]
-
-EOH
-  ;
-my $res = GetOptions( $opt, qw/
-                      days=i
-                      offset=i
-                      config-file=s
-                      gui
-                      configure
-                      help|h
-                      quiet
-                      output=s
-                      debug
-                      channel=s
-                      root-url=s
-                      list-channels
-                      / );
-die $usage if (not $res) || @ARGV;
-if ($opt->{help}) { print $usage; exit 0 }
-
 sub t;
 
-XMLTV::Ask::init($opt->{'gui'});
+my $default_root_url = 'http://tv.swedb.se/xmltv/channels.xml.gz';
+my $default_cachedir = get_default_cachedir();
 
-my @channel_list = ();
-my ($xmldecl, $channels);
+my( $opt, $conf ) = ParseOptions( { 
+    grabber_name => "tv_grab_se_swedb",
+    capabilities => [qw/baseline manualconfig apiconfig/],
+    stage_sub => \&config_stage,
+    listchannels_sub => \&list_channels,
+    load_old_config_sub => \&load_old_config,
+} );
 
-# File that stores which channels to download.
-my $config_file
-  = XMLTV::Config_file::filename($opt->{'config-file' },
-                                 'tv_grab_se_swedb', not $opt->{debug} );
+init_cachedir( $conf->{cachedir}->[0] );
+HTTP::Cache::Transparent::init( { BasePath => $conf->{cachedir}->[0] } );
 
-if( $opt->{configure} ) {
-    $opt->{'root-url'} = $default_root_url 
-        if(! defined( $opt->{'root-url'}));
-    ($xmldecl, $channels) = load_channels( $opt->{'root-url' } );
-    configure( $config_file );
-    exit;
-} else {
-    if( -f( $config_file ) ) {
-        load_config( $config_file );
-    } elsif( (not $opt->{channel}) and (not $opt->{"list-channels"}) ) {
-        die "You must run tv_grab_se_swedb --configure " .
-	  "to select channels.\n";
-    }
-}
-
-$opt->{'root-url'} = $default_root_url 
-    if (! defined ($opt->{'root-url'}));
-
-t "using $opt->{'root-url'}";
-
-if(not defined( $opt->{'cache-dir'} ) )
-{
-    $opt->{'cache-dir'} = get_default_cachedir();
-}
-
-init_cachedir( $opt->{'cache-dir'} );
-HTTP::Cache::Transparent::init( { BasePath => $opt->{'cache-dir'} } );
-
-($xmldecl, $channels) = load_channels( $opt->{'root-url' } );
-
-if( $opt->{'list-channels'} )
-{
-    my $fh = start_output();
-    write_header( $fh, $xmldecl );
-    write_channel_list( $fh, [sort keys %{$channels}] );
-    write_footer( $fh );
-    end_output( $fh );
-    exit;
-}
-
-# List of the ids of all channels that should be loaded.
-# This is loaded from the configuration file.
-if( defined( $opt->{channel} ) )
-{
-    @channel_list = split ",", $opt->{channel};
-}
+my($xmldecl, $channels) = load_channels( $conf->{'root-url'}->[0] );
 
 my( $odoc, $root );
 my $warnings = 0;
 
-my $fh = start_output();
+write_header( $xmldecl );
 
-write_header( $fh, $xmldecl );
-
-write_channel_list( $fh, \@channel_list );
+write_channel_list( $conf->{channel} );
 
 my $now = ParseDate( 'now' );
 my $date =$now;
@@ -252,20 +158,20 @@ $date = DateCalc( $now, "+$opt->{offset} days" )
 my $bar = undef;
 $bar = new XMLTV::ProgressBar( {
     name => 'downloading listings',
-    count => $opt->{days} * @channel_list
+    count => $opt->{days} * @{$conf->{channel}},
     }) if (not $opt->{quiet}) && (not $opt->{debug});
 
 for( my $i=0; $i < $opt->{days}; $i++ )
 {
     t "Date: $date";
-    foreach my $channel_id (@channel_list)
+    foreach my $channel_id (@{$conf->{channel}})
     {
         # We have already warned the user if the channel doesn't exist.
         if( exists $channels->{$channel_id} )
         {
             t "  $channel_id";
             my( $channel_name, $url ) = @{$channels->{$channel_id}};
-            print_data( $fh, $url, $channel_id, $date )
+            print_data( $url, $channel_id, $date )
                 or warning( "Failed to download data for $channel_id on " . 
                             UnixDate( $date, "%Y-%m-%d" ) . "." );
         }
@@ -276,9 +182,7 @@ for( my $i=0; $i < $opt->{days}; $i++ )
 
 $bar->finish() if defined $bar;
 
-write_footer( $fh );
-
-end_output( $fh );
+write_footer();
 
 # Signal that something went wrong if there were warnings.
 exit(1) if $warnings;
@@ -300,15 +204,67 @@ sub warning
     $warnings++;
 }
 
+sub list_channels
+{
+    my( $conf ) = @_;
+
+    ( $xmldecl, $channels ) = load_channels( $conf->{'root-url'}->[0] );
+    
+    my $result="";
+    write_header( $xmldecl );
+    write_channel_list( [sort keys %{$channels}] );
+    write_footer();
+
+    return $result;
+}
+
+sub config_stage
+{
+    my( $stage, $conf ) = @_;
+
+    die "Unknown stage $stage" if $stage ne "start";
+
+    my $result;
+    my $writer = new XMLTV::Configure::Writer( OUTPUT => \$result,
+                                               encoding => 'iso-8859-1' );
+    $writer->start( { grabber => 'tv_grab_se_swedb' } );
+    $writer->write_string( {
+        id => 'root-url', 
+        title => [ [ 'Root URL for grabbing data', 'en' ] ],
+        description => [ 
+         [ 'The file at this URL describes which channels are available and ' .
+           'where data can be found for them. ', 'en' ] ],
+        default => $default_root_url,
+     } );
+    $writer->write_string( {
+        id => 'cachedir', 
+        title => [ [ 'Directory to store the cache in', 'en' ] ],
+        description => [ 
+         [ 'tv_grab_se_swedb uses a cache with files that it has already '. 
+           'downloaded. Please specify where the cache shall be stored. ', 
+           'en' ] ],
+        default => $default_cachedir,
+     } );
+
+    $writer->end( 'select-channels' );
+
+    return $result;
+}
+
 #
-# Configuration
+# Load a configuration file in the old format.
 #
 
-sub load_config
+sub load_old_config
 {
     my( $config_file ) = @_;
 
     my @lines = XMLTV::Config_file::read_lines( $config_file );
+    
+    my $conf = {};
+    $conf->{cachedir}->[0] = $default_cachedir;
+    $conf->{'root-url'}->[0] = $default_root_url;
+    $conf->{channel} = [];
 
     foreach my $line (@lines)
     {
@@ -319,63 +275,17 @@ sub load_config
         $param =~ s/\s+$//;
 
         if ( $command =~ /^\s*root-url\s*$/) {
-            $opt->{'root-url'} = $param if (! defined ($opt->{'root-url'}));
+            $conf->{'root-url'}->[0] = $param;
         } elsif  ( $command =~ /^\s*channel\s*$/) {
-            push @channel_list, $param;
+            push @{$conf->{channel}}, $param;
         } elsif ( $command eq 'cache-dir' ) {
-            $opt->{'cache-dir'} = $param;
+            $conf->{'cachedir'}->[0] = $param;
         } else {
             die "Unknown command $command in config-file $config_file"
         }
     }
-}
 
-sub configure
-{
-    my( $config_file ) = @_;
-
-    XMLTV::Config_file::check_no_overwrite( $config_file );
-
-    mkpath(dirname($config_file));
-    open(CONF, ">$config_file") or die "cannot write to $config_file: $!";
-
-    my $defcache = get_default_cachedir();
-
-    my $path = ask( 
-                    "You need to decide where the cache should be stored.\n" . 
-                    "The cache must be stored in its own directory.\n" .
-                    "The directory should NOT be cleared when you reboot.\n" .
-                    "The default is $defcache\n\n" .
-                    "Where should the cache be stored?\n" . 
-                    "Leave empty to use the default location:\n" );
-    
-    $path = $defcache if( (not defined($path)) 
-                          or $path eq "" );
-    
-    init_cachedir( $path );
-
-    print CONF "cache-dir $path\n";
-
-    # Save the url of channels.xml.gz
-    print CONF "root-url $opt->{'root-url'}\n" 
-        if (defined($opt->{'root-url'}));
-
-    my @chan = sort { join( ".", reverse( split /\./, $a ) ) cmp 
-                     join( ".", reverse( split /\./, $b ) ) } 
-        keys %{$channels};
-
-    # Ask about Swedish channels first.
-    my @all = (grep( /\.se$/, @chan ), grep( !/\.se$/, @chan ));
-
-    my @wanted = ask_many_boolean(1,
-                    map { "get channel $channels->{$_}->[0] ($_)?" }
-                    @all );
-    foreach (@all) {
-        print CONF '# ' if not shift @wanted;
-        print CONF "channel $_\n";
-    }
-    close CONF or warn "cannot close $config_file: $!";
-    say("Finished configuration.");
+    return $conf;
 }
 
 sub get_default_cachedir
@@ -404,7 +314,7 @@ sub load_channels
     my %channels;
 
     my $compressed = get( $url )
-        or exit 1;
+        or die "Failed to fetch $url";
 
     my $xmldata = Compress::Zlib::memGunzip( \$compressed );
 
@@ -412,8 +322,8 @@ sub load_channels
     
     my $doc = $xml->parse_string($xmldata);
 
-    my $xmldecl = '<?xml version="' . $doc->version() . '" ' . 
-        'encoding="' . $doc->encoding() . qq'"?>\n';
+    my $xmldecl = "<?xml version='" . $doc->version() . "' " . 
+        "encoding='" . $doc->encoding() . "'?>\n";
 
     my $ns = $doc->find( "//channel" );
 
@@ -427,13 +337,7 @@ sub load_channels
         {
             $node->removeChild( $urlnode );
         }
-	my $str = $node->toString(0);
-
-	# Cosmetic changes.
-	$str =~ s!"/>!" />!g;
-	$str = join("\n", grep /\S/, split /\n/, $str);
-
-        $channels{$id} = [ $name, $url, $str ];
+        $channels{$id} = [ $name, $url, $node->toString(0) ];
     }
 
     return ($xmldecl, \%channels);
@@ -441,7 +345,7 @@ sub load_channels
 
 sub print_data
 {
-    my( $fh, $rooturl, $channel_id, $date ) = @_;
+    my( $rooturl, $channel_id, $date ) = @_;
     
     my $url = $rooturl . $channel_id . "_" . UnixDate( $date, "%Y-%m-%d" ) . 
         ".xml.gz";
@@ -460,42 +364,26 @@ sub print_data
     while( my $line = $in->getline() )
     {
         last if $line =~ /<\/tv>/;
-        $fh->print( $line );
+        print $line;
     }
 
     return 1;
 }
 
-sub start_output
-{
-    my $fh;
-    if (defined $opt->{output})
-    {
-        t "Sending output to $opt->{output}.";
-        $fh = new IO::File "> $opt->{output}";
-        die "cannot write to $opt->{output}" if not $fh;
-    }
-    else
-    {
-        $fh = wraphandle('STDOUT');
-    }
-
-    return $fh;
-}
 sub write_header
 {
-    my( $fh, $xmldecl ) = @_;
+    my( $xmldecl ) = @_;
 
     # Use the same xml declaration as the one in
     # channels.xml
-    $fh->print( $xmldecl );
-    $fh->print( '<!DOCTYPE tv SYSTEM "xmltv.dtd">' . "\n\n" );
-    $fh->print( "<tv>\n" );
+    print $xmldecl;
+    print '<!DOCTYPE tv SYSTEM "xmltv.dtd">' . "\n";
+    print "<tv>\n";
 }
 
 sub write_channel_list
 {
-    my( $fh, $channel_list ) = @_;
+    my( $channel_list ) = @_;
 
     # Write list of channels.
     t 'Writing list of channels.';
@@ -512,20 +400,13 @@ sub write_channel_list
         }
         
         my( $channel_name, $url, $def ) = @{$channels->{$channel_id}};
-        $fh->print( "  $def\n" );
+        print "  $def\n";
     }
 }
 
 sub write_footer
 {
-    my( $fh ) = @_;
-    $fh->print( "</tv>\n" );
-}
-
-sub end_output
-{
-    my( $fh ) = @_;
-    $fh->close();
+    print "</tv>\n";
 }
 
 ### Setup indentation in Emacs
