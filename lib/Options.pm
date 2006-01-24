@@ -163,7 +163,6 @@ sub ParseOptions
 	exit 0;
     }
     
-    
     if( defined( $opt->{output} ) )
     {
 	if( not open( OUT, "> $opt->{output}" ) )
@@ -184,7 +183,11 @@ sub ParseOptions
     }
     
     my $conf = LoadConfig( $opt->{'config-file'} );
-    
+    if( not defined( $conf ) and defined( $p->{load_old_config_sub} ) )
+    {
+	$conf = &{$p->{load_old_config_sub}}( $opt->{'config-file'} );
+    }
+   
     if( $opt->{"configure-api"} )
     {
 	if( (not defined $conf) and ( $opt->{stage} ne 'start' ) )
@@ -219,7 +222,13 @@ sub ParseOptions
 	
 	exit 0;
     }
-    
+   
+    if( not defined( $conf ) )
+    {
+	print STDERR "You need to configure the grabber by running it with --configure";
+	exit 1;
+    }
+	
     return ($opt, $conf);
 }
 
