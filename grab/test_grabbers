@@ -11,35 +11,24 @@
 use warnings;
 use strict;
 use Getopt::Long;
-use File::Copy;
-use File::Slurp;
-use List::Util qw(min);
 use File::chdir;
-use XML::LibXML;
 use FindBin qw($Bin);
 use lib "$Bin/../blib/lib";
     
 use XMLTV::ValidateFile qw/LoadDtd ValidateFile/;
-sub run;
+use XMLTV::ValidateGrabber qw/ValidateGrabber ConfigureGrabber/;
+
 sub w;
-
-# Run grabbers with these args.
-my ($offset, $days) = (1, 2);
-
-# How many seconds can a grabber take to download data
-my $CMD_TIMEOUT = 600;
 
 our $opt_configure;     # try to --configure grabbers if necessary
 our $opt_only;          # run just one grabber
 our $opt_list_channels; # run with --list-channels
-our $opt_validate_file; # validate that a file is valid xmltv data.
 our $opt_help=0;
 our $root = "$Bin/..";
 
 my $result = GetOptions('configure' => \$opt_configure,
 			'only=s' => \$opt_only,
 			'list-channels' => \$opt_list_channels,
-			'validate-file=s' => \$opt_validate_file,
 			'xmltv-root=s' => \$root,
 			'help|h' => \$opt_help,
 			);
@@ -57,15 +46,14 @@ Valid options:
                   if text_grabbers is moved outside of the xmltv distribution
                   directory.
 
---validate-file <filename> 
-                  Test that the contents of a file is valid xmltv.
-
 --help            Print this text.
 
 EOH
 
    exit 1;
 }
+
+die "--list-channels not implemented" if $opt_list_channels;
 
 my $dtd_in_root = "$root/xmltv.dtd";
 if (not -e $dtd_in_root)
@@ -77,11 +65,6 @@ if (not -e $dtd_in_root)
 }
 
 LoadDtd( $dtd_in_root );
-
-if ( defined( $opt_validate_file ) )
-{
-    exit ValidateFile( $opt_validate_file );
-}
 
 my @grabbers;
 {
@@ -98,6 +81,10 @@ my @grabbers;
 foreach (@grabbers) {
     /^[a-z_]+$/ or die "bad grabber name $_";
     my $exe = "tv_grab_$_";
+    my $cmd = "perl -I $root/blib/lib $root/blib/script/$exe";
+    my $conf = "$root/grab/$_/test.conf";
+    my $output_prefix = "t_${_}_";
+
     if ( -f "$root/blib/script/$exe" )
     {
 	w "Testing $exe";
@@ -108,209 +95,31 @@ foreach (@grabbers) {
 	next;
     }
 
-    my $exe_with_path = "perl -I $root/blib/lib $root/blib/script/$exe";
-    if (not run( "$exe_with_path --ahdmegkeja > /dev/null 2>&1" ))
+    if( not -f $conf )
     {
-      w "$exe_with_path --ahdmegkeja did not fail. The grabber seems to "
-	  . "accept any command-line parameter without returning an error.";
-      next;
-    }
-
-    if (run( "$exe_with_path --version > /dev/null 2>&1" ))
-    {
-      w "$exe_with_path --version failed: $?, $!";
-      next;
-    }
-
-    if (run( "$exe_with_path --capabilities > /dev/null 2>&1" ))
-    {
-      w "$exe_with_path --capabilities failed: $?, $!";
-      next;
-    }
-
-    my $config = "$root/grab/$_/test.conf";
-
-    my $output = $opt_list_channels ? "${_}_channels.xml" : "${_}_${offset}_$days.xml";
-    my $cmd;
-    if (-s $output) {
-	print "nonempty $output already there, not rerunning $exe\n";
-    }
-    elsif (not $opt_list_channels) {
-      TEST_CONFIG_EXISTS:
-	if (not -f $config) {
-	    my $config_cmd = "$exe_with_path --cache --config-file $config --configure";
-	    warn "$config does not exist\n";
-	    warn("you should run: $config_cmd\n"), next if not $opt_configure;
-	    if (run $config_cmd) {
-		warn "$config_cmd failed: $?, $!\n";
-		next;
-	    }
-	    # Otherwise, try again to see if config exists.
-	    goto TEST_CONFIG_EXISTS;
-	}
-
-	$cmd = "$exe_with_path --cache --config-file $config --offset $offset --days $days ";
-    }
-    else {
-	$cmd = "$exe_with_path --cache --list-channels ";
-    }
-
-    if (defined $cmd) {
-	if (run "$cmd > $output 2>$exe.log") {
-	    w "$cmd failed: $?, $!";
-	    next;
-	}
-
-	# Run the same command again to see that --output and --quiet works.
-	my $cmd2 = "$cmd --output ${output}2 2>$exe.log2";
-	my $cmd3 = "$cmd --quiet > ${output}3 2>$exe.log3";
-	my $cmd4 = "$cmd --quiet --output ${output}4 2>$exe.log4";
-
-	if (run $cmd2) {
-	    w "$cmd2 failed: $?, $!";
-	    next;
-	}
-
-	if (run $cmd3 ) {
-	    w "$cmd3 failed: $?, $!";
-	    next;
-	}
-
-	if (run $cmd4 ) {
-	    w "$cmd4 failed: $?, $!";
-	    next;
-	}
-        
-	# Check that the grabber was quiet when it should have been.
-	if ( -s "$exe.log3" )
+	if( $opt_configure )
 	{
-	    w "$cmd3 produced output to STDERR when it shouldn't have. " 
-		. "See $exe.log3";
+	    w "Configuring $exe";
+#        ConfigureGrabber(
 	}
 	else
 	{
-	    unlink( "$exe.log3" );
-	}
-
-	if ( -s "$exe.log4" )
-	{
-	    w "$cmd4 produced output to STDERR when it shouldn't have. " 
-		. "See $exe.log4";
-        }
-	else
-	{
-	    unlink( "$exe.log4" );
-	}
-
-	if ( ! compare_files( $output, "${output}2" ) )
-	{
-	    w "$output and ${output}2 differ.";
-	    next;
-	}
-
-	if ( ! compare_files( $output, "${output}3" ) )
-	{
-	    w "$output and ${output}3 differ.";
-	    next;
-	}
-
-	if ( ! compare_files( $output, "${output}4" ) )
-	{
-	    w "$output and ${output}4 differ.";
-	    next;
-	}
-
-	# The output files were all equal. Remove all but one of them.
-	unlink( "${output}2" );
-	unlink( "${output}3" );
-	unlink( "${output}4" );
-    }
-
-    # Okay, it ran, and we have the result in $output.  Validate.
-    if (ValidateFile( $output )) {
-	w "Errors found in $output";
-	next;
-    }
-    w "$output validates ok";
-
-    # Run through tv_cat, which makes sure the data looks like XMLTV,
-    # but also lets us compare before and after to check whitespace
-    # etc.
-    #
-    if (run "tv_cat $output >$output.catted") {
-	w "$output makes tv_cat choke, so probably has semantic errors";
-	next;
-    }
-    if (run("diff -us $output $output.catted | head")) {
-	die "diff failed: $?, $!";
-    }
-
-    unless ($opt_list_channels) {
-	# Do tv_sort sanity checks.  One day it would be better to put
-	# this stuff in a Perl library.
-	#
-	my $sort_errors = "$output.sort_errors";
-	if (run "tv_sort $output >$output.sorted 2>$sort_errors") {
-	    # This would indicate a bug in tv_sort.
-	    w "tv_sort failed on $output for some reason, see $sort_errors";
-	    next;
-	}
-	print "$output looks like XMLTV\n";
-	if (my @lines = read_file $sort_errors) {
-	    w "$output has funny start or stop times: some errors are:\n"
-	      . join('', @lines[0 .. min(9, $#lines)]);
+	    w "$exe not configured. Skipping.";
 	    next;
 	}
     }
-}
 
-# Compare two files. Return true if they have the same contents.
-sub compare_files {
-    my( $file1, $file2 ) = @_;
+    my $errors = ValidateGrabber( $cmd, $conf, $output_prefix, 
+				  "$root/blib/share/", 1, 1 );
 
-    run("diff $file1 $file2 > /dev/null");
-    return $? ? 0 : 1;
-}
-
-# Run an external command. Exit if the command is interrupted with ctrl-c.
-sub run {
-    my( $cmd ) = @_;
-
-#    print "Running $cmd\n";
-
-    my $killed = 0;
-
-    # Set a timer and run the real du.
-    eval {
-	local $SIG{ALRM} =
-            sub {
-		# ignore SIGHUP here so the kill only affects children.
-		local $SIG{HUP} = 'IGNORE';
-		kill 1,(-$$);
-		$killed = 1;
-	    };
-	alarm $CMD_TIMEOUT;
-	system ( $cmd );
-	alarm 0;
-    };
-    $SIG{HUP} = 'DEFAULT';    
-
-    if( $killed )
+    if( $errors )
     {
-	w "Timeout";
-	return 1;
+	w "$errors errors detected for $exe.";
     }
-
-    if ($? == -1) {
-	w "Failed to execute $cmd: $!";
-	return 1;
+    else
+    {
+	w "$exe validated ok.";
     }
-    elsif ($? & 127) {
-	w "Terminated by signal " . ($? & 127);
-	exit 1;
-    }
-
-    return $? >> 8;
 }
 
 sub w
