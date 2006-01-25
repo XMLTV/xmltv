@@ -41,6 +41,7 @@ All these functions are exported on demand.
 use XMLTV::ValidateFile qw/ValidateFile/;
 
 use File::Slurp qw/read_file/;
+use List::Util qw(min);
 
 # Parameters to call grabbers with.
 my $offset=1;
@@ -118,7 +119,8 @@ sub ValidateGrabber
     }
 
     my $extraop = "";
-    $extraop .= "--cache  ${op}cache" if $usecache;
+    $extraop .= "--cache  ${op}cache " 
+	if $capability{cache} and $usecache;
     $extraop .= "--share $sharedir "
 	if $capability{share} and defined( $sharedir );
 

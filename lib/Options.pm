@@ -42,7 +42,14 @@ my %cap_options = (
 				 stage=s
 				 list-channels
 				 /],
-		   newchannels => [qw/channel-updates=s/],
+		   # The cache option is normally handled by XMLTV::Memoize
+		   # but in case it is not used, we handle it here as well.
+		   cache => [qw/
+                             cache:s
+                             /],
+		   share => [qw/
+			     share:se
+			     /],
 		   );
 
 my %cap_defaults = (
@@ -65,6 +72,12 @@ my %cap_defaults = (
 			'configure-api' => 0,
 			stage => 'start',
 			'list-channels' => 0,
+		    },
+		    cache => {
+			cache => undef,
+		    },
+		    share => {
+			share => undef,
 		    },
 		    );
 
