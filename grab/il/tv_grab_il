@@ -1,0 +1,727 @@
+#!/usr/bin/perl -w
+
+=pod
+
+=head1 NAME
+
+tv_grab_il - Grab TV listings for Israel. (Ver: $Rev: 17 $)
+
+=head1 SYNOPSIS
+
+tv_grab_il --help
+
+tv_grab_il [--config-file FILE] --configure [--gui OPTION]
+
+tv_grab_il [--config-file FILE] [--output FILE] [--days N]  [--offset N]
+           [--quiet] [--gui OPTION] [--list-channels]
+
+=head1 DESCRIPTION
+
+Outputs TV listings for channels available in Israel (free to air, cable
+and satellite). The data is obtained from parsing web pages from the Israeli
+portal walla (from tv.walla.co.il) and www.tv2day.co.il
+
+First run B<tv_grab_il --configure> to decide which channels to download. There
+is a long list. You may want to select none when it asks you for which
+channels and manually edit the configuration file to uncomment the channels
+you wish to tape. Then run B<tv_grab_il> with no arguments to output the
+listing in XML format to the standard output.
+
+To view the hebrew, you will need to set your terminal to have a unicode font
+that supports hebrew.
+
+B<--configure> Prompt for which channels, and write the configuration file.
+B<--config-file FILE> Set the name of the configuration file, the
+default is B<~/.xmltv/tv_grab_il.conf>.  This is the file written by
+B<--configure> and read when grabbing.
+
+B<--output FILE> write to FILE rather than standard output.
+
+B<--grabber S> Select tvguide source(yestvguide-ru, yestvguide-he, walla)), default is yestvguide-ru
+
+B<--quiet> suppress the progress messages normally written to standard
+error.
+
+B<--days N> grab I<N> days.  The default is 7.
+
+B<--offset N> start grabbing N days from today, rather than starting
+today.  N may be negative. Due to the website organization, N cannot
+be inferior to -1.  
+
+B<--xmltvid_tmpl S> Use 'S' as a template for generating xmlid, default is %CHANNEL%-%DOMAIN%
+
+B[--gui OPTION] Use GUI mode (term or tk)
+
+=head1 SEE ALSO
+
+L<xmltv(5)>.
+
+=head1 AUTHOR
+
+Written by Mike Dubman, miked@mail15.com, based on tv_grab_il by
+Jason Friedman, jason.friedman@weizmann.ac.il
+
+=head1 BUGS
+
+The summer time routine uses the European summer time start and stop
+dates which are different to those used in Israel. The correct times
+can be found at
+http://www.greenwichmeantime.com/local/asia/il.htm?israel+jerusalem+tel_aviv
+
+=cut
+
+use strict;
+#binmode(STDOUT,":utf8");
+#binmode(STDERR,":utf8");
+use HTML::Entities qw(decode_entities);
+use HTML::TreeBuilder;
+use Date::Manip;
+use Getopt::Long;
+use Locale::Hebrew;
+use Encode;
+use Encode qw(from_to);
+
+use XMLTV;
+use XMLTV::Memoize;
+use XMLTV::Ask;
+use XMLTV::TZ qw(parse_local_date);
+use XMLTV::DST qw(utc_offset);
+use XMLTV::Config_file;
+use XMLTV::Get_nice;
+use XMLTV::Mode;
+use XMLTV::Version '$Id$';
+use XMLTV::Capabilities qw/baseline manualconfig/;
+
+use XMLTV::Usage <<END
+$0: get Israeli television listings in XMLTV format
+To configure: $0 --configure [--config-file FILE]
+To grab listings: $0 [--config-file FILE] [--output FILE] 
+                     [--quiet] [--gui OPTION]
+                     [--days N] [--offset N] [--list-channels]
+
+END
+  ;
+
+# Use Term::ProgressBar if installed.
+use constant Have_bar => eval { require Term::ProgressBar; 1 };
+
+# Memoize some date parsing routines, if possible.  FIXME move to
+# XMLTV::Memoize.
+#
+eval { require Memoize };
+unless ($@) {
+  foreach (qw(utc_offset ParseDate UnixDate dc get_xmlid)) {
+    Memoize::memoize($_) or warn "cannot memoize $_";
+  }
+}
+
+sub xhead();
+sub configure();
+sub get_display_name ($);
+sub read_config_file( $ );
+sub dc ( $$ );
+sub get_xmlid ( $ );
+sub set_grabber($);
+sub get_wday($);
+sub channels_to_xmltv($);
+sub programme_to_xmltv();
+sub read_programme();
+sub my_get($);
+
+my %yestvguide_grabber_config_he = (
+   'MAX_DAYS',       7,
+   'BASE_TZ',        'IST',
+   'PAGE_ENCODING',  'Windows-1255',
+   'DOMAIN',         'yestvguide.tv2day.co.il',
+   'FETCH_CHANNELS', '/timeline.asp?IsHeader=Y',
+   'FETCH_DATA_URL', 'http://yestvguide.tv2day.co.il/Guide.asp?chid=%d&chday=%d',
+   'LANG',           'he_IL',
+   'GET_CHANNELS',   \&get_channels_yestv_guide,
+   'FETCH_DATA',     \&fetch_data_yestvguide,
+   'PROCESS_DATA',   \&process_file_yestvguide,
+   );
+
+my %yestvguide_grabber_config_ru = (
+   'MAX_DAYS',       7,
+   'BASE_TZ',        'IST',
+   'PAGE_ENCODING',  'utf8',
+   'DOMAIN',         'yestvguideru.tv2day.co.il',
+   'FETCH_CHANNELS', '/TimeLine.asp?IsHeader=Y',
+   'FETCH_DATA_URL', 'http://www.tv2day.co.il/yesnewrus/Guide.asp?chid=%d&chday=%d',
+   'LANG',           'ru_RU',
+   'GET_CHANNELS',   \&get_channels_yestv_guide,
+   'FETCH_DATA',     \&fetch_data_yestvguide,
+   'PROCESS_DATA',   \&process_file_yestvguide,
+   );
+
+my %walla_grabber_config = (
+   'MAX_DAYS',       14,
+   'BASE_TZ',        'IST',
+   'PAGE_ENCODING',  'Windows-1255',
+   'DOMAIN',         'tv.walla.co.il',
+   'FETCH_CHANNELS', '/?w=/4',
+   'LANG',           'he_IL',
+   'GET_CHANNELS',   \&get_channels_walla,
+   'FETCH_DATA',     \&fetch_data_walla,
+   'PROCESS_DATA',   \&process_file_walla
+   );
+
+my %grabbers = (
+                'yestvguide-he', \%yestvguide_grabber_config_he,
+                'yestvguide-ru', \%yestvguide_grabber_config_ru,
+                'walla',         \%walla_grabber_config
+                );
+
+
+
+XMLTV::Memoize::check_argv('XMLTV::Get_nice::get_nice_aux');
+my ($opt_help, $opt_output, $opt_configure, $opt_config_file);
+my $opt_days   = 0; # default
+my $opt_quiet  = 0; # default
+my $opt_verbose  = 0; # default
+my $opt_offset = 0; #default
+my $opt_grab_source = '';#default
+my $opt_grab_source_default = "yestvguide-ru";#default
+my $opt_xmlid_tmpl = 0;
+my $opt_xmlid_tmpl_default = '%CHANNEL%.%DOMAIN%';
+my $opt_gui = 'term';
+my $opt_list_channels = 0;
+
+GetOptions(
+            'days=i'        => \$opt_days,
+            'offset=i'      => \$opt_offset,
+            'help'          => \$opt_help,
+            'configure'     => \$opt_configure,
+            'config-file=s' => \$opt_config_file,
+            'output=s'      => \$opt_output,
+            'quiet'         => \$opt_quiet,
+            'verbose'       => \$opt_verbose,
+            'grabber=s'     => \$opt_grab_source,
+            'xmltvid_tmpl=s'  => \$opt_xmlid_tmpl,
+            'gui:s'         => \$opt_gui,
+            'list-channels' => \$opt_list_channels,
+
+	  ) or usage(0);
+
+usage(1) if $opt_help;
+
+
+my $script_duration = time();
+
+
+my $mode = XMLTV::Mode::mode('grab', # default
+			     $opt_configure => 'configure',
+			    );
+# Find the config file
+my $config_file = XMLTV::Config_file::filename($opt_config_file, 'tv_grab_il', $opt_quiet);
+my $grabber_config = '';
+
+if ($mode eq 'configure') {
+   # set grabber
+   XMLTV::Ask::init($opt_gui);
+   $opt_grab_source = $opt_grab_source_default if (!$opt_grab_source);
+   die "Undefined grabber: $opt_grab_source" if not defined $grabbers{$opt_grab_source};
+   set_grabber($opt_grab_source);
+   $opt_xmlid_tmpl = $opt_xmlid_tmpl_default if (!$opt_xmlid_tmpl);
+   configure();
+   exit();
+}
+
+
+
+# read channels from configuration
+my %channels = read_config_file($config_file);
+
+if ($opt_list_channels) {
+   my %w_args;
+   if (defined $opt_output) {
+     my $fh = new IO::File(">$opt_output");
+     $w_args{OUTPUT} = $fh;
+   }
+   $w_args{encoding} = 'utf-8';
+   my $writer = new XMLTV::Writer(%w_args);
+   $writer->start(xhead);
+   channels_to_xmltv($writer);
+   $writer->end();
+   exit;
+}
+
+my (%freqs, %icons) = ((),());
+my $max_days   = $grabber_config->{'MAX_DAYS'};
+
+
+if ( (($opt_offset + $opt_days) > $max_days) or ($opt_offset > $max_days) ) {
+    $opt_days = $max_days - $opt_offset;
+    if ($opt_days < 0) {
+        $opt_offset = 0;
+        $opt_days = $max_days;
+    }
+    warn <<END
+The website does not handle more than $max_days days.
+So the grabber is now configure with --offset $opt_offset --days $opt_days
+END
+;
+}
+
+$max_days = $opt_days if ($opt_days);
+
+# fetch tvguide
+my @all_progs = ();
+read_programme();
+
+# save to xml
+my %w_args;
+if (defined $opt_output) {
+  my $fh = new IO::File(">$opt_output");
+  $w_args{OUTPUT} = $fh;
+}
+$w_args{encoding} = 'utf-8';
+
+my $writer = new XMLTV::Writer(%w_args);
+$writer->start(xhead);
+channels_to_xmltv($writer);
+programme_to_xmltv();
+$writer->end();
+
+$script_duration = time() - $script_duration;
+warn "Grabber process finished in " . $script_duration . " seconds.\n" if $opt_verbose;
+
+exit();
+#######################################################################
+
+sub read_programme() {
+
+   #print "offset: $opt_offset days: $opt_days max: $max_days\n";
+   my $all_channels = keys %channels;
+   my $max_iter =  int($all_channels * $max_days);
+   my $bar = new Term::ProgressBar({name => 'getting listings', 'count' => $max_iter}) if Have_bar && not $opt_quiet;
+   my ($iter) = (0);
+   foreach my $channel (keys %channels) {
+      for my $wday (0 ... ($max_days-1)) {
+         my $data_date     = UnixDate(dc("today", '+ ' . ($opt_offset + $wday) . ' day'),'%Y-%m-%d');
+         #print "Date: $data_date ", ($opt_offset+$wday+1), "\n";
+         my $func          = $grabber_config->{'FETCH_DATA'};
+         my $data          = &$func($channel, $data_date); #grab data
+	 $bar->message(sprintf("Getting listing for channel: %s date: %s", get_display_name($channel), $data_date)) if Have_bar && $opt_verbose;
+         if (defined $data) {
+            #print "DATADATE: $data_date - $day\n";
+            $func             = $grabber_config->{'PROCESS_DATA'};
+            &$func($writer, $data, $data_date, $channel);  #process data
+   
+         }
+         $bar->update($iter++) if Have_bar && not $opt_quiet;
+      }
+   }
+   $bar->update($max_iter) if Have_bar && not $opt_quiet;
+}
+
+sub programme_to_xmltv() {
+   foreach my $one_prog (@all_progs) {
+      $writer->write_programme(\%$one_prog);
+   }
+}
+sub channels_to_xmltv($) {
+   my ($writer) = @_;
+   foreach my $channel (keys %channels) {
+       my $ch_xid       = get_xmlid($channel);
+       my $display_name = get_display_name($channel);
+       #print "$display_name -- $ch_xid -- $freqs{$channel}\n";
+       my @names = ();
+       push (@names, [ $freqs{$channel}]) if (defined $freqs{$channel} && ($freqs{$channel} ne "--")) ;
+       push (@names,[ $display_name, $grabber_config->{'LANG'} ]);
+       my $ch = {id => $ch_xid, 'display-name' => \@names};
+       $ch->{'icon'}  = [{src=>$icons{$channel}}] if defined $icons{$channel};
+       $writer->write_channel($ch);
+   }
+}
+
+sub get_wday($) {
+   my ($now) = @_;
+
+   my $wday_today = UnixDate($now, '%w');
+   if ($wday_today == 7) {
+      $wday_today = 1;
+   } else {
+      $wday_today++;
+   }
+   return $wday_today;
+}
+
+sub set_grabber($) {
+   my ($grabber) = @_;
+   die "Undefined grabber: $grabber" unless defined $grabbers{$grabber};
+   warn "Using grabber: $grabber\n" if $opt_verbose;
+   $grabber_config = $grabbers{$grabber};
+}
+
+sub get_xmlid($) {
+   my ($channel) = @_;
+   my $xmlid = $opt_xmlid_tmpl;
+   $xmlid =~ s/%CHANNEL%/$channel/g;
+   $xmlid =~ s/%DOMAIN%/$grabber_config->{'DOMAIN'}/g;
+   return $xmlid;               
+}
+
+sub get_display_name ( $ ) {
+  my($chanid) = @_;
+  my $channel_name = $channels{$chanid};
+  die "No channel found for $chanid" unless defined $channels{$chanid};
+  return $channel_name;
+}
+
+#######################################################################
+
+sub tidy( $ ) {
+    for (my $tmp = shift) {
+    tr/\t\205/ /d;
+	s/\`\`//g;
+    if (s/([^\012\015\040-\176\240-\377]+)//g) {
+        warn "removing bad characters: '$1'" if $opt_verbose
+    }
+    return $_;
+    }
+}
+
+
+sub process_file_yestvguide( $$$$ ) {
+  my($writer,$data,$date,$channel) = @_;
+
+  #print "$data\n";
+  my $tree = HTML::TreeBuilder->new_from_content($data);
+
+  my $memirid_tree = $tree->look_down('_tag','TD', 'class', 'ChNameMemirID');
+
+  if (not defined $freqs{$channel}) {
+     my $freq         = $memirid_tree->as_trimmed_text;
+     $freq =~ s/[\(\)]//g;
+     if ($freq) {
+        $freqs{$channel} = sprintf("%d",$freq);
+     } else {
+        $freqs{$channel} = "--";
+     }
+  }
+
+  my @show_details = $tree->look_down('_tag','TD','class', 'prtime');
+  my $detail;
+
+  foreach $detail (@show_details) {
+    my $starttime =  $detail->as_text;
+    next if ($starttime !~ /^\d\d:\d\d$/);
+    my (%program);
+
+    my $detail2   = $detail->parent->look_down('_tag', 'TD', 'class', 'prnameTD');
+    my $progname  = tidy($detail2->content->[0]->as_trimmed_text);
+    if ($grabber_config->{'LANG'} =~ /^ru_/) {
+	   if ( $progname =~ /\(P\)(.+)/) {
+    		$program{subtitles} = [ { type => 'onscreen', language => [ "ru" ] } ];
+			$progname = $1;
+	   }
+       from_to($progname, "Windows-1251", "utf8");
+    } else {
+       $progname = hebrewflip($progname) ;
+       from_to($progname, "iso-8859-8", "utf8");
+    }
+    my $genre     = $detail2->content->[0]->attr('class');
+    $genre        =~ s/prname//g;
+
+    $program{title}     = [[$progname,$grabber_config->{'LANG'}]];
+    $program{start}     = utc_offset("$date $starttime",$grabber_config->{'BASE_TZ'});
+    $program{channel}   = get_xmlid($channel);
+    $program{category}  = [[$genre, "en"]] if $genre;
+
+    push(@all_progs, \%program);
+  }
+}
+
+
+
+
+#######################################################################
+# fetch the web page
+# Parameters:
+#    date
+#    channel number (on web page)
+#    directory for caching data
+
+sub fetch_data_yestvguide ( $$ ) {
+  my($channel, $data_date) = @_;
+
+  my $wday = get_wday($data_date);
+  my $format_url = $grabber_config->{'FETCH_DATA_URL'};
+  my $url = sprintf($format_url, $channel, $wday);
+  #print "URL: $url\n";
+  my $data = my_get($url);
+  warn "Could not download web page $url. (page load errors?)\n" unless defined $wday or $opt_quiet;
+  return $data;
+}
+
+##############################################################################
+sub read_config_file( $ ) {
+  my ($config_file) = @_;
+  my (@config_lines,%channels,$ch_did);#,$ch_name);
+
+  @config_lines = XMLTV::Config_file::read_lines($config_file);
+  my $line_num = 1;
+  foreach (@config_lines) {
+    ++$line_num;
+    next if not defined;
+    if (/^grabber (.+)$/) {
+       if ($opt_grab_source && ($opt_grab_source ne $1)) {
+          warn "Grabber was changed from: $1 to $opt_grab_source\n" unless $opt_quiet;;
+       } else {
+          $opt_grab_source = $1;
+       }
+       next;
+    }
+    if (/^xmltvid_tmpl (.+)$/) {
+       if ($opt_xmlid_tmpl && ($opt_xmlid_tmpl ne $1)) {
+          warn "xmltvid template was changed from: $1 to: $opt_xmlid_tmpl\n" unless $opt_quiet;;
+       } else {
+          $opt_xmlid_tmpl = $1;
+       }
+       next;
+    }
+    if (/^channel:?\s+(\S+)\s+([^\#]+)/) {
+	my $ch_did = $1;
+	my $ch_name = $2;
+	$ch_name =~ s/\s*$//;
+	$channels{$ch_did} = $ch_name;
+    } else {
+       warn "$config_file:$line_num: bad line: $_\n";
+     }
+   }
+
+  $opt_grab_source = $opt_grab_source_default if (!$opt_grab_source);
+  set_grabber($opt_grab_source);
+
+  $opt_xmlid_tmpl = $opt_xmlid_tmpl_default if (!$opt_xmlid_tmpl);
+
+  die "No channels specified, run me with --configure\n" if not %channels;
+  return %channels;
+}
+
+##############################################################################
+
+# Wrapper for DateCalc().
+sub dc( $$ ) {
+  my $err;
+  my $r = DateCalc(@_, \$err);
+  die "DateCalc() failed with $err" if $err;
+  die 'DateCalc() returned undef' if not defined $r;
+  return $r;
+}
+
+#
+# Wrap get_nice to make it try one more time if it fails
+# to download a url and return undef if it still fails to download
+# the uri.
+#
+sub my_get($)
+{
+    my( $uri ) = @_;
+
+    my $got = eval { get_nice $uri };
+    if( $@ )
+    {
+        $got = eval { get_nice $uri };
+        if( $@ )
+        {
+            warn( "Failed to fetch $uri" ) if $opt_verbose;
+            return undef;
+        }
+    }
+
+    return $got;
+}
+
+##############################################################################
+
+sub xhead() {
+  return { 'source-info-url'     => "http://$grabber_config->{'DOMAIN'}/",
+	   'source-data-url'     => "http://$grabber_config->{'DOMAIN'}",
+	   'generator-info-name' => 'XMLTV',
+	   'generator-info-url'  => 'http://membled.com/work/apps/xmltv/',
+	 };
+}
+
+#############################################################################
+
+sub configure() {
+   XMLTV::Config_file::check_no_overwrite($config_file);
+   
+   open(CONF, ">$config_file") or die "cannot write to $config_file: $!";
+   my $user_grabber = ask_choice("TV guide data source ($opt_grab_source) :", $opt_grab_source , keys %grabbers);
+   print CONF "grabber $user_grabber\n";
+
+   my $user_xmltvid = ask("xmltvid template (default $opt_xmlid_tmpl) :") || $opt_xmlid_tmpl;
+   print CONF "xmltvid_tmpl $opt_xmlid_tmpl\n";
+
+   my $bar = new Term::ProgressBar('getting channel list', 1) if Have_bar && not $opt_quiet;
+   my ($chsptr) = $grabber_config->{'GET_CHANNELS'};
+   update $bar if Have_bar && not $opt_quiet;
+   my %channels = &$chsptr;
+   
+   my @chs   = sort { $a <=> $b } keys %channels;
+   my @names = map { $channels{$_} } @chs;
+   my @qs    = map { "add channel $_?" } @names;
+   my @want  = ask_many_boolean(1, @qs);
+   foreach (@chs) {
+        my $w     = shift @want;
+        my $name  = shift @names;
+        warn("cannot read input, stopping channel questions"), last
+          unless defined $w or $opt_quiet;
+        print CONF '# ' if not $w;
+        print CONF "channel $_ $name\n";
+    }
+
+    close CONF or warn "cannot close $config_file: $!";
+    say "All done, run with no arguments to grab listings.\n";
+}
+
+############################################################################
+# get the channels for Israel and their categories
+sub get_channels_yestv_guide() {
+
+   my %all_channels = ();
+   my $location="http://" . $grabber_config->{'DOMAIN'} . '/' . $grabber_config->{'FETCH_CHANNELS'};
+   my $channelspage = get($location);
+   warn "cannot get $channelspage" unless defined $channelspage;
+   
+   my $tree = HTML::TreeBuilder->new_from_content($channelspage);
+
+   my $dir = "rtl";
+   $dir = "ltr" if ($grabber_config->{'LANG'} =~ /^ru_/);
+
+   my @channel_list = $tree->look_down(
+   				     '_tag','select',
+                                        'dir',$dir,
+                                        'name','select1'
+   				    );
+
+   my ($channel_element);
+   foreach $channel_element (@channel_list) {
+      my ($one_child);
+      my @children = $channel_element->content_list;
+      foreach $one_child (@children) {
+         
+         my ($one_name) = $one_child->as_trimmed_text;
+         my ($one_num)  = $one_child->attr('value');
+         next if ((not defined ($one_num) || not defined($one_name)) || (($one_num !~ /^\d+$/) || ($one_num <= 0)));
+         if ($grabber_config->{'LANG'} =~ /^ru_/) {
+            utf8::encode($one_name)  if (utf8::is_utf8($one_name) );
+         } else {
+            $one_name = hebrewflip($one_name) ;
+            from_to($one_name, "iso-8859-8", "utf8");
+         }
+         #print "N=$one_name V=$one_num\n";
+         $all_channels{$one_num} = $one_name;
+      }
+   }
+
+   # Now that we're done with it, we must destroy it.
+   $tree = $tree->delete;
+   return (%all_channels);
+}
+
+############################################################################
+# reencode a string
+sub reencode( $ ) {
+  my ($thestring) = @_;
+  return (encode_utf8(decode($grabber_config->{'PAGE_ENCODING'},$thestring)));
+}
+
+sub get_channels_walla() {
+
+   my $location="http://" . $grabber_config->{'DOMAIN'} . '/' . $grabber_config->{'FETCH_CHANNELS'};
+   my $channelspage = get($location);
+   warn "cannot get $channelspage" unless $channelspage or $opt_quiet;
+
+   my $tree = HTML::TreeBuilder->new_from_content($channelspage);
+
+   my @channel_list = $tree->look_down(
+				     '_tag','a',
+				     sub {
+				       $_[0]->attr('href') =~ /\?w=\/[0-9]*\/\/[0-9]{4}-[0-9][0-9]-[0-9][0-9]\/1$/
+				     }
+				    );
+
+   my ($channel_name,$channel_number,$channel_element,$channel_content,$channel_type);
+   my %channels = ();
+   foreach $channel_element (@channel_list) {
+     # ignore links to images
+     if (defined($channel_element->look_down('_tag','img'))) { next; };
+     $channel_content = $channel_element->as_text;
+     $channel_name = $channel_element->as_text;
+     from_to($channel_name, "iso-8859-8", "utf8");
+     $channel_element->starttag() =~ /w=\/([0-9]*)/;
+     $channel_number = $1;
+     $channels{$channel_number} = $channel_name;
+   }
+
+   # Now that we're done with it, we must destroy it.
+   $tree = $tree->delete;
+   return %channels;
+}
+
+sub fetch_data_walla($$) {
+   my($channel, $date) = @_;
+   my $url = "http://$grabber_config->{'DOMAIN'}/?w=/$channel//$date/1";
+   #print "URL: $url\n";
+   my $data = my_get($url);
+   warn "Could not download web page $url. (page load errors?)\n" unless defined $data;
+   return $data;
+}
+
+sub process_file_walla( $$$$$ ) {
+  my($writer,$data,$date,$channel) = @_;
+
+  my @genrenames = ("family","movie","music","sport","news","latenight","youth");
+
+#  print "$data\n";
+  my $tree = HTML::TreeBuilder->new_from_content($data);
+
+  my @show_details = $tree->look_down(
+				    '_tag','a',
+				      sub {
+					$_[0]->attr('href') =~ /\?w=\/[0-9]+\/[0-9]+\/[0-9]{4}-[0-9][0-9]-[0-9][0-9]\/1$/
+				      }
+				     );
+  my $detail;
+  my (@starttimes, @endtimes, @prognames, @genres);
+  foreach $detail (@show_details) {
+    my $progname =  $detail->as_trimmed_text;
+    $progname = hebrewflip($progname) ;
+    from_to($progname, "iso-8859-8", "utf8");
+    my $starttime = $detail->parent->parent->content->[4]->content->[0]->as_text;
+    my $genre_string = $detail->parent->parent->content->[3]->content->[0]->attr('src');
+    $genre_string =~ /genre\/(.*)\.gif/;
+    push @starttimes, $starttime;
+    push @prognames, $progname;
+    push @genres, $genrenames[$1-1];
+
+    if (not defined $icons{$channel}) {
+       my $icon = $tree->look_down('_tag', 'img', 
+                                   sub {
+                                          $_[0]->attr('src') =~ /http:\/\/ico.walla.co.il\/w6\/v\/tv\/ch_icons\/[^\.]+\..../
+                                       }
+                                 );
+       $icons{$channel} = $icon->attr('src') if defined $icon;
+    }
+  }
+
+  if (not @starttimes) {
+   warn "nothing found for date $date, channel $channel, ", get_display_name($channel), "\n" if $opt_verbose;
+   return;
+  }
+
+  my ($i);
+  for $i (1 ... scalar @starttimes) {
+    my (%program);
+    $program{title} = [[$prognames[$i-1],$grabber_config->{'LANG'}]];
+    $program{start} = utc_offset("$date $starttimes[$i-1]",$grabber_config->{'BASE_TZ'});
+    $program{channel} = get_xmlid($channel);
+    $program{category}  = [[$genres[$i-1], "en"]];
+    push(@all_progs, \%program);
+  }
+}
+
