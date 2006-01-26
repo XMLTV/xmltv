@@ -380,7 +380,11 @@ my @opt_components
        pl_files => { 'grab/huro/tv_grab_huro.PL'
 		     => 'grab/huro/tv_grab_huro' },
        share_files => { 'grab/huro/jobmap'
-			=> 'tv_grab_huro/jobmap' },
+			=> 'tv_grab_huro/jobmap',
+			'grab/huro/catmap.hu'
+			=> 'tv_grab_huro/catmap.hu',
+			'grab/huro/catmap.ro'
+			=> 'tv_grab_huro/catmap.ro' },
        to_clean => [ 'grab/huro/tv_grab_huro' ],
        deps => [ 'grab/huro/tv_grab_huro'
 		 => [ 'grab/huro/tv_grab_huro.in' ] ],
