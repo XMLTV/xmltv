@@ -68,16 +68,43 @@ to STDERR.
 
 ValidateFile checks the following:
 
-  File is well-formed XML.
-  File follows the XMLTV DTD.
-  There is exactly one channel-entry for each channel mentioned in a 
-  programme-entry.
-  All xmltvids look like proper ids, i.e. they match 
-  /^[-a-zA-Z0-9]+(\.[-a-zA-Z0-9]+)+$/.
-  Each programme entry has a valid channel id.
-  Each programme entry has a non-empty title.
-  Each programme entry has a valid start-time. 
-  If a programme has a stop-time, it must be valid.  
+=over
+
+=item *
+
+File is well-formed XML.
+
+=item *
+
+File follows the XMLTV DTD.
+
+=item *
+
+There is exactly one channel-entry for each channel mentioned in a 
+programme-entry.
+
+=item *
+
+All xmltvids look like proper ids, i.e. they match 
+/^[-a-zA-Z0-9]+(\.[-a-zA-Z0-9]+)+$/.
+
+=item *
+
+Each programme entry has a valid channel id.
+
+=item *
+
+Each programme entry has a non-empty title.
+
+=item *
+
+Each programme entry has a valid start-time. 
+
+=item *
+
+If a programme has a stop-time, it must be valid.  
+
+=back
 
 =cut 
   
@@ -193,10 +220,15 @@ sub w
 1;
 
 =back 
+
+=head1 BUGS
+
+It is currently necessary to specify the path to the xmltv dtd-file.
+This should not be necessary.
    
 =head1 COPYRIGHT
 
-Copyright (C) 2005 Mattias Holmlund.
+Copyright (C) 2006 Mattias Holmlund.
 
 This program is free software; you can redistribute it and/or
 modify it under the terms of the GNU General Public License

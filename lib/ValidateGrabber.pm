@@ -76,16 +76,44 @@ sub ConfigureGrabber
 
 Run the validation for a grabber.
 
-    ValidateGrabber( "./tv_grab_new", "./tv_grab_new.conf", "/tmp/new_",
-                     "./blib/share", 0, 1 )
+    ValidateGrabber( "./tv_grab_new", "./tv_grab_new.conf", 
+		     "/tmp/new_", "./blib/share", 0 )
 
+ValidateGrabber takes the following parameters:
+
+=over
+
+=item *
+
+the command to run the grabber.
+
+=item *
+
+the name of a configuration-file for the grabber.
+
+=item *
+
+a file-prefix that is added to all output-files.
+
+=item *
+
+a path to a directory with metadata for the grabber. This path
+is passed to the grabber via the --share option if the grabber
+supports the capability 'share'. undef if no --share parameter shall
+be used.
+
+=item *
+
+a boolean specifying if the --cache parameter shall be used for grabbers
+that support the 'cache' capability.
+
+=back
+  
 =cut
 
 sub ValidateGrabber
 {
-    my( $exe, $conf, $op, $sharedir, $usecache, $verbose ) = @_;
-
-    $verbose = 0 if not defined $verbose;
+    my( $exe, $conf, $op, $sharedir, $usecache ) = @_;
 
     my $errors=0;
     open( $runfh, ">${op}commands.log" )
@@ -116,6 +144,18 @@ sub ValidateGrabber
     foreach my $c (@capabilities)
     {
 	$capability{$c} = 1;
+    }
+
+    if( not defined( $capability{baseline} ) )
+    {
+	w "The grabber does not support the 'baseline' capability.";
+	$errors++;
+    }
+
+    if( not defined( $capability{manualconfig} ) )
+    {
+	w "The grabber does not support the 'manualconfig' capability.";
+	$errors++;
     }
 
     my $extraop = "";
@@ -358,6 +398,29 @@ sub compare_files {
 }
 
 1;
+
+
+=back 
+   
+=head1 COPYRIGHT
+
+Copyright (C) 2006 Mattias Holmlund.
+
+This program is free software; you can redistribute it and/or
+modify it under the terms of the GNU General Public License
+as published by the Free Software Foundation; either version 2
+of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program; if not, write to the Free Software
+Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+
+=cut
 
 ### Setup indentation in Emacs
 ## Local Variables:
