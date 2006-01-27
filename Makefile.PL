@@ -57,9 +57,11 @@ END
 #
 my $opt_strictdeps = 0;
 my $opt_yes = 0;
+my $opt_default = 0;
 my $opt_components;
 GetOptions('strict-deps'  => \$opt_strictdeps,	# be strict about dependencies
 	   yes            => \$opt_yes,		# answer yes to all questions
+   	   default        => \$opt_default,	# answer default to all questions
 	   'components=s' => \$opt_components,
 	  );
 
@@ -206,6 +208,9 @@ my %recommended
 
 if ($opt_yes) {
     *ask = sub { print "$_[0] yes\n"; 1 };
+}
+elsif ($opt_default) {
+    *ask = sub { print "$_[0] $_[2]\n"; $_[2] };
 }
 else {
     require 'lib/Ask/Term.pm';
