@@ -381,7 +381,7 @@ sub run_capture {
 
     if( $? >> 8 )
     {
-	return $? >> 8;
+	return undef;
     }
     else
     {
