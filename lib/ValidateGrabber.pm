@@ -132,6 +132,12 @@ sub ValidateGrabber
       $errors++;
     }
 
+    if (run( "$exe --description > /dev/null 2>&1" ))
+    {
+      w "$exe --description failed: $?, $!";
+      $errors++;
+    }
+
     my $cap = run_capture( "$exe --capabilities 2>/dev/null" );
     if ( not defined $cap )
     {
