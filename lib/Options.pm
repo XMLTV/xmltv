@@ -27,6 +27,7 @@ my %cap_options = (
 			   help|h
 			   version
 			   capabilities
+			   description
 			   /],
 		   baseline => [qw/
 				days=i 
@@ -92,6 +93,8 @@ my( $opt, $conf ) = ParseOptions( {
   listchannels_sub => \&list_channels,
   extra_options => {},
   extra_help => "",
+  version => '$Id$',
+  decription => 'Sweden (tv.swedb.se)',
 } );
 
 $opt is a hashref with the values for all command-line options in the
@@ -105,8 +108,8 @@ ParseOptions handles the following options automatically without returning:
 
 --help
 --capabilities
---version (note that --version is better handled with the XMLTV::Version
-module)
+--version 
+--description
 
 If the grabber supplies a stage_sub and a listchannels_sub, ParseOptions
 also takes care of the following options:
@@ -136,6 +139,16 @@ sub ParseOptions
     my @optdef=();
     my $opt={};
     
+    if( not defined( $p->{version} ) )
+    {
+	croak "No version specified in call to ParseOptions";
+    }
+
+    if( not defined( $p->{description} ) )
+    {
+	croak "No description specified in call to ParseOptions";
+    }
+
     push( @optdef, @{$cap_options{all}} );
     hash_push( $opt, $cap_defaults{all} );
     
@@ -170,9 +183,26 @@ sub ParseOptions
     }
     elsif( $opt->{version} )
     {
-	# This is only a fallback for when the grabber author has forgotten
-	# to load the XMLTV::Version module.
-	print "XMLTV module version $XMLTV::VERSION\n";
+	eval {
+	    require XMLTV;
+	    print "XMLTV module version $XMLTV::VERSION\n";
+	};
+	print "could not load XMLTV module, xmltv is not properly installed\n";
+
+	if( $p->{version} =~ m!\$Id: [^,]+,v (\S+) ([0-9/: -]+)! ) 
+	{
+	    print "This is $p->{grabber_name} version $2, $3\n";
+	}
+	else 
+	{
+	    croak "Invalid version $p->{version}";
+	}
+
+	exit 0;
+    }
+    elsif( $opt->{description} )
+    {
+	print $p->{description} . "\n";
 	exit 0;
     }
     
