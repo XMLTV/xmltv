@@ -177,7 +177,7 @@ my %pl_files = ('filter/tv_grep.PL'     => 'filter/tv_grep',
 	       );
 
 # Files to be installed in the system-wide share/ directory.
-my %share_files;
+my %share_files = ('xmltv.dtd' => 'xmltv.dtd');
 
 # Files which 'make clean' should remove, but doesn't by default, so
 # we have to patch it.
