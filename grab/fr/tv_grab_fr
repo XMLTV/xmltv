@@ -117,12 +117,13 @@ sub get {
 #***************************************************************************
 my $GRID_BASE_URL = 'http://telepoche.guidetele.com/gtv/grille?openagent&d=2&h=6&b=';
 my $GRID_BY_CHANNEL = 'http://telepoche.guidetele.com/gtv/semaine?openagent&d=0&c=';
+my $GRID_FOR_CHANNEL = 'http://telepoche.guidetele.com/grille/EMWD-62UN5A/';
 my $SHEET_URL = "http://telepoche.guidetele.com/fiche/emi_";
 my $ROOT_URL  = "http://telepoche.guidetele.com";
 my $LANG = "fr";
 my $MAX_STARS = 4;
 my $MAX_RETRY = 5;
-my $VERSION   = "090106-01";
+my $VERSION   = "270106-01";
 
 # Temporary avoid XML warnings (to be investigated)
 no warnings;
@@ -225,6 +226,7 @@ my $config_file = XMLTV::Config_file::filename($opt_config_file, 'tv_grab_fr', $
 #***************************************************************************
 sub get_channels( $ );
 sub process_channel_grid_page( $$$$ );
+sub get_detailed_fic( $$$ );
 sub debug_print( $ );
 
 # Set this to 1 of you debug strings
@@ -463,7 +465,7 @@ print STDERR "Grabber process finished in " . $script_duration . " seconds.\n" i
 sub get_channels( $ ) {
     my $gridid = shift;
     my %channels;
-    my $url = $GRID_BASE_URL.$gridid;
+    my $url = $GRID_FOR_CHANNEL.$gridid.'/2_6.html';
     my $page = get $url;
     die "could not get $url\n" if not defined $page;
     my $t = HTML::TreeBuilder->new;
@@ -476,11 +478,13 @@ sub get_channels( $ ) {
       if ( $chid =~ /goChaine\('(.*)','(.*)',''\);/ ) {
         $chid = $1;
         my $imgCell = $cellTree->look_down( "_tag", "img" );
+        my $chicon = $imgCell->attr('src');
         my $chname = $imgCell->attr('src');
         $chname =~ s/\/c_img\/chaine\///;
         $chname =~ s/\.gif//;
+        $chname =~ s/\.GIF//;
         debug_print "Found channel : $chid - " . $chname . "\n";
-        $channels{$chid} = {'name' =>  $chname, 'icon' => $imgCell->attr('src') };
+        $channels{$chid} = {'name' =>  $chname, 'icon' => $chicon };
       }
     }
     $t->delete(); undef $t;
@@ -659,115 +663,7 @@ sub process_channel_grid_page( $$$$ ) {
         my ($idesc, $tdesc, $imgdesc);
         # Now get program description if the longlisting option is set
         if ( $opt_slow && $progTree->attr('class') eq 'fiche' ) {
-          my $id = $progTree->attr('onclick');
-          my @desc;
-          $id =~ /fiche\('(\d+)'\)/ or die "expected fiche(x), got: $id";
-          $id = $1;
-          debug_print("Calling sheet URL : " . $SHEET_URL . $id . "\n");
-          
-          my $ficpage;
-          my $nbretryfic = 0;
-          my $uri = $SHEET_URL . $id;
-          while (not defined($ficpage = get $uri)) {
-            ++$nbretryfic;
-            die "cannot get $uri after $MAX_RETRY tries\n" if $nbretryfic == $MAX_RETRY;
-            sleep 1;
-          }
-          my $tfic = HTML::TreeBuilder->new;
-          $tfic->parse($ficpage) or die "cannot parse content of $uri\n";
-          $tfic->eof;
-
-          # This page's title tag contains the program title without the sub-title. Use it to separate the two.
-          my $ttitle;
-          if ( $ttitle = $tfic->look_down('_tag', 'title') ) {
-            my $htmltitle = $ttitle->as_text();
-            if ($title =~ s/^\Q$htmltitle\E\s+-\s+//) {
-              $prog{'title'} = [ [ tidy($htmltitle) ] ];
-              $prog{'sub-title'} = [ [ tidy($title) ] ];             
-            }
-          }
-          # Get the duration and the year
-          my ($length, $hour, $min, $year);
-          if ( $tdesc = $tfic->look_down('_tag', 'td', 'width', '250', 'class', 'txt') ) {
-            $length = $tdesc->as_text();
-            if ( $length =~ s/ Dur� : (\d+)h(\d+) AM(.*)// ) {
-              $hour = $1; $min = $2; $year = $3;
-              # guidetele.com si full of bugs ...
-              $hour = $hour - 12 if ($hour >= 12);
-              $prog{'length'} = ($hour * 3600) + ($min * 60);
-              $prog{'date'}   = $year;
-            }
-          }
-          # Now get descriptions, summary, advices, actors and director
-          my ($resume, $histoire, $avis);
-          my ($nextIsResume,$nextIsHistory,$nextIsAvis,$nextIsDirector) = (0,0,0,0);
-          my (@director, @actor);
-          if ( $tdesc = $tfic->look_down('_tag', 'td', 'width', '396') ) {
-            # Detect actors
-            foreach my $actorcell ($tdesc->look_down('_tag', 'td', 'class', 'disActeur') ) {
-              push @actor, tidy($actorcell->as_text());
-            }
-            my @children = $tdesc->content_list();
-            foreach my $desc (@children)  {
-              unless (ref($desc)) {
-                # Remove leading and trailing spaces
-                $desc =~ s/^ *: *//;
-                $desc =~ s/ *$//;
-              }              
-              if ($nextIsDirector == 1 ) {
-                push @director, tidy($desc);
-                $nextIsDirector = 0;
-                debug_print "FOUND DIRECTOR : " . tidy($desc) . " - $title - $id\n";
-              }
-              if ($nextIsResume == 1) {
-                $desc =~ s/ *$//;
-                warn "RESUME seen twice\n" if defined $resume;
-                $resume = tidy($desc);
-                $nextIsResume = 0;
-                debug_print "FOUND RESUME : $resume \n";
-              }
-              if ($nextIsHistory == 1 ) {
-                $desc =~ s/ *$//;
-                warn "HISTOIRE seen twice\n" if defined $histoire;
-                $histoire = tidy($desc);
-                $nextIsHistory = 0;
-                debug_print "FOUND HISTOIRE : $histoire \n";
-              }
-              if ($nextIsAvis == 1 ) {
-                $desc =~ s/ *$//;
-                warn "AVIS seen twice\n" if defined $avis;
-                $avis = tidy($desc);
-                $nextIsAvis = 0;
-                debug_print "FOUND AVIS : $avis \n";
-              }
-              if ( ref($desc) ) {
-                $nextIsResume = 1 if ( $desc->as_text() eq "RESUME" );
-                $nextIsHistory = 1 if  ( $desc->as_text() eq "HISTOIRE" );
-                $nextIsAvis = 1 if  ( $desc->as_text() eq "AVIS" );
-                $nextIsDirector = 1 if ($desc->as_text() =~ /R..lisateur/ );
-              }
-            }
-          }
-          # RESUME is main definition, HISTOIRE shorter.
-          foreach ($resume, $histoire) {
-            push @{$prog{desc}}, [ $_, $LANG ] if defined and length;
-          }
-          # Add AVIS to the main description, or make a new desc for it if there are none.
-          if (defined $avis and length($avis) ) {
-            if ($prog{desc}) {
-              $prog{desc}->[0]->[0] .= "Critique : " . tidy($avis);
-            } else {
-              push @{$prog{desc}}, [ tidy($avis), $LANG ];
-            }
-          }
-          if ($tdesc = $tfic->look_down('_tag', 'td', 'width', '190', 'valign', 'top', 'align', 'center' ) ) {
-            if ($imgdesc = $tdesc->look_down('_tag', 'img') ) {
-              $prog{icon} = [ {'src' => $ROOT_URL.$imgdesc->attr('src') } ];
-            }
-          }
-          # Now push the credits section, if exists
-          $prog{credits}{director } = \@director if @director;
-          $prog{credits}{actor}     = \@actor if @actor;
+          get_detailed_fic( $progTree->attr('onclick'), \%prog, $title );
         } else {
           # The text for the <a> tag contains the title without the sub-title so we can use that to separate the two. However
           # the text for the <a> tag may have been truncated so it fits the slot on the page. Also some titles may contain
@@ -784,7 +680,6 @@ sub process_channel_grid_page( $$$$ ) {
             $prog{'sub-title'} = [ [ tidy($title) ] ];
           }
         }
-
         if ( !$results{$prog{start}.$chid} ) {
           $results{$prog{start}.$chid} = "1";
           $writer->write_programme(\%prog);
@@ -794,4 +689,120 @@ sub process_channel_grid_page( $$$$ ) {
     }
   }
   $t->delete(); undef $t;
+}
+
+sub get_detailed_fic( $$$ ) 
+{
+  my $id    = shift;
+  my $prog  = shift;
+  my $title = shift;
+  my @desc;
+  $id =~ /fiche\('(\d+)'\)/ or die "expected fiche(x), got: $id";
+  $id = $1;
+  debug_print("Calling sheet URL : " . $SHEET_URL . $id . "\n");
+  
+  my $ficpage;
+  my $nbretryfic = 0;
+  my $uri = $SHEET_URL . $id;
+  while (not defined($ficpage = get $uri)) {
+    ++$nbretryfic;
+    # The detailed information page is not critical, so return to main loop
+    return if $nbretryfic == $MAX_RETRY;
+    sleep 1;
+  }
+  my $tfic = HTML::TreeBuilder->new;
+  $tfic->parse($ficpage) or die "cannot parse content of $uri\n";
+  $tfic->eof;
+
+  # This page's title tag contains the program title without the sub-title. Use it to separate the two.
+  my $ttitle;
+  if ( $ttitle = $tfic->look_down('_tag', 'title') ) {
+    my $htmltitle = $ttitle->as_text();
+    if ($title =~ s/^\Q$htmltitle\E\s+-\s+//) {
+      $prog->{'title'} = [ [ tidy($htmltitle) ] ];
+      $prog->{'sub-title'} = [ [ tidy($title) ] ];             
+    }
+  }
+  # Get the duration and the year
+  my ($length, $hour, $min, $year);
+  if ( my $tdesc = $tfic->look_down('_tag', 'td', 'width', '250', 'class', 'txt') ) {
+    $length = $tdesc->as_text();
+    if ( $length =~ s/ Dur� : (\d+)h(\d+) AM(.*)// ) {
+      $hour = $1; $min = $2; $year = $3;
+      # guidetele.com si full of bugs ...
+      $hour = $hour - 12 if ($hour >= 12);
+      $prog->{'length'} = ($hour * 3600) + ($min * 60);
+      $prog->{'date'}   = $year;
+    }
+  }
+  # Now get descriptions, summary, advices, actors and director
+  my ($resume, $histoire, $avis);
+  my ($nextIsResume,$nextIsHistory,$nextIsAvis,$nextIsDirector) = (0,0,0,0);
+  my (@director, @actor);
+  if ( my $tdesc = $tfic->look_down('_tag', 'td', 'width', '396') ) {
+    # Detect actors
+    foreach my $actorcell ($tdesc->look_down('_tag', 'td', 'class', 'disActeur') ) {
+      push @actor, tidy($actorcell->as_text());
+    }
+    my @children = $tdesc->content_list();
+    foreach my $desc (@children)  {
+      unless (ref($desc)) {
+        # Remove leading and trailing spaces
+        $desc =~ s/^ *: *//;
+        $desc =~ s/ *$//;
+      }              
+      if ($nextIsDirector == 1 ) {
+        push @director, tidy($desc);
+        $nextIsDirector = 0;
+        debug_print "FOUND DIRECTOR : " . tidy($desc) . " - $title - $id\n";
+      }
+      if ($nextIsResume == 1) {
+        $desc =~ s/ *$//;
+        warn "RESUME seen twice\n" if defined $resume;
+        $resume = tidy($desc);
+        $nextIsResume = 0;
+        debug_print "FOUND RESUME : $resume \n";
+      }
+      if ($nextIsHistory == 1 ) {
+        $desc =~ s/ *$//;
+        warn "HISTOIRE seen twice\n" if defined $histoire;
+        $histoire = tidy($desc);
+        $nextIsHistory = 0;
+        debug_print "FOUND HISTOIRE : $histoire \n";
+      }
+      if ($nextIsAvis == 1 ) {
+        $desc =~ s/ *$//;
+        warn "AVIS seen twice\n" if defined $avis;
+        $avis = tidy($desc);
+        $nextIsAvis = 0;
+        debug_print "FOUND AVIS : $avis \n";
+      }
+      if ( ref($desc) ) {
+        $nextIsResume = 1 if ( $desc->as_text() eq "RESUME" );
+        $nextIsHistory = 1 if  ( $desc->as_text() eq "HISTOIRE" );
+        $nextIsAvis = 1 if  ( $desc->as_text() eq "AVIS" );
+        $nextIsDirector = 1 if ($desc->as_text() =~ /R..lisateur/ );
+      }
+    }
+  }
+  # RESUME is main definition, HISTOIRE shorter.
+  foreach ($resume, $histoire) {
+    push @{$prog->{desc}}, [ $_, $LANG ] if defined and length;
+  }
+  # Add AVIS to the main description, or make a new desc for it if there are none.
+  if (defined $avis and length($avis) ) {
+    if ($prog->{desc}) {
+      $prog->{desc}->[0]->[0] .= "Critique : " . tidy($avis);
+    } else {
+      push @{$prog->{desc}}, [ tidy($avis), $LANG ];
+    }
+  }
+  if (my $tdesc = $tfic->look_down('_tag', 'td', 'width', '190', 'valign', 'top', 'align', 'center' ) ) {
+    if (my $imgdesc = $tdesc->look_down('_tag', 'img') ) {
+      $prog->{icon} = [ {'src' => $ROOT_URL.$imgdesc->attr('src') } ];
+    }
+  }
+  # Now push the credits section, if exists
+  $prog->{credits}{director } = \@director if @director;
+  $prog->{credits}{actor}     = \@actor if @actor;
 }
