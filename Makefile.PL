@@ -173,8 +173,17 @@ my %prereqs
 
 # Files which are run to generate source code.
 my %pl_files = ('filter/tv_grep.PL'     => 'filter/tv_grep',
+                'tools/tv_validate_file.PL'     => 'tools/tv_validate_file',
+                'tools/tv_validate_grabber.PL'     => 'tools/tv_validate_grabber',
 		'lib/XMLTV.pm.PL'       => 'lib/XMLTV.pm',
 	       );
+
+# Some tools which are generated from .PL files need the share/
+# directory passed as an extra argument.
+#
+my @need_share = ( 'tools/tv_validate_file',
+                   'tools/tv_validate_grabber',
+                   );
 
 # Files to be installed in the system-wide share/ directory.
 my %share_files = ('xmltv.dtd' => 'xmltv.dtd');
@@ -183,10 +192,14 @@ my %share_files = ('xmltv.dtd' => 'xmltv.dtd');
 # we have to patch it.
 #
 my @to_clean = ('filter/tv_grep',
+                'tools/tv_validate_file',
+                'tools/tv_validate_grabber',
 		'lib/XMLTV.pm');
 
 # Extra dependencies to add to the Makefile.
 my @deps = ('filter/tv_grep' => [ qw(filter/tv_grep.in pm_to_blib) ],
+            'tools/tv_validate_file' => [ qw(tools/tv_validate_file.in) ],
+            'tools/tv_validate_grabber' => [ qw(tools/tv_validate_grabber.in) ],
 	    'lib/XMLTV.pm' => [ 'lib/XMLTV.pm.in' ]);
 
 # Some grabbers which are generated from .PL files need the share/
@@ -1009,6 +1022,15 @@ sub MY::processPL {
 	    <$1 \$(PREFIX)/share/xmltv>m
 	    or die "no call to $_.PL in: $inherited";
     }
+
+    foreach (@need_share) {
+	$inherited =~
+	  s<($_.PL $_)\s*$>
+	    <$1 \$(PREFIX)/share/xmltv>m
+	    or die "no call to $_.PL in: $inherited";
+    }
+
+
     return $inherited;
 }
 
