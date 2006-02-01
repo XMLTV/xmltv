@@ -111,6 +111,7 @@ that support the 'cache' capability.
 
 ValidateGrabber returns a list of errors that it found with the grabber. Each
 error takes the form of a keyword:  
+
 =over
 
 =item noparamcheck
