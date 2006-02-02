@@ -62,61 +62,72 @@ sub LoadDtd {
 
 Validate that a file is valid according to the XMLTV dtd and try to check
 that it contains valid information. ValidateFile takes a filename as parameter
-and optionally also a day and an offset and returns an array of all the types
-of errors found in the file. If no errors were found, an empty array is 
-returned. Error messages are printed to STDERR.
+and optionally also a day and an offset and prints error messages to STDERR.
+
+ValidateFile returns a list of errors that it found with the file. Each
+error takes the form of a keyword:  
 
 ValidateFile checks the following:
 
 =over
 
-=item *
+=item notwell
 
-File is well-formed XML (notwell).
+The file is not well-formed XML.
 
-=item *
+=item notdtd
 
-File follows the XMLTV DTD (notdtd).
+The file does not follow the XMLTV DTD.
 
-=item *
+=item unknownid
 
-There is exactly one channel-entry for each channel mentioned in a 
-programme-entry (unknownid, duplicatechannel).
+No channel-entry found for a channelid that is used in a programme-entry.
 
-=item *
+=item duplicatechannel
 
-There are programme entries for all channel-entries (channelnoprogramme).
+More than one channel-entry found for a channelid.
 
-=item *
+=item noprogrammes
 
-All xmltvids look like proper ids, i.e. they match 
-/^[-a-zA-Z0-9]+(\.[-a-zA-Z0-9]+)+$/ (invalidid).
+No programme entries were found in the file.
 
-=item *
+=item channelnoprogramme
 
-Each programme entry has a valid channel id (noid).
+There are no programme entries for one of the channels listed with a 
+channel-entry.
 
-=item *
+=item invalidid
 
-Each programme entry has a non-empty title (emptytitle).
+An xmltvid does not look like a proper id, i.e. it doesn't  match 
+/^[-a-zA-Z0-9]+(\.[-a-zA-Z0-9]+)+$/.
 
-=item *
+=item noid
 
-Each programme entry has a valid start-time (badstart). 
+A programme-entry without an id was found.
 
-=item *
+=item emptytitle
 
-If a programme has a stop-time, it must be valid (badstop).
+A programme entry with an empty or missing title was found.
 
-=item *
+=item badstart
+
+A programme entry with an invalid start-time was found.
+
+=item badstop
+
+A programme entry with an invalid stop-time was found.
+
+=item earlystart, latestart
 
 If the day and offset parameters were specified in the call to ValidateFile,
 it checks to see that the start-time of each program is between 
 today+$days 00:00 and today+$offset+$days+1 06:00. This check does not take
-timezones into account, it ígnores the timezone component and assumes that
-the start-time is expressed in local time (earlystart, latestart).
+timezones into account, it ignores the timezone component and assumes that
+the start-time is expressed in local time.
 
 =back
+
+If no errors are found, an empty list is returned.
 
 =cut 
 
