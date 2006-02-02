@@ -25,15 +25,24 @@ use strict;
 
 package XMLTV::Get_nice;
 use base 'Exporter';
-our @EXPORT = qw(get_nice get_nice_tree);
-use LWP::Simple qw($ua);
+our @EXPORT = qw(get_nice get_nice_tree error_msg);
+#use LWP::Simple qw($ua);
+use LWP::UserAgent;
 use XMLTV;
-$ua->agent("xmltv/$XMLTV::VERSION");
 our $Delay = 5; # in seconds
 our $FailOnError = 1; # Fail on fetch error
 
-our $get = \&LWP::Simple::get;
 
+our $ua = LWP::UserAgent->new;
+$ua->agent("xmltv/$XMLTV::VERSION");
+#our $get = \&LWP::Simple::get;
+our %errors = ();
+
+
+sub error_msg($) {
+	my ($url) = @_;
+	$errors{$url};
+}
 sub get_nice( $ ) {
     # This is to ensure scalar context, to work around weirdnesses
     # with Memoize (I just can't figure out how SCALAR_CACHE and
@@ -71,14 +80,7 @@ sub get_nice_aux( $ ) {
         sleep $sleep_time if $sleep_time > 0;
     }
 
-    my $r = $get->($url);
-
-    # At the moment download failures seem rare, so the script dies if
-    # any page cannot be fetched.  We could later change this routine
-    # to return undef on failure.  But dying here makes sure that a
-    # failed page fetch doesn't get stored in XMLTV::Memoize's cache.
-    #
-    die "could not fetch $url, aborting\n" if not defined $r and $FailOnError;
+    my $r = $ua->get($url);
 
     # Then start the delay from this time on the next fetch - so we
     # make the gap _between_ requests rather than from the start of
@@ -88,7 +90,20 @@ sub get_nice_aux( $ ) {
     # slow server) so it's about right.
     #
     $last_get_time = time();
-    return $r;
+
+	if ($r->is_error) {
+    	# At the moment download failures seem rare, so the script dies if
+    	# any page cannot be fetched.  We could later change this routine
+    	# to return undef on failure.  But dying here makes sure that a
+    	# failed page fetch doesn't get stored in XMLTV::Memoize's cache.
+    	#
+    	die "could not fetch $url, error: $r->status_line , aborting\n" if $FailOnError;
+		$errors{$url} = $r->status_line;
+		return undef;
+    } else {
+		return $r->content;
+	}
+
 }
 
 1;
