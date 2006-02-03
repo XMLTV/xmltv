@@ -59,12 +59,10 @@ sub run_capture;
 
 =cut
 
-sub ConfigureGrabber
-{
+sub ConfigureGrabber {
     my( $exe, $conf ) = @_;
 
-    if ( not system( "$exe --configure --config-file $conf" ) )
-    {
+    if ( not system( "$exe --configure --config-file $conf" ) ) {
 	w "Error returned from grabber during configure.";
 	return 1;
     }
@@ -76,12 +74,16 @@ sub ConfigureGrabber
 
 Run the validation for a grabber.
 
-    ValidateGrabber( "./tv_grab_new", "./tv_grab_new.conf", 
+    ValidateGrabber( "tv_grab_new", "./tv_grab_new", "./tv_grab_new.conf", 
 		     "/tmp/new_", "./blib/share", 0 )
 
 ValidateGrabber takes the following parameters:
 
 =over
+
+=item *
+
+a short name for the grabber. This is only used when printing error messages.
 
 =item *
 
@@ -180,55 +182,47 @@ If no errors are found, an empty list is returned.
 
 =cut
 
-sub ValidateGrabber
-{
-    my( $exe, $conf, $op, $sharedir, $usecache ) = @_;
+sub ValidateGrabber {
+    my( $shortname, $exe, $conf, $op, $sharedir, $usecache ) = @_;
 
     my @errors;
     open( $runfh, ">${op}commands.log" )
 	or die "Failed to write to ${op}commands.log";
 
-    if (not run( "$exe --ahdmegkeja > /dev/null 2>&1" ))
-    {
-      w "$exe --ahdmegkeja did not fail. The grabber seems to "
+    if (not run( "$exe --ahdmegkeja > /dev/null 2>&1" )) {
+      w "$shortname with --ahdmegkeja did not fail. The grabber seems to "
 	  . "accept any command-line parameter without returning an error.";
       push @errors, "noparamcheck";
     }
 
-    if (run( "$exe --version > /dev/null 2>&1" ))
-    {
-      w "$exe --version failed: $?, $!";
+    if (run( "$exe --version > /dev/null 2>&1" )) {
+      w "$shortname with --version failed: $?, $!";
       push @errors, "noversion";
     }
 
-    if (run( "$exe --description > /dev/null 2>&1" ))
-    {
-      w "$exe --description failed: $?, $!";
+    if (run( "$exe --description > /dev/null 2>&1" )) {
+      w "$shortname with --description failed: $?, $!";
       push @errors, "nodescription";
     }
 
     my $cap = run_capture( "$exe --capabilities 2>/dev/null" );
-    if ( not defined $cap )
-    {
-      w "$exe --capabilities failed: $?, $!";
+    if (not defined $cap) {
+      w "$shortname with --capabilities failed: $?, $!";
       push @errors, "nocapabilities";
     }
 
     my @capabilities = split( /\s+/, $cap );
     my %capability;
-    foreach my $c (@capabilities)
-    {
+    foreach my $c (@capabilities) {
 	$capability{$c} = 1;
     }
 
-    if( not defined( $capability{baseline} ) )
-    {
+    if (not defined( $capability{baseline} )) {
 	w "The grabber does not claim to support the 'baseline' capability.";
 	push @errors, "nobaseline";
     }
 
-    if( not defined( $capability{manualconfig} ) )
-    {
+    if (not defined( $capability{manualconfig} )) {
 	w "The grabber does not claim to support the 'manualconfig' capability.";
 	push @errors, "nomanualconfig";
     }
@@ -239,8 +233,7 @@ sub ValidateGrabber
     $extraop .= "--share $sharedir "
 	if $capability{share} and defined( $sharedir );
 
-    if( not -f $conf )
-    {
+    if (not -f $conf) {
 	w "Configuration file $conf does not exist. Aborting.";
 	close( $runfh );
 	push @errors, "noconfigurationfile";
@@ -254,117 +247,111 @@ sub ValidateGrabber
 
     my $output = "${op}${offset}_$days.xml";
 
-    if (defined $cmd) {
-	if (run "$cmd > $output 2>${op}1.log") {
-	    w "$cmd failed: $?, $!";
-	    push @errors, "graberror";
-	}
-
-	# Run the same command again to see that --output and --quiet works.
-	my $cmd2 = "$cmd --output ${output}2 2>${op}2.log";
-	my $cmd3 = "$cmd --quiet > ${output}3 2>${op}3.log";
-	my $cmd4 = "$cmd --quiet --output ${output}4 2>${op}4.log";
-
-	if (run $cmd2) {
-	    w "$cmd2 failed: $?, $!";
-	    push @errors, "graberror";
-	}
-
-	if (run $cmd3 ) {
-	    w "$cmd3 failed: $?, $!";
-	    push @errors, "graberror";
-	}
-
-	if (run $cmd4 ) {
-	    w "$cmd4 failed: $?, $!";
-	    push @errors, "graberror";
-	}
-        
-	if( scalar( @errors ) )
-	{
-	    w "Errors found in basic behaviour. Aborting.";
+    if (run "$cmd > $output 2>${op}1.log") {
+	w "$cmd failed: $?, $!";
+	push @errors, "graberror";
+    }
+    else {
+	# Okay, it ran, and we have the result in $output.  Validate.
+	my @xmlerr = ValidateFile( $output, $offset, $days );
+	if (scalar(@xmlerr) > 0) {
+	    w "Errors found in $output";
 	    close( $runfh );
+	    push @errors, @xmlerr;
 	    goto bailout;
 	}
-
-	# Check that the grabber was quiet when it should have been.
-	if ( -s "${op}3.log" )
-	{
-	    w "$cmd3 produced output to STDERR when it shouldn't have. " 
-		. "See ${op}3.log";
-	    push @errors, "notquiet";
+	w "$output validates ok";
+	
+	# Run through tv_cat, which makes sure the data looks like XMLTV.
+	# What kind of errors does this catch that ValidateFile misses?
+	if (run "tv_cat $output >/dev/null") {
+	    w "$output makes tv_cat choke, so probably has semantic errors";
+	    push @errors, "caterror";
+	    goto bailout;
 	}
-	else
-	{
-	    unlink( "${op}3.log" );
+	
+	# Do tv_sort sanity checks.  One day it would be better to put
+	# this stuff in a Perl library.
+	my $sort_errors = "$output.sort_errors";
+	if (run "tv_sort $output >$output.sorted 2>$sort_errors") {
+	    # This would indicate a bug in tv_sort.
+	    w "tv_sort failed on $output for some reason, " 
+		. "see $sort_errors";
+	    push @errors, "sorterror";
 	}
-
-	if ( -s "${op}4.log" )
-	{
-	    w "$cmd4 produced output to STDERR when it shouldn't have. " 
-		. "See ${op}4.log";
-	    push @errors, "notquiet";
-        }
-	else
-	{
-	    unlink( "${op}4.log" );
+	
+	if (my @lines = read_file $sort_errors) {
+	    w "$output has funny start or stop times: some errors are:\n"
+		. join('', @lines[0 .. min(9, $#lines)]);
+	    push @errors, "overlap";
 	}
+    }
 
-	if ( ! compare_files( $output, "${output}2" ) )
-	{
+    # Run the same command again to see that --output and --quiet works.
+    my $cmd2 = "$cmd --output ${output}2 2>${op}2.log";
+    
+    if (run $cmd2) {
+	w "$shortname with --output failed: $?, $!";
+	push @errors, "graberror";
+    }
+    else {
+	if ( ! compare_files( $output, "${output}2" ) ) {
 	    w "$output and ${output}2 differ.";
 	    push @errors, "outputdiffers";
 	}
+	else {
+	    unlink( "${output}2" );
+	}
+    }
+    
+    my $cmd3 = "$cmd --quiet > ${output}3 2>${op}3.log";
 
-	if ( ! compare_files( $output, "${output}3" ) )
-	{
+    if (run $cmd3 ) {
+	w "$shortname with --quiet failed: $?, $!";
+	push @errors, "graberror";
+    }
+    else {
+	if ( -s "${op}3.log" ) {
+	    w "$shortname with --quiet produced output to STDERR when it shouldn't have. " 
+		. "See ${op}3.log";
+	    push @errors, "notquiet";
+	}
+	else {
+	    unlink( "${op}3.log" );
+	}
+	
+	if ( ! compare_files( $output, "${output}3" ) ) {
 	    w "$output and ${output}3 differ.";
 	    push @errors, "outputdiffers";
 	}
+	else {
+	    unlink( "${output}3" );
+	}
+    }
+    
+    my $cmd4 = "$cmd --quiet --output ${output}4 2>${op}4.log";
 
-	if ( ! compare_files( $output, "${output}4" ) )
-	{
+    if (run $cmd4 ) {
+	w "$shortname with --quiet and --output failed: $?, $!";
+	push @errors, "graberror";
+    }
+    else {
+	if ( -s "${op}4.log" ) {
+	    w "$shortname with --quiet and --output produced output to STDERR " .
+		"when it shouldn't have. See ${op}4.log";
+	    push @errors, "notquiet";
+	}
+	else {
+	    unlink( "${op}4.log" );
+	}
+	
+	if ( ! compare_files( $output, "${output}4" ) ) {
 	    w "$output and ${output}4 differ.";
 	    push @errors, "outputdiffers";
 	}
-
-	# The output files were all equal. Remove all but one of them.
-	unlink( "${output}2" );
-	unlink( "${output}3" );
-	unlink( "${output}4" );
-    }
-
-    # Okay, it ran, and we have the result in $output.  Validate.
-    my @xmlerr = ValidateFile( $output, $offset, $days );
-    if (scalar(@xmlerr) > 0) {
-	w "Errors found in $output";
-	close( $runfh );
-	push @errors, @xmlerr;
-	goto bailout;
-    }
-    w "$output validates ok";
-
-    # Run through tv_cat, which makes sure the data looks like XMLTV.
-    # What kind of errors does this catch that ValidateFile misses?
-    if (run "tv_cat $output >/dev/null") {
-	w "$output makes tv_cat choke, so probably has semantic errors";
-	push @errors, "caterror";
-        goto bailout;
-    }
-
-    # Do tv_sort sanity checks.  One day it would be better to put
-    # this stuff in a Perl library.
-    my $sort_errors = "$output.sort_errors";
-    if (run "tv_sort $output >$output.sorted 2>$sort_errors") {
-	# This would indicate a bug in tv_sort.
-	w "tv_sort failed on $output for some reason, see $sort_errors";
-	push @errors, "sorterror";
-    }
-
-    if (my @lines = read_file $sort_errors) {
-	w "$output has funny start or stop times: some errors are:\n"
-	    . join('', @lines[0 .. min(9, $#lines)]);
-	push @errors, "overlap";
+	else {
+	    unlink( "${output}4" );
+	}
     }
 
   bailout:
@@ -377,12 +364,19 @@ sub ValidateGrabber
 	push( @ferrors, $err ) if $err ne $lasterror;
 	$lasterror = $err;
     }
-	
+
+    if (scalar( @ferrors )) {
+	w "$shortname did not validate ok. See ${op}commands.log for a " 
+	    . "list of the commands that were used";
+    }
+    else {
+	w "$shortname validated ok.";
+    }
+
     return @ferrors;
 }
 
-sub w
-{
+sub w {
     print "$_[0]\n";
 }
 
@@ -409,8 +403,7 @@ sub run {
     };
     $SIG{HUP} = 'DEFAULT';    
 
-    if( $killed )
-    {
+    if ($killed) {
 	w "Timeout";
 	return 1;
     }
@@ -452,8 +445,7 @@ sub run_capture {
     };
     $SIG{HUP} = 'DEFAULT';    
 
-    if( $killed )
-    {
+    if ($killed) {
 	w "Timeout";
 	return undef;
     }
@@ -467,12 +459,10 @@ sub run_capture {
 	exit 1;
     }
 
-    if( $? >> 8 )
-    {
+    if ($? >> 8) {
 	return undef;
     }
-    else
-    {
+    else {
 	return $result;
     }
 }
