@@ -98,7 +98,7 @@ channel-entry.
 
 =item invalidid
 
-An xmltvid does not look like a proper id, i.e. it doesn't  match 
+An xmltvid does not look like a proper id, i.e. it does not  match 
 /^[-a-zA-Z0-9]+(\.[-a-zA-Z0-9]+)+$/.
 
 =item noid
@@ -147,7 +147,7 @@ sub ValidateFile {
 
     if (defined $offset) {
 	require DateTime;
-	$mintime = DateTime->now->add( days => $offset )->ymd("") . "000000";
+	$mintime = DateTime->now->add( days => $offset-1 )->ymd("") . "220000";
     }
 
     if (defined $days ) {
