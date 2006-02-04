@@ -33,7 +33,7 @@ use strict;
 
 package XMLTV::IMDB;
 
-our $VERSION = '0.5';
+our $VERSION = '0.6';
 
 sub new
 {
@@ -331,7 +331,7 @@ sub getMovieMatches($$$)
     my $year=shift;
 
     # Articles are put at the end of a title ( in all languages )
-    #$match=~s/^(The|A|Une|Les|L\'|Le|La|El|Das)\s+(.*)$/$2, $1/og;
+    #$match=~s/^(The|A|Une|Las|Les|Los|L\'|Le|La|El|Das|De|Het|Een)\s+(.*)$/$2, $1/og;
     
     my $match="$title";
     if ( defined($year) ) {
@@ -365,7 +365,7 @@ sub getMovieMatches($$$)
 
 	if ( $arr[0] eq $match ) {
 	    # return title and id
-	    #$arr[1]=~s/(.*),\s*(The|A|Une|Les|L\'|Le|La|El|Das)$/$2 $1/og;
+	    #$arr[1]=~s/(.*),\s*(The|A|Une|Las|Les|Los|L\'|Le|La|El|Das|De|Het|Een)$/$2 $1/og;
 		    
 	    #$arr[0]=~s/%(?:([0-9a-fA-F]{2})|u([0-9a-fA-F]{4}))/defined($1)? chr hex($1) : utf8_chr(hex($2))/oge;
 	    #$self->debug("exact:$arr[1] ($arr[2]) qualifier=$arr[3] id=$arr[4]");
@@ -377,7 +377,7 @@ sub getMovieMatches($$$)
 	    else {
 		die "unable to decode year from title key \"$title\", report to xmltv-devel\@lists.sf.net";
 	    }
-	    $title=~s/(.*),\s*(The|A|Une|Les|L\'|Le|La|El|Das)$/$2 $1/og;
+	    $title=~s/(.*),\s*(The|A|Une|Las|Les|Los|L\'|Le|La|El|Das|De|Het|Een)$/$2 $1/og;
 	    $self->debug("exact:$title ($arr[2]) qualifier=$arr[3] id=$arr[4]");
 	    push(@{$results->{exactMatch}}, {'key'=> $arr[1],
 					     'title'=>$title,
@@ -389,7 +389,7 @@ sub getMovieMatches($$$)
 	    # decode
 	    #s/%(?:([0-9a-fA-F]{2})|u([0-9a-fA-F]{4}))/defined($1)? chr hex($1) : utf8_chr(hex($2))/oge;
 	    # return title
-	    #$arr[1]=~s/(.*),\s*(The|A|Une|Les|L\'|Le|La|El|Das)$/$2 $1/og;
+	    #$arr[1]=~s/(.*),\s*(The|A|Une|Las|Les|Los|L\'|Le|La|El|Das|De|Het|Een)$/$2 $1/og;
 	    #$arr[0]=~s/%(?:([0-9a-fA-F]{2})|u([0-9a-fA-F]{4}))/defined($1)? chr hex($1) : utf8_chr(hex($2))/oge;
 	    #$self->debug("close:$arr[1] ($arr[2]) qualifier=$arr[3] id=$arr[4]");
 	    my $title=$arr[1];
@@ -406,7 +406,7 @@ sub getMovieMatches($$$)
 	    else {
 		die "unable to decode year from title key \"$title\", report to xmltv-devel\@lists.sf.net";
 	    }
-	    $title=~s/(.*),\s*(The|A|Une|Les|L\'|Le|La|El|Das)$/$2 $1/og;
+	    $title=~s/(.*),\s*(The|A|Une|Las|Les|Los|L\'|Le|La|El|Das|De|Het|Een)$/$2 $1/og;
 	    $self->debug("close:$title ($arr[2]) qualifier=$arr[3] id=$arr[4]");
 	    push(@{$results->{closeMatch}}, {'key'=> $arr[1],
 					     'title'=>$title,
@@ -521,11 +521,6 @@ sub getMovieIdDetails($$)
 }
 
 #
-# FUTURE "Columbo Cries Wolf" appears instead of "Columbo:Columbo Cries Wolf"
-#
-# FUTURE - common english->french vowel changes. For instance
-#          "Anna Karénin" (é->e)
-#
 # FUTURE - close hit could be just missing or extra
 #          punctuation:
 #       "Run Silent, Run Deep" for imdb's "Run Silent Run Deep"
@@ -534,6 +529,11 @@ sub getMovieIdDetails($$)
 #       "Baywatch Hawaiian Wedding" for imdb's "Baywatch: Hawaiian Wedding" :)
 #
 # FIXED - "Victoria and Albert" appears for imdb's "Victoria & Albert" (and -> &)
+# FIXED - "Columbo Cries Wolf" appears instead of "Columbo:Columbo Cries Wolf"
+# FIXED - Place the article last, for multiple languages. For instance
+#         Los amantes del círculo polar -> amantes del círculo polar, Los
+# FIXED - common international vowel changes. For instance
+#          "Anna Karénin" (é->e)
 #
 sub alternativeTitles($)
 {
@@ -541,18 +541,59 @@ sub alternativeTitles($)
     my @titles;
 
     push(@titles, $title);
+    # try the & -> and conversion
     if ( $title=~m/\&/o ) {
 	my $t=$title;
 	while ( $t=~s/(\s)\&(\s)/$1and$2/o ) {
 	    push(@titles, $t);
 	}
     }
+    # try the and -> & conversion
     if ( $title=~m/\sand\s/io ) {
 	my $t=$title;
 	while ( $t=~s/(\s)and(\s)/$1\&$2/io ) {
 	    push(@titles, $t);
 	}
     }
+
+    # try the "Columbo: Columbo cries Wolf" -> "Columbo cries Wolf" conversion
+    foreach (@titles) {
+        if ( m/^[^:]+:.+$/io ) {
+	    my $t=$_;
+            while ( $t=~s/^[^:]+:\s*(.+)\s*$/$1/io ) {
+                push(@titles, $t);
+            }
+        }
+    }
+
+    # Place the articles last
+    foreach (@titles) {
+        if ( m/^(The|A|Une|Les|Los|Las|L\'|Le|La|El|Das|De|Het|Een)\s+(.*)$/io ) {
+	    my $t=$_;
+            $t=~s/^(The|A|Une|Les|Los|Las|L\'|Le|La|El|Das|De|Het|Een)\s+(.*)$/$2, $1/iog;
+            push(@titles, $t);
+        }
+    }
+
+    # convert all the special language characters
+    foreach (@titles) {
+	if ( m/[ÀÁÂÃÄÅàáâãäåÈÉÊËèéêëÌÍÎÏìíîïÒÓÔÕÖØòóôõöøÙÚÛÜùúûüÆæÇçÑñßÝýÿ]/io ) {
+	    my $t=$_;
+	    $t=~s/[ÀÁÂÃÄÅàáâãäå]/a/gio;
+	    $t=~s/[ÈÉÊËèéêë]/e/gio;
+	    $t=~s/[ÌÍÎÏìíîï]/i/gio;
+	    $t=~s/[ÒÓÔÕÖØòóôõöø]/o/gio;
+	    $t=~s/[ÙÚÛÜùúûü]/u/gio;
+	    $t=~s/[Ææ]/ae/gio;
+	    $t=~s/[Çç]/c/gio;
+	    $t=~s/[Ññ]/n/gio;
+	    $t=~s/[ß]/ss/gio;
+	    $t=~s/[Ýýÿ]/y/gio;
+	    $t=~s/[Â¿]//gio;
+	    push(@titles, $t);
+	}
+    }
+
     return(\@titles);
 }
 
@@ -718,11 +759,11 @@ sub findMovieInfo($$$$)
 		}
 		else {
 		    # report these as debug messages
-		    $self->debug("ignoing close hit on \"$info->{key}\" (off by $yearsOff years)");
+		    $self->debug("ignoring close hit on \"$info->{key}\" (off by $yearsOff years)");
 		}
 	    }
 	    else {
-		$self->debug("ignoing close hit on \"$info->{key}\" (title did not match)");
+		$self->debug("ignoring close hit on \"$info->{key}\" (title did not match)");
 	    }
 	}
     }
@@ -1470,6 +1511,8 @@ sub readMoviesOrGenres($$$$)
 	if ( $tab != -1 ) {
 	    my $mkey=substr($line, 0, $tab);
 
+	    next if ($mkey=~m/\s*\{\{SUSPENDED\}\}/o);
+
 	    if ( $whatAreWeParsing == 2 ) {
 		# don't see what these are...?
 		# ignore {{SUSPENDED}}
@@ -1649,6 +1692,9 @@ sub readCastOrDirectors($$$)
 		# ignore character name
 	    }
 	}
+	# try ignoring these
+	next if ($line=~m/\s*\{\{SUSPENDED\}\}/o);
+
 	# don't see what these are...?
 	# ignore {{SUSPENDED}}
 	$line=~s/\s*\{\{SUSPENDED\}\}//o;
@@ -1831,6 +1877,21 @@ sub dbinfoSave($)
     return(0);
 }
 
+sub dbinfoCalcEstimate($$$)
+{
+    my ($self, $key, $estimateSizePerEntry)=@_;
+    
+    if ( !defined($self->{imdbListFiles}->{$key}) ) {
+	die ("invalid call");
+    }
+    my $fileSize=int(-s "$self->{imdbListFiles}->{$key}");
+    my $countEstimate=int($fileSize/$estimateSizePerEntry);
+
+    $self->dbinfoAdd($key."_list_file", $self->{imdbListFiles}->{$key});
+    $self->dbinfoAdd($key."_list_file_size", $fileSize);
+    $self->dbinfoAdd($key."_list_count_estimate", $countEstimate);
+    return($countEstimate);
+}
 
 sub invokeStage($$)
 {
@@ -1839,7 +1900,8 @@ sub invokeStage($$)
     my $startTime=time();
     if ( $stage == 1 ) {
 	$self->status("parsing Movies list for stage $stage..");
-	my $countEstimate=480000;
+	my $countEstimate=$self->dbinfoCalcEstimate("movies", 43);
+
 	my $num=$self->readMoviesOrGenres("Movies", $countEstimate, "$self->{imdbListFiles}->{movies}");
 	if ( $num < 0 ) {
 	    if ( $num == -2 ) {
@@ -1850,8 +1912,6 @@ sub invokeStage($$)
 	elsif ( abs($num - $countEstimate) > $countEstimate*.05 ) {
 	    $self->status("ARG estimate of $countEstimate for movies needs updating, found $num");
 	}
-	$self->dbinfoAdd("movie_list_file",         "$self->{imdbListFiles}->{movies}");
-	$self->dbinfoAdd("movie_list_file_size", -s "$self->{imdbListFiles}->{movies}");
 	$self->dbinfoAdd("db_stat_movie_count", "$num");
 
 	$self->status("writing stage1 data ..");
@@ -1890,7 +1950,8 @@ sub invokeStage($$)
     elsif ( $stage == 2 ) {
 	$self->status("parsing Directors list for stage $stage..");
 
-	my $countEstimate=108000;
+	my $countEstimate=$self->dbinfoCalcEstimate("directors", 162);
+
 	my $num=$self->readCastOrDirectors("Directors", $countEstimate, "$self->{imdbListFiles}->{directors}");
 	if ( $num < 0 ) {
 	    if ( $num == -2 ) {
@@ -1901,8 +1962,6 @@ sub invokeStage($$)
 	elsif ( abs($num - $countEstimate) > $countEstimate*.05 ) {
 	    $self->status("ARG estimate of $countEstimate for directors needs updating, found $num");
 	}
-	$self->dbinfoAdd("directors_list_file",         "$self->{imdbListFiles}->{directors}");
-	$self->dbinfoAdd("directors_list_file_size", -s "$self->{imdbListFiles}->{directors}");
 	$self->dbinfoAdd("db_stat_director_count", "$num");
 
 	$self->status("writing stage2 data ..");
@@ -1957,7 +2016,8 @@ sub invokeStage($$)
 	$self->status("parsing Actors list for stage $stage..");
 
 	#print "re-reading movies into memory for reverse lookup..\n";
-	my $countEstimate=630000;
+	my $countEstimate=$self->dbinfoCalcEstimate("actors", 290);
+
 	my $num=$self->readCastOrDirectors("Actors", $countEstimate, "$self->{imdbListFiles}->{actors}");
 	if ( $num < 0 ) {
 	    if ( $num == -2 ) {
@@ -1968,8 +2028,6 @@ sub invokeStage($$)
 	elsif ( abs($num - $countEstimate) > $countEstimate*.05 ) {
 	    $self->status("ARG estimate of $countEstimate for actors needs updating, found $num");
 	}
-	$self->dbinfoAdd("actors_list_file",         "$self->{imdbListFiles}->{actors}");
-	$self->dbinfoAdd("actors_list_file_size", -s "$self->{imdbListFiles}->{actors}");
 	$self->dbinfoAdd("db_stat_actor_count", "$num");
 
 	$self->status("writing stage3 data ..");
@@ -2008,7 +2066,7 @@ sub invokeStage($$)
     elsif ( $stage == 4 ) {
 	$self->status("parsing Actresses list for stage $stage..");
 
-	my $countEstimate=380000;
+	my $countEstimate=$self->dbinfoCalcEstimate("actresses", 250);
 	my $num=$self->readCastOrDirectors("Actresses", $countEstimate, "$self->{imdbListFiles}->{actresses}");
 	if ( $num < 0 ) {
 	    if ( $num == -2 ) {
@@ -2019,8 +2077,6 @@ sub invokeStage($$)
 	elsif ( abs($num - $countEstimate) > $countEstimate*.05 ) {
 	    $self->status("ARG estimate of $countEstimate for actresses needs updating, found $num");
 	}
-	$self->dbinfoAdd("actresses_list_file",         "$self->{imdbListFiles}->{actresses}");
-	$self->dbinfoAdd("actresses_list_file_size", -s "$self->{imdbListFiles}->{actresses}");
 	$self->dbinfoAdd("db_stat_actress_count", "$num");
 
 	$self->status("writing stage4 data ..");
@@ -2058,7 +2114,8 @@ sub invokeStage($$)
     }
     elsif ( $stage == 5 ) {
 	$self->status("parsing Genres list for stage $stage..");
-	my $countEstimate=360000;
+	my $countEstimate=$self->dbinfoCalcEstimate("genres", 60);
+
 	my $num=$self->readMoviesOrGenres("Genres", $countEstimate, "$self->{imdbListFiles}->{genres}");
 	if ( $num < 0 ) {
 	    if ( $num == -2 ) {
@@ -2069,8 +2126,6 @@ sub invokeStage($$)
 	elsif ( abs($num - $countEstimate) > $countEstimate*.05 ) {
 	    $self->status("ARG estimate of $countEstimate for genres needs updating, found $num");
 	}
-	$self->dbinfoAdd("genres_list_file",         "$self->{imdbListFiles}->{genres}");
-	$self->dbinfoAdd("genres_list_file_size", -s "$self->{imdbListFiles}->{genres}");
 	$self->dbinfoAdd("db_stat_genres_count", "$num");
 
 	$self->status("writing stage5 data ..");
@@ -2108,7 +2163,8 @@ sub invokeStage($$)
     }
     elsif ( $stage == 6 ) {
 	$self->status("parsing Ratings list for stage $stage..");
-	my $countEstimate=112000;
+	my $countEstimate=$self->dbinfoCalcEstimate("ratings", 60);
+
 	my $num=$self->readRatings($countEstimate, "$self->{imdbListFiles}->{ratings}");
 	if ( $num < 0 ) {
 	    if ( $num == -2 ) {
@@ -2119,8 +2175,6 @@ sub invokeStage($$)
 	elsif ( abs($num - $countEstimate) > $countEstimate*.05 ) {
 	    $self->status("ARG estimate of $countEstimate for ratings needs updating, found $num");
 	}
-	$self->dbinfoAdd("ratings_list_file",         "$self->{imdbListFiles}->{ratings}");
-	$self->dbinfoAdd("ratings_list_file_size", -s "$self->{imdbListFiles}->{ratings}");
 	$self->dbinfoAdd("db_stat_ratings_count", "$num");
 
 	$self->status("writing stage6 data ..");
@@ -2465,6 +2519,9 @@ sub invokeStage($$)
 	    for my $key (keys %movies) {
 		my $dbkey=$key;
 		
+		# drop episode information - ex: {Twelve Angry Men (1954)}
+		$dbkey=~s/\s*\{[^\}]+\}//go;
+		
 		# todo - this would make things easier
 		# change double-quotes around title to be (made-for-tv) suffix instead 
 		if ( $dbkey=~m/^\"/o && #"
@@ -2519,7 +2576,7 @@ sub invokeStage($$)
 		    $self->error("movie list format failed to decode year from title '$title'");
 		    $year="0000";
 		}
-		$title=~s/(.*),\s*(The|A|Une|Les|L\'|Le|La|El|Das)$/$2 $1/og;
+		$title=~s/(.*),\s*(The|A|Une|Las|Les|Los|L\'|Le|La|El|Das|De|Het|Een)$/$2 $1/og;
 		
 		my $hashkey=lc("$title ($year)");
 		$hashkey=~s/([^a-zA-Z0-9_.-])/uc sprintf("%%%02x",ord($1))/oeg;
@@ -2704,7 +2761,7 @@ sub crunchStage($$)
 	}
     }
 
-    if ( -f "$self->{moviedbInfo}" ) {
+    if ( -f "$self->{moviedbInfo}" && $stage != 1 ) {
 	my $ret=$self->dbinfoLoad();
 	if ( $ret ) {
 	    $self->error($ret);
