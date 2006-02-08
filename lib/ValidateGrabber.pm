@@ -62,7 +62,7 @@ sub run_capture;
 sub ConfigureGrabber {
     my( $exe, $conf ) = @_;
 
-    if ( not system( "$exe --configure --config-file $conf" ) ) {
+    if ( run( "$exe --configure --config-file $conf" ) ) {
 	w "Error returned from grabber during configure.";
 	return 1;
     }
@@ -356,6 +356,7 @@ sub ValidateGrabber {
 
   bailout:
     close( $runfh );
+    $runfh = undef;
 
     # Remove duplicate entries.
     my $lasterror = "nosucherror";
@@ -384,7 +385,8 @@ sub w {
 sub run {
     my( $cmd ) = @_;
 
-    print $runfh "$cmd\n";
+    print $runfh "$cmd\n"
+	if defined $runfh;
 
     my $killed = 0;
 
