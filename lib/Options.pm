@@ -14,6 +14,23 @@ BEGIN {
 }
 our @EXPORT_OK;
 
+=head1 NAME
+
+XMLTV::Options
+
+=head1 DESCRIPTION
+
+Utility library that implements command-line parsing and handles a lot
+of functionality that is common to all XMLTV grabbers.
+
+=head1 EXPORTED FUNCTIONS
+
+All these functions are exported on demand.
+
+=over 4
+
+=cut
+
 use XMLTV;
 use XMLTV::Configure qw/LoadConfig Configure SelectChannelsStage/;
 
@@ -83,40 +100,71 @@ my %cap_defaults = (
 		    );
 
 
-=pod
-    
-my( $opt, $conf ) = ParseOptions( { 
-  grabber_name => 'tv_grab_test',
-  defaults => {},
-  capabilities => [qw/baseline manualconfig apiconfig/],
-  stage_sub => \&config_stage,
-  listchannels_sub => \&list_channels,
-  extra_options => {},
-  extra_help => "",
-  version => '$Id$',
-  decription => 'Sweden (tv.swedb.se)',
-} );
+=item ParseOptions
 
-$opt is a hashref with the values for all command-line options in the
+ParseOptions shall be called by a grabber to parse the command-line
+options supplied by the user. It takes a single hashref as a parameter.
+The entries in the hash configure the behaviour of ParseOptions.
+
+  my( $opt, $conf ) = ParseOptions( { 
+    grabber_name => 'tv_grab_test',
+    version => '$Id$',
+    description => 'Sweden (tv.swedb.se)',
+    capabilities => [qw/baseline manualconfig apiconfig/],
+    stage_sub => \&config_stage,
+    listchannels_sub => \&list_channels,
+  } );
+
+ParseOptions returns two hashrefs:
+
+=over
+
+=item * 
+
+A hashref with the values for all command-line options in the
 format returned by Getopt::Long (See "Storing options in a hash" in 
-perldoc Getopt::Long).
+L<Getopt::Long>). This includes both options that the grabber
+must handle as well as options that ParseOptions handles for the grabber.
 
-$conf is a hashref to the data loaded from the configuration file.
-See perldoc XMLTV::Configure.
+=item *
+
+A hashref to the data loaded from the configuration file.
+See L<XMLTV::Configure> for the format of $conf.
+
+=back
 
 ParseOptions handles the following options automatically without returning:
 
---help
---capabilities
---version 
---description
+=over
 
-If the grabber supplies a stage_sub and a listchannels_sub, ParseOptions
-also takes care of the following options:
---configure
---configure-api
---list-channels
---stage
+=item --help
+
+=item --capabilities
+
+=item --version 
+
+=item --description
+
+=back
+
+ParseOptions also takes care of the following options without returning,
+by calling the listchannels_sub and stage_sub callbacks supplied by
+the grabber:
+
+=over
+
+=item --configure
+
+=item --configure-api
+
+=item --list-channels
+
+=item --stage
+
+=back
+
+ParseOptions will thus only return to the grabber when the grabber shall
+actually grab data.
 
 If the --output option is specified, STDOUT will be redirected to
 the specified file.
@@ -129,6 +177,81 @@ The grabber must check the following options on its own:
 
 and any other options that are grabber specific. This can be done by reading
 $opt->{days} etc.
+
+Changing the behaviour of ParseOptions
+
+The behaviour of ParseOptions can be influenced by passing named arguments
+in the hashref. The following arguments are supported:
+
+=over
+
+=item grabber_name
+
+Required. The name of the grabber (e.g. tv_grab_se_swedb). This is used
+when printing the synopsis.
+
+=item description
+
+Required. The description for the grabber. This is returned in response to
+the --description option and shall say which region the grabber returns data
+for (e.g. "Sweden" or "Sweden (tv.swedb.se)" if there are several grabbers
+for a country).
+
+=item version
+
+Required. This shall be a cvs Id field.
+
+=item capabilities
+
+Required. The capabilities that the grabber shall support. Only capabilities
+that XMLTV::Options know how to handle can be specified. Example: 
+
+  capabilities => [qw/baseline manualconfig apiconfig/],
+
+Note that XMLTV::Options guarantee that the grabber supports the manualconfig
+and apiconfig capabilities. The capabilities share and cache can be
+specified if the grabber supports them. XMLTV::Options will then automatically
+accept the command-line parameters --share and --cache respectively. 
+
+=item stage_sub
+
+Required. A coderef that takes a stage-name 
+and a configuration hashref as a parameter and returns an 
+xml-string that describes the configuration necessary for that stage. 
+The xml-string shall follow the xmltv-configuration.dtd.
+
+=item listchannels_sub
+
+Required. listchannels_sub shall be a coderef that takes a configuration 
+hash as returned by XMLTV::Configure::LoadConfig as the first parameter 
+and an option hash as returned by
+ParseOptions as the second parameter and returns an xml-string
+containing a list of all the channels that the grabber can deliver
+data for using the supplied configuration. Note that the listsub
+shall not use any channel-configuration from the hashref.
+
+=item load_old_config_sub
+
+Optional. Default undef. A coderef that takes a filename as a parameter
+and returns a configuration hash in the same format as returned by
+XMLTV::Configure::LoadConfig. load_old_config_sub is called if 
+XMLTV::Configure::LoadConfig fails to parse the configuration file. This
+allows the grabber to load configuration files created with an older
+version of the grabber.
+
+=item defaults
+
+Optional. Default {}. A hashref that contains default values for the
+command-line options. It shall be in the same format as returned by 
+Getopt::Long (See "Storing options in a hash" in  L<Getopt::Long>).
+
+=item extra_options
+
+Optional. Default []. An arrayref containing option definitions in the
+format accepted by Getopt::Long. This can be used to support grabber-specific
+options. The use of grabber-specific options is discouraged.
+
+=back
 
 =cut
 
@@ -288,6 +411,9 @@ $gn --help
 $gn --version
 
 $gn --capabilities
+
+$gn --description
+
 /;
 
     if( supports( "baseline", $p ) )
@@ -344,7 +470,7 @@ sub hash_push
    
 =head1 COPYRIGHT
 
-Copyright (C) 2005 Mattias Holmlund.
+Copyright (C) 2005,2006 Mattias Holmlund.
 
 This program is free software; you can redistribute it and/or
 modify it under the terms of the GNU General Public License
