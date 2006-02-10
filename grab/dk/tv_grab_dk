@@ -101,7 +101,6 @@ use XMLTV::Ask;
 use XMLTV::Mode;
 use XMLTV::Config_file;
 use XMLTV::DST;
-use XMLTV::Get_nice;
 use XMLTV::Date;
 # Todo: perhaps we should internationalize messages and docs?
 use XMLTV::Usage <<END
@@ -128,8 +127,11 @@ BEGIN {
     }
 }
 
+use LWP::UserAgent;
+my $ua = LWP::UserAgent->new;
+$ua->agent("xmltv/$XMLTV::VERSION");
+
 # Initialize cookie_jar
-use LWP::Simple qw($ua);
 use HTTP::Cookies;
 my $cookies = HTTP::Cookies->new;
 $ua->cookie_jar($cookies);
@@ -176,7 +178,7 @@ my %movietypes = (	'action'	=> 'action',
 			'western'	=> 'western'
 );
 # Get options
-XMLTV::Memoize::check_argv('XMLTV::Get_nice::get_nice_aux');
+XMLTV::Memoize::check_argv('get');
 my ($opt_days, $opt_offset, $opt_help, $opt_output,
     $opt_configure, $opt_config_file, $opt_gui,
     $opt_quiet, $opt_list_channels);
@@ -352,6 +354,13 @@ foreach (@config_lines) {
 ######################################################################
 # begin main program
 
+# Setting cookies
+if(defined $userid) {
+	$cookies->set_cookie(0,'cookTV2[intPingUserID]',$userid,'/','.tv2.dk',80,1,0,9999999,0);
+}
+# For some reason this line only works, if you have a valid userid.
+$cookies->set_cookie(0,'cookTV2[strKategoriIkoner]','5%2C1%2C55%2C38%2C50%2C61%2C13%2C59%2C40%2C2%2C51%2C46%2C63%2C26%2C48%2C53%2C28%2C31%2C3%2C57%2C42%2C44','/','.tv2.dk',80,1,0,9999999,0);
+
 my $now = parse_date('now');
 die if not defined $now;
 
@@ -425,20 +434,11 @@ sub process_listings_page ( $$$$$ ){
 	if( UnixDate($now,'%H') < 5 ) {
 		$dayOffset = 1;
 	}
-
-    # Setting cookies
-	if(defined $userid) {
-		$cookies->set_cookie(0,'cookTV2[intPingUserID]',$userid,'/','.tv2.dk',80,1,0,9999999,0);
-	}
-    # For some reason this line only works, if you have a valid userid.
-	$cookies->set_cookie(0,'cookTV2[strKategoriIkoner]','5%2C1%2C55%2C38%2C50%2C61%2C13%2C59%2C40%2C2%2C51%2C46%2C63%2C26%2C48%2C53%2C28%2C31%2C3%2C57%2C42%2C44','/','.tv2.dk',80,1,0,9999999,0);
 	
-    # We make an HTML::TreeBuilder object, get the information
-    # from it and them delete it.
-    #
-	my $t = get_nice_tree "http://tv.tv2.dk/tv/listning.php?Region=1&KanalID=".$tv2chan."&Dato=".($tv2date+$dayOffset)."&Kategori=0&Periode=1", \&tidy;
-	$cookies->clear;
-    
+	# We make an HTML::TreeBuilder object, get the information
+	# from it and them delete it.
+	my $t = get_tree("http://tv.tv2.dk/tv/listning.php?Region=1&KanalID=".$tv2chan."&Dato=".($tv2date+$dayOffset)."&Kategori=0&Periode=1");
+	
     my @elems = $t->look_down(class => 'udsendelse-vises-nu');
     push @elems, $t->look_down(class => 'udsendelse');
     if (not @elems) {
@@ -661,9 +661,8 @@ sub process_listings_page ( $$$$$ ){
 # get channel listing
 sub get_channels {
     my %channels;
-    my $url = 'http://tv.tv2.dk/tv';
 
-    my $t = get_nice_tree $url, \&tidy;
+    my $t = get_tree('http://tv.tv2.dk/tv');
 
     # The channels and their IDs are defined in javascript arrays
     my @elements = $t->look_down("_tag" => "script");
@@ -724,6 +723,17 @@ sub tidy( $ ) {
 	}
 	return $_;
     }
+}
+
+require HTML::TreeBuilder;
+my $fetched;
+sub get_tree( $ ) {
+	sleep rand(5) if defined $fetched;
+	my $t = new HTML::TreeBuilder;
+	$t->parse(tidy($ua->get(shift)->content));
+	$t->eof;
+	$fetched = 1;
+	return $t;
 }
 
 # Bump a YYYYMMDD date by one.
