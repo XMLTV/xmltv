@@ -76,9 +76,12 @@ our @EXPORT = qw(parse_local_date date_to_local utc_offset);
 sub parse_local_date($$) {
 #    local $Log::TraceMessages::On = 1;
     my ($date, $base) = @_;
-    croak 'usage: parse_local_date(unparsed date, base timezone)'
+    croak 'usage: parse_local_date(unparsed date, base timeoffset)'
       if @_ != 2 or not defined $date or not defined $base;
-    my $winter_tz = tz_to_num($base);
+    croak 'second parameter must be a time offset (+xxxx,-xxxx)'
+      if( $base !~ /^[-+]\d{4}$/ );
+
+    my $winter_tz = $base;
     my $summer_tz = sprintf('%+05d', $winter_tz + 100); # 'one hour'
 
     my $got_tz = gettz($date);
@@ -259,6 +262,9 @@ sub utc_offset( $$ ) {
     my ($indate, $basetz) = @_;
     croak "empty date" if not defined $indate;
     croak "empty base TZ" if not defined $basetz;
+    $basetz = tz_to_num( $basetz ) 
+      if $basetz !~ /^[-+]\d{4}$/;
+
     my $d = date_to_local(parse_local_date($indate, $basetz), $basetz);
     return UnixDate($d->[0],"%Y%m%d%H%M%S") . " " . $d->[1];
 }

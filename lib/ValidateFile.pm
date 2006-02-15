@@ -14,7 +14,8 @@ BEGIN {
 our @EXPORT_OK;
 
 use XML::LibXML;
-use File::Slurp;
+use Date::Manip qw/DateCalc UnixDate/;
+use File::Slurp qw/read_file/;
 
 my( $dtd, $parser );
 
@@ -132,6 +133,7 @@ If no errors are found, an empty list is returned.
 =cut 
 
 my %errors;
+my %timezoneerrors;
   
 sub ValidateFile {
     my( $file, $offset, $days ) = @_;
@@ -142,17 +144,20 @@ sub ValidateFile {
     my $mintime = "19700101000000";
     my $maxtime = "29991231235959";
 
+    my $maxstarttime = $mintime;
+    my $minstarttime = $maxtime;
+
     my $minerr = 0;
     my $maxerr = 0;
 
     if (defined $offset) {
-	require DateTime;
-	$mintime = DateTime->now->add( days => $offset-1 )->ymd("") . "220000";
+	$mintime = UnixDate( DateCalc( "today", "+" . $offset-1 . " days" ),
+			     "%Y%m%d") . "220000";
     }
 
     if (defined $days ) {
-	$maxtime = DateTime->now->add( days => $offset+$days )->ymd("") .
-	    "060000";
+	$maxtime = UnixDate( DateCalc("today", "+" . $offset+$days . " days"),
+			     "%Y%m%d" ) . "060000";
     }
 
     %errors = ();
@@ -226,14 +231,14 @@ sub ValidateFile {
 	    if $stop ne "" and not verify_time( $stop );
 
 	if ($start lt $mintime) {
-	    $w->( $p, "Start-time too early $start", 'earlystart' ) 
-		unless $minerr;
+	    $minstarttime = $start
+		if( $start < $minstarttime );
 	    $minerr++;
 	}
 
 	if ($start gt $maxtime) {
-	    $w->( $p, "Start-time too late $start", 'latestart' )
-		unless $maxerr;
+	    $maxstarttime = $start
+		if( $start > $maxstarttime );
 	    $maxerr++;
 	}
     }
@@ -245,20 +250,49 @@ sub ValidateFile {
 	}
     }
     
-    w( "$minerr entries had a start-time earlier than $mintime" )
-	if $minerr;
+    if( $minerr ) {
+	w( "$minerr entries had a start-time earlier than $mintime", 
+	   'earlystart' );
+	w( "Earliest starttime: $minstarttime" );
+    }
+	    
 
-    w( "$maxerr entries had a start-time later than $maxtime" )
-	if $maxerr;
-    
+    if ($maxerr) {
+	w( "$maxerr entries had a start-time later than $maxtime",
+	   'latestart' );
+	w( "Latest starttime: $maxstarttime" );
+    }
+
     return (keys %errors);
 }
 
 sub verify_time
 {
-    my( $time ) = @_;
+    my( $timestamp ) = @_;
 
-    return $time =~ /^\d{12,14}(\s+([A-Z]+|[+-]\d{4})){0,1}$/;
+    my( $date, $time, $tz ) =
+	($timestamp =~ /^(\d{8})(\d{4,6})(\s+([A-Z]+|[+-]\d{4})){0,1}$/ );
+
+    return 0 unless defined $time;
+
+    if( not defined( $tz ) )
+    {
+	if( not defined( $timezoneerrors{$tz} ) ) {
+	    w( "No timezone speicified", 'missingtimezone' );
+	    $timezoneerrors{$tz}++;
+	    return 0;
+	}
+    }
+
+    if( $tz =~ /[a-zA-Z]/ ) {
+	if( not defined( $timezoneerrors{$tz} ) ) {
+	    w( "Invalid timezone '$tz'", 'invalidtimezone' );
+	    $timezoneerrors{$tz}++;
+	    return 0;
+	}
+    }
+    
+    return 1;
 }
 
 sub w {
