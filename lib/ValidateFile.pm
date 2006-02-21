@@ -17,6 +17,9 @@ use XML::LibXML;
 use Date::Manip qw/DateCalc UnixDate/;
 use File::Slurp qw/read_file/;
 
+# Initialize Date::Manip to use UTC. What does this really mean?
+Date::Manip::Date_Init("TZ=UTC");
+
 my( $dtd, $parser );
 
 =head1 NAME
