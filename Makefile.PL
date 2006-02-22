@@ -1065,7 +1065,7 @@ sub targets( $ ) {
 	    die "target $name seen twice" if defined $r{$name};
 	    $r{$name} = $curr_target = [];
 	}
-	elsif (/^\t/ and defined $curr_target) {
+	elsif (/^\s+/ and defined $curr_target) {
 	    # Commands for the target.
 	    push @$curr_target, $_;
 	}
