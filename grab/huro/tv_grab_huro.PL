@@ -15,8 +15,10 @@ my $in = 'grab/huro/tv_grab_huro.in';
 my $out_fh = new IO::File "> $out" or die "cannot write to $out: $!";
 my $in_fh = new IO::File "< $in" or die "cannot read $in: $!";
 my $seen = 0;
+# example line: 
+#     my $SHARE_DIR = undef;
 while (<$in_fh>) {
-    s/^my \$SHARE_DIR =.*/my \$SHARE_DIR='$share_dir'; \# by $0/ && $seen++;
+    s/^(\s*)my *\$SHARE_DIR *=.*$/$1my \$SHARE_DIR='$share_dir'; \# by $0/ && $seen++;
     print $out_fh $_;
 }
 if ($seen == 0) {
