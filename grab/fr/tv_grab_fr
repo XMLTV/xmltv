@@ -89,7 +89,6 @@ use HTML::Entities; # parse entities
 use IO::File;
 use File::Temp;
 use URI;
-use LWP;
 use HTTP::Status;
 use Date::Manip;
 use XMLTV;
@@ -100,6 +99,7 @@ use XMLTV::Mode;
 use XMLTV::Config_file;
 use XMLTV::DST;
 use XMLTV::Memoize; XMLTV::Memoize::check_argv 'get';
+use LWP;
 
 # Code copied from LWP::Simple, but we want to change the user-agent.
 my $ua = new LWP::UserAgent;
@@ -115,7 +115,6 @@ sub get {
 #***************************************************************************
 # Main declarations
 #***************************************************************************
-my $GRID_BASE_URL = 'http://telepoche.guidetele.com/gtv/grille?openagent&d=2&h=6&b=';
 my $GRID_BY_CHANNEL = 'http://telepoche.guidetele.com/gtv/semaine?openagent&d=0&c=';
 my $GRID_FOR_CHANNEL = 'http://telepoche.guidetele.com/grille/EMWD-62UN5A/';
 my $SHEET_URL = "http://telepoche.guidetele.com/fiche/emi_";
@@ -123,7 +122,7 @@ my $ROOT_URL  = "http://telepoche.guidetele.com";
 my $LANG = "fr";
 my $MAX_STARS = 4;
 my $MAX_RETRY = 5;
-my $VERSION   = "270106-01";
+my $VERSION   = "270206-01";
 
 # Temporary avoid XML warnings (to be investigated)
 no warnings;
@@ -227,17 +226,15 @@ my $config_file = XMLTV::Config_file::filename($opt_config_file, 'tv_grab_fr', $
 sub get_channels( $ );
 sub process_channel_grid_page( $$$$ );
 sub get_detailed_fic( $$$ );
-sub debug_print( $ );
+sub debug_print( @ );
 
 # Set this to 1 of you debug strings
-my $DEBUG_FR = 0;
-# Internal debug functions
-sub debug_print( $ ) {
-  my $str = shift;
-
-  if ($DEBUG_FR) { print $str; }
+my $DEBUG_FR = 0;# Internal debug functions
+# Internal debug functionssub debug_print( $ ) {
+sub debug_print( @ ) {
+  if ($DEBUG_FR) { print @_; }
 }
-
+  
 sub xmlencoding {
     # encode for xml
     $_[0] =~ s/</&lt;/g;
@@ -467,17 +464,13 @@ sub get_channels( $ ) {
     my %channels;
     my $url = $GRID_FOR_CHANNEL.$gridid.'/2_6.html';
     my $nbretry = 0;
-    # Get the current page
-    my $page;
-    while (not defined($page = get $url)) {
-      ++$nbretry;
-      die "cannot get $url after $MAX_RETRY tries\n" if $nbretry == $MAX_RETRY;
-      sleep 1;
-    }
-    my $t = HTML::TreeBuilder->new;
-    $t->parse($page) or die "cannot parse content of $url";
-    $t->eof;
     
+    # Get the current page
+    my $CHANNEL_FILE = new File::Temp( SUFFIX => '.xmltv' );
+    LWP::Simple::getstore($url, $CHANNEL_FILE->filename);
+    my $t = HTML::TreeBuilder->new;
+    $t->parse_file($CHANNEL_FILE->filename);
+           
     debug_print( "URL  : " . $url ."\n");
     foreach my $cellTree ( $t->look_down( "_tag", "td", "width", "50", "height", "62" ) ) {
       my $chid = $cellTree->look_down( "_tag", "a", 'href', '#' )->attr('onclick');
@@ -501,19 +494,17 @@ sub process_channel_grid_page( $$$$ ) {
     my ($writer, $chid, $url, $slot) = @_;
     my ($genre, $showview, $hours, $starthour, $endhour, $date, $dateindex) = 0;
     my ($title, $subgenre, $footext, $star_rating, $datecreate) = 0;
-    my $PROG_FILE = new File::Temp( SUFFIX => '.xmltv' );
+    my $PROG_FILE = new File::Temp( UNLINK => 0, SUFFIX => '.xmltv' );
     my $nbretry = 0;
-
+    use LWP::Simple;
+       
     # Get the current page
-    my $page;
-    while (not defined($page = get $url)) {
-      ++$nbretry;
-      die "cannot get $url after $MAX_RETRY tries\n" if $nbretry == $MAX_RETRY;
-      sleep 1;
+    while ( HTTP::Status::is_error( getstore($url, $PROG_FILE->filename )) ) {
+      sleep(1); $nbretry++;
+      die "No access to website, check internet connection \n" if ($nbretry == $MAX_RETRY );
     }
     my $t = HTML::TreeBuilder->new;
-    $t->parse($page) or die "cannot parse content of $url\n";
-    $t->eof;
+    $t->parse_file( $PROG_FILE->filename );   
     debug_print("Now getting page : " . $url . "\n");
 
     # Reset some working variables
@@ -704,21 +695,18 @@ sub get_detailed_fic( $$$ )
   my $title = shift;
   my @desc;
   $id =~ /fiche\('(\d+)'\)/ or die "expected fiche(x), got: $id";
-  $id = $1;
+  $id = $1;         
+  my $nbretryfic = 0;
   debug_print("Calling sheet URL : " . $SHEET_URL . $id . "\n");
   
-  my $ficpage;
-  my $nbretryfic = 0;
-  my $uri = $SHEET_URL . $id;
-  while (not defined($ficpage = get $uri)) {
-    ++$nbretryfic;
-    # The detailed information page is not critical, so return to main loop
-    return if $nbretryfic == $MAX_RETRY;
-    sleep 1;
-  }
+  # Get the current page
+  my $FIC_FILE = new File::Temp( SUFFIX => '.xmltv' );    
+  while ( HTTP::Status::is_error( LWP::Simple::getstore($SHEET_URL . $id, $FIC_FILE->filename )) ) {      
+    return if ($nbretryfic == $MAX_RETRY );
+    sleep(1); $nbretryfic++;      
+  } 
   my $tfic = HTML::TreeBuilder->new;
-  $tfic->parse($ficpage) or die "cannot parse content of $uri\n";
-  $tfic->eof;
+  $tfic->parse_file($FIC_FILE->filename);  
 
   # This page's title tag contains the program title without the sub-title. Use it to separate the two.
   my $ttitle;
@@ -730,15 +718,46 @@ sub get_detailed_fic( $$$ )
     }
   }
   # Get the duration and the year
-  my ($length, $hour, $min, $year);
   if ( my $tdesc = $tfic->look_down('_tag', 'td', 'width', '250', 'class', 'txt') ) {
-    $length = $tdesc->as_text();
-    if ( $length =~ s/ Dur� : (\d+)h(\d+) AM(.*)// ) {
-      $hour = $1; $min = $2; $year = $3;
-      # guidetele.com si full of bugs ...
-      $hour = $hour - 12 if ($hour >= 12);
-      $prog->{'length'} = ($hour * 3600) + ($min * 60);
-      $prog->{'date'}   = $year;
+    my $length = $tdesc->as_text();
+    if ( $length =~ s/ Dur.e :\s*// ) {
+        $length=tidy($length);
+        debug_print("length=[$length]\n");
+        while ($length ne "") {
+            $length =~ s/^\s*//;
+            if ($length =~ s/^(\d+)h(\d+)//) {
+                warn "duration seen twice\n" if defined $prog->{'length'};
+                # guidetele.com si full of bugs ...
+                my ($hour, $min) = ($1, $2);
+                $hour = $hour - 12 if ($hour >= 12);
+                my $duration=($hour * 3600) + ($min * 60);
+                $prog->{'length'} = $duration if ($duration != 0);
+            }
+            elsif ($length =~ s/^-\s+(\d+)//) {
+                warn "date seen twice\n" if defined $prog->{'date'};
+                $prog->{'date'} = $1;
+            }
+            elsif ($length =~ s/^(Couleur|Noir et blanc)\s*//i) {
+                $prog->{'video'}{colour} = ($1 eq "Noir et blanc" ? "no" : "yes");
+            }
+            elsif ($length =~ s%^16/9%%) {
+                $prog->{'video'}{aspect} = "16/9";
+            }
+            elsif ($length =~ s/^(St.r.o|Dolby)\s*//i) {
+                my $stereo = $1;
+                if ($stereo =~ /^St.r.o$/)
+                {
+                    $prog->{'audio'}{stereo} = "stereo";
+                }
+                elsif ($stereo eq "Dolby")
+                {
+                    $prog->{'audio'}{stereo} = "dolby";
+                }
+            } else {
+                # Skip over garbage
+                $length =~ s/^\S*//;
+            }
+        }  
     }
   }
   # Now get descriptions, summary, advices, actors and director
@@ -753,6 +772,7 @@ sub get_detailed_fic( $$$ )
     my @children = $tdesc->content_list();
     foreach my $desc (@children)  {
       unless (ref($desc)) {
+        $desc =~ s/\@\@\@/ /g;
         # Remove leading and trailing spaces
         $desc =~ s/^ *: *//;
         $desc =~ s/ *$//;
@@ -798,7 +818,7 @@ sub get_detailed_fic( $$$ )
   # Add AVIS to the main description, or make a new desc for it if there are none.
   if (defined $avis and length($avis) ) {
     if ($prog->{desc}) {
-      $prog->{desc}->[0]->[0] .= "Critique : " . tidy($avis);
+      $prog->{desc}->[0]->[0] .= " Critique : " . tidy($avis);
     } else {
       push @{$prog->{desc}}, [ tidy($avis), $LANG ];
     }
