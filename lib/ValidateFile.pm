@@ -281,7 +281,7 @@ sub verify_time
     if( not defined( $tz ) )
     {
 	if( not defined( $timezoneerrors{$tz} ) ) {
-	    w( "No timezone speicified", 'missingtimezone' );
+	    w( "No timezone specified", 'missingtimezone' );
 	    $timezoneerrors{$tz}++;
 	    return 0;
 	}
