@@ -97,7 +97,7 @@ sub get_nice_aux( $ ) {
     	# to return undef on failure.  But dying here makes sure that a
     	# failed page fetch doesn't get stored in XMLTV::Memoize's cache.
     	#
-    	die "could not fetch $url, error: $r->status_line , aborting\n" if $FailOnError;
+    	die "could not fetch $url, error: " . $r->status_line . ", aborting\n" if $FailOnError;
 		$errors{$url} = $r->status_line;
 		return undef;
     } else {
