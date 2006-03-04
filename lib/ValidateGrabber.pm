@@ -312,7 +312,8 @@ sub ValidateGrabber {
 	unlink( "${op}3.log" );
     }
     
-    my $cmd4 = "$cmd --quiet --output ${output}4 2>${op}4.log";
+    my $output4 = "${op}4.xml";
+    my $cmd4 = "$cmd --quiet --output $output4 2>${op}4.log";
 
     if (run $cmd4 ) {
 	w "$shortname with --quiet and --output failed: See ${op}4.log";
