@@ -14,11 +14,7 @@ BEGIN {
 our @EXPORT_OK;
 
 use XML::LibXML;
-use Date::Manip qw/DateCalc UnixDate/;
 use File::Slurp qw/read_file/;
-
-# Initialize Date::Manip to use UTC. What does this really mean?
-Date::Manip::Date_Init("TZ=UTC");
 
 my( $dtd, $parser );
 
@@ -121,14 +117,6 @@ A programme entry with an invalid start-time was found.
 
 A programme entry with an invalid stop-time was found.
 
-=item earlystart, latestart
-
-If the day and offset parameters were specified in the call to ValidateFile,
-it checks to see that the start-time of each program is between 
-today+$days 00:00 and today+$offset+$days+1 06:00. This check does not take
-timezones into account, it ignores the timezone component and assumes that
-the start-time is expressed in local time.
-
 =back
 
 If no errors are found, an empty list is returned.
@@ -139,29 +127,10 @@ my %errors;
 my %timezoneerrors;
   
 sub ValidateFile {
-    my( $file, $offset, $days ) = @_;
+    my( $file ) = @_;
 
     die "ValidateFile called without previous call to LoadDtd" 
 	unless defined $dtd;
-
-    my $mintime = "19700101000000";
-    my $maxtime = "29991231235959";
-
-    my $maxstarttime = $mintime;
-    my $minstarttime = $maxtime;
-
-    my $minerr = 0;
-    my $maxerr = 0;
-
-    if (defined $offset) {
-	$mintime = UnixDate( DateCalc( "today", "+" . $offset-1 . " days" ),
-			     "%Y%m%d") . "220000";
-    }
-
-    if (defined $days ) {
-	$maxtime = UnixDate( DateCalc("today", "+" . $offset+$days . " days"),
-			     "%Y%m%d" ) . "060000";
-    }
 
     %errors = ();
 
@@ -233,17 +202,6 @@ sub ValidateFile {
 	$w->( $p, "Invalid stop-time '$stop'", 'badstop' )
 	    if $stop ne "" and not verify_time( $stop );
 
-	if ($start lt $mintime) {
-	    $minstarttime = $start
-		if( $start < $minstarttime );
-	    $minerr++;
-	}
-
-	if ($start gt $maxtime) {
-	    $maxstarttime = $start
-		if( $start > $maxstarttime );
-	    $maxerr++;
-	}
     }
 
     foreach my $channel (keys %channels) {
@@ -253,19 +211,6 @@ sub ValidateFile {
 	}
     }
     
-    if( $minerr ) {
-	w( "$minerr entries had a start-time earlier than $mintime", 
-	   'earlystart' );
-	w( "Earliest starttime: $minstarttime" );
-    }
-	    
-
-    if ($maxerr) {
-	w( "$maxerr entries had a start-time later than $maxtime",
-	   'latestart' );
-	w( "Latest starttime: $maxstarttime" );
-    }
-
     return (keys %errors);
 }
 
