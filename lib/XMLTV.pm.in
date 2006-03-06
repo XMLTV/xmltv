@@ -2000,6 +2000,8 @@ package XMLTV::Writer;
 use base 'XML::Writer';
 use Carp;
 
+use Date::Manip qw/UnixDate DateCalc/;
+
 # Use Log::TraceMessages if installed.
 BEGIN {
     eval { require Log::TraceMessages };
@@ -2011,6 +2013,10 @@ BEGIN {
 	*t = \&Log::TraceMessages::t;
 	*d = \&Log::TraceMessages::d;
     }
+}
+
+BEGIN {
+  Date::Manip::Date_Init("TZ=UTC");
 }
 
 # Override dataElement() to refuse writing empty or whitespace
@@ -2059,13 +2065,30 @@ or overridden methods:
 
 Creates an XMLTV::Writer object and starts writing an XMLTV file, printing
 the DOCTYPE line.  Arguments are passed on to XML::WriterE<39>s constructor,
-except that the 'encoding' key if present gives the XML character encoding.
+except for the following:
+
+the 'encoding' key if present gives the XML character encoding.
 For example:
 
-my $w = new XMLTV::Writer(encoding => 'ISO-8859-1');
+  my $w = new XMLTV::Writer(encoding => 'ISO-8859-1');
 
 If encoding is not specified, XML::WriterE<39>s default is used
 (currently UTF-8).
+
+XMLTW::Writer can also filter out specific days from the data. This is
+useful if the datasource provides data for periods of time that does not
+match the days that the user has asked for. The filtering is controlled
+with the days, offset and cutoff arguments:
+
+  my $w = new XMLTV::Writer(
+      offset => 1,
+      days => 2,
+      cutoff => "050000" );
+
+In this example, XMLTV::Writer will discard all entries that do not have
+starttimes larger than or equal to 05:00 tomorrow and less than 05:00
+two days after tomorrow. The time offset is stripped off the starttime before
+the comparison is made.
 
 =cut
 sub new {
@@ -2075,6 +2098,10 @@ sub new {
     croak 'OUTPUT requires a filehandle, not a filename or anything else'
       if exists $args{OUTPUT} and not ref $args{OUTPUT};
     my $encoding = delete $args{encoding};
+    my $days = delete $args{days};
+    my $offset = delete $args{offset};
+    my $cutoff = delete $args{cutoff};
+
     my $self = $class->SUPER::new(DATA_MODE => 1, DATA_INDENT => 2, %args);
     bless($self, $class);
 
@@ -2087,6 +2114,26 @@ sub new {
 	#
 	warn "assuming default UTF-8 encoding for output\n";
 	$self->xmlDecl();
+    }
+
+#    $Log::TraceMessages::On = 1;
+    $self->{mintime} = "19700101000000"; 	 
+    $self->{maxtime} = "29991231235959"; 	 
+    
+
+    if (defined( $days ) and defined( $offset ) and defined( $cutoff )) {
+      $self->{mintime} = UnixDate( 
+          DateCalc( "today", "+" . $offset . " days" ),
+          "%Y%m%d") . $cutoff;
+      t "using mintime $self->{mintime}";
+
+      $self->{maxtime} = UnixDate( 
+          DateCalc("today", "+" . $offset+$days . " days"), 	 
+          "%Y%m%d" ) . $cutoff;
+      t "using maxtime $self->{maxtime}";
+    }
+    elsif (defined( $days ) or defined( $offset ) or defined($cutoff)) {
+      croak 'You must specify days, offset and cutoff or none of them';
     }
 
     {
@@ -2261,6 +2308,15 @@ sub write_programme {
 	else { die "bad multiplicity for attribute: $mult" }
 	$attrs{$name} = $val if defined $val;
     }
+
+    # We use string comparisons without timeoffsets for comparing times.
+    my( $start ) = split( /\s+/, $attrs{start} );
+    if( $start lt $self->{mintime} or
+        $start ge $self->{maxtime} ) {
+      t "skipping programme with start $attrs{start}";
+      return;
+    }
+
     t "beginning 'programme' element";
     write_element_with_handlers($self, 'programme', \%attrs,
 				\@XMLTV::Programme_Handlers, \%p);
