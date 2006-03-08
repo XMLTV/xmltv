@@ -60,6 +60,7 @@ my %cap_options = (
 				 stage=s
 				 list-channels
 				 /],
+		   tkconfig => [qw/gui=s/],
 		   # The cache option is normally handled by XMLTV::Memoize
 		   # but in case it is not used, we handle it here as well.
 		   cache => [qw/
@@ -90,6 +91,9 @@ my %cap_defaults = (
 			'configure-api' => 0,
 			stage => 'start',
 			'list-channels' => 0,
+		    },
+		    tkconfig => {
+			gui => undef,
 		    },
 		    cache => {
 			cache => undef,
@@ -294,7 +298,7 @@ sub ParseOptions
     
     my $res = GetOptions( $opt, @optdef );
     
-    if( (not $res) || $opt->{help} )
+    if( (not $res) || $opt->{help} || scalar( @ARGV ) > 0 )
     {
 	PrintUsage( $p );
 	exit 1;

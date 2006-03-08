@@ -15,8 +15,6 @@ use XMLTV::Ask;
 use XMLTV::Config_file;
 use XML::LibXML;
 
-XMLTV::Ask::init( undef );
-
 =head1 NAME
 
 XMLTV::Configure
@@ -160,6 +158,8 @@ sub Configure
 {
     my( $stagesub, $listsub, $conffile, $opt ) = @_;
     
+    XMLTV::Ask::init($opt->{gui});
+
     # How can we read the language from the environment?
     my $lang = 'en'; 
     
