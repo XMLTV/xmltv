@@ -109,6 +109,11 @@ A programme-entry without an id was found.
 
 A programme entry with an empty or missing title was found.
 
+=item emptydescription
+
+A programme entry with an empty desc-element was found. The desc-element
+shall be omitted if there is no description.
+
 =item badstart
 
 A programme entry with an invalid start-time was found.
@@ -183,8 +188,10 @@ sub ValidateFile {
 	my $start = $p->findvalue('@start');
 	my $stop = $p->findvalue('@stop');
 	my $title = $p->findvalue('title/text()');
-	my $desc = $p->findvalue('desc/text()');
-		
+	my $desc;
+	$desc = $p->findvalue('desc/text()')
+	    if $p->findvalue( 'count(desc)' );
+
 	if (not defined( $channels{$channelid} )) {
 	    $w->( $p, "Channel '$channelid' does not have a <channel>-entry.",
 		  'unknownid' );
@@ -195,6 +202,9 @@ sub ValidateFile {
 	
 	$w->( $p, "Empty title", 'emptytitle' )    
 	    if $title =~ /^\s*$/;
+
+	$w->( $p, "Empty description", 'emptydescription' )    
+	    if defined($desc) and $desc =~ /^\s*$/;
 	
 	$w->( $p, "Invalid start-time '$start'", 'badstart' )
 	    if not verify_time( $start );
