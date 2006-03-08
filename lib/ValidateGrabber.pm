@@ -342,8 +342,9 @@ sub ValidateGrabber {
 	push @errors, "notadditive";
     }
     
-    if( !compare_files( "$output.sorted.xml", "${op}1_2-2.sorted.xml" ) ) {
-	w "The data is not additive.";
+    if( !compare_files( "$output.sorted.xml", "${op}1_2-2.sorted.xml",
+			"${op}_1_2.diff" ) ) {
+	w "The data is not additive. See ${op}_1_2.diff";
 	push @errors, "notadditive";
     }
     
@@ -464,9 +465,10 @@ sub run_capture {
 
 # Compare two files. Return true if they have the same contents.
 sub compare_files {
-    my( $file1, $file2 ) = @_;
+    my( $file1, $file2, $output ) = @_;
 
-    run("diff $file1 $file2 > /dev/null");
+    $output = "/dev/null" unless defined $output;
+    run("diff $file1 $file2 > $output");
     return $? ? 0 : 1;
 }
 
