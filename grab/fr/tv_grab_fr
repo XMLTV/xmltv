@@ -213,6 +213,16 @@ sub xmlencoding {
     return $_[0];
 }
 
+sub text_cleanup( $ ) 
+{
+  my $desc = shift;
+  $desc =~ s/\@\@\@/ /g;
+  # Remove leading and trailing spaces
+  $desc =~ s/^ *: *//;
+  $desc =~ s/ *$//;
+  return $desc;
+}
+
 sub tidy2 {
     # clean bad characters from HTML
     for (my $s = shift) {
@@ -467,7 +477,7 @@ sub get_channels( $ ) {
 
 sub process_channel_grid_page( $$$$ ) {
     my ($writer, $chid, $url, $slot) = @_;
-    my ($genre, $showview, $hours, $starthour, $endhour, $date, $dateindex) = 0;
+    my ($genre, $lastshowview, $showview, $hours, $starthour, $endhour, $date, $dateindex) = 0;
     my ($title, $subgenre, $footext, $star_rating, $datecreate) = 0;
        
     # Get the current page
@@ -611,6 +621,8 @@ sub process_channel_grid_page( $$$$ ) {
             $showview =~ s/Showview : //;
             for ($showview) { s/^\s+//; s/\s+$//; s/\xA0//; }          
             $prog{showview} = $showview;
+            next if ( $showview == $lastshowview );
+            $lastshowview = $showview;
           }
 
           # Variables needed for the detailed information parsing
@@ -677,98 +689,48 @@ sub get_detailed_fic( $$$ )
   }
   # Get the duration and the year
   if ( my $tdesc = $tfic->look_down('_tag', 'td', 'bgcolor', '#F8F8F8') ) {
-    my $length = $tdesc->as_text();
-    if ( $length =~ s/ Dur.e :\s*// ) {
-        $length=tidy($length);
-        debug_print("length=[$length]\n");
-        while ($length ne "") {
-            $length =~ s/^\s*//;
-            if ($length =~ s/^(\d+)h(\d+)//) {
-                warn "duration seen twice\n" if defined $prog->{'length'};
-                # guidetele.com si full of bugs ...
-                my ($hour, $min) = ($1, $2);
-                $hour = $hour - 12 if ($hour >= 12);
-                my $duration=($hour * 3600) + ($min * 60);
-                $prog->{'length'} = $duration if ($duration != 0);
-            }
-            elsif ($length =~ s/^-\s+(\d+)//) {
-                warn "date seen twice\n" if defined $prog->{'date'};
-                $prog->{'date'} = $1;
-            }
-            elsif ($length =~ s/^(Couleur|Noir et blanc)\s*//i) {
-                $prog->{'video'}{colour} = ($1 eq "Noir et blanc" ? "no" : "yes");
-            }
-            elsif ($length =~ s%^16/9%%) {
-                $prog->{'video'}{aspect} = "16/9";
-            }
-            elsif ($length =~ s/^(St.r.o|Dolby)\s*//i) {
-                my $stereo = $1;
-                if ($stereo =~ /^St.r.o$/)
-                {
-                    $prog->{'audio'}{stereo} = "stereo";
-                }
-                elsif ($stereo eq "Dolby")
-                {
-                    $prog->{'audio'}{stereo} = "dolby";
-                }
-            } else {
-                # Skip over garbage
-                $length =~ s/^\S*//;
-            }
-        }  
+	  debug_print "RAWDATA: " . tidy($tdesc->as_text()) . "\n";
+	  foreach my $field ( split(/\s+/, tidy($tdesc->as_text())) ) {
+	    if ( $field =~ s/^(\d\d\d\d)$//i ) {
+	      $prog->{'date'} = $1;
+	    } elsif ( $field =~ s/^(Couleur|Noir et blanc)//i ) {
+        $prog->{'video'}{colour} = ($1 eq "Noir et blanc" ? "no" : "yes");
+      } elsif  ( $field =~ s%^16/9%%) {
+        $prog->{'video'}{aspect} = "16/9";
+      } elsif ( $field =~ s/^(St.r.o|Dolby)\s*//i) {
+        my $stereo = $1;
+        if ($stereo =~ /^St.r.o$/) {
+          $prog->{'audio'}{stereo} = "stereo";
+        } elsif ($stereo eq "Dolby") {
+          $prog->{'audio'}{stereo} = "dolby";
+        }
+      } elsif ($field =~ s/(\d+)h(\d+)//) {      
+        # guidetele.com si full of bugs ...
+        my ($hour, $min) = ($1, $2);
+        $hour = $hour - 12 if ($hour >= 12);
+        my $duration=($hour * 3600) + ($min * 60);
+        $prog->{'length'} = $duration if ($duration != 0);       
+      }
     }
   }
   # Now get descriptions, summary, advices, actors and director
   my ($resume, $histoire, $avis);
   my ($nextIsResume,$nextIsHistory,$nextIsAvis,$nextIsDirector) = (0,0,0,0);
   my (@director, @actor);
-  if ( my $tdesc = $tfic->look_down('_tag', 'td', 'width', '396') ) {
-    # Detect actors
-    foreach my $actorcell ($tdesc->look_down('_tag', 'td', 'class', 'disActeur') ) {
-      push @actor, tidy($actorcell->as_text());
-    }
-    my @children = $tdesc->content_list();
-    foreach my $desc (@children)  {
-      unless (ref($desc)) {
-        $desc =~ s/\@\@\@/ /g;
-        # Remove leading and trailing spaces
-        $desc =~ s/^ *: *//;
-        $desc =~ s/ *$//;
-      }              
-      if ($nextIsDirector == 1 ) {
-        push @director, tidy($desc);
-        $nextIsDirector = 0;
-        debug_print "FOUND DIRECTOR : " . tidy($desc) . " - $title - $id\n";
+  foreach my $tpar ( $tfic->look_down('_tag', 'p' ) ) {
+    if ( my $ttext = $tpar->look_down('_tag', 'span', 'class', 'noir11') ) {
+      if ( $ttext->as_text eq "HISTOIRE" ) {
+        $histoire = text_cleanup(tidy($tpar->look_down('_tag', 'span', 'class', 'noir11r')->as_text()));
       }
-      if ($nextIsResume == 1) {
-        $desc =~ s/ *$//;
-        warn "RESUME seen twice\n" if defined $resume;
-        $resume = tidy($desc);
-        $nextIsResume = 0;
-        debug_print "FOUND RESUME : $resume \n";
+      if ( $ttext->as_text eq "RESUME" ) {
+        $resume = text_cleanup(tidy($tpar->look_down('_tag', 'span', 'class', 'noir11r')->as_text()));
       }
-      if ($nextIsHistory == 1 ) {
-        $desc =~ s/ *$//;
-        warn "HISTOIRE seen twice\n" if defined $histoire;
-        $histoire = tidy($desc);
-        $nextIsHistory = 0;
-        debug_print "FOUND HISTOIRE : $histoire \n";
-      }
-      if ($nextIsAvis == 1 ) {
-        $desc =~ s/ *$//;
-        warn "AVIS seen twice\n" if defined $avis;
-        $avis = tidy($desc);
-        $nextIsAvis = 0;
-        debug_print "FOUND AVIS : $avis \n";
-      }
-      if ( ref($desc) ) {
-        $nextIsResume = 1 if ( $desc->as_text() eq "RESUME" );
-        $nextIsHistory = 1 if  ( $desc->as_text() eq "HISTOIRE" );
-        $nextIsAvis = 1 if  ( $desc->as_text() eq "AVIS" );
-        $nextIsDirector = 1 if ($desc->as_text() =~ /R..lisateur/ );
+      if ( $ttext->as_text eq "AVIS" ) {
+        $avis = text_cleanup(tidy($tpar->look_down('_tag', 'span', 'class', 'noir11r')->as_text()));
       }
     }
   }
+  
   # RESUME is the main definition, HISTOIRE is shorter.
   foreach ($resume, $histoire) {
     push @{$prog->{desc}}, [ $_, $LANG ] if defined and length;
@@ -776,14 +738,9 @@ sub get_detailed_fic( $$$ )
   # Add AVIS to the main description, or make a new desc for it if there are none.
   if (defined $avis and length($avis) ) {
     if ($prog->{desc}) {
-      $prog->{desc}->[0]->[0] .= " Critique : " . tidy($avis);
+      $prog->{desc}->[0]->[0] .= " Critique : " . $avis;
     } else {
-      push @{$prog->{desc}}, [ tidy($avis), $LANG ];
-    }
-  }
-  if (my $tdesc = $tfic->look_down('_tag', 'td', 'width', '190', 'valign', 'top', 'align', 'center' ) ) {
-    if (my $imgdesc = $tdesc->look_down('_tag', 'img') ) {
-      $prog->{icon} = [ {'src' => $ROOT_URL.$imgdesc->attr('src') } ];
+      push @{$prog->{desc}}, [ $avis, $LANG ];
     }
   }
   # Now push the credits section, if exists
