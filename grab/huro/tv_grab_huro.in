@@ -1,8 +1,9 @@
 #!/usr/bin/perl -w
+# vi:noet:ts=4
+
 #-------------------------------------------------------------------------------
 # $Id$
 #-------------------------------------------------------------------------------
-# vi:noet:ts=4
 
 #-------------------------------------------------------------------------------
 # documentation
@@ -159,6 +160,9 @@ To show version: $0 --version
 END
 	;
 
+# ${Log::TraceMessages::On} = 1;
+# to switch TRACE in remove the comment from prev. line
+
 # Use Log::TraceMessages if installed.
 BEGIN {
 	eval { require Log::TraceMessages };
@@ -173,18 +177,25 @@ BEGIN {
 	}
 }
 
-# switch TRACE in:
-# ${Log::TraceMessages::On} = 1;
 
 my ($opt_days, $opt_offset, $opt_help, $opt_output, $opt_share,
 	$opt_configure, $opt_config_file, $opt_gui, $opt_quiet,
 	$opt_list_channels, $opt_loc, $opt_slow, $opt_full_desc,
 	$opt_local_icons, $opt_icons, $opt_no_fetch_icons,
-	$opt_max_desc_length);
+	$opt_max_desc_length, $opt_worker_times, $opt_now);
 
+our $FETCHOFFSET = 0;
 our ($DAYSPERPAGE, $TZ, $COUNTRY, $CONFIG_FILE, $WNAME, $WSTIME);
 our (%CATMAP, %JOBMAP, %CHANNELS, %WTIMES);
 our %COUNTRIES = (Hungary => [ 'hu', '+0100' ], Romania => [ 'ro', '+0200' ],);
+our %WORDS = (
+		hu => {	episode => "rész",
+				minute =>  "perc",
+				links => "Linkek" },
+		ro => { episode =>  "no such info on webpage",
+				minute => "minute",
+				links => "Linkuri" }
+	) ;
 
 sub domain();
 sub xid( $ );
@@ -198,13 +209,10 @@ sub grab_icon( $ );
 sub get_channel_urls( $ );
 sub worker( $ );
 sub showworkers();
+sub get_all_text ( $ );
 
 # Get options, including undocumented --cache option.
 XMLTV::Memoize::check_argv('XMLTV::Get_nice::get_nice_aux');
-
-# set user-agent manually
-$XMLTV::Get_nice::ua->agent('tv_grab_huro/1.0');
-
 
 #-------------------------------------------------------------------------------
 # domain
@@ -247,6 +255,27 @@ sub xhead() {
 	};
 }
 
+		# function to parse all of text data of a HTML element and his childs:
+#-------------------------------------------------------------------------------
+# get_all_text
+#-------------------------------------------------------------------------------
+# desc		: parse all of text data of a HTML element and in his childs
+# arguments	: 1- HTML:Element object from here will be started the downhill
+# returns	: @arrays of founded text elements
+#-------------------------------------------------------------------------------
+sub get_all_text( $ ) {
+	my @tmplines;
+	my $e = $_[0];
+	if (ref $e) {
+		foreach my $c ($e->content_list) {
+			push @tmplines, get_all_text($c);
+		}
+	}
+	else {
+		push @tmplines, $e;
+	}
+	return @tmplines;
+}
 
 #------------------------------------------------------------------------------
 # process_table
@@ -259,139 +288,195 @@ sub xhead() {
 # returns	: list of the programme hashes to write
 #------------------------------------------------------------------------------
 sub process_table( $$$$ ) {
-	my ($basedate, $ch_xmltv_id, $ch_port_id, $day) = @_;
+	my ($basedate, $ch_xmltv_id, $ch_port_id, $baseday) = @_;
+	my $basedateday = UnixDate(parse_date($basedate), '%e');
+	my $urlfmt = "http://www." . domain() .
+		"/pls/tv/tv.channel?i_ch=$ch_port_id" .
+		"&i_days=%d&i_xday=$DAYSPERPAGE&i_where=1";
+	my $url = "$urlfmt";
+	my ($tree, $body);
 
-	my $url = "http://www." . domain() . "/pls/tv/tv.channel?i_ch=$ch_port_id" .
-		"&i_days=$day&i_xday=$DAYSPERPAGE&i_where=1";
 
-	t "fetching url: $url";
-
-	worker("base-downloading");
-	my $data=get_nice($url);
-	if (not defined $data) {
-		die "could not fetch $url, aborting\n";
-	}
 	local $SIG{__WARN__} = sub {
 		warn "$url: $_[0]";
 	};
 
-	# parse the page to a document object
-	my $tree = HTML::TreeBuilder->new();
-	$tree->parse($data) or die "cannot parse content of $url\n";
-	$tree->eof;
-	worker("base-parsing");
+	# make (maximum) two loop to fetch program data:
+	#
+	# if the grabber runs in eraly hours (e.g. 01:00, 02:00) port.hu returns
+	# the yesterdays's program as today's program... so we have to check it,
+	# example.hu: <span class="ctxt">Péntek (február 27.)</span>
+	# example.ro: <span class="ctxt">Duminic\u0103 (26 februarie)</span>
+	# if this failes, we construct the previous (or next?) day's url 
+
+	foreach (1, 2) {
+		$url = sprintf($urlfmt, $baseday + $FETCHOFFSET);
+
+		t "fetching url: $url";
+		worker("base-downloading");
+		my $data=get_nice($url);
+		$tree = HTML::TreeBuilder->new_from_content($data) or 
+			die "could not fetch/parse $url (progamtable)\n";
+		worker("base-parsing");
+
+		$body = $tree->look_down("_tag"=>"body");
+
+		my @daysonpage = () ;
+		foreach ($body->look_down("_tag"=>"span", "class" => "ctxt")) {
+			$_ = $_->as_text();
+			if ((($COUNTRY eq 'hu') && (m/^\s*\S+\s+\(\s*\S+\s+(\d+)\.\s*\)\s*$/))
+				||
+				(($COUNTRY eq 'ro') && (m/^\s*\S+\s+\(\s*(\d+)\s+\S+\s*\)\s*$/))) {
+				t "added founded date of the month on the grabbed page: $1";
+				push @daysonpage, $1;
+			}
+		} 
+		if (@daysonpage) {
+			# check date ... is the first founded date on the page the requested?
+
+			last if ($basedateday == $daysonpage[0]);
+
+			$body = undef;
+			$tree->delete();
+
+			t "requested from $basedate, but port.$COUNTRY returned programs from wrong day: $daysonpage[0]";
+			if (UnixDate(DateCalc($basedate, "- 1 days"), '%e') == $daysonpage[0]) {
+				# port.hu returned the programms from yesterday
+				$FETCHOFFSET += 1 ;
+			}
+			elsif (UnixDate(DateCalc($basedate, "+ 1 days"), '%e') == $daysonpage[0]) {
+				# port.hu returned the programms from tommorrow
+				$FETCHOFFSET -= -1 ;
+			}
+			else {
+				t "fetched HTML page do not contain 0, +1 or -1 day of the reuested one";
+				last;
+			}
+			t "global fetch offset was set to: $FETCHOFFSET";
+		}
+		else {
+			warn "no date data found on the fetched HTML page, trying to continue";
+			last;
+		}
+	}
+
+	if (! defined($body)) {
+		warn "Could not found the requested day's data on the grabbed HTML page, " .
+			"some programs on $ch_xmltv_id channel will be not fetched.";
+		return;
+	}
 
 	# the page consists of two major tables, where one holds the data 
 	# until 'bout 20 o'clock, the other, i.e. lower, one the evening program
-	my $body = $tree->look_down("_tag"=>"body");
+	# the programs are in <tr> statements in more tables, this tables are
+	# intermited with other tables, which contain images
+	# - we need only the rows, which hold program data; because tables are
+	#   structured into other tables, we need only the most inner row
+	#   -> if it contains program data, and 
+	#   -> has no child-tables in it
+	# - there are tables, which will be the lower region delimiter
+	#   this is most inner and contains the vonal.gif, we will add this row
+	#   only as "lower region" string
 
-	# the program is in tables, we need only the most inner tables, so add this
-	# tables if is inner and contains program data (has time in it) or
-	# add a "lower region" string, if contains vonal.gif -> becuase to know
-	# we are in the lower region
+	my @rows;
+	foreach ($body->look_down("_tag"=>"tr")) {
 
-	my @tables;
-	foreach ($body->look_down("_tag"=>"table")) {
-		my $t;
-		# look_down begins at self, so one table will be found allways, if we
-		# found 2 -> this is not the inner table
-		(undef, $t) = $_->look_down("_tag"=>"table");
-		next if (defined $t);
-		if ($_->as_text() =~ /[012][0-9]:[0-5][0-9]/) {
-			push @tables, $_;
-			t "+ table containing programs found:";
-			t $_->as_text();
+		# have childrens? if yes, skip this row
+		next if ($_->look_down("_tag"=>"table"));
+
+		if ($_->look_down("_tag"=>"img", "src" => "/tv/kep/vonal.gif")) {
+			# ther is the "vonal.gif" in the table?
+			t "+ most inner row containing vonal.gif found";
+			push @rows, "lower region";
 		}
-		elsif ($_->look_down("_tag"=>"img", "src" => "/tv/kep/vonal.gif")) {
-			t "+ table containing vonal.gif found";
-			push @tables, "lower region";
-		};
+		elsif ($_->as_text() =~ /[012][0-9]:[0-5][0-9]/) {
+			t "+ most inner row containing programs found:";
+			t $_->as_text();
+			push @rows, $_;
+		}
 	}
 
-	# walk through the tables to create programs
+	# walk through the rows to create programs
 	# if you grab channel programs for 3 days in one fetch, you will have
-	# probable minimum 6 tables (3 upper, 3 lower) and additionaly tables,
-	# because one program-table can be split up by program images
-	#
-	# the order of the arrays is, how thay appear in the output, so the
+	# the order of the rows is, how thay appear in the output, so the
 	# 1-day, 2-day, 3-day, 1-night, 2-night-part1, 2-night-part2, 3-night
-	#
-	# if we step into lower region, wa are staying there
 
 	my @programs;
 	my $region = "upper";
 	my $startdate = $basedate;
 	my $lasttime = 0;
 
-	foreach my $tab (@tables) {
+	# we need all the rows, because this is a program record:
+	foreach my $row (@rows) {
 
 		# check whether if we are first in lower tables ... -> reset date
-		if (! ref($tab) && $tab eq "lower region") {
+		if (! ref($row) && $row eq "lower region") {
 			if ($region eq "upper") {
 				t "upper/lower delimiter found, setting date back to startdate";
 				$startdate = $basedate;
+				$lasttime = 0;
 				$region = "lower";
 			}
 			next;
 		}
 
-		# we need all the rows, because this is a program record:
-		foreach my $row ($tab->look_down("_tag"=>"tr")) {
+		my (@urls, %program);
 
-			my (@urls, %program);
+		foreach my $col ($row->look_down("_tag"=>"td", "valign"=>"top")) {
+			# the column can hold following type of data:
+			# begin time | title | long desc | url | category
 
-			foreach my $col ($row->look_down("_tag"=>"td", "valign"=>"top")) {
-				# the column can hold following type of data:
-				# begin time | title | long desc | url | category
+			$_ = $col->as_text();
+			s/^\s+//;s/\s+$//;
 
-				$_ = $col->as_text();
-				s/^\s+//;s/\s+$//;
+			# port.hu makes sometimes empty td elements
+			next if (! length);
 
-				# port.hu makes sometimes empty td elements
-				next if (! length);
+			t "col contents as text:" . d $_;
 
-				t "col contents as text:" . d $_;
+			if (m/^([012][0-9]):([0-5][0-9])$/) {
+				s/^Kb[.]//; # means 'approx' in Magyar
+				s/^24:/00:/;
 
-				if (m/^([012][0-9]):([0-5][0-9])$/) {
-					s/^Kb[.]//; # means 'approx' in Magyar
-					s/^24:/00:/;
-
-					my $time = $1 * 60 + $2;
-					if ($time < $lasttime) {
-						t "bumped to thee the next day";
-						$startdate = UnixDate(DateCalc(parse_date($startdate), 
-														"+ 1 day"), '%Q');
-						die if not defined $startdate;
-					}
-					$lasttime = $time;
-					$program{time} = $_ ;
-					$program{startdate} = $startdate ;
+				my $time = $1 * 60 + $2;
+				if ($time < $lasttime) {
+					t "bumped to the the next day";
+					$startdate = UnixDate(DateCalc(parse_date($startdate), 
+													"+ 1 day"), '%Q');
+					die if not defined $startdate;
+				}
+				$lasttime = $time;
+				$program{time} = $_ ;
+				$program{startdate} = $startdate ;
+			}
+			else {
+				if (my @span = $col->look_down("_tag"=>"span")) {
+					$program{title} = $span[0]->as_text();
 				}
 				else {
-					$program{desc} = $_ if length($_);
-					if (my @span = $col->look_down("_tag"=>"span")) {
-						$program{title} = $span[0]->as_text();
-					}
-					else {
-						warn "cannot found title: $startdate" ;
-					}
-					foreach my $a ($col->look_down("_tag"=>"a")) {
-						push @urls,	$a->attr(q(href));
-					}
+					warn "cannot found title: $startdate" ;
 				}
-			} # foreach $col
+				# add one space after the title, if there is none
+				my @tmp = get_all_text($col);
+				$_ = join(' ', @tmp);
+				s/  +/ /g;
+				$program{desc} = $_ if length($_);
+				foreach my $a ($col->look_down("_tag"=>"a")) {
+					push @urls,	$a->attr(q(href));
+				}
+			}
+		} # foreach $col
 
-			# add all parsed info, as program{time, title, desc, category, date}
+		# add all parsed info, as program{time, title, desc, category, date}
 
-			$program{infourl} = \@urls if (@urls);
+		$program{infourl} = \@urls if (@urls);
 
-			parse_short_desc(\%program);
+		parse_short_desc(\%program);
 
-			push @programs, \%program if (defined $program{time}) &&
+		push @programs, \%program if (defined $program{time}) &&
 										(defined $program{title});
 
-		} # foreach $row
-	} # foreach $tab
+	} # foreach $row
 
 
 	$tree->delete; # get rid of HTML::TreeBuilder's in memory representation
@@ -516,7 +601,7 @@ sub parse_short_desc ($) {
 
 	t "parse_short_desc: text: '$cont'";
 
-	if (m/\s*([0-9\/]+)\. rész/) { $episode = $1; }
+	if (m/\s*([0-9\/]+)\. $WORDS{$COUNTRY}->{episode}/) { $episode = $1; }
 	if (m/\s*(\d+)'/)           { $minutes = $1; }
 	if (m/\s*([12][0-9]{3})/)    { $year = $1 }
 
@@ -539,7 +624,7 @@ sub parse_short_desc ($) {
 		if($episode =~ m#(\d+)/(\d+)#) {
 			# episode-num spec with the total number specified.
 			# however XMLTV counts from 0 on ...
-			$prog->{q(episode-num)} = [[ sprintf("%d/%d", $1 - 1, $2), "xmltv-ns" ]];
+			$prog->{q(episode-num)} = [[ sprintf('%d/%d', $1 - 1, $2), "xmltv-ns" ]];
 		}
 		else {
 			$prog->{q(episode-num)} = [[ $episode, "onscreen" ]];
@@ -566,12 +651,10 @@ sub get_channels() {
 	my $url="http://www.$d/pls/tv/tv.prog";
 
 	worker("base-downloading");
-	my $data=get_nice($url);
-	die "could not get channel listing $url, aborting\n"
-		if not defined $data;
-
-	my $tree = HTML::TreeBuilder->new_from_content($data)
-		or die "cannot parse content of $url\n";
+	t "fetching $url...";
+	my $data = get_nice($url);
+	my $tree = HTML::TreeBuilder->new_from_content($data) or
+		die "could not fetch/parse $url (channel listing)";
 	worker("base-parsing");
 
 	my @menus = $tree->find_by_tag_name("_tag"=>"select");
@@ -653,21 +736,6 @@ sub get_infourl_data( $$ ) {
 		my $d = domain();
 		my $url = "http://www.$d" .	shift;
 
-		# function to parse all of text data of a HTML element and his childs:
-		sub getalltext ( $ );
-		sub getalltext ( $ ) {
-			my @tmplines;
-			my $e = $_[0];
-			if (ref $e) {
-				foreach my $c ($e->content_list) {
-					push @tmplines, getalltext($c);
-				}
-			}
-			else {
-				push @tmplines, $e;
-			}
-			return @tmplines;
-		}
 
 		# do not grab:
 		# -> pictures: ... pls/me/picture.popup?i_area_id
@@ -682,13 +750,12 @@ sub get_infourl_data( $$ ) {
 		}
 
 		t "fetching slow url" . d $url;
+
 		worker("slow-downloading");
-		my $tree = HTML::TreeBuilder->new();
+		t "fetching $url...";
 		my $data = get_nice($url);
-		warn "could not fetch $url (infopage), trying to continue.\n"
-				unless(defined $data);
-		$tree->parse($data) or warn "cannot parse content of $url\n";
-		$tree->eof;
+		my $tree = HTML::TreeBuilder->new_from_content($data) or
+			die "could not fetch/parse $url (infopage)";
 		worker("slow-parsing");
 
 		my (@lines, $line, $anchor, $left, $right, $parent, $elem, $joined);
@@ -717,7 +784,7 @@ sub get_infourl_data( $$ ) {
 				# selected language (so the english title will be not
 				# visible otherwise just in sub-title)
 
-				@tmp = getalltext($elem);
+				@tmp = get_all_text($elem);
 				push @lines, @tmp;
 				$line = join(' ', @tmp);
 				if (($engtitle) = $line =~ m/^\s*\(([^\)]+)\)\s*$/) {
@@ -748,9 +815,8 @@ sub get_infourl_data( $$ ) {
 		$anchor = undef;
 		my @spans = $tree->look_down(_tag => "span");
 		t "spans found: " . $#spans;
-		my %word = ( hu => "Linkek", ro => "Linkuri" );
 		foreach (@spans) { 
-			if ($_->as_text() =~ /$word{$COUNTRY}/) {
+			if ($_->as_text() =~ /$WORDS{$COUNTRY}->{links}/) {
 				t "anchor point found";
 				$anchor = $_;
 				last;
@@ -800,7 +866,7 @@ sub get_infourl_data( $$ ) {
 			$elem = $anchor; 
 			while (($elem = $elem->right()) &&
 						((ref $elem) && ($elem->tag() ne "table"))) {
-				push @lines, getalltext($elem);
+				push @lines, get_all_text($elem);
 			}
 			$joined = join(" ", @lines);
 			$joined =~ s/\xA0//;	# remove the to_text()'s results of &npsp
@@ -839,7 +905,7 @@ sub get_infourl_data( $$ ) {
 		@lines = ();
 		foreach $elem ($anchor->parent()->content_list()) {
 			last if ((ref $elem) && ($elem == $anchor));
-			push @lines, getalltext($elem);
+			push @lines, get_all_text($elem);
 		}
 
 		# 0:{we are in credits secton}, 1:{duration,year section}
@@ -876,9 +942,9 @@ sub get_infourl_data( $$ ) {
 
 					$_ = $part;
 					SWITCH: {
-						if ((m/\s*([0-9\/]+)\. rész/) && (! defined $episode))
+						if ((m/\s*([0-9\/]+)\. $WORDS{$COUNTRY}->{episode}/) && (! defined $episode))
 							{ $episode = $1; last SWITCH;}
-						if ((m/\s*(\d+) perc/) && (! defined $minutes))
+						if ((m/\s*(\d+) $WORDS{$COUNTRY}->{minute}/) && (! defined $minutes))
 							{ $minutes = $1; last SWITCH;}
 						if ((m/\s*([12][0-9]{3})/) && (! defined $year))
 							{ $year = $1; last SWITCH;}
@@ -974,7 +1040,7 @@ sub get_infourl_data( $$ ) {
 			if($episode =~ m#(\d+)/(\d+)#) {
 				# episode-num spec with the total number specified.
 				# however XMLTV counts from 0 on ...
-				$prog->{q(episode-num)} = [[ sprintf("%d/%d", $1 - 1, $2), "xmltv-ns" ]];
+				$prog->{q(episode-num)} = [[ sprintf('%d/%d', $1 - 1, $2), "xmltv-ns" ]];
 			}
 			else {
 				$prog->{q(episode-num)} = [[ $episode, "onscreen" ]];
@@ -1021,6 +1087,7 @@ sub grab_icon( $ ) {
 	}
 
 	if (open(FILE,">$file")) {
+		t "fetching $fetchurl...";
 		if (my $image = get_nice($fetchurl)) {
 			t "icon grabbed successfully";
 			print FILE $image;
@@ -1051,13 +1118,12 @@ sub grab_icon( $ ) {
 sub get_channel_urls( $ ) {
 	my $tree = shift;
 	my @result = ();
-    my $portchurl;
+	my $portchurl;
 
 	# this is a channel id -> grab page first
 	if (! ref $tree) {
 		# get page to grab official URL for the channel: HBO -> www.hbo.hu
 		my $ch_did = $tree;
-		my $chdata;
 		# two sprintf parameters: first: channel_id,, second how many days grabbed
 		my $churlfmt = "http://www." . domain() .
 			"/pls/tv/tv.channel?i_ch=%d&" .
@@ -1067,14 +1133,10 @@ sub get_channel_urls( $ ) {
 
 		t "fetching page for channel urls: $churl\n";
 		worker("base-downloading");
-		if (! ($chdata = get_nice($churl))) {
-			warn "could not get channel listing $churl\n";
-		}
-		if (! ($tree = HTML::TreeBuilder->new_from_content($chdata))) {
-			warn "cannot parse content of $churl.";
-			worker("base-parsing");
-			return @result;
-		}
+		t "fetching $churl...";
+		my $chdata = get_nice($churl);
+		$tree = HTML::TreeBuilder->new_from_content($chdata) or
+			die "could not fetch/parse $churl (channel infopage)";
 		worker("base-parsing");
 	}
 
@@ -1105,7 +1167,7 @@ sub get_channel_urls( $ ) {
 	}
 	# add PORT url, too, this should be the last (and open 3 days if clicked)
 	push @result, $portchurl if defined $portchurl;
-    return @result;
+	return @result;
 }
 
 
@@ -1228,14 +1290,14 @@ sub worker( $ ) {
 
 	if (! defined $WNAME) {
 		$WNAME = $newworker;
-    	$WTIMES{$WNAME} = 0;
+		$WTIMES{$WNAME} = 0;
 		$WSTIME = $now;
 		return;
 	}
 
-    $WTIMES{$WNAME} += $now - $WSTIME;
+	$WTIMES{$WNAME} += $now - $WSTIME;
 	$WSTIME = $now;
-    $WNAME = $newworker;
+	$WNAME = $newworker;
 }
 
 
@@ -1248,15 +1310,18 @@ sub worker( $ ) {
 #-------------------------------------------------------------------------------
 sub showworkers() {
 	return if $opt_quiet;
+	return if not $opt_worker_times;
 
-    my $total = 0;
-    $total += $_ foreach values %WTIMES;
-	printf STDERR ("  %-20s: % 3dm %02ds (%-3.0d%%)\n",
+	my $total = 0;
+	$total += $_ foreach values %WTIMES;
+	$total = 1 unless $total ; # division by zero
+	printf STDERR ("%-20s: %3d:%02dm %3d%%\n",
 		$_,
 		$WTIMES{$_} / 60, $WTIMES{$_} % 60,
 		100 * $WTIMES{$_} / $total)
 			foreach keys %WTIMES;
-	printf STDERR ("  %-20s: % 3dm %02ds\n", "total", $total / 60, $total % 60);
+	printf STDERR ("%-20s: %3d:%02dm\n",
+		"total", $total / 60, $total % 60);
 }
 
 #-------------------------------------------------------------------------------
@@ -1292,8 +1357,10 @@ GetOptions(	'days=i'		=> \$opt_days,
 			'no-fetch-icons'=> \$opt_no_fetch_icons,
 			'loc=s'			=> \$opt_loc,
 			'share=s'		=> \$opt_share,
+			'now=s'		  => \$opt_now,
+			'worker-times'  => \$opt_worker_times,
 			'get-full-description' => \$opt_full_desc,
-			'max-desc-length=s' => \$opt_max_desc_length
+			'max-desc-length=i' => \$opt_max_desc_length
 		) or usage(0);
 
 die 'number of days must not be negative'
@@ -1401,7 +1468,7 @@ if ($mode eq 'grab') {
 	worker("base-parsing");
 
 	my $ch_did;
-    my $bar;
+	my $bar;
 	my @portids = load_configs();
 
 	# sets %CHANNELS
@@ -1414,8 +1481,8 @@ if ($mode eq 'grab') {
 	# we have to fetch @portids icons, and @portids pages for channel URL
 	# (e.g.: www.hbo.hu)
 
-    $bar = new XMLTV::ProgressBar('getting channel details ', 2 * @portids)
-        if not $opt_quiet;
+	$bar = new XMLTV::ProgressBar('getting channel details ', 2 * @portids)
+		if not $opt_quiet;
 
 	worker("xml-writing");
 	$writer->start(xhead());
@@ -1429,19 +1496,19 @@ if ($mode eq 'grab') {
 		if (my $iconurl = grab_icon( $ch_did )) {
 			$channel{'icon'} = [ { src => $iconurl } ];
 		}
-        update $bar if not $opt_quiet;
+		update $bar if not $opt_quiet;
 		worker("base-parsing");
 
 		if (my @churls = get_channel_urls( $ch_did )) {
 			$channel{'url'} = \@churls;
 		}
-        update $bar if not $opt_quiet;
+		update $bar if not $opt_quiet;
 	
 		worker("xml-writing");
 		$writer->write_channel(\%channel);
 		worker("base-parsing");
 	}
-    $bar->finish() if not $opt_quiet;
+	$bar->finish() if not $opt_quiet;
 
 	# The grabber's source allows requests of more than one day per page. This can
 	# be done by specifying the i_xday argument with the GET request.
@@ -1456,20 +1523,48 @@ if ($mode eq 'grab') {
 
 	t "requesting $DAYSPERPAGE days per scraped webpage ..."; 
 
+	# port.hu|ro provide the today's program based on the localtime on
+	# Hungary. So in other lands e.g. Australia (thx Zsolt Bayer) (TZ: EST/AEST) if
+	# there is f.e. friday 22:38 here in Hungary it is saturday 04:38
+	# so Zsolt will get the programs not for the requested day (the XML will be
+	# correct, just the wrong day is in)
+	#
+	# we cannot use Date::Manip's Date_ConvTZ, because it does not detects
+	# correctly f.e. the Australia/Melbourne zone. (because it uses `date +%Z`
+	# to get the zone, and date will output EST and not AEST :-().
+	# [we could not use f.e. `date +%z`, becuase what happen on windows?]
+	#
+	# that means: we will here not set the global FETCHOFFSET to fetch
+	# the "today's" program from everywhere on the world, but we will grab
+	# at first 3 pages (0, -1, +1) to find the correct offset.
+
+	my $now = parse_date("now");
+
+	# developer's options --now: what time is it? (measured in local time)
+	$now = parse_date( $opt_now ) if ($opt_now);
+
+	t "now=$now";
+
+	my $startat = DateCalc($now, "$opt_offset days");
+	my $startatdate = UnixDate($startat, '%Q');
+
+	t "start grabbing from (offset added, localtime): $startatdate";
+
 	# make list: which date is which day on the website, we will make grabbing
 	# requests based on the @days array
 
 	my @days;
-	my $now = DateCalc(parse_date('now'), "$opt_offset days");
-	my $day=UnixDate($now,'%Q');
+
 	for (my $i = 1 + $opt_offset; 
-			$i < 1+ $opt_offset + $opt_days;
+			$i < 1 + $opt_offset + $opt_days;
 			$i += $DAYSPERPAGE) {
-		push @days, [ $day, $i ];
+		push @days, [ $startatdate, $i ];
 	
 		# calculate the next date: bump a YYYYMMDD date by $DAYSPERPAGE day
-		$day = UnixDate(DateCalc(parse_date($day), "+ $DAYSPERPAGE day"), '%Q');
-		die if not defined $day;
+		$startatdate = UnixDate(DateCalc(parse_date($startatdate), "+ $DAYSPERPAGE days"), '%Q');
+
+		die "Could not calculate next grabbing date $days[$#days][0] (+$DAYSPERPAGE days)"
+			if not defined $startatdate;
 	}
 	
 	# This progress bar is for both downloading and parsing.	Maybe
