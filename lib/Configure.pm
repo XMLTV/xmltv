@@ -158,8 +158,6 @@ sub Configure
 {
     my( $stagesub, $listsub, $conffile, $opt ) = @_;
     
-    XMLTV::Ask::init($opt->{gui});
-
     # How can we read the language from the environment?
     my $lang = 'en'; 
     

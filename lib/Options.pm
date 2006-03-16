@@ -83,6 +83,7 @@ my %cap_defaults = (
 			offset => 0,
 			output => undef,
 			debug => 0,
+			gui => undef,
 		    },
 		    manualconfig => {
 			configure => 0,
@@ -93,7 +94,6 @@ my %cap_defaults = (
 			'list-channels' => 0,
 		    },
 		    tkconfig => {
-			gui => undef,
 		    },
 		    cache => {
 			cache => undef,
@@ -333,6 +333,8 @@ sub ParseOptions
 	exit 0;
     }
     
+    XMLTV::Ask::init($opt->{gui});
+
     if( defined( $opt->{output} ) )
     {
 	if( not open( OUT, "> $opt->{output}" ) )
