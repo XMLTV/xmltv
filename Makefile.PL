@@ -278,6 +278,14 @@ my @opt_components
                     'HTML::Entities' => 1.27 , }
      },
 
+     { name => 'tv_grab_br_net',
+       blurb => 'Grabber for Brazil NET Cable',
+       exes => [ 'grab/br_net/tv_grab_br_net' ],
+       prereqs => { 'HTML::Entities' => 1.27 , 
+		    'WWW::Mechanize' => 1.16 ,
+		    'HTTP::Cookies' => 1.39 , }
+     },
+
      { name     => 'tv_grab_ch',
        blurb    => 'Grabber for Switzerland',
        exes     => [ 'grab/ch/tv_grab_ch' ],
