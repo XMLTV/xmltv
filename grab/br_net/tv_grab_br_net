@@ -1,0 +1,947 @@
+#!/usr/bin/perl
+
+=pod
+
+=head1 NAME
+
+tv_grab_br_net - Grab TV listings for Brazil's NET Cable service (from nettv.globo.com).
+
+=head1 SYNOPSIS
+
+tv_grab_br_net --help
+
+tv_grab_br_net [--config-file FILE] --configure [--gui OPTION]
+
+tv_grab_br_net [--config-file FILE] [--output FILE] [--gui OPTION]
+               [--days N] [--offset N] [--relax N]
+               [--quiet] [--slow]
+
+tv_grab_br_net --list-channels
+
+=head1 DESCRIPTION
+
+Output TV listings for several channels available in Brazil from the widely present NET cable provider. The data comes from nettv.globo.com which is their web page containing program information. The grabber relies on parsing HTML so it might stop working at any time.
+
+First run B<tv_grab_br_net --configure> to choose your city, your lineup and which channels you want to download. Should your city not be listed even though NET has it on their homepage...sorry, they are using 2 different formats. Only one is implemented here.
+
+Then running B<tv_grab_br_net> with no arguments will output listings in XML format to standard output.
+
+B<--configure> Ask for configuration-data, which channels to download and write the configuration file.
+
+B<--config-file FILE> Set the name of the configuration file, the default is B<~/.xmltv/tv_grab_br_net.conf>. This is the file written by B<--configure> and read when grabbing.
+
+B<--gui OPTION> Use this option to enable a graphical interface to be used. OPTION may be 'Tk', or left blank for the best available choice. Additional allowed values of OPTION are 'Term' for normal terminal output (default) and 'TermNoProgressBar' to disable the use of Term::ProgressBar.
+
+B<--output FILE> write to FILE rather than standard output.
+
+B<--days N> grab N days. The default is seven.
+
+B<--offset N> start N days in the future. The default is to start from today (=zero). Set to -1 to grab data beginning yesterday.
+
+B<--quiet> suppress the progress messages normally written to standard error.
+
+B<--slow> enables long strategy run: There is only basic information listed on the main channel page. However there is a lot more provided on subsequent pages for particular broadcasts. If you'd like to parse the data from these pages as well, supply this flag. But consider that the grab process takes much much longer when doing so, since many more web pages have to be retrieved.
+
+B<--relax N> may be used if time is not an issue, bandwidth is limited or you don't want to pound the NET Website (good idea). It adds a sleep of N seconds after fetching each page. Consider it!
+
+B<--list-channels> write output giving <channel> elements for every channel available (using the city and selection from the config file), but no programs.
+
+B<--help> print a help message and exit.
+
+=head1 TODO
+
+=over
+
+=item - share data with other users
+
+=item - implement cache for faster grabbing
+
+=item - automagically remove channels from the config that don't provide data
+
+=item - translate user-interface and documentation to Portuguese
+
+=item - use existing list and gather more details by using the URL of the broadcasts
+
+=item - use overview from this URL:
+
+I<http://nettv.globo.com/NETServ/br/home/indexnet.jsp?id=4>
+
+=item - logos/images (impossible because not implemented by the NET website)
+
+=item - prepare for new XMLTV features
+
+=back
+
+=head1 KNOWN PROBLEMS
+
+For some channels it seems NET has no data available whatsoever. Just reconfigure and disable those channels.
+
+The NET website is sometimes inconsistent and buggy. And while the grabber might work perfect for some cities, it might not even be configurable for others. This is due to the bundles/selections they offer for the particular cities. It looks like for some cities the site works completely different :-(
+
+Here a way to determine if your city is one of those that are different and not supported:
+
+=over
+
+=item 1) Go to I<http://nettv.globo.com/NETServ/br/home/>
+
+=item 2) Select São Paulo or Rio de Janeiro (they're known to be working)
+
+=item 3) After accepting the cookie enter this URL:
+
+I<http://nettv.globo.com/NETServ/br/home/indexnet.jsp?id=35>
+
+=item 4) Check if your city is still in the select-list on top of the page. If not - sorry, you're not lucky today :-(
+
+=back
+
+As of now there is no solution or workaround for this problem. Let me know if you find a workaround or want to implement a different grabber for the so far unsupported cities.
+
+=head1 SEE ALSO
+
+L<xmltv(5)>.
+
+=head1 AUTHOR
+
+Max Becker, maxbecker -at- rocketmail -dot- com. Based on various other tv_grabbers from the XMLTV-project. Initial inspiration by Cristiano Garcia.
+
+=head1 BUGS
+
+If you happen to find a bug, please send me an email or mail to one of the XMLTV mailing lists, see web pages at I<http://sourceforge.net/projects/xmltv/>.
+
+=head1 COPYRIGHT
+
+Copyright © 2005-2006 Max Becker.
+
+This program is free software; you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation; either version 2 of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License along with this program; if not, write to the Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
+
+=cut
+
+
+use strict;
+use WWW::Mechanize;
+use HTML::Entities;
+use Getopt::Long;
+require HTTP::Cookies;
+use Date::Manip;
+
+use XMLTV;
+use XMLTV::Capabilities qw/baseline manualconfig/;
+use XMLTV::Description 'Brazil NET';
+use XMLTV::Ask;
+use XMLTV::Config_file;
+use XMLTV::Memoize;
+use XMLTV::Mode;
+use XMLTV::Version '$Id$';
+
+use XMLTV::Usage <<END
+$0: get Brazilian television listings from nettv.globo.com in XMLTV format
+To configure: $0 --configure [--config-file FILE] [--gui OPTION]
+To grab data: $0 [--config-file FILE] [--output FILE] 
+                 [--days N] [--offset N] [--relax N] 
+                 [--quiet] [--slow]
+Channel List: $0 --list-channels
+END
+;
+
+BEGIN {
+    # Use Log::TraceMessages if installed.
+    eval { require Log::TraceMessages };
+    if ($@) {
+        *t = sub {};
+        *d = sub { '' };
+    }else{
+        *t = \&Log::TraceMessages::t;
+        *d = \&Log::TraceMessages::d;
+    }
+}
+
+# definitions for the NET website
+my constant $base = 'http://nettv.globo.com';
+my constant $pname_sel = 'selecaoid';
+my constant $pname_ch = 'canalid';
+my constant $pname_city = 'cidade_id';
+
+# language
+my constant $lang = 'pt_BR';
+
+# Parse argv
+&XMLTV::Memoize::check_argv('XMLTV::Get_nice::get_nice_aux');
+
+# commandline-options
+my $opt_configure;
+my $opt_config_file;
+my $opt_gui;
+my $opt_output;
+my $opt_days = 7;
+my $opt_offset = 0;
+my $opt_quiet = 0;
+my $opt_relax = 0;
+my $opt_list_channels;
+my $opt_help;
+my $opt_slow = 0;
+
+&GetOptions( 'configure'     => \$opt_configure,
+	     'config-file=s' => \$opt_config_file,
+	     'gui:s'         => \$opt_gui,
+	     'output=s'      => \$opt_output,
+	     'days=i'        => \$opt_days,
+	     'offset=i'      => \$opt_offset,
+	     'relax=i'       => \$opt_relax,
+	     'quiet'         => \$opt_quiet,
+	     'list-channels' => \$opt_list_channels,
+	     'help'          => \$opt_help,
+	     'slow'          => \$opt_slow
+	     ) || &usage(0);
+
+
+&usage(1) if $opt_help;
+
+&XMLTV::Ask::init($opt_gui);
+
+my $mode = &XMLTV::Mode::mode( 'grab', # default value
+			       $opt_configure 	  => 'configure',
+			       $opt_list_channels => 'list-channels'
+			       );
+
+# initialize config file support
+my $config_file = XMLTV::Config_file::filename($opt_config_file, 'tv_grab_br_net', $opt_quiet);
+
+# global variables
+my ($city, $selection, $channels, $bar);
+
+# init timezone
+Date_Init("TZ=BRT");
+
+# which mode?
+if ($mode eq 'configure') {
+    &configure();
+
+} elsif($mode eq 'list-channels') {
+    &list_channels();
+
+} elsif($mode eq 'grab') {
+    &grab();
+
+} else {
+    say("never heard of XMLTV mode '$mode', sorry\n");
+    exit 1;
+}
+
+
+# display the list of available channels for the current setup
+sub list_channels {
+    # we need at least the city and selection
+    &read_config();
+
+    my $mech = &init();
+    my $chs = &channellist($mech);
+
+    foreach (keys %$chs) {
+	# fetch additional information
+	&channel($mech, $chs->{$_});
+    }
+    my $writer = &build_writer();
+    &write_channels($writer, $chs);
+    $writer->end();
+}
+
+
+# fetch list of channels
+sub channellist {
+    my $mech = shift;
+    my $chs;
+    my $url = "/NETServ/br/prog/canais.jsp?$pname_sel=$selection";
+
+    update $bar if $bar;
+
+    $mech->get($base . $url);
+    my $html = $mech->content();
+
+    # parse content
+    # each channel on this page should match the regexp below
+    while ($html =~ s/canais_detalhes\.jsp\?.*?\Q$pname_ch\E=(\d+).*?<span[^>]*>\s*(\d+)\s*\-\s*(.*?)<\/span>//s) {
+	my $number = $2 + 0; # convert string to number
+	$chs->{$number}->{ID} = $1;
+	$chs->{$number}->{Number} = $number;
+	$chs->{$number}->{Name} = $3;
+
+	update $bar if $bar;
+    }
+
+    unless ($chs && scalar keys %$chs) {
+	$bar->finish() if $bar;
+	say("No channels found!\nThis likely means that the NET website has changed.\n");
+	exit 1;
+    }
+
+    return $chs;
+}
+
+
+# grab broadcasts
+sub grab {
+    &read_config();
+    my $mech = &init();
+    my $writer = &build_writer();
+
+    # warn if trying to fetch data out of range
+    say("Can't fetch program data longer ago than yesterday! Ignoring.")
+	if $opt_offset < -1 && ! $opt_quiet;
+
+    # calculate last date to retrieve
+    my $maxdate = DateCalc("today", "+ " . $opt_offset + $opt_days . " days");
+    # calculate absolute maximum supported (4 weeks)
+    my $absmax = DateCalc("today", "+ 4 weeks");
+
+    if (Date_Cmp($absmax, $maxdate) < 0) {
+	say("Can't fetch program data further than 4 weeks in the future! Ignoring.") unless $opt_quiet;
+	# set last date to maximum supported value
+	$maxdate = $absmax;
+    }
+
+    my $ch_written = 0;
+    my @skiplist;
+
+    # loop over days
+    for my $offset ($opt_offset .. $opt_offset + $opt_days - 1) {
+
+	next if $offset < -1;
+	my $date = DateCalc("today", "+ $offset days");
+	# finish if going beyond specs
+	last if Date_Cmp($maxdate, $date) < 0;
+	my $date_formatted = UnixDate($date, '%d/%m/%Y');
+
+	# set up progress-bar
+	$bar = new XMLTV::ProgressBar( {
+	    name => "fetching data for $date_formatted",
+	    count => scalar(keys %$channels)
+	    } ) unless $opt_quiet;
+
+	# loop over channels
+	foreach (keys %$channels) {
+
+	    update $bar if $bar;
+
+	    # free memory (previous days)
+	    $channels->{$_}->{Broadcasts} = undef;
+
+	    # fetch basic information of broadcasts
+	    &channel($mech, $channels->{$_}, $date, $date_formatted);
+	    sleep $opt_relax if $opt_relax;
+	}
+
+	$bar->finish() if $bar;
+
+	# write channel information (only once)
+	unless ($ch_written) {
+	    &write_channels($writer, $channels);
+	    $ch_written = 1;
+	}
+
+	# write program information (broadcast)
+	# loop over channels
+	foreach my $ch (map $channels->{$_}, keys %$channels) {
+
+	    # set up progress-bar for details
+	    $bar = new XMLTV::ProgressBar( {
+		name => "fetching details for $ch->{Name} $date_formatted",
+		count => scalar(keys %{$ch->{Broadcasts}})
+		} ) if $opt_slow && ! $opt_quiet;
+
+	    # loop over broadcasts
+	    foreach my $bc (map $ch->{Broadcasts}->{$_}, keys %{$ch->{Broadcasts}}) {
+
+		# fetch all the details?
+		if ($opt_slow) {
+
+		    if ($bc->{URL}) {
+			update $bar if $bar;
+
+			# skip if it's a repetition
+			my $id = join('|', $ch->{rfc2838}, $bc->{Time});
+			next if grep $_ eq $id, @skiplist;
+
+			# loop over repetitions of the broadcast
+			foreach my $time (&details($mech, $bc)) {
+
+			    # skip if out of date-range (avoiding collisions)
+			    next if Date_Cmp(ParseDate($time), $maxdate) > 0;
+
+			    # copy broadcast
+			    my $rep;
+			    map $rep->{$_} = $bc->{$_}, keys %$bc;
+
+			    # set time
+			    $rep->{Time} = $time;
+
+			    # write out
+			    &write_broadcast($writer, $rep, $ch->{rfc2838});
+
+			    # add to skip-list
+			    push @skiplist, join('|', $ch->{rfc2838}, $time);
+			}
+			sleep $opt_relax if $opt_relax;
+
+		    }else{ # no URL -> no details
+			say("No URL found for $ch->{Name} $bc->{Time} $bc->{Title}!\nPlease check. Maybe the NET website has changed.\n");
+		    }
+		}
+
+		# write out broadcast
+		&write_broadcast($writer, $bc, $ch->{rfc2838});
+	    }
+	    $bar->finish() if $bar;
+	}
+    }
+    $writer->end();
+    say "fetch completed" unless $opt_quiet;
+}
+
+
+# fetch broadcasts for one channel (including additional channel-info)
+sub channel {
+    my ($mech, $ch, $date, $date_formatted) = @_;
+
+    my $url = "/NETServ/br/prog/canais_detalhes.jsp?$pname_sel=$selection&$pname_ch=$ch->{ID}&data=$date_formatted";
+
+    $mech->get($base . $url);
+    my $html = $mech->content();
+
+    # parse additional channel details unless already there
+    &parsechannel($ch, $html) unless $ch->{rfc2838};
+
+    # parse basic broadcast information if date is given
+    if ($date) {
+	my $counter = 0;
+
+	# get time, URL and title
+	while ($html =~ s/<tr>.*?>(\d?\d)h(\d\d)<.*?href=\"(\/NETServ\/br\/prog\/programa.jsp\?[^\"]+)\"[^>]*>(.*?)<\/a><\/td>.*?<\/tr>//si) {
+
+	    my $url = $3;
+	    my $title = $4;
+	    my $time = UnixDate(Date_SetTime($date, $1, $2), '%q %z');
+	    $ch->{Broadcasts}->{$time}->{URL} = $url;
+	    $title =~ s/^\s+//; # remove leading whitespace
+	    $title =~ s/\s+/ /g; # remove consecutive whitespace
+	    $title =~ s/^\((.*)\)$/$1/; # remove weird surrounding parens
+	    $ch->{Broadcasts}->{$time}->{Title} = $title;
+	    $ch->{Broadcasts}->{$time}->{Time} = $time;
+
+	    $counter++;
+	}
+	say("Channel $ch->{Name} has no broadcast information available.\nConsider removing it from your configuration.\nIf this happens to all channels its likely that the NET website changed.") unless $counter;
+    }
+}
+
+
+# parse additional channel-info
+sub parsechannel {
+    my ($ch, $html) = @_;
+
+    # abbreviation and description
+    if ($html =~ /<LI><SPAN[^>]*>([^<]*)<\/SPAN><BR>\s*<SPAN[^>]*>(\w+)\s\Q$ch->{Number}\E<\/SPAN><BR>\s*<SPAN[^>]*>([^<]*)<\/SPAN>\s*<\/UL>/si) {
+	$ch->{Name} = $1 unless $ch->{Name};
+	$ch->{Abbreviation} = $2;
+	$ch->{Description} = $3;
+	# remove consecutive whitespace
+	$ch->{Description} =~ s/\s+/ /g;
+	# remove leading and trailing whitespace
+	$ch->{Description} =~ s/^\s*(.*)\s*$/$1/g;
+    }
+
+    # not implemented: Logo of channel
+    # not a single channels seems to have been implemented with a logo by NET
+
+    # gather URL under image "VEJA O SITE DO CANAL"
+    if ($html =~ /href\s*=\s*\"([^\"]+)\"[^>]*><img\s+src\s*=\s*[\'\"\w\/]*?sitecanal\.gif/si) {
+	$ch->{URL} = $1 if $1;
+    }
+
+    # create rfc2838-conform specifier
+    $ch->{rfc2838} = &rfc2838($ch->{Name}, $ch->{Number}, $ch->{Abbreviation}, $ch->{URL});
+}
+
+
+# fetch details for a broadcast
+sub details {
+    my ($mech, $bc) = @_;
+
+    $mech->get($base . $bc->{URL});
+    my $html = $mech->content();
+
+    # not implemented: Logo of broadcast
+    # not a single broadcast seems to have been provided with a logo by NET
+
+    # directors
+    push @{$bc->{Director}}, split (/,\s*/, $3)
+	if $html =~ /<b[^>]*>Dire(&ccedil;|ç)(&atilde;|ã)o:<\/b>\s*<[^>]+>\s*(.*?)<\//is;
+
+    # actors
+    push @{$bc->{Actors}}, split (/,\s*/, $1)
+	if $html =~ /<b[^>]*>Elenco:<\/b>\s*<[^>]+>\s*(.*?)<\//is;
+
+    # remove 'Vozes de'
+    # in case of a comic the person speaking a character is the actor
+    @{$bc->{Actors}} = map s/^vozes\s+de\s+//i, @{$bc->{Actors}};
+
+    # year
+    $bc->{Date} = $1 if $html =~ /<b[^>]*>ano:<\/b>\s*<[^>]+>\s*(\d{2,4})<\//is;
+
+    # description
+    if ($html =~ /<b[^>]*>sinopse:<\/b>\s*<[^>]+>\s*(.*?)<\//is) {
+	$bc->{Description} = $1;
+	$bc->{Description} =~ s/^\s+//; # remove leading whitespace
+	$bc->{Description} =~ s/\s+/ /g; # remove consecutive whitespace
+	delete $bc->{Description} if $bc->{Description} =~ /Nenhuma sinopse dispon/;
+    }
+
+    # length
+    $bc->{Length} = $3 if $html =~ /<b[^>]*>dura(&ccedil;|ç)(&atilde;|ã)o:<\/b>\s*<[^>]+>\s*(\d+)\s*minutos<\//is;
+
+    # star-rating
+    if ($html =~ /<b[^>]*>avalia(&ccedil;|ç)(&atilde;|ã)o:<\/b>\s*((<img\s+src\s*=\s*([\'\"])([^\'\"]+)\5\s+[^>]+>)+)\s*<\//is) {
+	$bc->{star_icon} = "$base$6";
+	my $stars = $3;
+	my $rating;
+	$rating++ while $stars =~ s/(<img[^>]+>)//i;
+	$bc->{star_rating} = "$rating / 5"; # 5 is the maximum here
+    }
+
+    # category (no longer provided)
+#    $bc->{Category} = $1 if $html =~ /<td><b>G&ecirc;nero:<\/b>&nbsp;(.*?)<\/td>/s;
+
+    # original name
+    $bc->{original_name} = $1 if $html =~ /<b[^>]*>nome original:<\/b>\s*<[^>]+>\s*(.*?)<\//is;
+
+    # rating (eg. PG13)
+    $bc->{rating} = $3 if $html =~ /<b[^>]*>classifica(&ccedil;|ç)(&atilde;|ã)o:<\/b>\s*<[^>]+>\s*(.*?)<\//is;
+
+    # Gather times when this broadcast is repeated
+    # to skip duplicate queries for the same show
+    my @repeat;
+
+    while ($html =~ s/<INPUTs+TYPE="Checkbox"\s+name="horaAlerta"\s+value="\d+"><\/TD>\s*<TD[^>]+>([^>]+)<\/TD>//si) {
+
+	my $time = $1;
+
+	# convert time to usable format
+	$time =~ s/^.*,\s+(\d+)\/(\d+)\/(\d+)[\D]+(\d+)h(\d+)/UnixDate(ParseDate("$3$2$1 $4:$5"), '%q %z')/e;
+
+	# add to repetition list if its not the broadcast itself
+	push @repeat, $time unless $time eq $bc->{Time};
+    }
+    return @repeat;
+}
+
+
+# write channellist
+sub write_channels {
+    my ($writer, $chans) = @_;
+
+    # available channel-properties:
+    # Number, Name, Abbreviation, Description, rfc2838, URL
+
+    my $ch;
+    map {
+	$ch->{"$chans->{$_}->{rfc2838}"} = {
+
+	    'id' => $chans->{$_}->{rfc2838},
+
+	    'display-name' => [ [ "$chans->{$_}->{Number}-$chans->{$_}->{Name}", $lang ] ]
+	    };
+
+	push @{$ch->{"$chans->{$_}->{rfc2838}"}->{'display-name'}},
+	[ "$chans->{$_}->{Number}-$chans->{$_}->{Abbreviation}", $lang ]
+	    if $chans->{$_}->{Abbreviation};
+
+	# add channel-URL if available
+	$ch->{"$chans->{$_}->{rfc2838}"}->{url} = [ $chans->{$_}->{URL} ] if $chans->{$_}->{URL};
+
+
+    } keys %$chans;
+    $writer->write_channels($ch);
+}
+
+
+# write XML of one show
+sub write_broadcast {
+    my ($writer, $p, $ch) = @_;
+
+    # basic information
+    my $prog = {
+	channel => $ch,
+	start   => $p->{Time},
+	title   => [[$p->{Title}, $lang]]
+	};
+
+    # add URL if available
+    $prog->{url} = [ $base . $p->{URL} ] if $p->{URL};
+
+    # details only if requested
+    if ($opt_slow) {
+	# add original title
+	# language is not given by NET, but most of the time its english
+	push @{$prog->{title}}, [$p->{original_name}, 'en']
+	    if $p->{original_name} && $p->{original_name} ne $p->{Title};
+
+	# add description
+	$prog->{desc} = [ [$p->{Description}, $lang] ] if $p->{Description};
+
+	# add date (year)
+	$prog->{date} = $p->{Date} if $p->{Date};
+
+	# add credits
+	$prog->{credits}->{director} = $p->{Director} if $p->{Director};
+	$prog->{credits}->{actor} = $p->{Actors} if $p->{Actors};
+
+	# add length (in seconds)
+	$prog->{length} = $p->{Length} * 60 if $p->{Length};
+
+	# rating
+	$prog->{rating} = [ [$p->{rating}] ] if $p->{rating};
+
+	# star-rating
+	if ($p->{star_rating}) {
+	    my $image = {};
+	    $image = {src => $p->{star_icon}} if $p->{star_icon};
+	    $prog->{'star-rating'} = [ $p->{star_rating}, [$image] ];
+	}
+    }
+
+    # write output
+    $writer->write_programme($prog);
+}
+
+
+# create XMLTV::Writer Object
+sub build_writer {
+    my %writer_args;
+
+    # define output
+    if (defined $opt_output) {
+	my $handle = new IO::File(">$opt_output");
+	unless (defined $handle) {
+	    say("cannot write to output file, $opt_output!\n$!\n");
+	    exit 1;
+	}
+	$writer_args{'OUTPUT'} = $handle;
+    }
+
+    # set encoding
+    $writer_args{'encoding'} = 'ISO-8859-1';
+
+    my $writer = new XMLTV::Writer(%writer_args);
+
+    # write header
+    $writer->start( {
+	'generator-info-name'  => "tv_grab_br_net/0.9",
+	'generator-info-url'   => 'http://membled.com/work/apps/xmltv/',
+	'source-data-url'      => "$base/NETServ/br/prog/canais.jsp?$pname_sel=$selection",
+	'source-info-url'      => "$base/",
+	'source-info-name'     => 'NET website',
+	'date'                 => UnixDate(ParseDate('today'), '%Q')
+	} );
+    return $writer;
+}
+
+
+# read config and set global values
+sub read_config {
+    foreach (&XMLTV::Config_file::read_lines($config_file)) {
+	if (/^(\d+)\s+(\d+)\s+(.*)$/) {
+	    $channels->{$2}->{ID} = $1;
+	    $channels->{$2}->{Number} = $2;
+	    $channels->{$2}->{Name} = $3;
+	}else{
+	    $city = $1 if /^city:\s+(\d+).*$/;
+	    $selection = $1 if /^selection:\s+(\d+).*$/;
+	}
+    }
+    unless ($city =~ /^\d+$/ &&
+	    $selection =~ /^\d+$/ &&
+	    scalar keys %$channels) {
+	say ("Configuration file '$config_file' is corrupt or does not contain any channels!\n\nPlease reconfigure with '--configure'\n");
+	exit 1;
+    }
+}
+
+
+# read available options from the NET Website
+# ask user for selections
+# store values in configfile
+sub configure {
+    my @config_lines;
+
+    &XMLTV::Config_file::check_no_overwrite($config_file);
+
+###### Cities
+    # set up progress-bar
+    $bar = new XMLTV::ProgressBar({name => 'looking up cities', count => 44})
+	unless $opt_quiet;
+
+    # fetch list of available cities
+    my ($mech, $cities) = &citylist();
+    $bar->finish() if $bar;
+
+    # nothing found?!?
+    &net_error() unless scalar keys %$cities;
+
+    # Ask for city
+    my $x = ask_choice('Which city do you want channels for?', 'Rio de Janeiro', sort values %$cities);
+
+    foreach (keys %$cities) {
+	if ($cities->{$_} eq $x) {
+	    $city = $_;
+	    last;
+	}
+    }
+
+    # add city to config
+    push @config_lines, "city: $city \# $cities->{$city}";
+
+    # init for this city
+    &init($mech, $city);
+
+
+###### Bundles
+    # set up progress-bar
+    $bar = new XMLTV::ProgressBar({name => "looking up available bundles for $cities->{$city}", count => 8})
+	unless $opt_quiet;
+
+    # fetch list of available bundles/selections for the selected city
+    my $bundles = &bundlelist($mech);
+    $bar->finish() if $bar;
+
+    # no bundles?
+    &net_error() unless scalar keys %$bundles;
+
+    # Ask for bundle/selection
+    $x = ask_choice('Which bundle do you have?', (values %$bundles)[0], map $bundles->{$_}, sort keys %$bundles);
+
+    foreach (keys %$bundles) {
+	if ($bundles->{$_} eq $x) {
+	    $selection = $_;
+	    last;
+	}
+    }
+
+    # add bundle/selection to config
+    push @config_lines, "selection: $selection \# $bundles->{$selection}";
+
+
+###### Channels
+    # set up progress-bar
+    $bar = new XMLTV::ProgressBar({name => "looking up available channels for $bundles->{$selection} in $cities->{$city}", count => 40})
+	unless $opt_quiet;
+
+    # fetch channellist
+    my $channels = &channellist($mech);
+    $bar->finish() if $bar;
+
+    # sort and ask user which channels to use
+    my @chs = sort {$a <=> $b} keys %$channels;
+    my @want = ask_many_boolean(1, map "add channel $_ $channels->{$_}->{Name} ?", @chs);
+
+    foreach (@chs) {
+	my $w = shift @want;
+	warn("cannot read input, stopping channel questions"), last
+	    unless defined $w;
+
+	# translate a 'no' into '#' to comment out
+	my $comm;
+	$comm = '# ' unless $w;
+	push @config_lines, "$comm$channels->{$_}->{ID} $_ $channels->{$_}->{Name}";
+    }
+
+###### save config
+    unless (open(CONFIG, ">$config_file")) {
+	say("Failed to write config file '$config_file'!\n$!\n");
+	exit 1;
+    }
+    print CONFIG join "\n", @config_lines;
+    close CONFIG;
+
+    say("configuration complete\n");
+}
+
+# initialize mech and set cookie for city
+sub init {
+    my $mech = shift;
+    my $c = shift || $city;
+
+    if ($mech) {
+	# reset cookies
+	$mech->cookie_jar(HTTP::Cookies->new);
+    }else{
+	$mech = &initmech();
+    }
+    
+    my $url = '/NETServ/br/home/home.jsp';
+    $mech->get($base . $url);
+
+    $mech->submit_form(form_number => 1, fields => {$pname_city => $c});
+    return $mech;
+}
+
+
+# initialization for the mech-connection
+sub initmech {
+    my $mech = WWW::Mechanize->new( stack_depth => 1,
+				    autocheck   => 1,
+				    onerror     => \&net_error
+				    );
+    $mech->cookie_jar(HTTP::Cookies->new);
+    $mech->agent_alias('Windows IE 6');
+    $mech->env_proxy();
+    $mech->default_header(Accept => "text/*");
+    return $mech;
+}
+
+
+# fetch list of available cities
+# The list from the homepage can not be used because some cities
+# don't use the format this grabber was built for.
+# Thus we first use a city that works and fetch the list from
+# a page that comes up later.
+sub citylist {
+    my $url = '/NETServ/br/home/home.jsp';
+
+    my $mech = &init(undef, 1); # 1 aka São Paulo works
+    update $bar if $bar;
+
+    # the selectlist on this page is different!
+    $url = '/NETServ/br/prog/melhor_mes.jsp';
+    $mech->get($base . $url);
+    update $bar if $bar;
+
+    my $html = $mech->content();
+
+    my %cities;
+    if ($html =~ /<(select)\s+name=(\"|\')?\Q$pname_city\E\2\s+[^>]*>(.*?)<\/\1>/is) {
+	my $options = $3;
+
+	while ($options =~ s/<(option)[^>]*value\s*=(\"|\')?(\d+)\2[^>]*>([^<]*?)<\/\1>//is) {
+	    next if $3 == 0;
+	    $cities{$3} = $4;
+	    update $bar if $bar;
+	}
+    }
+    return ($mech, \%cities);
+}
+
+
+# fetches a list of available bundles for the selected city
+sub bundlelist {
+    my $mech = shift;
+    my $url = '/NETServ/br/prog/canais.jsp';
+
+    update $bar if $bar;
+
+    $mech->get($base . $url);
+    my $html = $mech->content();
+
+    my $bundles = {};
+    my @params;
+
+    &parsebundles($html, $url, $bundles);
+
+    # select digital or analog or ???
+    if ($html =~ /<INPUT\s+TYPE\s*=\s*(\"|\')?radio\1\s+NAME\s*=\s*(\"|\')?padrao\2/si) {
+	my $x = $html;
+	# extract parameters from radio buttons
+	while ($x =~ s/<INPUT\s+TYPE\s*=\s*(\"|\')?radio\1\s+NAME\s*=\s*(\"|\')?padrao\2\s*[^>]*?\s+onclick\s*=\s*(\"|\').*?\Q$url\E(\?\w+=\d+).*?\3\s*(checked)?\s*>//si) {
+	    next if $5; # we are looking at this setup right now
+	    push @params, $4; # put the rest on a stack
+	}
+    }
+
+    # work on the rest of the available bundles
+    foreach (@params) {
+	update $bar if $bar;
+	$mech->get($base . $url . $_);
+	&parsebundles($mech->content(), $url, $bundles);
+    }
+
+    return $bundles;
+}
+
+
+# parse bundlename and ID from the HTML
+sub parsebundles {
+    my ($html, $url, $bundles) = @_;
+
+    # extract name and URL-parameters of the bundles
+    while ($html =~ s/<A\s+HREF\s*=\s*(\"|\')?\Q$url\E\?([\w\&=]+)\1\s*[^>]*>([^<]+)<\/A>//si) {
+	my $name = $3;
+	my $params = $2;
+	# only take the value of parameter $pname_sel
+	my ($selection) = $params =~ /\Q$pname_sel\E=(\d+)/;
+	$bundles->{$selection} = $name;
+    }
+}
+
+
+# Try to create a URI conforming to RFC2838
+# The channel number has been added as a prefix
+# in order to be able to sort the list
+sub rfc2838 {
+    my ($name, $number, $abr, $url) = @_;
+
+    if ($url) {
+	$url =~ s/^(https?:\/\/)?(www\.)?([\w\.\-]+)(\/|(.+))$/$3$5/;
+    
+	# globo namespace
+	$url =~ s/^globosat(\.globo\.com)\/(\w+).*$/$2$1/;
+
+	# cartoons
+	$url =~ s/^(cartoonnetwork\.com\.br)\/(\w+).*$/$2\.$1/;
+
+	# remove path
+	$url =~ s/\/.*$//;
+
+	# uniqueness for duplicate urls...
+	$url = 'e.cinemax-br.tv' if $url eq 'cinemax-br.tv' && $abr eq 'MXE';
+	$url = 'e.hbofamily-br.com' if $url eq 'hbofamily-br.com' && $abr eq 'HFE';
+	$url = 'e.maxprime-br.tv' if $url eq 'maxprime-br.tv' && $abr eq 'MPE';
+
+	if ($url eq 'discovery.com') {
+	    $url = 'civilization.discovery.com' if $abr eq 'DCI';
+	    $url = 'turbo.discovery.com' if $abr eq 'DTU';
+	    $url = 'science.discovery.com' if $abr eq 'DSC';
+	}
+
+	if ($url =~ /((nettv|sportv|telecine)\.globo\.com)/) {
+	    my $main = $1;
+	    $name =~ s/[^\w\-]//g;
+	    $url = join '.', lc $name, $main;
+	}
+
+    }else{ # no URL -> construct URI from abbreviation or name
+	if ($abr) {
+	    $url = join '.', lc $abr, 'tv.br';
+	}elsif ($name) {
+	    # convert special characters to ASCII
+	    $name =~ tr/ÁÀÃÂáàãâÇçÉÊéêÓÔóô/aaaaaaaacceeeeoooo/;
+	    # get rid of what is left and not ASCII
+	    $name =~ s/[^\w\-]//g;
+	    $url = join '.', lc $name, 'tv.br';
+	}else{
+	    say("Not enough information to create URI for channel $number\n");
+	    exit 1;
+	}
+    }
+    # prefix with 'ch123' for sorting by channel-number
+    return sprintf("ch%03d.$url", $number);
+}
+
+
+# some error occurred gathering data from the website
+sub net_error {
+    $bar->finish() if $bar;
+    say ("Sorry!\n\nThere was a problem grabbing data from the NET website.\n\nPlease check your connection/proxy.\n\nMaybe even the NET website was changed. Please check the NET website and the manual.\n\n:-(");
+    exit 1;
+}
