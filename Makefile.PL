@@ -482,11 +482,6 @@ my @opt_components
        prereqs => { 'HTML::TreeBuilder' => 0,
                     'HTML::Entities' => 1.27 } },
 
-     { name => 'tv_grab_cz',
-       blurb => 'Grabber for the Czech Republic',
-       exes => [ 'grab/cz/tv_grab_cz' ],
-       prereqs => { 'XML::LibXML' => 0 } },
-
      { name => 'tv_check',
        blurb => 'Program to report exceptions and changes in a schedule',
        exes => [ 'choose/tv_check/tv_check' ],
