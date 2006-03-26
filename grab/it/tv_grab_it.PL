@@ -130,7 +130,7 @@ L<xmltv(5)>.
 
 =head1 AUTHOR
 
-Davide Chiarini, pinwiz\@inwind.it
+Davide Chiarini, davide.chiarini\@gmail.com
 
 =cut
 END
@@ -246,7 +246,7 @@ L<xmltv(5)>.
 
 =head1 AUTORE
 
-Davide Chiarini, pinwiz\@inwind.it
+Davide Chiarini, davide.chiarini\@gmail.com
 
 =cut
 END
