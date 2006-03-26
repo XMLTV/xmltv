@@ -111,7 +111,7 @@ my $SHEET_URL = "http://telepoche.guidetele.com/fiche/emi_";
 my $ROOT_URL  = "http://telepoche.guidetele.com";
 my $LANG = "fr";
 my $MAX_STARS = 4;
-my $VERSION   = "100306-01";
+my $VERSION   = "260306-01";
 
 # Temporary avoid XML warnings (to be investigated)
 no warnings;
@@ -223,21 +223,11 @@ sub text_cleanup( $ )
   return $desc;
 }
 
-sub tidy2 {
-    # clean bad characters from HTML
-    for (my $s = shift) {
-      s/&#8212;/--/g;
-      s/&#8230;/.../g;
-      decode_entities $_;
-      tr/\207\211\200\224/\347\311\055\055/; # bad characters
-      return $_;            
-    }
-}
-
 sub tidy {    
     for (my $s = shift) {
       s/&#8212;/--/g;
       s/&#8230;/.../g;
+      s/\x{2019}/\'/g;
       decode_entities $_;
       tr/\207\211\200\224/\347\311\055\055/; # bad characters
       tr/\205//d;
@@ -449,16 +439,19 @@ print STDERR "Grabber process finished in " . $script_duration . " seconds.\n" i
 # Specific functions for grabbing information
 #***************************************************************************
 sub get_channels( $ ) {
-    my $gridid = shift;
-    my %channels;
-    my $url = $GRID_FOR_CHANNEL.$gridid.'/2_6.html';
+  my $gridid = shift;
+  my %channels;
+  my $url = $GRID_FOR_CHANNEL.$gridid.'/2_6.html';
     
-    # Get the current page
-    my $t = get_nice_tree($url);           
+  # Get the current page
+  my $t = get_nice_tree($url);           
     
-    debug_print( "URL  : " . $url ."\n");
-    foreach my $cellTree ( $t->look_down( "_tag", "td", "width", "50", "height", "62" ) ) {
-      my $chid = $cellTree->look_down( "_tag", "a", 'href', '#' )->attr('onclick');
+  debug_print( "URL  : " . $url ."\n");
+ 
+  foreach my $cellTree ( $t->look_down( "_tag", "td", "width", "50", "height", "62" ) ) {
+    my $tag = $cellTree->look_down( "_tag", "a", 'href', '#' ); 
+    if ($tag != undef) {
+      my $chid = $tag->attr('onclick');
       if ( $chid =~ /goChaine\('(.*)','(.*)',''\);/ ) {
         $chid = $1;
         my $imgCell = $cellTree->look_down( "_tag", "img" );
@@ -471,9 +464,10 @@ sub get_channels( $ ) {
         $channels{$chid} = {'name' =>  $chname, 'icon' => $chicon };
       }
     }
-    $t->delete(); undef $t;
-    return %channels;
   }
+  $t->delete(); undef $t;
+  return %channels;
+}
 
 sub process_channel_grid_page( $$$$ ) {
     my ($writer, $chid, $url, $slot) = @_;
@@ -689,11 +683,11 @@ sub get_detailed_fic( $$$ )
   }
   # Get the duration and the year
   if ( my $tdesc = $tfic->look_down('_tag', 'td', 'bgcolor', '#F8F8F8') ) {
-	  debug_print "RAWDATA: " . tidy($tdesc->as_text()) . "\n";
-	  foreach my $field ( split(/\s+/, tidy($tdesc->as_text())) ) {
-	    if ( $field =~ s/^(\d\d\d\d)$//i ) {
-	      $prog->{'date'} = $1;
-	    } elsif ( $field =~ s/^(Couleur|Noir et blanc)//i ) {
+    debug_print "RAWDATA: " . tidy($tdesc->as_text()) . "\n";
+    foreach my $field ( split(/\s+/, tidy($tdesc->as_text())) ) {
+      if ( $field =~ s/^(\d\d\d\d)$//i ) {
+        $prog->{'date'} = $1;
+      } elsif ( $field =~ s/^(Couleur|Noir et blanc)//i ) {
         $prog->{'video'}{colour} = ($1 eq "Noir et blanc" ? "no" : "yes");
       } elsif  ( $field =~ s%^16/9%%) {
         $prog->{'video'}{aspect} = "16/9";
@@ -702,17 +696,26 @@ sub get_detailed_fic( $$$ )
         if ($stereo =~ /^St.r.o$/) {
           $prog->{'audio'}{stereo} = "stereo";
         } elsif ($stereo eq "Dolby") {
-          $prog->{'audio'}{stereo} = "dolby";
+          $prog->{'audio'}{stereo} = "dolby";       
+          } elsif  ( $field =~ s%^16/9%%) {
+            $prog->{'video'}{aspect} = "16/9";
+          } elsif ( $field =~ s/^(St.r.o|Dolby)\s*//i) {
+            my $stereo = $1;
+            if ($stereo =~ /^St.r.o$/) {
+              $prog->{'audio'}{stereo} = "stereo";
+            } elsif ($stereo eq "Dolby") {
+              $prog->{'audio'}{stereo} = "dolby";
+            }
+          } elsif ($field =~ s/(\d+)h(\d+)//) {      
+            # guidetele.com si full of bugs ...
+            my ($hour, $min) = ($1, $2);
+            $hour = $hour - 12 if ($hour >= 12);
+            my $duration=($hour * 3600) + ($min * 60);
+            $prog->{'length'} = $duration if ($duration != 0);       
+          }
         }
-      } elsif ($field =~ s/(\d+)h(\d+)//) {      
-        # guidetele.com si full of bugs ...
-        my ($hour, $min) = ($1, $2);
-        $hour = $hour - 12 if ($hour >= 12);
-        my $duration=($hour * 3600) + ($min * 60);
-        $prog->{'length'} = $duration if ($duration != 0);       
       }
-    }
-  }
+   }
   # Now get descriptions, summary, advices, actors and director
   my ($resume, $histoire, $avis);
   my ($nextIsResume,$nextIsHistory,$nextIsAvis,$nextIsDirector) = (0,0,0,0);
