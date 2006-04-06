@@ -24,9 +24,8 @@ tv_grab_fi --version
 =head1 DESCRIPTION
 
 Output TV listings for several channels available in Finland.
-The data comes from www.katso.fi which is owned by one of the largest
-companies providing TV listings in Finland.  The grabber relies on
-parsing HTML so it might stop working at any time.
+The data comes from www.telkku.com. The grabber relies on parsing HTML 
+so it might stop working at any time.
 
 First run B<tv_grab_fi --configure> to choose, which channels you want
 to download. Then running B<tv_grab_fi> with no arguments will output
@@ -70,7 +69,7 @@ L<xmltv(5)>.
 
 =head1 AUTHOR
 
-Matti Airas, mairas@iki.fi.  Based on tv_grab_sn by Stefan G:orling.
+Ville Ahonen, ville-xmltv@thesubmachine.com. Based on previous version of tv_grab_fi by Matti Airas.
 
 =head1 BUGS
 
@@ -89,6 +88,7 @@ use XMLTV::Capabilities qw/baseline manualconfig cache/;
 use XMLTV::Description 'Finland';
 use Getopt::Long;
 use Date::Manip;
+use HTML::Entities;
 use HTML::TreeBuilder;
 use HTML::Entities; # parse entities
 use IO::File;
@@ -114,12 +114,12 @@ To show version: $0 --version
 END
   ;
 
-my $DOMAIN = 'katso.fi';
+my $DOMAIN = 'telkku.com';
 my $SITE = "http://www.$DOMAIN";
 
 # Attributes of the root element in output.
 my $HEAD = { 'source-info-url'     => "$SITE/",
-	     'source-data-url'     => "$SITE/tvopas",
+	     'source-data-url'     => "$SITE/",
 	     'generator-info-name' => 'XMLTV',
 	     'generator-info-url'  => 'http://membled.com/work/apps/xmltv/',
 	   };
@@ -342,9 +342,8 @@ sub tidy( $ ) {
 #
 sub process_table {
     my ($date, $ch_xmltv_id, $ch_their_id) = @_;
-
-    my $today = UnixDate($date, '%Y-%m-%d');
-    my $url = "$SITE/tvopas/?pvm=$today&tv_kanava=$ch_their_id";
+    my $today = UnixDate($date, '%Y%m%d');
+    my $url = "$SITE/telkku?tila=knvt&kan=$ch_their_id&p=$today";
     t "getting URL: $url";
     my $tree = get_nice_tree $url, \&tidy;
     local $SIG{__WARN__} = sub {
@@ -430,32 +429,46 @@ sub bump_start_day {
     }
 }
 
-# program data is split as follows:
-# - td with class=kanava-klo is the time
-# - its sibling td with class=kanava-ohj(-nyt)? (two to the right)
-#   is the program
-# - second td on the next row is the description
+#####
+# All program info is contained within a table cell with the
+# following properties:
+#
+# <td style="height: 500px; padding:5px 15px 5px 15px;" valign="top">
+#
+# For each program there is a entry that looks as follows:
+#
+# <b>hh:mm Program Name</b><br />Description<br /><br />
+# 
+# After processing the html with get_nice_tree, the slashes in the 
+# <br /> tags fall off. Also, all special characters (e.g. Â‰ˆ≈ƒ÷)
+# are replaced with their corresponding html special characters. This 
+# means that the following program element
+#
+# <b>12:10 T‰n‰‰n otsikoissa</b><br />Aamu-tv:n ajankohtaiset aiheet koosteena.<br /><br />
+# 
+# ends up looking like this:
+#
+# <b>12:10 T&auml;n&auml;&auml;n otsikoissa</b><br />Aamu-tv:n ajankohtaiset aiheet koosteena.<br><br>
+#
 sub get_program_data {
     my $tree = shift;
     t "get_program_data() ENTRY for tree: $tree";
     my @data;
-
-    my @time_elems = get_time_elems($tree);
-    t 'time elements: ' . d \@time_elems;
-
-    # Subroutines to call on each element.
-    my %keys = (time => \&get_time_str,
-		title => \&get_name_str,
-		desc => \&get_desc_str,
-	       );
-    # Actually time and title are required, but we don't check that.
-    foreach my $elem (@time_elems) {
-	t 'doing elem: ' . d $elem;
+    # Dump the html-tree to a string for matching
+    my $html = $tree->as_HTML;
+    while ($html =~ m/<b>([0-9]{2}:[0-9]{2}) (.+?)<\/b><br>(.*?)<br><br>/g) {
+	# Use decode_entities() to convert html characters 
+	# to ascii (e.g &auml; to ‰)
+	my %keys = (time => $1,
+		    title => decode_entities($2),
+		    desc => decode_entities($3),
+		    );
 	my %h;
 	foreach my $k (keys %keys) {
-	    my $sub = $keys{$k};
-	    my $v = $sub->($elem);
-	    if (defined $v) {
+	    my $v = $keys{$k};
+	    # Only record entry if it isn't empty (actually time 
+	    # and title are required, but we don't check that.)
+	    if (length ($v) > 0) {
 		t "got a result from sub for $k: $v";
 		$h{$k} = $v;
 	    }
@@ -466,64 +479,13 @@ sub get_program_data {
     t 'get_program_data() RETURNING ' . d \@data;
     return @data;
 }
-sub get_time_elems {
-    my ($tree) = @_;
-    my @time_elems = $tree->look_down
-      ("_tag"=>"td",
-       sub { defined $_[0]->attr('class') and $_[0]->attr('class') =~ /^kanava-klo(?:-nyt)?$/ });
-    return @time_elems;
-}
-sub get_time_str {
-    my ($time_elem) = @_;
-    return get_content($time_elem->content_list());
-}
-sub get_name_str {
-    my ($time_elem) = @_;
-    return get_content(navigate($time_elem,("right","right")));
-}
-sub get_desc_str {
-    my ($time_elem) = @_;
-
-    my @next = navigate($time_elem,("parent","right"));
-    return undef if @next < 2;
-    for (my $tmp = get_content($next[1]->content_list())) {
-	return undef if not defined;
-	s/^\s+//; s/\s+$//;
-	return undef if not length;
-	return $_;
-    }
-}
-sub get_content {
-  my (@l) = @_;
-  while (@l) {
-    my $e = shift @l;
-    return $e if !ref($e);
-  }
-  return undef;
-}
-
-sub navigate {
-  my ($elem,@dir) = @_;
-
-  if (!@dir) {
-    return $elem->content_list();
-  } else {
-    my $d = shift @dir;
-    my $e = $elem->$d();
-    if (defined($e)) {
-      return navigate($e,@dir);
-    } else {
-      return undef;
-    }
-  }
-}
 
 # get channel listing
 sub get_channels {
     my $bar = new XMLTV::ProgressBar('getting list of channels', 1)
       if not $opt_quiet;
     my %channels;
-    my $url="$SITE/tvopas";
+    my $url="$SITE/telkku?tila=knvt";
     my $tree = get_nice_tree $url;
 
     # FIXME commonize this
@@ -534,26 +496,38 @@ sub get_channels {
 	die "$url: $_[0]";
     };
 
-    # all channel elements are specially formatted <a/> tags
-    # with class=white
+    # All channel elements are contained within <a>-tags
+    # with class="o", further surrounded by <b>-tags. Example:
+    # Channel name 'YLE2', channel id '1' looks as follows:
+    # <a href="telkku?tila=knvt&kan=1" class="o">  <b>YLE2</b></a><br />
 
-    my @kanava_elems = $tree->look_down(_tag => 'div',
-					class => 'kanava');
+    my @kanava_elems = $tree->look_down(_tag => 'a', class => 'o');
     my @ch_a_elems = map { $_->look_down(_tag => 'a') } @kanava_elems;
     foreach my $elem (@ch_a_elems) {
 	my $href = $elem->attr('href');
-	if ($href =~ m!^/tvopas/\?pvm=([\d\-]*?)&tv_kanava=(.*?)$!) {
-	    my $channel_id=$2;
-	    my @children=$elem->content_list;
-	    if (scalar(@children) != 1 || ref($children[0])) {
-		warn "Illegal channel name";
+	if ($href =~ m!^telkku\?tila=knvt&kan=(.*?)$!) {
+	    my $channel_id=$1;
+
+	    # Skip channel 149, aka 'Suosikkikanava', as it isn't
+	    # a real channel
+	    if ($channel_id == 149) {
 		next;
 	    }
-	    for ($children[0]) {
-		s/^\s+//; s/\s+$//;
-		$channels{$channel_id}=$_;
-		push @ch_all, { 'display-name' => [ [ $_, $LANG ] ],
-				'id' => $channel_id };
+
+	    my @b_elems = $elem->look_down(_tag => 'b');
+	    my @ch_b_elems = map { $_->look_down(_tag => 'b') } @b_elems;
+	    foreach my $b_elem (@ch_b_elems) {
+		my @children=$b_elem->content_list;
+		if (scalar(@children) != 1 || ref($children[0])) {
+		    warn "Illegal channel name";
+		    next;
+		}
+		for ($children[0]) {
+		    s/^\s+//; s/\s+$//;
+		    $channels{$channel_id}=$_;
+		    push @ch_all, { 'display-name' => [ [ $_, $LANG ] ],
+				    'id' => $channel_id };
+		}
 	    }
 	}
     }
@@ -570,4 +544,3 @@ sub nextday {
     my $n = DateCalc($p, '+ 1 day');
     return UnixDate($n, '%Q');
 }
-
