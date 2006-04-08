@@ -35,6 +35,7 @@ our $FailOnError = 1; # Fail on fetch error
 
 our $ua = LWP::UserAgent->new;
 $ua->agent("xmltv/$XMLTV::VERSION");
+$ua->env_proxy;
 #our $get = \&LWP::Simple::get;
 our %errors = ();
 
