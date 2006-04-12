@@ -212,16 +212,6 @@ sub xmlencoding {
     return $_[0];
 }
 
-sub text_cleanup( $ ) 
-{
-  my $desc = shift;
-  $desc =~ s/\@\@\@/ /g;
-  # Remove leading and trailing spaces
-  $desc =~ s/^ *: *//;
-  $desc =~ s/ *$//;
-  return $desc;
-}
-
 sub tidy {    
     for (my $s = shift) {
       s/&#8212;/--/g;
@@ -659,6 +649,27 @@ sub process_channel_grid_page( $$$$ ) {
   $t->delete(); undef $t;
 }
 
+sub text_cleanup( $ )
+{
+  my ($desc) = @_;
+  $desc =~ s/\@\@\@/ /g;
+  # Remove leading and trailing spaces
+  $desc =~ s/^\s*:\s*//;
+  $desc =~ s/\s*$//;
+  return $desc;
+}
+
+sub parse_name_list( $ )
+{
+  my ($names) = @_;
+  # Remove leading and trailing spaces
+  $names =~ s/^\s*:\s*//;
+  $names =~ s/\s*$//;
+  $names =~ s/\s+(?:avec|et)\s+/, /i;
+  my @list=split /(?:\s*,)+\s*/, $names;
+  return @list;
+}
+
 sub get_detailed_fic( $$$ ) 
 {
   my $id    = shift;
@@ -676,6 +687,7 @@ sub get_detailed_fic( $$$ )
     return if ($nbretry == 5 );
   }
   my $tfic = HTML::TreeBuilder->new;
+  $tfic->store_comments(1);
   $tfic->parse_file( $FIC_FILE->filename );  
 
   # This page's title tag contains the program title without the sub-title. Use it to separate the two.
@@ -688,6 +700,7 @@ sub get_detailed_fic( $$$ )
       $prog->{'sub-title'} = [ [ tidy($title) ] ];             
     }
   }
+
   # Get the duration and the year
   if ( my $tdesc = $tfic->look_down('_tag', 'td', 'bgcolor', '#F8F8F8') ) {
     debug_print "RAWDATA: " . tidy($tdesc->as_text()) . "\n";
@@ -714,23 +727,79 @@ sub get_detailed_fic( $$$ )
       }
     }
   }
-  # Now get descriptions, summary, advices, actors and director
-  my ($resume, $histoire, $avis);
-  my (@director, @actor);
-  foreach my $tpar ( $tfic->look_down('_tag', 'p' ) ) {
-    if ( my $ttext = $tpar->look_down('_tag', 'span', 'class', 'noir11') ) {
-      if ( $ttext->as_text eq "HISTOIRE" ) {
-        $histoire = text_cleanup(tidy($tpar->look_down('_tag', 'span', 'class', 'noir11r')->as_text()));
-      }
-      if ( $ttext->as_text eq "RESUME" ) {
-        $resume = text_cleanup(tidy($tpar->look_down('_tag', 'span', 'class', 'noir11r')->as_text()));
-      }
-      if ( $ttext->as_text eq "AVIS" ) {
-        $avis = text_cleanup(tidy($tpar->look_down('_tag', 'span', 'class', 'noir11r')->as_text()));
-      }
+
+  # The actors list is really hard to identify and risks producing false
+  # positives. Fortunately we know it follows a 'DISTRIBUTION' comment.
+  # So we:
+  # - locate the 'DISTRIBUTION' comment and identify what should be the
+  #   first actor after that
+  # - only set $actors_section to 1 when we are in the right area of the page.
+  #   The rest of the time it is set to 0 before the actors section,
+  #   and 2 after it.
+  my $actors_section=0;
+  my $first_actor;
+  if (my $comment=$tfic->look_down('_tag', '~comment', 'text', qr/DISTRIBUTION/)) {
+    my $sibling=$comment->right();
+    if (!ref $sibling) {
+      # $sibling is a string, what we want is the next HTML element
+      $sibling=($comment->parent()->content_list())[$comment->pindex()+2];
+    }
+    if (defined $sibling) {
+      $first_actor=$sibling->look_down('_tag', 'span', 'class', 'noir11');
     }
   }
-  
+
+  # Now get descriptions, summary, advices, actors and director
+  # These are represented as <span class='noir11'> / <span class='noir11r'>
+  # pairs.
+  my ($resume, $histoire, $avis);
+  foreach my $span ($tfic->look_down('_tag', 'span', 'class', 'noir11')) {
+    my $sibling=$span->right();
+    next if (!defined $sibling);
+
+    my $value="";
+    if (!ref $sibling) {
+      # $sibling is a string, what we want is the next HTML element
+      $value=$sibling;
+      $sibling=($span->parent()->content_list())[$span->pindex()+2];
+      next if (!defined $sibling);
+    }
+    if ($sibling->attr('_tag') ne "span" or
+        $sibling->attr('class') ne "noir11r") {
+      # Not a valid value span tag
+      next;
+    }
+    $value.=$sibling->as_text();
+    my $name=$span->as_text();
+
+    if ($name =~ /^Titre original/i) {
+      # FIXME: Still in the works...
+      ;
+    } elsif ($name =~ /^R.*alisateur/i) {
+      push @{$prog->{credits}{director}}, parse_name_list(tidy($value));
+    } elsif ($name =~ /^Pr.*sentateur/i) {
+      push @{$prog->{credits}{presenter}}, parse_name_list(tidy($value));
+    } elsif ($name =~ /^Sc.*nariste/i) {
+      push @{$prog->{credits}{writer}}, parse_name_list(tidy($value));
+    } elsif ($name =~ /Musique/i) {
+      # No xmltv field for this
+      ;
+    } elsif ($name eq "HISTOIRE") {
+      $histoire = text_cleanup(tidy($value));
+      $actors_section=2;
+    } elsif ($name eq "RESUME") {
+      $resume = text_cleanup(tidy($value));
+      $actors_section=2;
+    } elsif ($name eq "AVIS") {
+      $avis = text_cleanup(tidy($value));
+      $actors_section=2;
+    } elsif ($actors_section == 1 or
+             ($actors_section == 0 and defined $first_actor and $span eq $first_actor)) {
+      push @{$prog->{credits}{actor}}, text_cleanup(tidy($name));
+      $actors_section=1;
+    }
+  }
+
   # RESUME is the main definition, HISTOIRE is shorter.
   foreach ($resume, $histoire) {
     push @{$prog->{desc}}, [ $_, $LANG ] if defined and length;
@@ -743,9 +812,6 @@ sub get_detailed_fic( $$$ )
       push @{$prog->{desc}}, [ $avis, $LANG ];
     }
   }
-  # Now push the credits section, if exists
-  $prog->{credits}{director } = \@director if @director;
-  $prog->{credits}{actor}     = \@actor if @actor;
-  
+
   $tfic->delete(); undef $tfic;
 }
