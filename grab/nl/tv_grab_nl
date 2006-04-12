@@ -717,10 +717,9 @@ sub process_details_page( $$$ ) {
         my @ths = $tr->look_down('_tag' => 'th');
         my @tds = $tr->look_down('_tag' => 'td');
         if( @ths == 1 && @tds == 1 ) {
-        	push @info, [ $ths[0]->as_text(), $tds[0]->as_text() ];
+        	push @info, [ $ths[0]->as_text(), $tds[0] ];
         }
     }
-    $t->delete(); undef $t;
 
     # Process the list of [ heading, data ] pairs.
     my (
@@ -729,23 +728,21 @@ sub process_details_page( $$$ ) {
 
     	# At most one:
         $director, $previously_shown, $orig_title, $sub_title, $genre,
-        $date, $episode_num, $actors, $writers, $commentators,
+        $date, $episode_num, $writers, $commentators,
 
     	# Zero or more:
-        @presenter, @url,
+        @presenter, @url, @actor,
     );
 
-    # NB 'at most one' $actors but that one entry can give several.
-
-    my ($teletext_sub, $widescreen) = 0; # boolean
+    my ($teletext_sub, $widescreen, $blackandwhite) = 0; # boolean
     my $seen_tijdstip = 0;
     my $last;
 
     ELEM: foreach (@info) {
         my ($regel, $text) = @$_;
-        foreach ($regel, $text) {
-    	    s/^\s+//; s/\s+$//;
-    	}
+
+        $regel =~ s/^\s+//;
+        $regel =~ s/\s+$//;
 
     	if ($regel eq '') {
     	    # Continuation of the previous one, hopefully.
@@ -757,188 +754,209 @@ sub process_details_page( $$$ ) {
     	    $last = $regel;
     	}
 
-    	if ($regel eq 'Datum en tijdstip') {
-    	    warn "seen 'Tijdstip' twice\n" if $seen_tijdstip++;
-    	    if (length($text)<=16) {
-        		t "'onvolledig' is true, nothing more to write";
-        		t 'process_details_page() RETURNING';
-        		return 'END';
-    	    }
-            else {
-        		# Extract time strings from the text, but not full
-        		# Date::Manip objects.
-        		#
-        		($van,$tot) = time_to_str($text);
-	        }
-    	}
-    	elsif ($regel eq 'Inhoud') {
-    	    # Empty text for this happens often, just skip it.
-    	    push @desc, $text if $text ne '';
-    	}
-    	elsif ($regel eq 'Genre') {
-    	    warn "seen 'Genre' twice\n" if defined $genre;
-    	    # Empty text for this happens often, just skip it.
-    	    $genre = $text if $text ne '';
-    	}
-    	elsif ($regel eq 'Zender') {
-            # In the new layout, this field contains the logo
-            # for the channel. Ignore it, because these logos
-            # are too small to use in an application.
-    	    #
-    	}
-    	elsif ($regel eq 'Omroep') {
-            # We ignore this setting, because the XMLTV format
-            # doesn't have room for this. In Holland, a few broadcasters
-            # share the same channel.       
-    	    #
-    	}
-    	elsif ($regel eq 'Bijzonderheden') {
-    	    foreach (split /,\s*/, $text) {
-        		if ($_ eq 'Teletekst ondertiteld') {
-        		    # I'm guessing this means teletext subtitles :-).
-        		    $teletext_sub++
-        		      && warn 'seen teletext subtitles twice';
-        		}
-        		elsif ($_ eq 'Breedbeeld uitzending') {
-        		    $widescreen++ && warn 'seen widescreen twice';
-        		}
-        		elsif (length >= 50) {
-        		    # Some long sentence, part of description.
-        		    push @desc, $_;
-        		}
-        		else {
-        		    warn "unknown 'Bijzonderheden' bit $_"
-        		      unless $warned_regel{"Bijzonderheden: $_"}++;	
-        		    push @desc, $_;
-        		}
-    	    }
-    	}
-        elsif ($regel eq 'Teletekst') {
-            # Teletekst contains the 'teletext' page for this programme
-            # This information isn't used at the moment
+        if ($regel eq 'Acteurs') {
+            warn "seen 'Acteurs' twice" if @actor;
+
+            foreach ($text->look_down('_tag' => 'div')->content_list()) {
+                push @actor, $_ unless ref ($_);
+            }
+
+            foreach (@actor) {
+                s/^\s+//;
+                s/\s+$//;
+                # 'e.a' appearing in the description means 'and others';
+                # it's implicit in XMLTV that there might be other actors,
+                # so we quietly remove it.
+                #
+                s/\s*e\.a\s*$//;
+                $text = $_;
+                while (length $text) {
+                    if ($text =~ s/\s*([^:]+):\s*([^.]+)(?:$|\.)//) {
+                        warn "discarding information about the parts played by each actor\n"
+                        unless $warned_discarding_parts++;
+                        $_ = $2;
+                    }
+                    elsif ($text =~ s/\s*([^,]+)(?:$|,)//) {
+                        $_ = $1;
+                    }
+                    else {
+                        warn "unknown remnant 'Acteurs' text '$text'";
+                        last;
+                    }
+                }
+            }
         }
-    	elsif ($regel eq 'Presentatie') {
-    	    push @presenter, $text;
-    	}
-    	elsif ($regel eq 'Aflevering') {
-    	    warn "seen 'Aflevering"
-    	      if defined $episode_num;
-    	    if ($text eq 'Slot') {
-        		# The last episode of a series.  There isn't a way to
-        		# store this in the current XMLTV format.
-        		#
-        		warn "discarding 'Slot'" unless $warned_slot++;
+        else {
+            # not actors, now convert to text
+            $text = $text->as_text();
+            $text =~ s/^\s+//;
+            $text =~ s/\s+$//;
+
+	    if ($regel eq 'Datum en tijdstip') {
+    	        warn "seen 'Tijdstip' twice\n" if $seen_tijdstip++;
+    	        if (length($text)<=16) {
+        	    t "'onvolledig' is true, nothing more to write";
+        	    t 'process_details_page() RETURNING';
+        	    return 'END';
+    	        }
+                else {
+        	    # Extract time strings from the text, but not full
+        	    # Date::Manip objects.
+        	    #
+        	    ($van,$tot) = time_to_str($text);
+	        }
     	    }
-    	    elsif ($text =~ /^\d+$/) {
-        		if ($text == 0) {
-        		    warn "I thought episode nums on the site were from 1";
-        		}
-    	    	else {
-        		    $episode_num = $text - 1;
-        		}
+    	    elsif ($regel eq 'Inhoud') {
+    	        # Empty text for this happens often, just skip it.
+    	        push @desc, $text if $text ne '';
     	    }
-    	    elsif ($text =~ /^(?:\d+-)+\d$/) {
-    	    	# This means multiple episodes.  This ought to be
-        		# handled by turning the programme into a clump.
-        		#
-        		warn "programme covers multiple episodes ($text), not handled";
+    	    elsif ($regel eq 'Genre') {
+    	        warn "seen 'Genre' twice\n" if defined $genre;
+    	        # Empty text for this happens often, just skip it.
+    	        $genre = $text if $text ne '';
+    	    }
+    	    elsif ($regel eq 'Zender') {
+                # In the new layout, this field contains the logo
+                # for the channel. Ignore it, because these logos
+                # are too small to use in an application.
+    	        #
+    	    }
+    	    elsif ($regel eq 'Omroep') {
+                # We ignore this setting, because the XMLTV format
+                # doesn't have room for this. In Holland, a few broadcasters
+                # share the same channel.       
+    	        #
+    	    }
+    	    elsif ($regel eq 'Bijzonderheden') {
+    	        foreach (split /,\s*/, $text) {
+        	    if ($_ eq 'Teletekst ondertiteld') {
+        	        # I'm guessing this means teletext subtitles :-).
+        	        $teletext_sub++
+        	          && warn 'seen teletext subtitles twice';
+        	    }
+        	    elsif ($_ eq 'Breedbeeld uitzending') {
+        	        $widescreen++ && warn 'seen widescreen twice';
+        	    }
+                    elsif ($_ eq 'Zwart-Wit') {
+                        $blackandwhite++ && warn 'seen black & white twice';
+                    }
+        	    elsif (length >= 50) {
+        	        # Some long sentence, part of description.
+        	        push @desc, $_;
+        	    }
+        	    else {
+        	        warn "unknown 'Bijzonderheden' bit $_"
+        	          unless $warned_regel{"Bijzonderheden: $_"}++;	
+        	        push @desc, $_;
+        	    }
+    	        }
+    	    }
+            elsif ($regel eq 'Teletekst') {
+                # Teletekst contains the 'teletext' page for this programme
+                # This information isn't used at the moment
+            }
+    	    elsif ($regel eq 'Presentatie') {
+    	        push @presenter, $text;
+    	    }
+    	    elsif ($regel eq 'Aflevering') {
+    	        warn "seen 'Aflevering"
+    	          if defined $episode_num;
+    	        if ($text eq 'Slot') {
+        	    # The last episode of a series.  There isn't a way to
+        	    # store this in the current XMLTV format.
+        	    #
+        	    warn "discarding 'Slot'" unless $warned_slot++;
+    	        }
+    	        elsif ($text =~ /^\d+$/) {
+        	    if ($text == 0) {
+        	        warn "I thought episode nums on the site were from 1";
+        	    }
+    	    	    else {
+        	        $episode_num = $text - 1;
+        	    }
+    	        }
+    	        elsif ($text =~ /^(?:\d+-)+\d$/) {
+    	    	    # This means multiple episodes.  This ought to be
+        	    # handled by turning the programme into a clump.
+        	    #
+        	    warn "programme covers multiple episodes ($text), not handled";
+    	        }
+    	        else {
+        	    warn "bad episode number $text";
+    	        }
+    	    }
+    	    elsif ($regel eq 'Titel aflevering') {
+    	        warn "seen 'Titel aflevering' twice"
+    	          if defined $sub_title;
+    	        $sub_title = $text;
+    	    }
+    	    elsif ($regel eq 'Url') {
+    	        # We have to turn the string given, which is normally
+    	        # just a hostname, into a URL.  I don't see why they
+    	        # don't just link to it directly, this is a web site
+    	        # after all.
+    	        #
+    	        # Anyway, the URI library doesn't seem to have any way
+    	        # to take a string and turn it into a URL adding
+    	        # 'http:' if necessary, so we do this by hand.
+    	        #
+    	        if ($text !~ tr/://) {
+        	    $text = "http://$text";
+    	        }
+    	        push @url, $text;
+    	    }
+    	    elsif ($regel eq 'Scenario') {
+    	        warn "seen 'Scenario' twice" if $writers;
+    	        push @$writers, $text;
+    	    }
+    	    elsif ($regel eq 'Email') {
+    	        push @url, "mailto:$text";
+    	    }
+    	    elsif ($regel eq 'Bron') {
+    	        # FIXME cannot do anything special with this.  It
+    	        # means 'source' and perhaps by parsing the text we
+    	        # could find the names of writers or whatever.
+    	        #
+    	        # push @desc, "$regel: $text";
+    	    }
+    	    elsif ($regel eq 'Commentaar') {
+    	        push @$commentators, $text;
+    	    }
+    	    elsif ($regel eq 'Jaar van premiere') {
+    	        # Year of release, I think.
+    	        warn "seen 'Jaar van premiere' twice"
+    	          if defined $date;
+    	        $date = $text;
+    	    }
+            elsif ($regel eq 'Regie') {
+                warn "seen 'Regie' twice" if defined $director;
+                $director = $text;
+            }
+    	    elsif ($regel eq 'Orginele titel') {
+    	        warn "seen 'Orginele titel' twice" if defined $orig_title;
+    	        $orig_title = $text;
+    	    }
+    	    elsif ($regel eq 'Behaalde prijzen') {
+    	        # Awards won.  It doesn't seem worth adding a separate
+    	        # field for this to the XMLTV format, just append to
+    	        # the description.
+    	        #
+    	        # push @desc, "$regel: $text";
+    	    }
+    	    elsif ($regel eq 'Website') {
+    	        push @url, ($text =~ /^[a-z]+:/) ? $text : "http://$text";
     	    }
     	    else {
-        		warn "bad episode number $text";
+    	        # Unknown key, report it back to the prompt
+    	        #
+    	        warn "unknown programme info key $regel\n"
+    	          unless $warned_regel{$regel}++;
     	    }
-    	}
-    	elsif ($regel eq 'Titel aflevering') {
-    	    warn "seen 'Titel aflevering' twice"
-    	      if defined $sub_title;
-    	    $sub_title = $text;
-    	}
-    	elsif ($regel eq 'Url') {
-    	    # We have to turn the string given, which is normally
-    	    # just a hostname, into a URL.  I don't see why they
-    	    # don't just link to it directly, this is a web site
-    	    # after all.
-    	    #
-    	    # Anyway, the URI library doesn't seem to have any way
-    	    # to take a string and turn it into a URL adding
-    	    # 'http:' if necessary, so we do this by hand.
-    	    #
-    	    if ($text !~ tr/://) {
-        		$text = "http://$text";
-    	    }
-    	    push @url, $text;
-    	}
-    	elsif ($regel eq 'Acteurs') {
-    	    warn "seen 'Rolverdeling' twice" if $actors;
-    
-    	    # 'e.a' appearing in the description means 'and others';
-    	    # it's implicit in XMLTV that there might be other actors,
-    	    # so we quietly remove it.
-    	    #
-    	    $text =~ s/\s*e\.a\s*$//;
-    	
-    	    while (length $text) {
-        		if ($text =~ s/\s*([^:]+):\s*([^.]+)(?:$|\.)//) {
-        		    warn "discarding information about the parts played by each actor\n"
-        		      unless $warned_discarding_parts++;
-        		    push @$actors, $2;
-        		}
-        		elsif ($text =~ s/\s*([^,]+)(?:$|,)//) {
-        		    push @$actors, $1;
-        		}
-        		else {
-        		    warn "unknown remnant 'Rolverdeling' text '$text'";
-        		    last;
-        		}
-    	    }
-    	}
-    	elsif ($regel eq 'Scenario') {
-    	    warn "seen 'Scenario' twice" if $writers;
-    	    push @$writers, $text;
-    	}
-    	elsif ($regel eq 'Email') {
-    	    push @url, "mailto:$text";
-    	}
-    	elsif ($regel eq 'Bron') {
-    	    # FIXME cannot do anything special with this.  It
-    	    # means 'source' and perhaps by parsing the text we
-    	    # could find the names of writers or whatever.
-    	    #
-    	    # push @desc, "$regel: $text";
-    	}
-    	elsif ($regel eq 'Commentaar') {
-    	    push @$commentators, $text;
-    	}
-    	elsif ($regel eq 'Jaar van premiere') {
-    	    # Year of release, I think.
-    	    warn "seen 'Jaar van premiere' twice"
-    	      if defined $date;
-    	    $date = $text;
-    	}
-    	elsif ($regel eq 'Regisseur') {
-    	    warn "seen 'Regisseur' twice" if defined $director;
-    	    $director = $text;
-    	}
-    	elsif ($regel eq 'Orginele titel') {
-    	    warn "seen 'Orginele titel' twice" if defined $orig_title;
-    	    $orig_title = $text;
-    	}
-    	elsif ($regel eq 'Behaalde prijzen') {
-    	    # Awards won.  It doesn't seem worth adding a separate
-    	    # field for this to the XMLTV format, just append to
-    	    # the description.
-    	    #
-    	    # push @desc, "$regel: $text";
-    	}
-    	elsif ($regel eq 'Website') {
-    	    push @url, ($text =~ /^[a-z]+:/) ? $text : "http://$text";
-    	}
-    	else {
-    	    # Unknown key, report it back to the prompt
-    	    #
-    	    warn "unknown programme info key $regel\n"
-    	      unless $warned_regel{$regel}++;
-    	}
+        }
     }
+
+    $t->delete();
+    undef $t;
 
     if (not defined $naam) {
     	warn "did not see programme title, skipping programme\n";
@@ -972,24 +990,28 @@ sub process_details_page( $$$ ) {
     # information in different ways.
     #
     $prog{desc} = [ [ join("\n\n", @desc), $LANG ] ] if @desc;
-	
+
     $prog{'sub-title'} = [ [ $sub_title, $LANG ] ] if defined $sub_title;
     $prog{subtitles} = [ { type => 'teletext' } ] if $teletext_sub;
-    $prog{video} = { aspect => '16:9' } if $widescreen;
-    $prog{credits} = { presenter => \@presenter } if @presenter;
     $prog{'episode-num'} = [ [ $episode_num ] ] if defined $episode_num;
     $prog{url} = \@url if @url;
     $prog{date} = $date if defined $date;
     $prog{category} = [ [ $genre, $LANG ] ] if defined $genre;
     $prog{'previously-shown'} = $previously_shown if $previously_shown;
-	
-    my %c;
-    $c{actor} = $actors if $actors;
-    $c{writer} = $writers if $writers;
-    $c{commentator} = $commentators if $commentators;
-    $c{director} = [ $director ] if $director;
-    $prog{credits} = \%c if %c;
-	
+
+    my %video;
+    $video{aspect} = '16:9' if $widescreen;
+    $video{colour} = 0 if $blackandwhite;
+    $prog{video} = \%video if %video;
+
+    my %credits;
+    $credits{presenter} = \@presenter if @presenter;
+    $credits{actor} = \@actor if @actor;
+    $credits{writer} = [ $writers ] if $writers;
+    $credits{commentator} = [ $commentators ] if $commentators;
+    $credits{director} = [ $director ] if $director;
+    $prog{credits} = \%credits if %credits;
+
     return \%prog;
 }
 
