@@ -261,22 +261,24 @@ my @opt_components
 #       exes => [ 'grab/de/tv_grab_de' ],
 #     },
 
-     { name     => 'tv_grab_au',
-       blurb    => 'Grabber for Australia',
-       exes     => [ 'grab/au/tv_grab_au' ],
-       deps     => [ 'grab/au/tv_grab_au' => [ 'grab/au/tv_grab_au.in' ] ],
-       pl_files => { 'grab/au/tv_grab_au.PL' => 'grab/au/tv_grab_au' },
-       to_clean => [ 'grab/au/tv_grab_au' ],
-       share_files => { 'grab/au/channel_ids' => 'tv_grab_au/channel_ids' },
-       grab_need_share => [ 'au' ],
-     },
+# Disabled 2006-04-12 since it doesn't provide data anymore.
+#     { name     => 'tv_grab_au',
+#       blurb    => 'Grabber for Australia',
+#       exes     => [ 'grab/au/tv_grab_au' ],
+#       deps     => [ 'grab/au/tv_grab_au' => [ 'grab/au/tv_grab_au.in' ] ],
+#       pl_files => { 'grab/au/tv_grab_au.PL' => 'grab/au/tv_grab_au' },
+#       to_clean => [ 'grab/au/tv_grab_au' ],
+#       share_files => { 'grab/au/channel_ids' => 'tv_grab_au/channel_ids' },
+#       grab_need_share => [ 'au' ],
+#     },
 
-     { name => 'tv_grab_br',
-       blurb => 'Grabber for Brazil',
-       exes => [ 'grab/br/tv_grab_br' ],
-       prereqs => { 'HTML::TreeBuilder' => 0 ,
-                    'HTML::Entities' => 1.27 , }
-     },
+# Disabled 2006-04-12 since it doesn't provide data anymore.
+#     { name => 'tv_grab_br',
+#       blurb => 'Grabber for Brazil',
+#       exes => [ 'grab/br/tv_grab_br' ],
+#       prereqs => { 'HTML::TreeBuilder' => 0 ,
+#                    'HTML::Entities' => 1.27 , }
+#     },
 
      { name => 'tv_grab_br_net',
        blurb => 'Grabber for Brazil NET Cable',
