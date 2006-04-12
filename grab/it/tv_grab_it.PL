@@ -71,25 +71,29 @@ Additional allowed values of OPTION are 'Term' for normal terminal output
 
 B<--output FILE> write to FILE rather than standard output.
 
-B<--days N> grab N days.  The default is 7.
+B<--days N> Grab N days.  The default is 7.
 
-B<--offset N> start N days in the future.  The default is to start
+B<--offset N> Start N days in the future.  The default is to start
 from today.
 
-B<--quiet> suppress the progress messages normally written to standard
+B<--quiet> Suppress the progress messages normally written to standard
 error.
 
-B<--slow> downloads more details (descriptions, actors...). This means
+B<--slow> Downloads more details (descriptions, actors...). This means
 downloading a new file for each programme, so itE<39>s off by default to
 save time.
 
-B<--verbose> prints out verbose information useful for debugging.
+B<--verbose> Prints out verbose information useful for debugging.
 
-B<--errors-in-xml> outputs warnings as programmes in the xml file,
+B<--errors-in-xml> Outputs warnings as programmes in the xml file,
 so that you can see errors in your favorite frontend in addition
 to the default STDERR. 
 
-B<--backend> set the backend (or backends) to use. See the examples.
+B<--backend> Set the backend (or backends) to use. See the examples.
+
+B<--version> Show the version of the grabber.
+
+B<--help> Print a help message and exit.
 
 =head1 CAVEATS
 
