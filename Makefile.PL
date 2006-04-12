@@ -307,16 +307,20 @@ my @opt_components
        prereqs => { 'HTML::Entities' => 1.27 } ,
      },
 
-     { name => 'tv_grab_uk_bleb',
-       blurb => 'Fast alternative grabber for the UK',
-       exes => [ 'grab/uk_bleb/tv_grab_uk_bleb' ],
-       pl_files => { 'grab/uk_bleb/tv_grab_uk_bleb.PL' => 'grab/uk_bleb/tv_grab_uk_bleb' },
-       share_files => { 'grab/uk_bleb/icon_urls' => 'tv_grab_uk_bleb/icon_urls' },
-       to_clean => [ 'grab/uk_bleb/tv_grab_uk_bleb' ],
-       deps => [ 'grab/uk_bleb/tv_grab_uk_bleb' => [ 'grab/uk_bleb/tv_grab_uk_bleb.in' ] ],
-       grab_need_share => [ 'uk_bleb' ],
-       prereqs => { 'IO::Scalar' => 0, 'Archive::Zip' => 0 },
-     },
+#
+# Disabled at the request of the author/maintainer April 12, 2006
+# site only allows 10 channels at a time and folks migrated to _uk_rt
+#
+#     { name => 'tv_grab_uk_bleb',
+#       blurb => 'Fast alternative grabber for the UK',
+#       exes => [ 'grab/uk_bleb/tv_grab_uk_bleb' ],
+#       pl_files => { 'grab/uk_bleb/tv_grab_uk_bleb.PL' => 'grab/uk_bleb/tv_grab_uk_bleb' },
+#       share_files => { 'grab/uk_bleb/icon_urls' => 'tv_grab_uk_bleb/icon_urls' },
+#       to_clean => [ 'grab/uk_bleb/tv_grab_uk_bleb' ],
+#       deps => [ 'grab/uk_bleb/tv_grab_uk_bleb' => [ 'grab/uk_bleb/tv_grab_uk_bleb.in' ] ],
+#       grab_need_share => [ 'uk_bleb' ],
+#       prereqs => { 'IO::Scalar' => 0, 'Archive::Zip' => 0 },
+#     },
 
      { name => 'tv_grab_be',
        blurb => 'Grabber for Belgium and Luxemburg',
