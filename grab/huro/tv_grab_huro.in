@@ -214,6 +214,7 @@ sub get_all_text ( $ );
 # Get options, including undocumented --cache option.
 XMLTV::Memoize::check_argv('XMLTV::Get_nice::get_nice_aux');
 
+
 #-------------------------------------------------------------------------------
 # domain
 #-------------------------------------------------------------------------------
@@ -314,6 +315,7 @@ sub process_table( $$$$ ) {
 
 		t "fetching url: $url";
 		worker("base-downloading");
+		$XMLTV::Get_nice::FailOnError = 1;
 		my $data=get_nice($url);
 		$tree = HTML::TreeBuilder->new_from_content($data) or 
 			die "could not fetch/parse $url (progamtable)\n";
@@ -652,6 +654,7 @@ sub get_channels() {
 
 	worker("base-downloading");
 	t "fetching $url...";
+	$XMLTV::Get_nice::FailOnError = 1;
 	my $data = get_nice($url);
 	my $tree = HTML::TreeBuilder->new_from_content($data) or
 		die "could not fetch/parse $url (channel listing)";
@@ -732,323 +735,331 @@ sub add_person ( $$$ ) {
 # returns	: none
 #-------------------------------------------------------------------------------
 sub get_infourl_data( $$ ) {
-		my $prog = shift;
-		my $d = domain();
-		my $url = "http://www.$d" .	shift;
+	my $prog = shift;
+	my $d = domain();
+	my $url = "http://www.$d" .	shift;
 
 
-		# do not grab:
-		# -> pictures: ... pls/me/picture.popup?i_area_id
-		# -> dvd rent links page: ... pls/w/logging.page_log?i_page_id=20...
-		# -> sample movie ... video.link_popup?i_object_id=18822
+	# do not grab:
+	# -> pictures: ... pls/me/picture.popup?i_area_id
+	# -> dvd rent links page: ... pls/w/logging.page_log?i_page_id=20...
+	# -> sample movie ... video.link_popup?i_object_id=18822
 
-		if ($url =~ "(picture.popup|logging.page_log|video.link_popup)") {
-			# add this url to the program
-			push @{$prog->{q(url)}}, $url;
-			t "SKIP fetching of slow url: $url";
-			return;
-		}
+	if ($url =~ "(picture.popup|logging.page_log|video.link_popup)") {
+		# add this url to the program
+		push @{$prog->{q(url)}}, $url;
+		t "SKIP fetching of slow url: $url";
+		return;
+	}
 
-		t "fetching slow url" . d $url;
+	t "fetching slow url" . d $url;
 
-		worker("slow-downloading");
-		t "fetching $url...";
-		my $data = get_nice($url);
-		my $tree = HTML::TreeBuilder->new_from_content($data) or
-			die "could not fetch/parse $url (infopage)";
+	worker("slow-downloading");
+	t "fetching $url...";
+	$XMLTV::Get_nice::FailOnError = 0;
+	my $data;
+	if (! defined($data = get_nice($url))) {
 		worker("slow-parsing");
+		warn "Could not get URL: $url, the detailed description for the program [" .
+			$prog->{channel} . ", " . $prog->{title}[0][0] . ", " . $prog->{start} .
+			"] will be not available. Error message: " . error_msg($url) . "." ;
+		return;
+	}
+	my $tree = HTML::TreeBuilder->new_from_content($data) or
+		die "could not fetch/parse $url (infopage)";
+	worker("slow-parsing");
 
-		my (@lines, $line, $anchor, $left, $right, $parent, $elem, $joined);
+	my (@lines, $line, $anchor, $left, $right, $parent, $elem, $joined);
 
-		# SUBTITLE
-		# anchor point: 
-		# the title will be tagged aw follows:
-		#							<span class="blackbigtitle"> title </span>
-		# these siblings buld the subtitle, until a table follows... e.g.:
-		#	<br><span class="txt"> ... subtitle line 1 ...<br>
-		#	<span class="bsubtitle"> ...subtitle line 2 ... </span></center><p>
-		#	<table ....
-		#	we have to search the title tag and collect the text until
-		#	table found
+	# SUBTITLE
+	# anchor point: 
+	# the title will be tagged aw follows:
+	#							<span class="blackbigtitle"> title </span>
+	# these siblings buld the subtitle, until a table follows... e.g.:
+	#	<br><span class="txt"> ... subtitle line 1 ...<br>
+	#	<span class="bsubtitle"> ...subtitle line 2 ... </span></center><p>
+	#	<table ....
+	#	we have to search the title tag and collect the text until
+	#	table found
 
-		t "suptitle parsing ...";
-		($anchor) = $tree->look_down(_tag=>"span", class=>"blackbigtitle");
-		if ($anchor) {
-			$elem = $anchor; 
-			my ($engtitle, @tmp);
-			while (($elem = $elem->right()) &&
+	t "suptitle parsing ...";
+	($anchor) = $tree->look_down(_tag=>"span", class=>"blackbigtitle");
+	if ($anchor) {
+		$elem = $anchor; 
+		my ($engtitle, @tmp);
+		while (($elem = $elem->right()) &&
+				((ref $elem) && ($elem->tag() ne "table"))) {
+			# if a whole line is sorrounded with parentheses, on port.hu
+			# this is the program' english title, add this as title and
+			# aso as subtitle: because some viewer shows only infos of
+			# selected language (so the english title will be not
+			# visible otherwise just in sub-title)
+
+			@tmp = get_all_text($elem);
+			push @lines, @tmp;
+			$line = join(' ', @tmp);
+			if (($engtitle) = $line =~ m/^\s*\(([^\)]+)\)\s*$/) {
+				push @{$prog->{q(title)}}, [$engtitle, 'en'];
+				t "engtitle added: $engtitle";
+			}
+		}
+		$joined = join(", ", @lines);
+		$joined =~ s/\xA0//;	# remove the to_text()'s results of &npsp
+		$joined =~ s/^\s+//;	# remove blanks
+		$joined =~ s/\s+$//;	# remove blanks
+		t "anchor and right sibling found, joinedlines parsed :'$joined'";
+		$prog->{q(sub-title)} = [[$joined, $COUNTRY]] if length($joined);
+	}
+
+	# LINKS:
+	# try to grab IMDB, All Movie, official web site of the program
+	# anchor point:
+	# (the Links are listed between dots, but it is not allways the 5th)
+	# (dots block, because not all blocks presented allways, so this is not)
+	# (suggested to use) the Links are listed after the text Linkek(hu)
+	# or Linkuri(ro), some line
+	# after come a 'dots' (which is in a TABLE element, so:
+	# find a span element with Linkek(hu) or Linkuri(ro) contents, get all
+	# A element until TABLE not reached
+
+	t "links parsing ...";
+	$anchor = undef;
+	my @spans = $tree->look_down(_tag => "span");
+	t "spans found: " . $#spans;
+	foreach (@spans) { 
+		if ($_->as_text() =~ /$WORDS{$COUNTRY}->{links}/) {
+			t "anchor point found";
+			$anchor = $_;
+			last;
+		}
+	}
+	my @links;
+	if ($anchor) {
+		$elem = $anchor; 
+		while (($elem = $elem->right()) &&
+				((ref $elem) && ($elem->tag() ne "table"))) {
+			foreach ($elem->find_by_tag_name("_tag"=>"a")) {
+				# is this not begins with 'https?://' add prefix
+				push @links, ($_->attr(q(href)) =~ /^https?:\/\// ? "" : "http://www.$d") .  $_->attr(q(href));
+				t "link url added: " . $_->attr(q(href)) ;
+			}
+		}
+	}
+	push @links, $url;
+
+	if (defined $prog->{q(url)}) {
+		@{$prog->{q(url)}} = ( @links, @{$prog->{q(url)}} );
+	}
+	else {
+		push @{$prog->{q(url)}}, @links;
+	}
+
+	# LONG DESCRIPTION:
+	# long descr is preceded with the following HTML block, called "dots"
+	# <table border="0" cellpadding="0" cellspacing="0" width="100%">
+	# ...
+	# <td background="/cc/hdots.gif"><img src="/cc/t.gif"
+	# ...
+	# </table>
+	# anchor point: 
+	# long desc is in the 3. block; blocks are delimited with dots (images),
+	# to get the information:
+	# after the 2. founded dots find the containing table element: this is
+	# the nearest parent table
+	# collect all text until the next table element.
+
+	t "long desc parsing ...";
+	my @dots = $tree->look_down(_tag=>"td", background => qr/hdots.gif/);
+	return if ($#dots < 1);
+	@lines = ();
+	($anchor) = $dots[1]->look_up(_tag=>"table", width=>"100%");
+	if ($anchor) {
+		$elem = $anchor; 
+		while (($elem = $elem->right()) &&
 					((ref $elem) && ($elem->tag() ne "table"))) {
-				# if a whole line is sorrounded with parentheses, on port.hu
-				# this is the program' english title, add this as title and
-				# aso as subtitle: because some viewer shows only infos of
-				# selected language (so the english title will be not
-				# visible otherwise just in sub-title)
-
-				@tmp = get_all_text($elem);
-				push @lines, @tmp;
-				$line = join(' ', @tmp);
-				if (($engtitle) = $line =~ m/^\s*\(([^\)]+)\)\s*$/) {
-					push @{$prog->{q(title)}}, [$engtitle, 'en'];
-					t "engtitle added: $engtitle";
-				}
-			}
-			$joined = join(", ", @lines);
-			$joined =~ s/\xA0//;	# remove the to_text()'s results of &npsp
-			$joined =~ s/^\s+//;	# remove blanks
-			$joined =~ s/\s+$//;	# remove blanks
-			t "anchor and right sibling found, joinedlines parsed :'$joined'";
-			$prog->{q(sub-title)} = [[$joined, $COUNTRY]] if length($joined);
-		}
-
-		# LINKS:
-		# try to grab IMDB, All Movie, official web site of the program
-		# anchor point:
-		# (the Links are listed between dots, but it is not allways the 5th)
-		# (dots block, because not all blocks presented allways, so this is not)
-		# (suggested to use) the Links are listed after the text Linkek(hu)
-		# or Linkuri(ro), some line
-		# after come a 'dots' (which is in a TABLE element, so:
-		# find a span element with Linkek(hu) or Linkuri(ro) contents, get all
-		# A element until TABLE not reached
-
-		t "links parsing ...";
-		$anchor = undef;
-		my @spans = $tree->look_down(_tag => "span");
-		t "spans found: " . $#spans;
-		foreach (@spans) { 
-			if ($_->as_text() =~ /$WORDS{$COUNTRY}->{links}/) {
-				t "anchor point found";
-				$anchor = $_;
-				last;
-			}
-		}
-		my @links;
-		if ($anchor) {
-			$elem = $anchor; 
-			while (($elem = $elem->right()) &&
-					((ref $elem) && ($elem->tag() ne "table"))) {
-				foreach ($elem->find_by_tag_name("_tag"=>"a")) {
-					# is this not begins with 'https?://' add prefix
-					push @links, ($_->attr(q(href)) =~ /^https?:\/\// ? "" : "http://www.$d") .  $_->attr(q(href));
-					t "link url added: " . $_->attr(q(href)) ;
-				}
-			}
-		}
-		push @links, $url;
-
-		if (defined $prog->{q(url)}) {
-			@{$prog->{q(url)}} = ( @links, @{$prog->{q(url)}} );
-		}
-		else {
-			push @{$prog->{q(url)}}, @links;
-		}
-
-		# LONG DESCRIPTION:
-		# long descr is preceded with the following HTML block, called "dots"
-		# <table border="0" cellpadding="0" cellspacing="0" width="100%">
-		# ...
-		# <td background="/cc/hdots.gif"><img src="/cc/t.gif"
-		# ...
-		# </table>
-		# anchor point: 
-		# long desc is in the 3. block; blocks are delimited with dots (images),
-		# to get the information:
-		# after the 2. founded dots find the containing table element: this is
-		# the nearest parent table
-		# collect all text until the next table element.
-
-		t "long desc parsing ...";
-		my @dots = $tree->look_down(_tag=>"td", background => qr/hdots.gif/);
-		return if ($#dots < 1);
-		@lines = ();
-		($anchor) = $dots[1]->look_up(_tag=>"table", width=>"100%");
-		if ($anchor) {
-			$elem = $anchor; 
-			while (($elem = $elem->right()) &&
-						((ref $elem) && ($elem->tag() ne "table"))) {
-				push @lines, get_all_text($elem);
-			}
-			$joined = join(" ", @lines);
-			$joined =~ s/\xA0//;	# remove the to_text()'s results of &npsp
-			$joined =~ s/^\s+//;	# remove blanks
-			$joined =~ s/\s+$//;	# remove blanks
-			t "long desc: anchor and right siblings found: joined:'$joined'";
-			if (length($joined)) {
-				delete($prog->{q(desc)});
-
-				# strip the desc at the specified command line option (if spec)
-				if (defined ($opt_max_desc_length) && 
-						($opt_max_desc_length < length($joined))) {
-					t "long desc was stripped, at: $opt_max_desc_length.";
-					$joined = substr($joined, 0, $opt_max_desc_length - 3) . "...";
-				}
-
-				$prog->{q(desc)} = [[ $joined, $COUNTRY ]]
-			}
-		}
-
-		# SERIES NUMBER, CATEGORY, YEAR
-		# anchor point: 1st dots
-		# all text data is in/under the left siblings of the 1.st dots
-		# and collect all text data, and parse it from known datas. the dots
-		# table is the child of a td element, which holds the usable data
-
-		return if ($#dots < 0);
-
-		if (!(($anchor) = $dots[0]->look_up(_tag=>"table", width=>"100%"))) {
-			return;
-		}
-
-		# collect all text lines (which are the left siblings of the achor), we
-		# achive this to jump to the parent first, and walk all the childs until
-		# the anchor is reached
-		@lines = ();
-		foreach $elem ($anchor->parent()->content_list()) {
-			last if ((ref $elem) && ($elem == $anchor));
 			push @lines, get_all_text($elem);
 		}
+		$joined = join(" ", @lines);
+		$joined =~ s/\xA0//;	# remove the to_text()'s results of &npsp
+		$joined =~ s/^\s+//;	# remove blanks
+		$joined =~ s/\s+$//;	# remove blanks
+		t "long desc: anchor and right siblings found: joined:'$joined'";
+		if (length($joined)) {
+			delete($prog->{q(desc)});
 
-		# 0:{we are in credits secton}, 1:{duration,year section}
-		my $section = 0;
-		my $job = "foobar";
-		my $part = "";
-		my (%credits, $episode, $minutes, $year);
-		my $person = "";
+			# strip the desc at the specified command line option (if spec)
+			if (defined ($opt_max_desc_length) && 
+					($opt_max_desc_length < length($joined))) {
+				t "long desc was stripped, at: $opt_max_desc_length.";
+				$joined = substr($joined, 0, $opt_max_desc_length - 3) . "...";
+			}
+
+			$prog->{q(desc)} = [[ $joined, $COUNTRY ]]
+		}
+	}
+
+	# SERIES NUMBER, CATEGORY, YEAR
+	# anchor point: 1st dots
+	# all text data is in/under the left siblings of the 1.st dots
+	# and collect all text data, and parse it from known datas. the dots
+	# table is the child of a td element, which holds the usable data
+
+	return if ($#dots < 0);
+
+	if (!(($anchor) = $dots[0]->look_up(_tag=>"table", width=>"100%"))) {
+		return;
+	}
+
+	# collect all text lines (which are the left siblings of the achor), we
+	# achive this to jump to the parent first, and walk all the childs until
+	# the anchor is reached
+	@lines = ();
+	foreach $elem ($anchor->parent()->content_list()) {
+		last if ((ref $elem) && ($elem == $anchor));
+		push @lines, get_all_text($elem);
+	}
+
+	# 0:{we are in credits secton}, 1:{duration,year section}
+	my $section = 0;
+	my $job = "foobar";
+	my $part = "";
+	my (%credits, $episode, $minutes, $year);
+	my $person = "";
 
 
-		foreach $line (@lines) {
-			$line =~ s/\xA0//; # remove to_text()'s results of &npsp
-			t	"processing line: '" . d $line . "'";
+	foreach $line (@lines) {
+		$line =~ s/\xA0//; # remove to_text()'s results of &npsp
+		t	"processing line: '" . d $line . "'";
 
-			foreach $part (split /, */, $line) {
+		foreach $part (split /, */, $line) {
 
-				$part =~ s/^\s+//; # remove heading blanks
-				$part =~ s/\s+$//; # remove ending blanks
-				$part =~ s/^,*$//;
+			$part =~ s/^\s+//; # remove heading blanks
+			$part =~ s/\s+$//; # remove ending blanks
+			$part =~ s/^,*$//;
 
-				next unless length $part;
-				t "processing part: '$part'";
+			next unless length $part;
+			t "processing part: '$part'";
 
-				# we are in credits block if a known hungarian "job:" found
-				$section = 1 if (($section == 0) && 
-								(($_) = $part =~ m/\b(.+):/) && 
-								(defined($JOBMAP{$_})));
+			# we are in credits block if a known hungarian "job:" found
+			$section = 1 if (($section == 0) && 
+							(($_) = $part =~ m/\b(.+):/) && 
+							(defined($JOBMAP{$_})));
 
-				if ($section == 0) {
-					# duration, year, category
-					# possibilitys
-					# 1: amerikai filmdráma sorozat, 90 perc, 2000, 2. rész
-					# 12 éven aluliak számára ....
+			if ($section == 0) {
+				# duration, year, category
+				# possibilitys
+				# 1: amerikai filmdráma sorozat, 90 perc, 2000, 2. rész
+				# 12 éven aluliak számára ....
 
-					$_ = $part;
-					SWITCH: {
-						if ((m/\s*([0-9\/]+)\. $WORDS{$COUNTRY}->{episode}/) && (! defined $episode))
-							{ $episode = $1; last SWITCH;}
-						if ((m/\s*(\d+) $WORDS{$COUNTRY}->{minute}/) && (! defined $minutes))
-							{ $minutes = $1; last SWITCH;}
-						if ((m/\s*([12][0-9]{3})/) && (! defined $year))
-							{ $year = $1; last SWITCH;}
-						{ ; } # default -> category, was processed over 
-					}
+				$_ = $part;
+				SWITCH: {
+					if ((m/\s*([0-9\/]+)\. $WORDS{$COUNTRY}->{episode}/) && (! defined $episode))
+						{ $episode = $1; last SWITCH;}
+					if ((m/\s*(\d+) $WORDS{$COUNTRY}->{minute}/) && (! defined $minutes))
+						{ $minutes = $1; last SWITCH;}
+					if ((m/\s*([12][0-9]{3})/) && (! defined $year))
+						{ $year = $1; last SWITCH;}
+					{ ; } # default -> category, was processed over 
+				}
 
-					t "found episode: '$episode'" if defined $episode;
-					t "found minutes: '$minutes'" if defined $minutes;
-					t "found year: '$year'"			 if defined $year;
-				} # section 0
-				if ($section == 1) {
-					# 
-					# is there a "hu-job:" string in the part? if yes, we should
-					# push the last readed person, and clear the person string.
-					# if a job is defined (hu-job) but not supported in the DTD
-					# we will add # the person(s) as:
-					# <actor> some_job: Foo Bar, Dummy Name, ...<actor>
-					# note: \b(.+): do not match to " író: ", because í is not
-					# part of \b
+				t "found episode: '$episode'" if defined $episode;
+				t "found minutes: '$minutes'" if defined $minutes;
+				t "found year: '$year'"			 if defined $year;
+			} # section 0
+			if ($section == 1) {
+				# 
+				# is there a "hu-job:" string in the part? if yes, we should
+				# push the last readed person, and clear the person string.
+				# if a job is defined (hu-job) but not supported in the DTD
+				# we will add # the person(s) as:
+				# <actor> some_job: Foo Bar, Dummy Name, ...<actor>
+				# note: \b(.+): do not match to " író: ", because í is not
+				# part of \b
 
-					if (($_) = $part =~ /^\s*(\S+):/) {
-						# remove the "jobname:" string
-						$part =~ s/^\s*(\S+):\s*//;
-						t "is this a known job?: '$_'";		# e.g.: hu-job 
-						if (defined($JOBMAP{$_})) {
-							t "yes, this string is a jobname";
-							# this means, we should add our until now collected
-							# person to the credits, and begin to collect new 
-							# actors...
+				if (($_) = $part =~ /^\s*(\S+):/) {
+					# remove the "jobname:" string
+					$part =~ s/^\s*(\S+):\s*//;
+					t "is this a known job?: '$_'";		# e.g.: hu-job 
+					if (defined($JOBMAP{$_})) {
+						t "yes, this string is a jobname";
+						# this means, we should add our until now collected
+						# person to the credits, and begin to collect new 
+						# actors...
 
-							add_person($job, $person, \%credits);
+						add_person($job, $person, \%credits);
 
-							if (length($JOBMAP{$_})) {
-								# newly readed part has a en-job (this is defined in DTD, so
-								# this will be the next used job for XML generation
+						if (length($JOBMAP{$_})) {
+							# newly readed part has a en-job (this is defined in DTD, so
+							# this will be the next used job for XML generation
 
-								t "job known in DTD as: $JOBMAP{$_}";
-								$job = $_;
-								$person = $part;
-							} #en-job
-							else {
-								# this job is not known in DTD, so only en-job, no hu-job;
-								# add as descriped above, set job to foobar to add as actor
-								$job = "foobar";
-								$person = "$_: $part ";
-							} #hu-job
-							next;
+							t "job known in DTD as: $JOBMAP{$_}";
+							$job = $_;
+							$person = $part;
+						} #en-job
+						else {
+							# this job is not known in DTD, so only en-job, no hu-job;
+							# add as descriped above, set job to foobar to add as actor
+							$job = "foobar";
+							$person = "$_: $part ";
 						} #hu-job
-					} #: in the part
+						next;
+					} #hu-job
+				} #: in the part
 
-					# we are here, if:
-					# -> $part holds ':' but it is no hu-job (no en-job)
-					# -> it have no :
+				# we are here, if:
+				# -> $part holds ':' but it is no hu-job (no en-job)
+				# -> it have no :
 
-					if ($part =~ /^\(.*\)$/) {
-						t "found () expression, addint it to person string";
-						# if it has the from '(...)' the found HTML was:
-						# actor: Arnold Schweizenegger (as the Terminator)
-						# add this to persons and do not push, it. 
+				if ($part =~ /^\(.*\)$/) {
+					t "found () expression, addint it to person string";
+					# if it has the from '(...)' the found HTML was:
+					# actor: Arnold Schweizenegger (as the Terminator)
+					# add this to persons and do not push, it. 
+					$person .= " $part";
+				}
+				else {
+					# this is a new name, check how looks person, if it ends
+					# with ":" do not add this to credits, only append, because in the
+					# previuos iteration only hu-job was found.
+					if ($person =~ /:\s*$/) {
 						$person .= " $part";
 					}
 					else {
-						# this is a new name, check how looks person, if it ends
-						# with ":" do not add this to credits, only append, because in the
-						# previuos iteration only hu-job was found.
-						if ($person =~ /:\s*$/) {
-							$person .= " $part";
-						}
-						else {
-							add_person($job, $person, \%credits);
-							$person = $part;
-						}
+						add_person($job, $person, \%credits);
+						$person = $part;
 					}
-				} #section 1
-			} #loop over parts
-		} #loop over $lines
+				}
+			} #section 1
+		} #loop over parts
+	} #loop over $lines
 
-		# add the last processed data to credits...
-		add_person($job, $person, \%credits) if length($person);
+	# add the last processed data to credits...
+	add_person($job, $person, \%credits) if length($person);
 
-		t "CREDITS: " . d \%credits;
+	t "CREDITS: " . d \%credits;
 
-		#$prog->{q(category)} = [[ $category, $COUNTRY ]]
-			#if defined $category and length $category;
+	#$prog->{q(category)} = [[ $category, $COUNTRY ]]
+		#if defined $category and length $category;
 
-		$prog->{q(length)} = $minutes * 60
-			if defined $minutes;
+	$prog->{q(length)} = $minutes * 60
+		if defined $minutes;
 
-		$prog->{q(date)} = $year
-			if defined $year ;
+	$prog->{q(date)} = $year
+		if defined $year ;
 
-		if(defined($episode)) {
-			if($episode =~ m#(\d+)/(\d+)#) {
-				# episode-num spec with the total number specified.
-				# however XMLTV counts from 0 on ...
-				$prog->{q(episode-num)} = [[ sprintf('%d/%d', $1 - 1, $2), "xmltv-ns" ]];
-			}
-			else {
-				$prog->{q(episode-num)} = [[ $episode, "onscreen" ]];
-			}
+	if(defined($episode)) {
+		if($episode =~ m#(\d+)/(\d+)#) {
+			# episode-num spec with the total number specified.
+			# however XMLTV counts from 0 on ...
+			$prog->{q(episode-num)} = [[ sprintf('%d/%d', $1 - 1, $2), "xmltv-ns" ]];
 		}
+		else {
+			$prog->{q(episode-num)} = [[ $episode, "onscreen" ]];
+		}
+	}
 
-		$prog->{q(credits)} = \%credits;
-		$tree->delete;
+	$prog->{q(credits)} = \%credits;
+	$tree->delete;
 }
 
 
@@ -1069,6 +1080,9 @@ sub grab_icon( $ ) {
 
 	return $fetchurl if ($opt_icons && ! $opt_local_icons);
 
+	# create directory
+	mkdir $opt_local_icons unless (-d $opt_local_icons);
+
 	# remove multiple /;	make absoluth path 
 	$_ = "${opt_local_icons}/${channelid}.gif";
 	s!//!/!g;
@@ -1078,8 +1092,6 @@ sub grab_icon( $ ) {
 
 	return $iconurl	if ($opt_local_icons && $opt_no_fetch_icons);
 
-	# create directory
-	mkdir $opt_local_icons unless (-d $opt_local_icons);
 	if (! -d $opt_local_icons) {
 		warn "directory not exists, and cannot create: $opt_local_icons; " .
 				"icon will be not grabbed";
@@ -1088,19 +1100,27 @@ sub grab_icon( $ ) {
 
 	if (open(FILE,">$file")) {
 		t "fetching $fetchurl...";
+		$XMLTV::Get_nice::FailOnError = 0;
 		if (my $image = get_nice($fetchurl)) {
-			t "icon grabbed successfully";
+			t "icon for $channelid grabbed successfully";
 			print FILE $image;
 			close FILE;
 			# success
 			return $iconurl;
 		}
 		else {
-			warn "cannot create icon file ($file), using remote URL instead";
+			warn "Could not download channel-logo for channel $channelid, using remote URL instead. " .
+				"Error message: " . error_msg($fetchurl) . ".";
 			close FILE;
 			unlink $file;
 			return $fetchurl;
 		}
+	}
+	else {
+		warn "cannot create icon file ($file) for channel $channelid, using remote URL instead";
+		close FILE;
+		unlink $file;
+		return $fetchurl;
 	}
 	return;
 }
@@ -1116,29 +1136,38 @@ sub grab_icon( $ ) {
 # returns	: array of urls pointing to tha channel's pages/emails
 #-------------------------------------------------------------------------------
 sub get_channel_urls( $ ) {
-	my $tree = shift;
+	my $ch_did = shift;
 	my @result = ();
-	my $portchurl;
+    my $chdata;
 
-	# this is a channel id -> grab page first
-	if (! ref $tree) {
-		# get page to grab official URL for the channel: HBO -> www.hbo.hu
-		my $ch_did = $tree;
-		# two sprintf parameters: first: channel_id,, second how many days grabbed
-		my $churlfmt = "http://www." . domain() .
-			"/pls/tv/tv.channel?i_ch=%d&" .
-			"i_days=1&i_xday=%d&i_where=1";
-		my $churl = sprintf($churlfmt, $ch_did, 1);
-		$portchurl = sprintf($churlfmt, $ch_did, 3);
+	# two sprintf parameters: first: channel_id,, second how many days grabbed
+	my $churlfmt = "http://www." . domain() .
+		"/pls/tv/tv.channel?i_ch=%d&" .
+		"i_days=1&i_xday=%d&i_where=1";
 
-		t "fetching page for channel urls: $churl\n";
-		worker("base-downloading");
-		t "fetching $churl...";
-		my $chdata = get_nice($churl);
-		$tree = HTML::TreeBuilder->new_from_content($chdata) or
-			die "could not fetch/parse $churl (channel infopage)";
+    # url to grab now (1 days)
+	my $churl = sprintf($churlfmt, $ch_did, 1);
+
+    # url to add as the information source (3 days)
+	my $portchurl = sprintf($churlfmt, $ch_did, 3);
+
+	t "fetching page for channel urls: $churl\n";
+	worker("base-downloading");
+
+	t "fetching $churl...";
+	$XMLTV::Get_nice::FailOnError = 0;
+
+	if (! defined($chdata = get_nice($churl))) {
 		worker("base-parsing");
+		warn "Could not get URL: $churl, the information urls for the channel $ch_did will be not available. " .
+			"Error message: " . error_msg($churl) . ".";
+		push @result, $portchurl;
+		return @result;
 	}
+
+	my $tree = HTML::TreeBuilder->new_from_content($chdata) or
+		die "could not fetch/parse $churl (channel infopage)";
+	worker("base-parsing");
 
 	my ($anchor, $elem);
 	# we have to way to find the channel URLs: 
