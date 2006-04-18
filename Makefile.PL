@@ -282,8 +282,7 @@ my @opt_components
      { name => 'tv_grab_br_net',
        blurb => 'Grabber for Brazil NET Cable',
        exes => [ 'grab/br_net/tv_grab_br_net' ],
-       prereqs => { 'HTML::Entities' => 1.27 , 
-		    'WWW::Mechanize' => 1.16 ,
+       prereqs => { 'WWW::Mechanize' => 1.16 ,
 		    'HTTP::Cookies' => 1.39 , }
      },
 
