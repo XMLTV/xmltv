@@ -979,7 +979,7 @@ END
 	$inherited .= "\n\t\@\$(NOOP)\n";
 	
 	# And realclean should remove them, by calling realclean_$filetype.
-	$inherited =~ s/^(\s*realclean\s+::\s.+)/$1 realclean_$filetype/m or die;
+	$inherited =~ s/^(\s*realclean\s+::\s[^\\]+)/$1 realclean_$filetype /m or die;
 	$inherited .= "realclean_$filetype ::\n\t\$(RM_F) ";
 	foreach (sort keys %files) {
 	    my $inst_pos = $files{$_};
