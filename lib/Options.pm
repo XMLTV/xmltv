@@ -313,12 +313,12 @@ sub ParseOptions
 	eval {
 	    require XMLTV;
 	    print "XMLTV module version $XMLTV::VERSION\n";
-	};
-	print "could not load XMLTV module, xmltv is not properly installed\n";
+	} or print 
+	    "could not load XMLTV module, xmltv is not properly installed\n";
 
 	if( $p->{version} =~ m!\$Id: [^,]+,v (\S+) ([0-9/: -]+)! ) 
 	{
-	    print "This is $p->{grabber_name} version $2, $3\n";
+	    print "This is $p->{grabber_name} version $1, $2\n";
 	}
 	else 
 	{
