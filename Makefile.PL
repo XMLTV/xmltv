@@ -392,6 +392,11 @@ my @opt_components
 #       exes => [ 'grab/es_digital/tv_grab_es_digital' ],
 #       prereqs => { 'HTML::TreeBuilder' => 0 } },
 
+     { name => 'tv_grab_es_laguiatv',
+       blurb => 'Alternative grabber for Spain',
+       exes => [ 'grab/es_laguiatv/tv_grab_es_laguiatv' ],
+       prereqs => { 'HTML::TreeBuilder' => 0 } },
+
      { name => 'tv_grab_nl',
        blurb => 'Grabber for the Netherlands',
        exes => [ 'grab/nl/tv_grab_nl' ],
