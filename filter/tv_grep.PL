@@ -16,8 +16,8 @@ require 'filter/Grep.pm';
 
 my $out = shift @ARGV; die "no output file given" if not defined $out;
 my $in = 'filter/tv_grep.in';
-my $out_fh = new IO::File "> $out" or die "cannot write to $out: $!";
 my $in_fh = new IO::File "< $in" or die "cannot read $in: $!";
+my $out_fh = new IO::File "> $out" or die "cannot write to $out: $!";
 while (<$in_fh>) {
     if (/^\s*\@PROGRAMME_CONTENT_TESTS\s*$/) {
 	# Query XMLTV.pm to find out what keys of programme exist.

@@ -283,8 +283,8 @@ my $in  = 'grab/it/tv_grab_it.in';
 
 #warn "lang e' $LANG deflang e' $LANG_STR\n";
 
-open(OUT_FH, ">$out") or die "cannot write to $out: $!";
 open(IN_FH, $in) or die "cannot read $in: $!";
+open(OUT_FH, ">$out") or die "cannot write to $out: $!";
 
 while (<IN_FH>) {
     if (/^my \$POD_GOES_HERE;$/) {

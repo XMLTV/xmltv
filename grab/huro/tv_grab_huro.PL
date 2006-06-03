@@ -12,8 +12,8 @@ my $out = shift @ARGV; die "no output file given" if not defined $out;
 my $share_dir = shift @ARGV;
 die "no final share/ location given" if not defined $share_dir;
 my $in = 'grab/huro/tv_grab_huro.in';
-my $out_fh = new IO::File "> $out" or die "cannot write to $out: $!";
 my $in_fh = new IO::File "< $in" or die "cannot read $in: $!";
+my $out_fh = new IO::File "> $out" or die "cannot write to $out: $!";
 my $seen = 0;
 # example line: 
 #     my $SHARE_DIR = undef;
