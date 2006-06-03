@@ -284,7 +284,11 @@ sub ParseOptions
 
     foreach my $cap (@{$p->{capabilities}})
     {
-	croak "Unknown capability $cap" unless exists $cap_options{$cap};
+	if (not exists $cap_options{$cap})
+	{
+	    my @known = sort keys %cap_options;
+	    croak "Unknown capability $cap (known: @known)";
+	}
 	
 	push( @optdef, @{$cap_options{$cap}} );
 	hash_push( $opt, $cap_defaults{$cap} );
