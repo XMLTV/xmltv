@@ -240,7 +240,8 @@ if ($opt_days) {
       if not defined $use_days;
     warn "rounding up to $use_days days (must be one of @allowed_days)\n"
       if $use_days != $opt_days;
-# OK, now $use_days has the number of days to grab starting from now.
+# OK, now $use_days has the number of days to grab starting from now,
+# if that was specified on the command line.
 }
 
 # Default retries = 3;
@@ -278,6 +279,12 @@ my %channels;
 my %options;
 
 read_config(\%channels);
+
+if (not defined $use_days) {
+    # Not got from command line or config file; default it.
+    $use_days = 14;
+}
+
 
 $opt_mnet_fallback = 1 if !(defined $opt_mnet_fallback  || defined $opt_dstv_fallback);
 
@@ -377,6 +384,7 @@ sub dstv_channel_uri( $ ) {
 	my $ch = shift;
 	my $mapped = dstv_channel_map($ch);
 	die "cannot look up '$ch' in map" if not defined $mapped;
+	die if not defined $use_days;
 	my $days_param = $use_days == 1 ? 0 : $use_days;
 	return "http://www.dstv.com/DStv_Guide/print.aspx?Channel=$mapped&time=$days_param&submit=true&Channels";
 }
@@ -1153,9 +1161,6 @@ sub get_dstv_time_mappings() {
 				}
 			  
 			}
-            if (not defined $use_days) {
-                $use_days = 14;
-            }
 		}
 	}
 
@@ -1191,6 +1196,13 @@ sub get_mnet() {
 	my $res;
  
 	my $chanid = mnet_channel_map($channame); 
+	if (not defined $chanid) {
+	    my $msg = "cannot look up '$channame' in map";
+	    warn $msg;
+	    # This seems to be the convention for returning errors.
+	    return ":error:$msg";
+	}
+
 	my $start_date = POSIX::strftime("%Y/%m/%d", localtime(time()));
 	my $end_date = POSIX::strftime("%Y/%m/%d", localtime(time()+(($use_days-1)*86400)));
 	my %info = (
@@ -1205,44 +1217,6 @@ sub get_mnet() {
 	);
 	t "getting channel: $channame (ID = $chanid)";
  	$data = get_url("POST", "http://www.mnet.co.za/schedules/default.asp", 'http://www.mnet.co.za/schedules/default.asp', undef, \%info);
- 	
-#	while ($tries < $opt_retries && not defined $data) {
-#		$tries++;
-#		my $chanid = mnet_channel_map($channame);
-#		my $url = "http://www.mnet.co.za/schedules/default.asp";
-#		t "getting channel: $channame (ID = $chanid)";
-#
-#	my $start_date = POSIX::strftime("%Y/%m/%d", localtime(time()));
-#		my $end_date = POSIX::strftime("%Y/%m/%d", localtime(time()+(($use_days-1)*86400)));
-
-#		$res = $ua->post( $url,
-#			[  'startDate' => $start_date,
-#			   'EndDate' => $end_date, 
-#			   'sType' => '5', 
-#			   'channelid' => $chanid, 
-#			   'searchstring' => '', 
-#			   'channel' => $chanid, 
-#			   'theType' => 'today', 
-#			   'firstRun' => 'false', 
-#			],
-#			'Accept-Encoding' => 'gzip',
-#			'Referer' => 'http://www.mnet.co.za/schedules/default.asp',
-#			);
-
-#		if ($res->is_success) {
-#			if (($res->headers()->header('Content-Encoding')) && 
-#				($res->headers()->header('Content-Encoding') eq 'gzip')) {
-#					$res->content(Compress::Zlib::memGunzip($res->content));
-#			}
-#			if ($res->content =~ /did not return any results/) {
-#				t "No results found - skipping";
-#				$data = ":error:no data:";   
-#			} else {
-#				$data = $res->content;
-#			}
-#		}
-#	}
-#	if (not $data) {$data = ":error:maximum retries:"};   
 	return $data;
 }
 
@@ -1293,57 +1267,53 @@ sub initialise_ua {
 
 
 sub read_config {
-	my $channels = shift;
-	my $options = shift;
+    my $channels = shift;
+    my $options = shift;
 	
-	my @config_lines = XMLTV::Config_file::read_lines($config_file);
+    my @config_lines = XMLTV::Config_file::read_lines($config_file);
 	
 	
-	# Read configuration.
-	my $line_num = 1;
-	foreach (@config_lines) {
-		++ $line_num;
-		next if not defined;
-		s/#.*//g;
-		next if /^\s+$/;
-		s/\s+$//g;
-		if (/^channel/) {
-			my (undef, $chanid, $name) = split(/\s+/, $_, 3);
-			$channels->{$chanid} = $name;
-		}
-		if (/^option/) {
-			my (undef, $conf_option, $conf_value) = split(/\s+/, $_, 3);
-			
-			$opt_opentime = 1 if $conf_option eq 'opentime';
-			$opt_opentime_combined = 1 if $conf_option eq 'opentime-combined';
-			$opt_mnet_fallback = 1 if $conf_option eq 'mnet-fallback';
-			$opt_dstv_fallback = 1 if $conf_option eq 'dstv-fallback';
-			$opt_retries = $conf_value if $conf_option eq 'retries';
-			$ua->timeout($conf_value) if $conf_option eq 'timeout';
-			
-			if ($conf_option eq 'days') {
-				if (defined $opt_days or defined $opt_offset) {
-					# Day stuff was given on the command line.  This
-					# should override whatever's in the config file.
-					#
-				} else {
-					# Set the number of days from the config file.  It
-					# must be one of the numbers allowed by the site.
-					$use_days = $conf_value;
-					die "bad number of days $use_days in config file\n"
-						if not grep { $_ == $use_days } @allowed_days;
-				}
-			}
-            if (not defined $use_days) {
-                $use_days = 14;
-            }
-		}
+    # Read configuration.
+    my $line_num = 1;
+    foreach (@config_lines) {
+	++ $line_num;
+	next if not defined;
+	s/#.*//g;
+	next if /^\s+$/;
+	s/\s+$//g;
+	if (/^channel/) {
+	    my (undef, $chanid, $name) = split(/\s+/, $_, 3);
+	    $channels->{$chanid} = $name;
 	}
-	die 'config file: --opentime and --opentime-combined are mutually exclusive' 
-		if (defined $opt_opentime && $opt_opentime_combined);
-	die 'config file: --mnet-fallback and --dstv-fallback are mutually exclusive' 
-		if (defined $opt_mnet_fallback && $opt_dstv_fallback);
-
+	if (/^option/) {
+	    my (undef, $conf_option, $conf_value) = split(/\s+/, $_, 3);
+			
+	    $opt_opentime = 1 if $conf_option eq 'opentime';
+	    $opt_opentime_combined = 1 if $conf_option eq 'opentime-combined';
+	    $opt_mnet_fallback = 1 if $conf_option eq 'mnet-fallback';
+	    $opt_dstv_fallback = 1 if $conf_option eq 'dstv-fallback';
+	    $opt_retries = $conf_value if $conf_option eq 'retries';
+	    $ua->timeout($conf_value) if $conf_option eq 'timeout';
+			
+	    if ($conf_option eq 'days') {
+		if (defined $opt_days or defined $opt_offset) {
+		    # Day stuff was given on the command line.  This
+		    # should override whatever's in the config file.
+		    #
+		} else {
+		    # Set the number of days from the config file.  It
+		    # must be one of the numbers allowed by the site.
+		    $use_days = $conf_value;
+		    die "bad number of days $use_days in config file\n"
+		      if not grep { $_ == $use_days } @allowed_days;
+		}
+	    }
+	}
+    }
+    die 'config file: --opentime and --opentime-combined are mutually exclusive' 
+      if (defined $opt_opentime && $opt_opentime_combined);
+    die 'config file: --mnet-fallback and --dstv-fallback are mutually exclusive' 
+      if (defined $opt_mnet_fallback && $opt_dstv_fallback);
 }
 
 sub get_url($$$$$) {
