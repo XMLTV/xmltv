@@ -6,7 +6,7 @@ use warnings;
 BEGIN {
     use Exporter   ();
     our (@ISA, @EXPORT, @EXPORT_OK, %EXPORT_TAGS);
-    
+
     @ISA         = qw(Exporter);
     @EXPORT      = qw( );
     %EXPORT_TAGS = ( );     # eg: TAG => [ qw!name1 name2! ],
@@ -47,7 +47,7 @@ my %cap_options = (
 			   description
 			   /],
 		   baseline => [qw/
-				days=i 
+				days=i
 				offset=i
 				quiet
 				output=s
@@ -56,7 +56,7 @@ my %cap_options = (
 				/],
 		   manualconfig => [qw/configure/],
 		   apiconfig => [qw/
-				 configure-api 
+				 configure-api
 				 stage=s
 				 list-channels
 				 /],
@@ -72,14 +72,14 @@ my %cap_options = (
 		   );
 
 my %cap_defaults = (
-		    all => { 
+		    all => {
 			capabilities => 0,
 			help => 0,
 			version => 0,
 		    },
 		    baseline => {
 			quiet => 0,
-			days => 5, 
+			days => 5,
 			offset => 0,
 			output => undef,
 			debug => 0,
@@ -110,7 +110,7 @@ ParseOptions shall be called by a grabber to parse the command-line
 options supplied by the user. It takes a single hashref as a parameter.
 The entries in the hash configure the behaviour of ParseOptions.
 
-  my( $opt, $conf ) = ParseOptions( { 
+  my( $opt, $conf ) = ParseOptions( {
     grabber_name => 'tv_grab_test',
     version => '$Id$',
     description => 'Sweden (tv.swedb.se)',
@@ -123,10 +123,10 @@ ParseOptions returns two hashrefs:
 
 =over
 
-=item * 
+=item *
 
 A hashref with the values for all command-line options in the
-format returned by Getopt::Long (See "Storing options in a hash" in 
+format returned by Getopt::Long (See "Storing options in a hash" in
 L<Getopt::Long>). This includes both options that the grabber
 must handle as well as options that ParseOptions handles for the grabber.
 
@@ -145,7 +145,7 @@ ParseOptions handles the following options automatically without returning:
 
 =item --capabilities
 
-=item --version 
+=item --version
 
 =item --description
 
@@ -208,26 +208,26 @@ Required. This shall be a cvs Id field.
 =item capabilities
 
 Required. The capabilities that the grabber shall support. Only capabilities
-that XMLTV::Options know how to handle can be specified. Example: 
+that XMLTV::Options know how to handle can be specified. Example:
 
   capabilities => [qw/baseline manualconfig apiconfig/],
 
 Note that XMLTV::Options guarantee that the grabber supports the manualconfig
 and apiconfig capabilities. The capabilities share and cache can be
 specified if the grabber supports them. XMLTV::Options will then automatically
-accept the command-line parameters --share and --cache respectively. 
+accept the command-line parameters --share and --cache respectively.
 
 =item stage_sub
 
-Required. A coderef that takes a stage-name 
-and a configuration hashref as a parameter and returns an 
-xml-string that describes the configuration necessary for that stage. 
+Required. A coderef that takes a stage-name
+and a configuration hashref as a parameter and returns an
+xml-string that describes the configuration necessary for that stage.
 The xml-string shall follow the xmltv-configuration.dtd.
 
 =item listchannels_sub
 
-Required. listchannels_sub shall be a coderef that takes a configuration 
-hash as returned by XMLTV::Configure::LoadConfig as the first parameter 
+Required. listchannels_sub shall be a coderef that takes a configuration
+hash as returned by XMLTV::Configure::LoadConfig as the first parameter
 and an option hash as returned by
 ParseOptions as the second parameter and returns an xml-string
 containing a list of all the channels that the grabber can deliver
@@ -238,7 +238,7 @@ shall not use any channel-configuration from the hashref.
 
 Optional. Default undef. A coderef that takes a filename as a parameter
 and returns a configuration hash in the same format as returned by
-XMLTV::Configure::LoadConfig. load_old_config_sub is called if 
+XMLTV::Configure::LoadConfig. load_old_config_sub is called if
 XMLTV::Configure::LoadConfig fails to parse the configuration file. This
 allows the grabber to load configuration files created with an older
 version of the grabber.
@@ -246,7 +246,7 @@ version of the grabber.
 =item defaults
 
 Optional. Default {}. A hashref that contains default values for the
-command-line options. It shall be in the same format as returned by 
+command-line options. It shall be in the same format as returned by
 Getopt::Long (See "Storing options in a hash" in  L<Getopt::Long>).
 
 =item extra_options
@@ -262,10 +262,10 @@ options. The use of grabber-specific options is discouraged.
 sub ParseOptions
 {
     my( $p ) = @_;
-    
+
     my @optdef=();
     my $opt={};
-    
+
     if( not defined( $p->{version} ) )
     {
 	croak "No version specified in call to ParseOptions";
@@ -278,10 +278,10 @@ sub ParseOptions
 
     push( @optdef, @{$cap_options{all}} );
     hash_push( $opt, $cap_defaults{all} );
-    
+
     $opt->{'config-file'} = XMLTV::Config_file::filename(
 	 undef, $p->{grabber_name}, 1 );
-    
+
     foreach my $cap (@{$p->{capabilities}})
     {
 	croak "Unknown capability $cap" unless exists $cap_options{$cap};
@@ -289,15 +289,15 @@ sub ParseOptions
 	push( @optdef, @{$cap_options{$cap}} );
 	hash_push( $opt, $cap_defaults{$cap} );
     }
-    
+
     push( @optdef, @{$p->{extra_options}} )
 	if( defined( $p->{extra_options} ) );
-    
+
     hash_push( $opt, $p->{defaults} )
 	if( defined( $p->{defaults} ) );
-    
+
     my $res = GetOptions( $opt, @optdef );
-    
+
     if( (not $res) || $opt->{help} || scalar( @ARGV ) > 0 )
     {
 	PrintUsage( $p );
@@ -313,14 +313,14 @@ sub ParseOptions
 	eval {
 	    require XMLTV;
 	    print "XMLTV module version $XMLTV::VERSION\n";
-	} or print 
+	} or print
 	    "could not load XMLTV module, xmltv is not properly installed\n";
 
-	if( $p->{version} =~ m!\$Id: [^,]+,v (\S+) ([0-9/: -]+)! ) 
+	if( $p->{version} =~ m!\$Id: [^,]+,v (\S+) ([0-9/: -]+)! )
 	{
 	    print "This is $p->{grabber_name} version $1, $2\n";
 	}
-	else 
+	else
 	{
 	    croak "Invalid version $p->{version}";
 	}
@@ -332,7 +332,7 @@ sub ParseOptions
 	print $p->{description} . "\n";
 	exit 0;
     }
-    
+
     XMLTV::Ask::init($opt->{gui});
 
     if( defined( $opt->{output} ) )
@@ -346,20 +346,20 @@ sub ParseOptions
 	# Redirect STDOUT to the file.
 	select( OUT );
     }
-    
+
     if( $opt->{configure} )
     {
 	Configure( $p->{stage_sub}, $p->{listchannels_sub},
 		   $opt->{"config-file"}, $opt );
 	exit 0;
     }
-    
+
     my $conf = LoadConfig( $opt->{'config-file'} );
     if( not defined( $conf ) and defined( $p->{load_old_config_sub} ) )
     {
 	$conf = &{$p->{load_old_config_sub}}( $opt->{'config-file'} );
     }
-   
+
     if( $opt->{"configure-api"} )
     {
 	if( (not defined $conf) and ( $opt->{stage} ne 'start' ) )
@@ -375,12 +375,12 @@ sub ParseOptions
 	}
 	else
 	{
-	    print &{$p->{stage_sub}}( $opt->{stage}, 
+	    print &{$p->{stage_sub}}( $opt->{stage},
 				      LoadConfig( $opt->{"config-file"} ) );
 	}
 	exit 0;
     }
-    
+
     if( $opt->{"list-channels"} )
     {
 	if( not defined( $conf ) )
@@ -394,7 +394,7 @@ sub ParseOptions
 	
 	exit 0;
     }
-   
+
     if( not defined( $conf ) )
     {
 	print STDERR "You need to configure the grabber by running it with --configure";
@@ -407,10 +407,10 @@ sub ParseOptions
 sub PrintUsage
 {
     my( $p ) = @_;
-    
+
     my $gn = $p->{grabber_name};
     my $en = " " x length( $gn );
-    
+
     print qq/
 $gn --help
 	
@@ -425,7 +425,7 @@ $gn --description
     if( supports( "baseline", $p ) )
     {
 	print qq/
-$gn [--config-file FILE] 
+$gn [--config-file FILE]
 $en [--days N] [--offset N]
 $en [--output FILE] [--quiet] [--debug]
 /;
@@ -437,15 +437,15 @@ $en [--output FILE] [--quiet] [--debug]
 $gn --configure [--config-file FILE]
 /;
  }
-    
+
     if( supports( "apiconfig", $p ) )
     {
 	print qq/
 $gn --configure-api [--stage NAME]
-$en [--config-file FILE] 
+$en [--config-file FILE]
 $en [--output FILE]
 
-$gn --list-channels [--config-file FILE] 
+$gn --list-channels [--config-file FILE]
 $en [--output FILE] [--quiet] [--debug]
 /;
     }
@@ -454,7 +454,7 @@ $en [--output FILE] [--quiet] [--debug]
 sub supports
 {
     my( $cap, $p ) = @_;
-    
+
     foreach my $sc (@{$p->{capabilities}})
     {
 	return 1 if( $sc eq $cap );
@@ -473,7 +473,7 @@ sub hash_push
 
 1;
 
-   
+
 =head1 COPYRIGHT
 
 Copyright (C) 2005,2006 Mattias Holmlund.
