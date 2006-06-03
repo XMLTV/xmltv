@@ -166,7 +166,7 @@ my %prereqs
      'XML::Parser' => 2.34,
      'XML::Twig'   => 3.10,
      'Date::Manip' => 5.42,
-     'XML::Writer' => '0.4.6',
+     'XML::Writer' => 0.600,
      'Memoize'     => 0,
      'Storable'    => 2.04,
     );

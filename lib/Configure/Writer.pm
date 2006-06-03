@@ -14,7 +14,7 @@ BEGIN {
 }
 our @EXPORT_OK;
 
-use XML::Writer;
+use XML::Writer 0.600;
 use base 'XML::Writer';
 use Carp;
 
