@@ -363,8 +363,9 @@ my @opt_components
        deps     => [ 'grab/na_icons/tv_grab_na_icons' => [ 'grab/na_icons/tv_grab_na_icons.in' ] ],
        pl_files => { 'grab/na_icons/tv_grab_na_icons.PL' => 'grab/na_icons/tv_grab_na_icons' },
        to_clean => [ 'grab/na_icons/tv_grab_na_icons' ],
-       prereqs  => { 'HTML::TableExtract' => 0,
-                    'WWW::Mechanize' => 1.02 },
+       prereqs  => { 'HTML::TreeBuilder' => 0,
+                     'XML::Twig'         => 0,
+                     'WWW::Mechanize' => 1.02 },
        grab_need_share => [ 'na_icons' ],
      },
 

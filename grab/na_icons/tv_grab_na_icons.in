@@ -69,11 +69,13 @@ Robert Eden
 =cut 
 
 use strict;
+use open qw(:utf8);
 use Getopt::Long;
 use Data::Dumper;
 use File::Basename;
-use HTML::TableExtract;
 use WWW::Mechanize 1.02;
+use HTML::TreeBuilder;
+use XML::Twig;
 
 use XMLTV;
 use XMLTV::Ask;
@@ -92,6 +94,7 @@ my $opt_debug=0;
 my $opt_links=0;
 my $SHARE_DIR = '/share';
 my $fileno=0;
+my $file=undef;
 
 GetOptions(
 	   'help'          => \$opt_help,
@@ -129,7 +132,18 @@ while (1)
     $a->field("zipcode",$zip);
     $a->submit;
     check_page($a);
+#
+# bug in zap2it.com, zip not being picked up from first page, try next page
+#
+    if (grep(/Enter ZIP for local listings/,$a->content)) {
+        die "Can't find zipcode form\n" unless find_form($a,"zipcode");
+        print STDERR "Submitting zip code $zip (again)\n" if $opt_debug;
+        $a->field("zipcode",$zip);
+        $a->submit;
+        check_page($a);
+    }
     last if grep(/No Provider Selected/,$a->content);
+    last if grep(/Please select your provider/,$a->content);
     print "  Invalid Postal Code, try again\n";
 }
 
@@ -137,74 +151,77 @@ while (1)
 # select lineup
 #
 {
-    die "Can't find provider form\n" unless find_form($a,"provider");
+    my %lineups=();
+    my $def_lineup=undef;
+    foreach $_ ($a->links) {
+        next unless ($_->url =~ /lineupId=(.+)/ );
+        my $name=$_->text;
+           $name =~ s/\xa0//g; # drop bad characters
 
-    my $field=$a->current_form->find_input("provider");
-    my @names=$field->value_names;
-    my @ids  =$field->possible_values;
-    map {s/\xa0//g} @names;  # remove non-breaking spaces
-
-    my $name=$names[0];    
-    $name=ask_choice("\nLineup?",$name,@names);
-
-    foreach (0..$#names)
-    {
-        next unless $names[$_] eq $name;
-        print STDERR "Setting provider $ids[$_]\n" if $opt_debug;
-        $a->field("provider",$ids[$_]);
-        last;
+        print "Lineup $name\n" if $opt_debug;
+        $lineups{$name}=\%$_;
+        $def_lineup=$name unless defined $def_lineup;
     }
-    print STDERR "Clicking form\n" if $opt_debug;
-    $a->click;
+    
+#print "Link: ", Dumper($_)  foreach $a->links();
+
+    die "Can't find provider links\n" unless defined $def_lineup;
+
+    my $name=$def_lineup;
+    $name=ask_choice("\nLineup?",$name,sort keys %lineups);
+
+    print STDERR "getting lineup $lineups{$name}\n" if $opt_debug;
+#print Dumper($lineups{$name});
+    $a->follow_link(url => $lineups{$name}->url);
     check_page($a);
-}
+} # select lineup
     
 #
 # select all channels
 #
-    die "Can't find rowdisplay form\n" unless find_form($a,"rowdisplay");
-    print STDERR "Selecting all channels\n" if $opt_debug;
-    $a->field("rowdisplay",0);
-    $a->click;
+    print "Display All Channels\n" if $opt_debug;
+    $a->follow_link(text_regex => qr/ALL CHANNELS/i) || die "Can't find all channels link\n";
     check_page($a);
 
 #
-# set up handlers to extract the text and images from our table;
-# 
+# Convert HTML to XML
+#
+# we can use TWIG to do this because we need to use utf8_mode to avoid a warning
+#
+my $tree = HTML::TreeBuilder->new; # empty tree
+   $tree->utf8_mode(1);
+   $tree->parse($a->content);
+my $xml = $tree->as_XML;
+
+#
+# Now parse the XML
+#
 my $image;
 my %icons;
-my $p = HTML::Parser->new;
-$p->report_tags(["img"]);
-$p->handler(start =>  sub { $image=$_[0]->{src}          },'attr');
-$p->handler(text  =>  sub { $_=$_[0];
-                            s/\s//g;
-                            return unless length($_);
-                            return unless defined $image;
-                            return if     /--if/;
-                            return if     /^\d+$/;
-                            return if     $image =~ /ads.zap2it/;
-                            $icons{$_}=$image;
-                            $image=undef;
-                                                         },'text');
+my $twig=XML::Twig->new(   
+         twig_roots    => { html => 1},
+		 twig_handlers => 
+		      {
+		         td  => sub {
+                                  my $img_el;
+                                  if (defined  $_->att('class')
+                                            && $_->att('class') eq 'channel') {
+                                      my $name=$_ -> parent_trimmed_text;
+                                      $name=~s/^([\.\d]+) //; # trim leading channel number
 
-
-#
-# Now parse the page to get the right column 
-# can't use column headers, there are none!
-#
-my $te = new HTML::TableExtract( depth => 2, count => 1 , keep_html => 1);
-$te->parse($a->content);
-
-#
-# step through results, run the column through the parser above
-#
-for my $ts ($te->table_states)
-{
-   for my $row ($ts->rows)
-   {
-      $p->parse($row->[0]);
-   }
-}
+                                      if ( $img_el=$_ -> first_child_matches('img')) {
+                                          $icons{$name}=$img_el->att('src');
+                                          print "Got $name->$icons{$name}\n" if $opt_debug;
+                                      }
+                                      else {
+                                          print "Got $name but no image\n" if $opt_debug;
+                                      }
+                                  }
+                                  $_->twig->purge;
+                                  return 0;
+		         }
+		      });
+$twig->parse_html($xml);
 
 #
 # check for problems
@@ -223,10 +240,10 @@ unless (keys %icons)
 my $base=$a->base;
 foreach (sort keys %icons)
 {
-    my $image=URI->new_abs($icons{$_},$base);
+    $image=URI->new_abs($icons{$_},$base);
     if ($opt_links)
     {
-        my $file="$SHARE_DIR/icons/$_.url";
+        $file="$SHARE_DIR/icons/$_.url";
         open(FILE,">$file") || die "Can't write to $file\n";
             print FILE $image."\n";
             close FILE;
@@ -235,7 +252,7 @@ foreach (sort keys %icons)
     else
     {
         my $type=(fileparse($image,'\..*'))[2];
-        my $file="$SHARE_DIR/icons/$_$type";
+        $file="$SHARE_DIR/icons/$_$type";
         printf "Getting %10s as %20s: %s\n",$_,$file,$a->mirror($image,$file)->message;
     }
 }
@@ -255,7 +272,7 @@ sub check_page {
     $fileno++;
     if ($opt_debug)
     {
-        my $file="na_icon_${fileno}";
+        $file="na_icon_${fileno}";
         open  FILE,">$file.html" || die "Can't open $file.html\n";
         print FILE $res->content;
         close FILE;
