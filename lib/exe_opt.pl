@@ -14,8 +14,6 @@ use File::Spec;
 #
 # output constants
 #
-#-bind=libexpat.dll[file=\perl\site\lib\auto\XML\Parser\Expat\libexpat.dll,extract]
-#-trim="Convert::EBCDIC;Encode;HASH;HTML::FromText;Text::Iconv;Unicode::Map8;v5;URI/urn::isbn.pm;URI/urn::oid.pm;PerlIO/gzip.pm;HTML::FormatText"
 print '-nologo
 -force
 -add="XMLTV::Ask::Term;XMLTV::Ask::Tk"
@@ -24,7 +22,7 @@ print '-nologo
 -add="Class::MethodMaker::scalar"
 -add="Tk::ProgressBar"
 -bind=libxml2.dll[file=\perl\bin\libxml2.dll,extract]
--trim="Apache::Const;Apache::RequestIO;DIME::Payload;MIME::Entity;Apache::RequestRec;DIME::Message"
+-trim="Apache::Const;Apache::RequestIO;DIME::Payload;MIME::Entity;Apache::RequestRec;DIME::Message;I18N::Langinfo"
 -info CompanyName="XMLTV Project http://www.xmltv.org"
 -info FileDescription="EXE bundle of XMLTV tools to manage TV Listings"
 -info InternalName=xmltv.exe
