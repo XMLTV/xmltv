@@ -16,7 +16,7 @@ tv_grab_br_net --configure [--config-file FILE]  [--gui OPTION]
 
 tv_grab_br_net [--config-file FILE] [--output FILE] [--gui OPTION]
                [--days N] [--offset N] [--quiet]
-               [--relax N] [--slow]
+               [--relax N] [--slow] [--fast]
 
 tv_grab_br_net --list-channels [--config-file FILE]
                [--output FILE] [--quiet]
@@ -48,9 +48,11 @@ B<--quiet> Suppress the progress messages normally written to standard error.
 
 B<--list-channels> Write output giving <channel> elements for every channel available (using the city and selection from the config file), but no programs. All channels are listed. Even those without any information about broadcasts.
 
-B<--slow> Enables long strategy run: There is only basic information listed on the main channel page. However there is a lot more provided on subsequent pages for particular broadcasts. If you'd like to parse the data from these pages as well, supply this flag. But consider that the grab process takes much much longer when doing so, since many more web pages have to be retrieved. Please note that this option is a non-standard extension to the XMLTV-options.
+B<--slow> Overrides the default set by the configuration. It enables the long strategy run: There is only basic information listed on the main channel page. However there is a lot more provided on subsequent pages for particular broadcasts. If you'd like to parse the data from these pages as well, set it in the configuration or supply this flag. But consider that the grab process takes much much longer when doing so, since many more web pages have to be retrieved. Please note that this option is a non-standard extension to the XMLTV-options and should be specified at configuration-time.
 
-B<--relax N> May be used if time is not an issue, bandwidth is limited or you don't want to pound the NET Website (good idea). It adds a sleep after fetching each page. The number of seconds paused is random and between 1 and N. Consider it. This also is an extension to the XMLTV-options that might not be found in other grabbers.
+B<--fast> Overrides the default set by the configuration. It switches back to fast operation if the configuration specified slow. Please note that this option is a non-standard extension to the XMLTV-options and should be specified at configuration-time.
+
+B<--relax N> May be used if time is not an issue, bandwidth is limited or you don't want to pound the NET Website (good idea). It adds a sleep after fetching each page. The number of seconds paused is random and between 1 and N. Since this also is a non-standard extension, you should consider setting it in the configuration. The commandline-option is only meant to override the config.
 
 B<--version> Show the version of the grabber.
 
@@ -151,7 +153,7 @@ my constant $enc = 'ISO-8859-1';
 Date_Init("TZ=BRT");
 
 # global variables
-my ($channels, $bar, $writer, $slow, $relax);
+my ($channels, $bar, $writer, $slow, $fast, $relax);
 
 my ($opt, $conf) = ParseOptions( {
     grabber_name => $grabbername,
@@ -160,7 +162,9 @@ my ($opt, $conf) = ParseOptions( {
     listchannels_sub => \&list_channels,
     version => '$Id$',
     description => "Brazil (NET)",
-    extra_options => ["slow" => \$slow, "relax=n" => \$relax],
+    extra_options => [ "slow"    => \$slow,
+		       "fast"    => \$fast,
+		       "relax=n" => \$relax ],
 } );
 
 # fill $channels with the data from the configuration
@@ -200,8 +204,8 @@ sub channellist {
 	$chs->{$number}->{ID} = $1;
 	$chs->{$number}->{Number} = $number;
 	$chs->{$number}->{Name} = $3;
+	$chs->{$number}->{Name} =~ s/\*$//;
 	$chs->{$number}->{rfc2838} = &rfc2838($chs->{$number});
-
     }
 
     unless ($chs && scalar keys %$chs) {
@@ -369,8 +373,8 @@ sub channel {
 	    $title =~ s/^\((.*)\)$/$1/; # remove weird surrounding parens
 
 	    # extract episode-number
-	    if ($title =~ s/\s*\-\s*Epis(ó|&oacute;)dio\s*(\d+)//) {
-		$ch->{Broadcasts}->{$time}->{Episode} = $2;
+	    if ($title =~ s/\s*\-\s*Ep(is(ó|&oacute;)dio|\.)\s*(\d+)//) {
+		$ch->{Broadcasts}->{$time}->{Episode} = $3;
 	    }
 
 	    $ch->{Broadcasts}->{$time}->{Title} = $title;
@@ -406,12 +410,16 @@ sub parsechannel {
     # name, abbreviation and description
     if ($html =~ /<LI><SPAN[^>]*>([^<]*)<\/SPAN><BR>\s*<SPAN[^>]*>(...)?\s+\Q$num\E<\/SPAN><BR>\s*<SPAN[^>]*>([^<]*)<\/SPAN>\s*<\/UL>/si) {
 	$ch->{Name} = $1 unless $ch->{Name};
-	$ch->{Abbreviation} = $2 if $2;
+	$ch->{Name} =~ s/\*$//;
+	$ch->{Abbreviation} = $2 if $2 && $2 ne $1;
 	$ch->{Description} = $3;
 	# remove consecutive whitespace
 	$ch->{Description} =~ s/\s+/ /g;
 	# remove leading and trailing whitespace
 	$ch->{Description} =~ s/^\s*(.*)\s*$/$1/g;
+    }else{
+	&delete_ch($ch);
+	# remove inconsistencies!
     }
 
     # not implemented: Logo of channel
@@ -435,10 +443,10 @@ sub details {
 
     # directors
     push @{$bc->{Director}}, split (/,\s*/, $3)
-	if $html =~ /<b[^>]*>Dire(&ccedil;|ç)(&atilde;|ã)o:<\/b>\s*<[^>]+>\s*(.*?)<\//is;
+	if $html =~ /<b[^>]*>Dire(&ccedil;|ç)(&atilde;|ã)o:<\/b>\s*<[^>]+>\s*(.*?)\.?<\//is;
 
     # actors
-    if ($html =~ /<b[^>]*>Elenco:<\/b>\s*<[^>]+>\s*(.*?)<\//is) {
+    if ($html =~ /<b[^>]*>Elenco:<\/b>\s*<[^>]+>\s*(.*?)\.?<\//is) {
 	foreach (split (/,\s*/, $1)) {
 	    # remove 'Vozes de'
 	    # in case of a comic the person speaking a character is the actor
@@ -476,7 +484,7 @@ sub details {
     # original name
     $bc->{original_name} = $1 if $html =~ /<b[^>]*>nome original:<\/b>\s*<[^>]+>\s*(.*?)<\//is;
     # remove episode-number from original name
-    $bc->{original_name} =~ s/\s*Eps\.?\s*\Q$bc->{Episode}\E//i;
+    $bc->{original_name} =~ s/\s*\-\s*Eps?\.?\s*\Q$bc->{Episode}\E//i;
 
     # rating (eg. PG13)
     $bc->{rating} = $3 if $html =~ /<b[^>]*>classifica(&ccedil;|ç)(&atilde;|ã)o:<\/b>\s*<[^>]+>\s*(.*?)<\//is;
@@ -514,11 +522,11 @@ sub write_channels {
 
 	    'id' => $chans->{$_}->{rfc2838},
 
-	    'display-name' => [ [ "$chans->{$_}->{Number}-$chans->{$_}->{Name}", $lang ] ]
+	    'display-name' => [ [ "$chans->{$_}->{Name}", $lang ] ]
 	    };
 
 	push @{$ch->{"$chans->{$_}->{rfc2838}"}->{'display-name'}},
-	[ "$chans->{$_}->{Number}-$chans->{$_}->{Abbreviation}", $lang ]
+	[ "$chans->{$_}->{Abbreviation}", $lang ]
 	    if $chans->{$_}->{Abbreviation};
 
 	# add channel-URL if available
@@ -657,9 +665,9 @@ sub init {
 # initialization for the mech-connection
 sub initmech {
     my $mech = WWW::Mechanize->new( stack_depth => 1,
-				    onerror => undef );
+				    onerror => undef,
+				    agent => "xmltv/$XMLTV::VERSION" );
     $mech->cookie_jar(HTTP::Cookies->new);
-    $mech->agent_alias('Windows IE 6');
     $mech->env_proxy();
     $mech->default_header(Accept => "text/*");
     return $mech;
@@ -835,6 +843,7 @@ sub fill_ch {
 	    die "configfile corrupt! Please run with --configure\n";
 	}
     }
+
     # unused channels
     foreach (@{$conf->{no_channel}}) {
 	if (/^((\d{3})\.(\d+)\.\Q$conf->{selection}->[0]\E\.\Q$conf->{city}->[0]\E\.\Q$domain\E)$/) {
@@ -846,6 +855,23 @@ sub fill_ch {
 	    die "configfile corrupt! Please run with --configure\n";
 	}
     }
+
+    # slow / fast
+    if ($fast) {
+	$slow = undef;
+    }elsif($slow) {
+	$slow = 1;
+    }elsif($conf->{slow}->[0]) {
+	$slow = 1;
+    }else{
+	$slow = undef;
+    }
+
+    # relax
+    unless (defined $relax) {
+	$relax = $conf->{relax}->[0];
+    }
+    $relax = undef if $relax !~ /^\d+$/;
 }
 
 
@@ -875,10 +901,9 @@ sub config_stage {
         $writer->start_selectone( {
             id => 'city',
             title => [ [ 'City', 'en' ], [ 'Cidade', $lang] ],
-            description =>
-		[ [ 'City you want to download data for', 'en' ],
-		  [ 'Cidade para onde você quer a programação', $lang] ]
-	    } );
+            description => [ [ 'City you want to download data for', 'en' ],
+			     [ 'Cidade para que você quer a programação', $lang] ]
+			     } );
 
 	# write sorted citylist
         foreach (sort {$cities->{$a} cmp $cities->{$b}} keys %$cities) {
@@ -891,6 +916,7 @@ sub config_stage {
         $writer->end_selectone();
         $writer->end('select-lineup');
 	# end of city-selection
+
 
     }elsif ($stage eq 'select-lineup') { # 2nd stage for lineup-selection
 
@@ -913,10 +939,9 @@ sub config_stage {
         $writer->start_selectone( {
             id => 'selection',
             title => [ [ 'Bundle', 'en' ], [ 'Grade de canais', $lang] ],
-            description =>
-		[ [ 'Bundle you want to download data for', 'en' ],
-		  [ 'Grade de canais para programação', $lang] ]
-	      } );
+            description => [ [ 'Bundle you want to download data for', 'en' ],
+			     [ 'Grade de canais para programação', $lang] ]
+			     } );
 
 	# write sorted bundlelist
         foreach (sort {$bundles->{$a} cmp $bundles->{$b}} keys %$bundles) {
@@ -927,8 +952,47 @@ sub config_stage {
         }
 
         $writer->end_selectone();
+        $writer->end('options');
+	# end of bundle-selection. Next are options
+
+
+    }elsif ($stage eq 'options') { # 3rd stage for options
+
+	# title and desc
+        $writer->start_selectone( {
+            id => 'slow',
+            title => [ [ 'Enable details (slow)', 'en' ],
+		       [ 'Ligar detalhes (lento)', $lang] ],
+            description => [ [ 'Enable mode with more details (credits, rating, etc.)? This takes about 20 times longer and produces about 2 times more output', 'en' ],
+			     [ 'Ativar o modo mais detalhado (creditos, ano, etc.)? Esta muito mais lento (20 vezes) e produz 2 vezes mais detalhes.', $lang] ]
+			     } );
+
+	$writer->write_option( {
+	    value => 0,
+	    text => [ [ 'off', 'en' ], [ 'desligado', $lang ] ]
+	    } );
+
+	$writer->write_option( {
+	    value => 1,
+	    text => [ [ 'on', 'en' ], [ 'ligado', $lang ] ]
+	    } );
+
+	$writer->end_selectone();
+
+
+	# relax
+        $writer->write_string( {
+            id => 'relax',
+            title => [ [ 'Enable relaxed mode', 'en' ],
+		       [ 'Ativar modo relaxado', $lang] ],
+            description => [ [ 'Enable pausing between page-fetches in order not to look like a robot. Specify a number in seconds or 0 to disable.', 'en' ],
+			     [ 'Este modo faz uma pausa entre a busca das paginas. Por favor digite 0 para desligar ou digite um numero em segundos.', $lang] ],
+	    default => 0
+	    } );
+
         $writer->end('select-channels');
-	# end of bundle-selection. Next are channels
+	# end of options. Next are channels
+
 
     } else {
 	die "Unknown stage $stage";
