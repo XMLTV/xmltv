@@ -16,6 +16,8 @@ our @EXPORT_OK;
 use XML::LibXML;
 use File::Slurp qw/read_file/;
 
+our $REQUIRE_CHANNEL_ID=1;
+
 my( $dtd, $parser );
 
 =head1 NAME
@@ -192,10 +194,10 @@ sub ValidateFile {
 	$desc = $p->findvalue('desc/text()')
 	    if $p->findvalue( 'count(desc)' );
 
-	if (not defined( $channels{$channelid} )) {
+	if ($REQUIRE_CHANNEL_ID and not exists( $channels{$channelid} )) {
 	    $w->( $p, "Channel '$channelid' does not have a <channel>-entry.",
 		  'unknownid' );
-	    $channels{$channelid} = "auto";
+	    $channels{$channelid} = 0;
 	}
 
 	$channels{$channelid}++;
