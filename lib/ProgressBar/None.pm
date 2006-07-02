@@ -6,9 +6,13 @@ use strict;
 sub new {
         my $class = shift;
         my $self = {};
-        
+
         my $args = shift;
-        print STDERR "$args->{name}\n";
+        unless (ref($args)) {
+                $args = { 'name' => $args };
+        }
+        
+        print STDERR $args->{"name"} . "\n";
         
         return bless $self, $class;
 }
