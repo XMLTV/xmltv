@@ -297,6 +297,21 @@ my @opt_components
 #       grab_need_share => [ 'ch' ],
 #     },
 
+     { name     => 'tv_grab_ch_bluewin',
+       blurb    => 'Grabber for Switzerland',
+       exes     => [ 'grab/ch_bluewin/tv_grab_ch_bluewin' ],
+       deps     => [ 'grab/ch_bluewin/tv_grab_ch_bluewin' 
+       			=> [ 'grab/ch_bluewin/tv_grab_ch_bluewin.in' ] ],
+       pl_files => { 'grab/ch_bluewin/tv_grab_ch_bluewin.PL' 
+       			=> 'grab/ch_bluewin/tv_grab_ch_bluewin' },
+       to_clean => [ 'grab/ch_bluewin/tv_grab_ch_bluewin' ],
+       share_files => { 'grab/ch_bluewin/channel_ids' 
+       			=> 'tv_grab_ch_bluewin/channel_ids' },
+       grab_need_share => [ 'ch_bluewin' ],
+       prereqs => { 'HTML::Entities' => 1.27,
+		    'HTML::TreeBuilder' => 0 },
+     },
+
      { name => 'tv_grab_uk_rt',
        blurb => 'Alternative grabber for Britain',
        exes => [ 'grab/uk_rt/tv_grab_uk_rt' ],

@@ -1,0 +1,767 @@
+#!/usr/bin/perl
+
+=pod
+
+=head1 NAME
+
+tv_grab_ch_bluewin - Grab TV listings for Switzerland (from fernsehen.bluewin.ch webpage).
+
+=head1 SYNOPSIS
+
+tv_grab_ch_bluewin --help
+
+tv_grab_ch_bluewin [--config-file FILE] --configure [--gui OPTION]
+
+tv_grab_ch_bluewin [--config-file FILE] [--output FILE] [--quiet]
+           [--days N] [--offset N]
+
+tv_grab_ch_bluewin --list-channels
+
+tv_grab_de_bluewin --capabilities
+
+tv_grab_de_bluewin --version
+
+=head1 DESCRIPTION
+
+Output TV listings for several channels available in Switzerland and
+(partly) central Europe. 
+The data comes from fernsehen.bluewin.ch. The grabber relies on
+parsing HTML so it might stop working at any time.
+
+First run B<tv_grab_ch_bluewin --configure> to choose, which channels 
+you want to download. Then running B<tv_grab_ch_bluewin> with no 
+arguments will output listings in XML format to standard output.
+
+B<--configure> Ask for each available channel whether to download
+and write the configuration file.
+
+B<--config-file FILE> Set the name of the configuration file, the
+default is B<~/.xmltv/tv_grab_ch_bluewin.conf>.  This is the file 
+written by B<--configure> and read when grabbing.
+
+B<--gui OPTION> Use this option to enable a graphical interface to be used.
+OPTION may be 'Tk', or left blank for the best available choice.
+Additional allowed values of OPTION are 'Term' for normal terminal output
+(default) and 'TermNoProgressBar' to disable the use of Term::ProgressBar.
+
+B<--output FILE> Write to FILE rather than standard output.
+
+B<--days N> Grab N days.  The default is fourteen.
+
+B<--offset N> Start N days in the future.  The default is to start
+from now on (= zero).
+
+B<--quiet> Suppress the progress messages normally written to standard
+error.
+
+B<--list-channels> Write output giving <channel> elements for every
+channel available (ignoring the config file), but no programmes.
+
+B<--capabilities> Show which capabilities the grabber supports. For more
+information, see L<http://membled.com/twiki/bin/view/Main/XmltvCapabilities>
+
+B<--version> Show the version of the grabber.
+
+B<--help> print a help message and exit.
+
+
+=head1 SEE ALSO
+
+L<xmltv(5)>.
+
+=head1 AUTHOR
+
+Daniel Bittel <daniel.bittel@solnet.ch>. Inspired by tv_grab_ch by Stefan Siegl.
+
+=head1 BUGS
+
+If you happen to find a bug, you're requested to send a mail to me
+at B<daniel.bittel@solnet.ch> or to one of the XMLTV mailing lists, see webpages
+at http://sourceforge.net/projects/xmltv/.
+
+=cut
+
+use warnings;
+use strict;
+use Date::Manip;
+use XMLTV::Version '$Id$ ';
+use XMLTV::Capabilities qw/baseline manualconfig cache share/;
+use XMLTV::Description 'Switzerland (www.bluewin.ch)';
+use Getopt::Long;
+use HTML::TreeBuilder;
+use HTML::Entities;
+use URI::Escape;
+use XMLTV;
+use XMLTV::Ask;
+use XMLTV::ProgressBar;
+use XMLTV::DST;
+use XMLTV::Config_file;
+use XMLTV::Mode;
+use XMLTV::Get_nice;
+use XMLTV::Memoize;
+use XMLTV::Usage<<END
+$0: get Swiss television listings from www.bluewin.ch in XMLTV format
+To configure: $0 --configure [--config-file FILE] [--gui OPTION]
+To grab data: $0 [--config-file FILE] [--output FILE] [--quiet]
+                 [--days N] [--offset N]
+Channel List: $0 --list-channels
+To show capabilities: $0 --capabilities
+To show version: $0 --version
+
+Don't try to run this grabber between midnight and ~6 o'clock in the morning
+to get data for the current day (ergo: without offset):
+When viewing Bluewin's website after midnight, I found they only display 
+data from early in the morning of that day.
+END
+  ;
+
+# Use Log::TraceMessages if installed.
+BEGIN {
+    eval { require Log::TraceMessages };
+    if ($@) {
+        *t = sub {};
+        *d = sub { '' };
+    }
+    else {
+        *t = \&Log::TraceMessages::t;
+        *d = \&Log::TraceMessages::d;
+    }
+}
+
+
+
+## our own prototypes first ...
+sub get_channels();
+sub channel_id($);
+sub get_page($);
+sub grab_channel($);
+
+## attributes of xmltv root element
+my $head = { 
+    'source-data-url'      => 'http://fernsehen.bluewin.ch/programm/',
+    'source-info-url'      => 'http://fernsehen.bluewin.ch/',
+    'generator-info-name'  => 'XMLTV',
+    'generator-info-url'   => 'http://membled.com/work/apps/xmltv/',
+};
+
+
+
+## the timezone fernsehen.ch lives in is, CET/CEST
+my constant $TZ = "+0100";
+my constant $lang = "de";
+
+
+
+## Parse argv now.  First do undocumented --cache option.
+XMLTV::Memoize::check_argv('XMLTV::Get_nice::get_nice_aux');
+
+
+
+my $opt_configure;
+my $opt_config_file;
+my $opt_gui;
+my $opt_output;
+my $opt_days = 14;
+my $opt_offset = 0;
+my $opt_quiet = 0;
+my $opt_list_channels;
+my $opt_help;
+my $opt_share;
+
+GetOptions(
+    'configure'      => \$opt_configure,
+    'config-file=s'  => \$opt_config_file,
+    'gui:s'          => \$opt_gui,
+    'output=s'       => \$opt_output,
+    'days=i'         => \$opt_days,
+    'offset=i'       => \$opt_offset,
+    'quiet'          => \$opt_quiet,
+    'list-channels'  => \$opt_list_channels,
+    'help'           => \$opt_help,
+    'share=s'        => \$opt_share,
+) or usage(0);
+
+usage(1) if $opt_help;
+
+XMLTV::Ask::init($opt_gui);
+
+## make sure offset+days arguments are within range
+die "neither offset nor days may be negative"
+  if($opt_offset < 0 || $opt_days < 0);
+
+
+## calculate global start/stop times ...
+my $grab_start = DateCalc("00:00:00", "+ $opt_offset days");
+my $grab_stop = DateCalc($grab_start, "+ $opt_days days");
+
+
+my $mode = XMLTV::Mode::mode('grab', # default value
+    $opt_configure 	=> 'configure',
+    $opt_list_channels	=> 'list-channels',
+);
+
+
+
+## initialize config file support
+my $config_file = XMLTV::Config_file::filename($opt_config_file, 'tv_grab_ch_bluewin', $opt_quiet);
+my @config_lines;
+
+if($mode eq 'configure') {
+    XMLTV::Config_file::check_no_overwrite($config_file);
+} 
+elsif($mode eq 'grab' || $mode eq 'list-channels') {
+    @config_lines = XMLTV::Config_file::read_lines($config_file);
+} 
+else { die("never heard of XMLTV mode $mode, sorry :-(") }
+
+
+
+## hey, we can't live without channel data, so let's get those now!
+my $bar = new XMLTV::ProgressBar( 'getting list of channels', 1 )
+    if not $opt_quiet;
+
+my %channels = get_channels();
+$bar->update() if not $opt_quiet;
+$bar->finish() if not $opt_quiet;
+
+
+
+# share/ directory for storing channel mapping files.  This next line
+# is altered by processing through tv_grab_ch_bluewin.PL.  But we can
+# use the current directory instead of share/tv_grab_ch_bluewin for
+# development.
+#
+# The 'source' file tv_grab_ch_bluewin.in has $SHARE_DIR undef, which
+# means use the current directory.  In any case the directory can be
+# overridden with the --share option (useful for testing).
+#
+my $SHARE_DIR = undef;
+
+$SHARE_DIR = $opt_share if defined $opt_share;
+my $OUR_SHARE_DIR = (defined $SHARE_DIR) ? "$SHARE_DIR/tv_grab_ch_bluewin" : '.';
+
+
+# Read the file with channel mappings.
+(my $CHANNEL_NAMES_FILE = "$OUR_SHARE_DIR/channel_ids") =~ tr!/!/!s;
+my (%chid_mapping, %seen);
+my $line_num = 0;
+foreach (XMLTV::Config_file::read_lines($CHANNEL_NAMES_FILE, 1)) {
+    ++ $line_num;
+    next unless defined;
+    my $where = "$CHANNEL_NAMES_FILE:$line_num";
+    
+    my @fields = split m/:/;
+    print @fields   if(@fields != 2 );
+    die "$where: wrong number of fields"
+      if(@fields != 2 );
+
+    my ($xmltv_id, $bluewin_ch_id) = @fields;
+    warn "$where: bluewin.ch id $bluewin_ch_id seen already\n"
+      if defined $chid_mapping{$bluewin_ch_id};
+    $chid_mapping{$bluewin_ch_id} = $xmltv_id;
+    
+    warn "$where: XMLTV id $xmltv_id seen already\n"
+      if $seen{$xmltv_id}++;
+}
+
+my @requests;
+
+## read our configuration file now
+my $line = 1;
+foreach(@config_lines) {
+    $line ++;
+    next unless defined;
+
+    if (/^channel:?\s+(\S+)/) {
+	warn("\nConfigured channel $1 not available anymore. \nPlease reconfigure tv_grab_ch_bluewin.\n"),
+	  next unless(defined($channels{$1}));
+	push @requests, $1;
+    } 
+    elsif (/^map:?\s+(\S+)\s+(\S+)/) {
+	# Override anything set in the channel_ids file.
+	$chid_mapping{$1} = $2;
+    } 
+    else {
+	warn "$config_file:$line: bad line\n";
+    }
+}
+
+## if we're requested to do so, write out a new config file ...
+if ($mode eq 'configure') {
+    open(CONFIG, ">$config_file") or die("cannot write to $config_file, due to: $!");
+
+    ## now let's annoy the user, sorry, I meant ask ..
+    my @chs = sort keys %channels;
+    my @names = map { $channels{$_} } @chs;
+    my @qs = map { "add channel $_?" } @names;
+    my @want = ask_many_boolean(1, @qs);
+
+    foreach (@chs) {
+	my $w = shift @want;
+	my $chname = shift @names;
+	
+	warn("cannot read input, stopping to ask questions ..."), last if not defined $w;
+
+	print CONFIG '#' if not $w; #- comment line out if user answer 'no'
+
+	# shall we store the display name in the config file?
+	# leave it in, since it probably makes it a lot easier for the
+	# user to choose which channel to comment/uncommet - when manually
+	# viing the config file -- are there people who do that?
+	print CONFIG "channel $_ #$chname\n";
+    }
+
+    close CONFIG or warn "unable to nicely close the config file: $!";
+    say("Finished configuration.");
+
+    exit();
+}
+
+
+
+## well, we don't have to write a config file, so, probably it's some xml stuff :)
+## if not, let's go dying ...
+die unless($mode eq 'grab' or $mode eq 'list-channels');
+
+my %writer_args;
+if (defined $opt_output) {
+    my $handle = new IO::File(">$opt_output");
+    die "cannot write to output file, $opt_output: $!" unless (defined $handle);
+    $writer_args{'OUTPUT'} = $handle;
+}
+
+$writer_args{'encoding'} = 'ISO-8859-1';
+
+
+if( defined( $opt_days )) {
+    $writer_args{offset} = $opt_offset;
+	$writer_args{days} = $opt_days;
+	$writer_args{cutoff} = "060000";
+}
+
+## create our writer object
+my $writer = new XMLTV::Writer(%writer_args);
+$writer->start($head);
+
+
+
+if ($mode eq 'list-channels') {
+    foreach (keys %channels) {
+        my %channel = ('id'           => channel_id($_), 
+                       'display-name' => [[$channels{$_}, $lang]]); 
+        $writer->write_channel(\%channel);
+    }
+
+    $writer->end();
+    exit();
+}
+
+
+
+## there's only one thing, why we might exist: write out tvdata!
+die unless ($mode eq 'grab');
+die "No channels specified, run me with --configure flag\n" unless(scalar(@requests));
+
+
+
+## write out <channel> tags
+foreach(@requests) {
+    my $id = channel_id($_);
+    my %channel = ('id'           => $id, 
+                   'display-name' => [[$channels{$_}, $lang]]); 
+    $writer->write_channel(\%channel);
+}
+
+
+## the page doesn't specify the year when the programmes begin or end, thus
+## we need to guess, store current year and month globally as needed for every
+## programme ...
+my ($cur_year, $cur_month) = ParseDate('now') =~ m/(....)(..)/;
+
+
+## write out <programme> tags
+$bar = new XMLTV::ProgressBar('grabbing channels       ', scalar(@requests))
+  if not $opt_quiet;
+
+foreach my $channel (@requests) {
+    grab_channel $channel;
+    update $bar if not $opt_quiet;
+}
+
+$bar->finish()
+    unless($opt_quiet);
+
+## hey, looks like we've finished ...
+$writer->end();
+
+
+
+## channel_id($s) :: turn site channel id into an xmltv id
+sub channel_id($) {  
+    for (my $s = shift) {
+	$_ = lc(defined($chid_mapping{$_}) ? $chid_mapping{$_} : "$_.bluewin.ch");
+	$_ = "C$_" if /^\d/;
+	return $_;
+    }
+}
+
+
+
+
+
+## grab_channel($start, $laststart, $laststop, $stop)
+sub grab_channel($) {
+    my ($start, $laststart, $laststop, $stop);
+
+    my $channel = shift;
+    my $grabDate = $grab_start;
+  grab_channel_loop:
+    my $tb = HTML::TreeBuilder->new();
+    my $got = 0;
+
+    
+    my $loop_date = substr($grabDate,0,4) . '-' . substr($grabDate,4,2) . '-' . substr($grabDate,6,2);
+    
+    $tb->parse(get_page("http://fernsehen.bluewin.ch/programm/station/?id=$channel&day=$loop_date"))
+      or die "cannot parse content of http://fernsehen.bluewin.ch/programm/station/?id=$channel&day=$loop_date";    
+    $tb->eof;
+    
+    for($tb->look_down('_tag' => 'form', 'action' => '/memberzone/alert/mytv/')) {
+
+
+        foreach($_->look_down('_tag' => 'table', 'width' => '100%', 'border' => 0, 'cellspacing' => 0, 'cellpadding' => 4)) {
+            my %show;
+            die unless(ref($_)) eq 'HTML::Element';
+
+
+            $show{channel} = channel_id($channel);
+      		my  $checkbox = $_->look_down('_tag' => 'input', 'type' => 'checkbox');
+      		next unless (ref($checkbox)) eq 'HTML::Element';
+      
+	    	$start = parse_local_date( substr(($_->look_down('_tag' => 'input', 'type' => 'checkbox'))->attr('value'),0,12), $TZ );
+
+      		my $tmpStr = $_->look_down('_tag' => 'td', 'class' => 'textdat', 'width' => 35)->as_text();
+      		$tmpStr =~ s/^(.*)(\W)bis(\W)(.*)/$4/;
+
+      		$stop = parse_local_date( ( substr($start, 0, 8).$tmpStr), $TZ);
+
+    		if ( Date_Cmp ($start, $stop ) > 0 ) { # if the end time is before the start time, the show goes over midnight.
+    			 $stop=DateCalc ( $stop, "+ 1 day");
+    		}
+			my ($start_base, $start_tz) = @{ date_to_local($start, $TZ) };
+    		$show{start} = UnixDate($start_base, '%q') . " $start_tz";
+    		
+			
+			my ($stop_base, $stop_tz) = @{ date_to_local($stop, $TZ) };
+    		$show{stop} = UnixDate($stop_base, '%q') . " $stop_tz";
+
+   		
+    		my $categoryElement = $_->look_down('_tag' => 'td', 'class' => 'textdat', 'width' => 90, 'align' => 'right' );
+    		
+    		if (ref($categoryElement) eq 'HTML::Element')
+    		{
+    			my $category = $categoryElement->as_text();
+    		
+    			$category =~ s/^\s+//;
+    			$category =~ s/\s+$//;
+    		
+    		 
+    			$show{'category'} = [[$category, $lang]] if ( length($category) ) ;
+    		}
+    		
+            my $title = "";
+            my $link_detail = "";
+
+            my $link = "";
+       		my $DescAvailable = 0;
+      		foreach($_->look_down('_tag' => 'img', 'src' => '/img/jump2_right.gif')) {
+            	my %show;
+            	die unless(ref($_)) eq 'HTML::Element';
+      			$DescAvailable = 1;
+      		}
+
+      	   foreach my $blah (@{$_->extract_links()}) {
+                my($my_link, $element, $attr, $tag) = @$blah;
+                next if ( $element->as_text() eq '' );
+
+                my @title = split ( / - /, $element->as_text());
+      	        my $title = $element->as_text();  
+
+      			$link = $my_link;
+            	$link  =~ s/^(.*),\'(.*)\'\)/$2/;
+              
+
+            	my @details = get_details ( $link,  $element->as_text() );
+
+            	$show{'title'} = [[$details[0], $lang]];
+            	$show{'sub-title'} = [[$details[1], $lang]] if(length($details[1]));
+            	if ( $DescAvailable  == 1 ) {
+		            $show{desc} = [[ $details[2], $lang ]] if(length($details[2]));
+            	}            
+            
+            	if ( $details[3] ne "" ) {
+                	my @actors = split(m/\s*,\s*/, $details[3]);
+                	$show{credits}{actor} = \@actors;            
+            	}
+  	    		
+  	    		if(length($details[4])) {
+                	my @directors = split(m/\s*,\s*/, $details[4]);
+                	$show{credits}{director} = \@directors;
+            	}
+            	
+            	if(length($details[5])) {
+					my @writers = split(m/\s*,\s*/, $details[5]);
+					$show{credits}{writer} = \@writers;
+            	}
+	
+				if(length($details[6])) {
+					my @presenters = split(m/\s*,\s*/, $details[6]);
+					$show{credits}{presenter} = \@presenters;
+            	}
+
+            	$show{audio}{stereo} = $details[7] if(length($details[7]) );
+            
+	    		$show{subtitles} = [{ type => $details[8] }] if(length($details[8]));
+            
+            	$show{'previously-shown'} = {} if(length($details[9]));
+				$writer->write_programme(\%show);
+			}	
+
+			
+		}	
+   }
+    $tb->delete();    
+	
+    $grabDate = &DateCalc($grabDate,"+ 1 day");
+	
+    if(Date_Cmp($grab_stop, $grabDate) > 0) {
+		goto grab_channel_loop;
+    }
+	
+}
+
+## separate_titles ($title, fullTitle )
+
+sub separate_titles ($$) {
+    my ($title, $fullTitle );
+	
+	$title = shift;
+	$fullTitle = shift;
+
+	my @result = ("","");
+	my @specialChars = (":","!", "'", "&" );
+
+
+	## this is the _really_ ugly part: bluewin.ch does not provide the tile and 
+	## sub/episode-title seperately or with a unique seperator ($fullTitle).
+	##
+	## they do include a javascript containing the title only as a property of an
+	## object. 
+	## so we could seperate title and sub/episode title with a substr using the 
+	## length of the object.property ($title).
+	##
+	## BUT: $title does not contain special characters like : or !
+	## for example:
+	## title: Fussball: WM 2006 Deutschland Vorrunde - Frankreich - Schweiz aus Stuttgart/GER
+	## 'javascript-title': Fussball+WM+2006+Deutschland+Vorrunde
+	##
+	## so we first have to loop over $title and search for the special chars and insert a char 
+	## at the same position in $title.
+
+	foreach(@specialChars)
+	{
+	my $pos = 0;
+		while ( ( index ( $fullTitle, $_, $pos ) != -1) && 
+			  ( index ( $fullTitle, $_, $pos ) <= length ( $title ) ) ) {
+  			$pos = index ( $fullTitle, $_, $pos );
+  			$title = substr ( $title, 0, $pos )." ".substr ( $title, $pos );
+  			$pos++;
+ 		}
+ 	}
+ 	## now we can do the substr-stuff, and remove whitespaces.
+ 	
+	$result[0] = substr ($fullTitle, 0, length ($title ) );
+	$result[0] =~ s/^\s+//;
+ 
+ 	$result[1] = substr ($fullTitle, length ($title ) ) if ( length ($title) < length $fullTitle ) ;
+ 
+ 	$result[1] =~ s/^\s+// if ( $result[1] ne "" ); 
+ 	$result[1] =~ s/^-\s+// if ( $result[1] ne "" );
+
+ 	return @result;
+}
+
+
+## get_details ($url, $title)
+
+sub get_details ($) {
+	my $url= "http://fernsehen.bluewin.ch" . shift;        # no slash after .ch!
+	my $title = shift;
+	## http://fernsehen.bluewin.ch/programm/detail/index.php?const_id=.....
+
+	my @result = ("","","","","","","","","","");
+	## tilte, episode title, description, actors, director, 
+	## writer, presenter, audio, subtitles, previously-shown
+ 
+	my $tb=new HTML::TreeBuilder();
+	$tb->parse(get_page($url))
+	  or die "cannot parse content of $url";	
+	$tb->eof;
+    
+    ## description
+    foreach($tb->look_down('_tag' => 'td', 'class' => 'text', 'style' => 'padding:3px', 'valign' => 'top')) {
+		next unless(ref($_) eq "HTML::Element");
+
+		$result[2] = $_->as_text();
+		$result[2] =~ s/\226/-/g; # replace 0x96 separator by '-'
+    }
+    
+    ## credits
+    my @info  = $tb->look_down('_tag' => 'td', 'class' => 'textdat', 'style' => 'padding:3px' );
+    my $infoTd = $info[-2]->as_HTML();
+
+	## a bit ugly: bluewin.ch does not always use linebreaks to seperate the credits. so we have to do a little
+	## REGEXPing to ensure the correct format.
+
+	$infoTd =~ s/Besetzung:/<br><b>Besetzung:<\/b>/s;
+	$infoTd =~ s/Musik:/<br><b>Musik:<\/b>/s;
+	$infoTd =~ s/Musik:/<br><b>Musik:<\/b>/s;
+	$infoTd =~ s/Kamera:/<br><b>Kamera:<\/b>/s;
+	$infoTd =~ s/Regie:/<br><b>Regie:<\/b>/s;
+	$infoTd =~ s/Buch:/<br><b>Buch:<\/b>/s;
+	$infoTd =~ s/Moderation:/<br><b>Moderation:<\/b>/s;
+	$infoTd =~ s/<b><br>//g;
+	$infoTd =~ s/<\/b><\/b>/<\/b>/g;
+
+    my $infoTB=HTML::TreeBuilder->new_from_content ("");
+  
+	## actors
+    my $tmpStr = $infoTd;
+    if ( $tmpStr =~ s/(.*)<b>Besetzung:<\/b> (.+?)<br>(.*)/$2/s ) {
+    	$tmpStr =~ s/ \((.*?)+\)//g;
+    	$tmpStr =~ s/, /,/g;
+    	$infoTB=HTML::TreeBuilder->new_from_content ($tmpStr);
+        $tmpStr= $infoTB->look_down('_tag' => 'body')->as_text;
+        
+    	$result[3] = $tmpStr;
+	}
+    
+	## director
+    $tmpStr = $infoTd;
+    if ( $tmpStr =~ s/(.*)<b>Regie:<\/b> (.+?)<br>(.*)/$2/s ) {
+    	$infoTB=HTML::TreeBuilder->new_from_content ($tmpStr);
+        $tmpStr= $infoTB->look_down('_tag' => 'body')->as_text;
+    	$result[4] = $tmpStr;
+    }
+
+    ## Writer
+    $tmpStr = $infoTd;
+    if ( $tmpStr =~ s/(.*)<b>Buch:<\/b> (.+?)<br>(.*)/$2/s ) {
+    	$infoTB=HTML::TreeBuilder->new_from_content ($tmpStr);
+        $tmpStr= $infoTB->look_down('_tag' => 'body')->as_text;
+		$result[5] = $tmpStr;
+    }   
+
+	## Presenter    
+    $tmpStr = $infoTd;
+    if ( $tmpStr =~ s/(.*)<b>Moderation:<\/b> (.+?)<br>(.*)/$2/s ) {
+    	$infoTB=HTML::TreeBuilder->new_from_content ($tmpStr);
+        $tmpStr= $infoTB->look_down('_tag' => 'body')->as_text;
+    	$result[6] = $tmpStr;
+    }       
+    
+    $infoTB->delete();
+    
+    ## parse some additional info
+    
+    $infoTd = $info[-1]->as_HTML();
+
+	## audio options ( bluewin.ch also provides info for '2-kanal ton', 
+	## but there is no audio-value defined in xmltv for this  )
+    $result[7] = "surround" if ( index ($infoTd, "(Dolby Surround)" ) ne -1 );
+	$result[7] = "stereo"   if ( index ($infoTd, "(Stereo)" ) ne -1 );
+	
+	## subtitles
+	$result[8] = "teletext" if ( index ($infoTd, "(TXT-Untertitelt)" ) ne -1 );
+    
+	## is it a rerun 
+	$result[9] = "rerun" if ( index ($infoTd, "(Wiederholung)" ) ne -1 );
+
+
+    foreach($tb->look_down('_tag' => 'script', 'language' => 'javascript')) {
+		next unless(ref($_) eq "HTML::Element");
+
+		my $mainTitle = $_->as_HTML();
+		$mainTitle =~ s/(.*)hbx.pn=\"(.*)\"(.*)bx.pndef=(.*)/$2/s;
+
+		my @titles = separate_titles( $mainTitle, $title );
+      
+		$result[0] = $titles[0];
+		$result[1] = $titles[1];
+		$result[0] =~ s/\226/-/g; # replace 0x96 separator by '-'
+		$result[1] =~ s/\226/-/g; # replace 0x96 separator by '-'
+	}
+
+	$tb->delete;
+	return @result;
+}
+
+## get channel listing
+sub get_channels() {
+    my %channels;
+    my $url=$head->{q(source-data-url)};
+
+    my $tb=new HTML::TreeBuilder();
+    $tb->parse(get_page($url))
+	  or die "cannot parse content of $url";    
+    $tb->eof;
+
+	## getting the channels directly selectable
+	foreach($tb->look_down('_tag' => 'table', 'width' => '100%', 'border' => 0, 'cellspacing' => 0, 'cellpadding' => 0, 'bgcolor' => '#ffffff' )) {
+        next unless(ref($_) eq "HTML::Element");
+
+        foreach(@{$_->extract_links('a')}) {
+
+            my($link, $element, $attr, $tag) = @$_;
+			my $channel_name = (($element->content_list())[0]->attr('alt'));
+			$channel_name = (split (/zu /, $channel_name))[1];
+            $link =~ m/id=(\S+)/
+                or die "unable to extract chid from $link";
+
+            $channels{uri_escape($1)} = $channel_name;
+        }
+    }
+
+    ## foreign-, satelite and paytv -channels are located separately.
+	foreach($tb->look_down('_tag' => 'select', 'name' => 'station[]' )) {
+		next unless(ref($_) eq "HTML::Element");
+
+        foreach($_->look_down('_tag' => 'option' )) {
+	         my $channel_name = $_->as_text();
+            $channels{uri_escape($_->attr('value'))} = $channel_name;
+        }
+    }
+
+    $tb->delete;
+    return %channels;
+}
+
+
+
+## get_page($url) :: try to download $url via http://, look for closing </body> tag or die
+sub get_page($) {
+    my $url = shift;
+    my $retry = 0;
+
+    local $SIG{__DIE__} = sub { die "\n$url: $_[0]" };
+    
+    while($retry < 2) {
+        my $got = eval { get_nice($url . ($retry ? "&retry=$retry" : "")); };
+        $retry ++;
+
+        next if($@); # unable to download, doesn't look too good for us.
+        return $got;
+    }
+
+    die "cannot grab webpage $url (tried $retry times). giving up. sorry";
+}
