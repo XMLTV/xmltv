@@ -482,6 +482,21 @@ my @opt_components
                   },
      },
 
+     { name => 'tv_grab_hr',
+       blurb => 'Grabber for Croatia',
+       exes => [ 'grab/hr/tv_grab_hr' ],
+       pl_files => { 'grab/hr/tv_grab_hr.PL'
+		     => 'grab/hr/tv_grab_hr' },
+       to_clean => [ 'grab/hr/tv_grab_hr' ],
+       deps => [ 'grab/hr/tv_grab_hr'
+		 => [ 'grab/se_swedb/tv_grab_se_swedb.in' ] ],
+       prereqs => { 'XML::LibXML' => 0,
+                    'Compress::Zlib' => 0,
+                    'IO::Stringy' => 0,
+		    'HTTP::Cache::Transparent' => 0,
+                  },
+     },
+
      { name => 'tv_grab_fr',
        blurb => 'Grabber for France',
        exes => [ 'grab/fr/tv_grab_fr' ],
