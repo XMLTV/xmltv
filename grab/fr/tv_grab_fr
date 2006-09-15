@@ -7,8 +7,8 @@ tv_grab_fr - Grab TV listings for France.
 =head1 SYNOPSIS
 
 To configure: tv_grab_fr --configure [--config-file FILE] [--gui OPTION]
-To grab listings: tv_grab_fr [--output FILE] [--quiet]
-Slower, detailed grab: tv_grab_fr --slow [--output FILE] [--days N] [--offset N] [--quiet]
+To grab listings: tv_grab_fr [--output FILE] [--quiet] [--perdays]
+Slower, detailed grab: tv_grab_fr --slow [--output FILE] [--days N] [--offset N] [--quiet] [--perdays]
 To show capabilities: $0 --capabilities
 To show version: $0 --version
 Help: tv_grab_fr --help
@@ -48,6 +48,9 @@ description, reviews and credits.
 
 B<--quiet> Suppress the progress messages normally written to standard
 error.
+
+B<--perdays> Activate the "per days" grabbing mode. It is a fallback to use if the
+grabber does not return any data in the XML file
 
 B<--capabilities> Show which capabilities the grabber supports. For more
 information, see L<http://membled.com/twiki/bin/view/Main/XmltvCapabilities>
@@ -132,12 +135,13 @@ use LWP::Simple;
 # Main declarations
 #***************************************************************************
 my $GRID_BY_CHANNEL = 'http://telepoche.guidetele.com/gtv/semaine?openagent&d=0&c=';
+my $GRID_BY_CHANNEL_PER_DAY = 'http://telepoche.guidetele.com/gtv/journee?openagent&';
 my $GRID_FOR_CHANNEL = 'http://telepoche.guidetele.com/grille/EMWD-6KWLUE/';
 my $SHEET_URL = "http://telepoche.guidetele.com/fiche/emi_";
 my $ROOT_URL  = "http://telepoche.guidetele.com";
 my $LANG = "fr";
 my $MAX_STARS = 4;
-my $VERSION   = "260501-02";
+my $VERSION   = "150906-01";
 
 # FIXME: Temporary avoid XML warnings (to be investigated)
 no warnings;
@@ -153,12 +157,14 @@ my %GridType = (  "HERTZIENNE" => "EMWD-66DGBM",
 
 # Slot of hours according to the website (needed to build the URL)
 my @offsets = (2, 3, 4, 5, 6, 7);
+# Slot of days for day per day grabbing 
+my @days = (2, 3, 4, 5, 6, 7, 8, 9);
 
 #***************************************************************************
 # Global variables allocation according to options
 #***************************************************************************
 XMLTV::Memoize::check_argv('XMLTV::Get_nice::get_nice_aux');
-my ($opt_days,  $opt_help,  $opt_output,  $opt_offset,  $opt_gui, $opt_quiet,  $opt_list_channels, $opt_config_file, $opt_configure, $opt_slow);
+my ($opt_days,  $opt_help,  $opt_output,  $opt_per_days, $opt_offset,  $opt_gui, $opt_quiet,  $opt_list_channels, $opt_config_file, $opt_configure, $opt_slow);
 $opt_quiet  = 0;
 # The website is able to store up to nine days from now
 my $default_opt_days = 9;
@@ -172,7 +178,8 @@ GetOptions('days=i'    => \$opt_days,
      'config-file=s' => \$opt_config_file,
      'gui:s'     => \$opt_gui,
      'list-channels' => \$opt_list_channels,
-     'slow' => \$opt_slow
+     'slow' => \$opt_slow, 
+     'perdays' => \$opt_per_days
     )
   or usage(0);
 
@@ -207,6 +214,7 @@ END
 #***************************************************************************
 my %results;
 my $lastdaysoffset = $opt_offset + $opt_days - 1;
+my $checkDummySlot = 0;
 
 # Now detects if we are in configure mode
 my $mode = XMLTV::Mode::mode('grab', # default
@@ -428,12 +436,22 @@ my $script_duration = time();
 
 # The website stores channel information by hour area for a whole week !
 foreach $chid (sort keys %channels) {
+    my $url;
     $writer->write_channel({ id => "C".$chid.".telepoche.com", 'display-name' => [[$channels{$chid}{name}]], 'icon' => [{src=>$channels{$chid}{icon}}]});
-    foreach (@offsets) {
-        my $url = $GRID_BY_CHANNEL . "$chid&h=$_";
+    if ( $opt_per_days ) {
+      foreach (@days) {
+        $url = $GRID_BY_CHANNEL_PER_DAY . "d=$_&c=$chid&h=0";
         push @to_get, [ $url, $chid, $_ ];
+      } 
+    } else {
+      foreach (@offsets) {
+        $url = $GRID_BY_CHANNEL . "$chid&h=$_";
+        push @to_get, [ $url, $chid, $_ ];
+      }
     }
-}
+}    
+
+
 my $bar = new XMLTV::ProgressBar('getting listings', scalar @to_get)  if not $opt_quiet;
 Date_Init("TZ=UTC");
 
@@ -485,10 +503,182 @@ sub get_channels( $ ) {
   return %channels;
 }
 
+sub process_fucking_damned_page( $$$$ ) {
+  my ($writer, $myrow, $dateindex, $slot) = @_;
+  my ($genre, $lastshowview, $showview, $hours, $starthour, $endhour) = 0;
+  my ($title, $subgenre, $star_rating, $datecreate) = 0;
+          
+  # Each show is described in a table cell with a 'prog' class
+  foreach my $show ($myrow->look_down('_tag', 'td', 'class', 'prog') ) {
+    # Each cell contains zero or more links describing the show.
+    # - If no information is available for the time slot, then the cell
+    #   is empty (&nbsp; actually).
+    # - Links with a 'fiche' class have the most details and also point
+    #   to the per-show web page with the extra information.
+    # - Other links contain less detailed information and no pointer to
+    #   a per-show page.
+    my $link=$show->look_down('_tag', 'a', 'class', 'fiche') ||
+             $show->look_down('_tag', 'a', 'onmouseover', qr/^showmenu/);
+    next if (!$link);
+
+    my $line = $link->attr('onmouseover');
+    $line =~ (!m/showmenu\(([^""]+)\)/);
+    $line =~ m/\'(.*)\',\'(.*)\'/;
+    $title = tidy($2);
+    my $mydata = $1;
+    next if ( $title eq 'Fin des programmes');
+    ($hours, $genre, $showview) = split (/<br>/, $mydata);
+    next if ( !$hours );
+    # Process the title, sometimes a showview field is shown
+    $title =~ s/^\d{7,8} //;
+    $title =~ s/\\//g;
+    if ($title =~ s/\s*([*]+)\s*$//) {
+      my $n = length $1;
+      if (0 < $n and $n <= $MAX_STARS) {
+        $star_rating = $n;
+      } elsif ($MAX_STARS < $n) {
+        warn "too many stars ($n), expected at most $MAX_STARS\n";
+      } else { die }
+    }
+    die if $title =~ /[*]$/;
+    my ($language, $subtitles_language);
+    for ($title) {
+      s/\s+$//;
+      if (s/\s+\(VO\)$//) {
+      # Version originale - language is unknown but not French.  There is no way to represent this in the DTD.
+    } elsif (s/\s+\(VO sous-titr.e\)$//) {
+      # Language unknown, but we know it has French subtitles.
+      $subtitles_language = 'fr';
+      } elsif (s/\s+\(VF\)$//) {
+        # Version francaise.  The title may or may not be translated.
+        $language = 'fr';
+      }
+    }
+    # At this point, $title contains title and subtitle (if any), separated by a '-'. We will try to split off the subtitle
+    # further down. Process hours, there are like HHhMM
+    ($starthour, $endhour)  = split("-", $hours);
+    $starthour =~ s/h//g
+      or die "Cannot detect start hour from website : $starthour \n";
+    $endhour   =~ s/h//g
+      or die "Cannot detect end hour from website : $endhour \n";
+    # Process the start/stop dates
+    my $start = $dateindex.$starthour."00";
+    my $stop  = $dateindex.$endhour."00";
+    
+    # Dummy site : the slot 0-4 of day n is in fact the slot 0-4 for day n+1
+    # Again, specific parsing if we are in "per days" mode
+    if ( $opt_per_days ) {
+      # Check it only after 06:00, sometimes we have shows at 03:00.
+      my $myslot = substr($starthour, 0, 2);
+      $checkDummySlot = 1 if($myslot > 6);
+      if($checkDummySlot && $myslot >= 0 && $myslot < 4) {
+        $start = &UnixDate(&DateCalc($start, "+1 day"), "%Y%m%d%H%M%S");
+        die 'could not add one day to start time' if not $start;
+        $stop  = &UnixDate(&DateCalc($stop, "+1 day"), "%Y%m%d%H%M%S");
+        die 'could not add one day to stop time' if not $stop;
+      }
+    } else {
+      if ( $slot == 7 ) {
+        my $myslot = substr($starthour, 0, 2);
+        die if not $start;
+        $start = &UnixDate(&DateCalc($start, "+1 day"), "%Y%m%d%H%M%S")
+        if ($myslot >= 0 && $myslot < 4);
+        die 'could not add one day to start time' if not $start;
+        $stop  = &UnixDate(&DateCalc($stop, "+1 day"), "%Y%m%d%H%M%S");
+        die 'could not add one day to stop time' if not $stop;
+      }
+    }
+    # Last check to see if start > stop
+    if ( Date_Cmp($start, $stop) > 0 ) {
+      $stop = &UnixDate(&DateCalc($stop, "+1 day"), "%Y%m%d%H%M%S");
+      die 'could not add one day to stop time' if not $stop;
+    }
+    # Now set the proper timezone (WT/ST) according to current date
+    die if not $start; die if not $stop;
+    $start = utc_offset( $start, "+0100");
+    $stop  = utc_offset( $stop , "+0100");
+    my %prog = (channel  => "C".$chid.".telepoche.com",
+        title    => [ [ tidy($title) ] ],             # lang unknown
+        start    => $start,
+        stop     => $stop
+      );
+    debug_print("Found title : $title - $start - $stop \n");
+    $prog{'star-rating'} = [ "$star_rating/$MAX_STARS" ] if defined $star_rating;
+    for ($language) { $prog{language} = [ $_ ] if defined }
+    for ($subtitles_language) {
+      $prog{subtitles} = [ { type => 'onscreen', language => [ $_ ] } ]
+      if defined;
+    }
+    # Sometimes the genre is not set, so replace it by the showview field
+    if (defined $genre and $genre =~ m/Showview : /) {
+      $showview = $genre;
+      undef $genre;
+    }
+    # Process the genre, subgenre and date if defined
+    if  (defined $genre ) {
+      ($genre, $datecreate) = split("-", $genre);
+      ($genre, $subgenre)   = split(",", $genre);
+      for ($genre) { s/^\s+//; s/\s+$//; s/\xA0//; }
+      if (defined $subgenre) {
+        for ($subgenre) { s/^\s+//; s/\s+$//; s/\xA0//; }
+        $prog{category} = [ [ xmlencoding(lc($genre)), $LANG ], [ xmlencoding(lc($subgenre)), $LANG ] ];
+      } else {
+        $prog{category} = [ [ xmlencoding(lc($genre)), $LANG ] ];
+      }
+      if (defined $datecreate) {
+        for ($datecreate) { s/^\s+//; s/\s+$//; s/\xA0//; }
+        $prog{date} = $datecreate ;
+      }
+    }
+    # Process the showview field
+    if ( defined $showview ) {
+      $showview =~ s/Showview : //;
+      for ($showview) { s/^\s+//; s/\s+$//; s/\xA0//; }          
+      $prog{showview} = $showview;
+      next if ( $showview == $lastshowview );
+      $lastshowview = $showview;
+    }
+
+    my $img=$show->look_down('_tag', 'img', 'onerror', qr/this\.src=/);
+    if ($img) {
+      my $url=$img->attr('src');
+      # Get the big icon
+      $url =~ s%/c_img/v/%/c_img/i/%;
+      push @{$prog{icon}}, {src => $url};
+    }
+
+    # Now get program description if the longlisting option is set
+    if ( $opt_slow && $link->attr('class') eq 'fiche' ) {
+      get_detailed_fic( $link->attr('onclick'), \%prog, $title );
+    } else {
+      # The text for the <a> tag contains the title without the sub-title so we can use that to separate the two. However
+      # the text for the <a> tag may have been truncated so it fits the slot on the page. Also some titles may contain
+      # a ' - '. Still the heuristic works very well.
+      my $subtitle;
+      my $text = $link->as_text();
+      if ($text =~ s/\.\.\.$//) {
+        if ($title =~ s/^\Q$text\E([^-]+)\s+-\s+//) {
+          $prog{'title'} = [ [ tidy($text).tidy($1) ] ];
+          $prog{'sub-title'} = [ [ tidy($title) ] ];
+        }
+      }
+      elsif ($title =~ s/^\Q$text\E\s+-\s+//) {
+        $prog{'title'} = [ [ tidy($text) ] ];
+        $prog{'sub-title'} = [ [ tidy($title) ] ];
+      }
+    }
+    if ( !$results{$prog{start}.$chid} ) {
+      $results{$prog{start}.$chid} = "1";
+      $writer->write_programme(\%prog);
+    }
+  }
+}
+
 sub process_channel_grid_page( $$$$ ) {
     my ($writer, $chid, $url, $slot) = @_;
     my ($genre, $lastshowview, $showview, $hours, $starthour, $endhour, $date, $dateindex) = 0;
     my ($title, $subgenre, $star_rating, $datecreate) = 0;
+    $checkDummySlot = 0;
        
     # Get the current page
     my $t = get_nice_tree($url);
@@ -505,180 +695,47 @@ sub process_channel_grid_page( $$$$ ) {
         my $daterow = $dateRow->look_down('_tag', 'td', 'width', '403');
         if ( $daterow ) {
           my $startdate = $daterow->as_text();
-          $startdate =~ /^Les programmes de la semaine du (\d+)\/(\d+)\/(\d+)/;
-          $day = $1; $month = $2; $year = $3;
+          if ( $opt_per_days ) {
+            $startdate =~ /^Les programmes de la journ.*e\s+du\s+(\d+)\/(\d+)\/(\d+)/;
+            $day = $1; $month = $2; $year = $3;
+          } else {
+            $startdate =~ /^Les programmes de la semaine du (\d+)\/(\d+)\/(\d+)/;
+            $day = $1; $month = $2; $year = $3;
+          }
         }
       }
     }
     
-    if ( my $tableTree = $t->look_down('_tag', 'table', 'width', '655', 'class', 'prog_grille') ) {
-      foreach my $myrow ( $tableTree->look_down('_tag', 'tr') ) {
-        if ( my $celldate = $myrow->look_down('_tag', 'td', 'width', '55', 'height', '42' ) ) {
-          my $myday = $celldate->as_text();
-          $myday =~ /^(\d+)\/(\d+)/;
-          $day = $1; $month = $2;
-        }
-        debug_print "Now parsing date : $day $month \n";
-        $date = DateCalc($month."/".$day."/".$year, "+0 days");
-        $dateindex = UnixDate($date, "%Y%m%d");
-        # We need to limit the number of days fetched in slow mode, but in fast mode no limit is needed since
-        # there is a single fetch for all days.
-        if ($opt_slow) {
-          next if Date_Cmp($dateindex, UnixDate(DateCalc("today", "+$opt_offset days"),"%Y%m%d")) < 0;
-          next if Date_Cmp($dateindex, UnixDate(DateCalc("today", "+$lastdaysoffset days"),"%Y%m%d")) > 0;
-        }
-
-        # Each show is described in a table cell with a 'prog' class
-        foreach my $show ($myrow->look_down('_tag', 'td', 'class', 'prog') ) {
-          # Each cell contains zero or more links describing the show.
-          # - If no information is available for the time slot, then the cell
-          #   is empty (&nbsp; actually).
-          # - Links with a 'fiche' class have the most details and also point
-          #   to the per-show web page with the extra information.
-          # - Other links contain less detailed information and no pointer to
-          #   a per-show page.
-          my $link=$show->look_down('_tag', 'a', 'class', 'fiche') ||
-                   $show->look_down('_tag', 'a', 'onmouseover', qr/^showmenu/);
-          next if (!$link);
-
-          my $line = $link->attr('onmouseover');
-          $line =~ (!m/showmenu\(([^""]+)\)/);
-          $line =~ m/\'(.*)\',\'(.*)\'/;
-          $title = tidy($2);
-          my $mydata = $1;
-          next if ( $title eq 'Fin des programmes');
-          ($hours, $genre, $showview) = split (/<br>/, $mydata);
-          next if ( !$hours );
-          # Process the title, sometimes a showview field is shown
-          $title =~ s/^\d{7,8} //;
-          $title =~ s/\\//g;
-          if ($title =~ s/\s*([*]+)\s*$//) {
-            my $n = length $1;
-            if (0 < $n and $n <= $MAX_STARS) {
-              $star_rating = $n;
-            } elsif ($MAX_STARS < $n) {
-              warn "too many stars ($n), expected at most $MAX_STARS\n";
-            } else { die }
+    # If we are grabbing in "per days" mode, then enter here
+    if ( $opt_per_days) {
+      $date = DateCalc($month."/".$day."/".$year, "+0 days");
+      $dateindex = UnixDate($date, "%Y%m%d");
+      foreach my $tableTree ($t->look_down('_tag', 'table', 'width', '655')) {
+        # Skip table which do not contain program
+        next if(!$tableTree->look_down('_tag', 'td', 'class', 'prog'));
+        process_fucking_damned_page( $writer, $tableTree, $dateindex, $slot);
+      }
+    # Default old per week grabbing process
+    } else {
+      if ( my $tableTree = $t->look_down('_tag', 'table', 'width', '655', 'class', 'prog_grille') ) {
+        foreach my $myrow ( $tableTree->look_down('_tag', 'tr') ) {
+          if ( my $celldate = $myrow->look_down('_tag', 'td', 'width', '55', 'height', '42' ) ) {
+            my $myday = $celldate->as_text();
+            $myday =~ /^(\d+)\/(\d+)/;
+            $day = $1; $month = $2;
           }
-          die if $title =~ /[*]$/;
-          my ($language, $subtitles_language);
-          for ($title) {
-            s/\s+$//;
-            if (s/\s+\(VO\)$//) {
-            # Version originale - language is unknown but not French.  There is no way to represent this in the DTD.
-          } elsif (s/\s+\(VO sous-titr.e\)$//) {
-            # Language unknown, but we know it has French subtitles.
-            $subtitles_language = 'fr';
-            } elsif (s/\s+\(VF\)$//) {
-              # Version francaise.  The title may or may not be translated.
-              $language = 'fr';
-            }
+          debug_print "Now parsing date : $day $month \n";
+          $date = DateCalc($month."/".$day."/".$year, "+0 days");
+          $dateindex = UnixDate($date, "%Y%m%d");
+          # We need to limit the number of days fetched in slow mode, but in fast mode no limit is needed since
+          # there is a single fetch for all days.
+          if ($opt_slow) {
+            next if Date_Cmp($dateindex, UnixDate(DateCalc("today", "+$opt_offset days"),"%Y%m%d")) < 0;
+            next if Date_Cmp($dateindex, UnixDate(DateCalc("today", "+$lastdaysoffset days"),"%Y%m%d")) > 0;
           }
-          # At this point, $title contains title and subtitle (if any), separated by a '-'. We will try to split off the subtitle
-          # further down. Process hours, there are like HHhMM
-          ($starthour, $endhour)  = split("-", $hours);
-          $starthour =~ s/h//g
-            or die "Cannot detect start hour from website : $starthour \n";
-          $endhour   =~ s/h//g
-            or die "Cannot detect end hour from website : $endhour \n";
-          # Process the start/stop dates
-          my $start = $dateindex.$starthour."00";
-          my $stop  = $dateindex.$endhour."00";
-          # Dummy site : the slot 0-4 of day n is in fact the slot 0-4 for day n+1
-          if ( $slot == 7 ) {
-            my $myslot = substr($starthour, 0, 2);
-            die if not $start;
-            $start = &UnixDate(&DateCalc($start, "+1 day"), "%Y%m%d%H%M%S")
-              if ($myslot >= 0 && $myslot < 4);
-            die 'could not add one day to start time' if not $start;
-            $stop  = &UnixDate(&DateCalc($stop, "+1 day"), "%Y%m%d%H%M%S");
-            die 'could not add one day to stop time' if not $stop;
-          }
-          # Last check to see if start > stop
-          if ( Date_Cmp($start, $stop) > 0 ) {
-            $stop = &UnixDate(&DateCalc($stop, "+1 day"), "%Y%m%d%H%M%S");
-            die 'could not add one day to stop time' if not $stop;
-          }
-          # Now set the proper timezone (WT/ST) according to current date
-          die if not $start; die if not $stop;
-          $start = utc_offset( $start, "+0100");
-          $stop  = utc_offset( $stop , "+0100");
-          my %prog = (channel  => "C".$chid.".telepoche.com",
-              title    => [ [ tidy($title) ] ],             # lang unknown
-              start    => $start,
-              stop     => $stop
-            );
-          debug_print("Found title : $title - $start - $stop \n");
-          $prog{'star-rating'} = [ "$star_rating/$MAX_STARS" ] if defined $star_rating;
-          for ($language) { $prog{language} = [ $_ ] if defined }
-          for ($subtitles_language) {
-            $prog{subtitles} = [ { type => 'onscreen', language => [ $_ ] } ]
-            if defined;
-          }
-          # Sometimes the genre is not set, so replace it by the showview field
-          if (defined $genre and $genre =~ m/Showview : /) {
-            $showview = $genre;
-            undef $genre;
-          }
-          # Process the genre, subgenre and date if defined
-          if  (defined $genre ) {
-            ($genre, $datecreate) = split("-", $genre);
-            ($genre, $subgenre)   = split(",", $genre);
-            for ($genre) { s/^\s+//; s/\s+$//; s/\xA0//; }
-            if (defined $subgenre) {
-              for ($subgenre) { s/^\s+//; s/\s+$//; s/\xA0//; }
-              $prog{category} = [ [ xmlencoding(lc($genre)), $LANG ], [ xmlencoding(lc($subgenre)), $LANG ] ];
-            } else {
-              $prog{category} = [ [ xmlencoding(lc($genre)), $LANG ] ];
-            }
-            if (defined $datecreate) {
-              for ($datecreate) { s/^\s+//; s/\s+$//; s/\xA0//; }
-              $prog{date} = $datecreate ;
-            }
-          }
-          # Process the showview field
-          if ( defined $showview ) {
-            $showview =~ s/Showview : //;
-            for ($showview) { s/^\s+//; s/\s+$//; s/\xA0//; }          
-            $prog{showview} = $showview;
-            next if ( $showview == $lastshowview );
-            $lastshowview = $showview;
-          }
-
-          my $img=$show->look_down('_tag', 'img', 'onerror', qr/this\.src=/);
-          if ($img) {
-            my $url=$img->attr('src');
-            # Get the big icon
-            $url =~ s%/c_img/v/%/c_img/i/%;
-            push @{$prog{icon}}, {src => $url};
-          }
-
-          # Now get program description if the longlisting option is set
-          if ( $opt_slow && $link->attr('class') eq 'fiche' ) {
-            get_detailed_fic( $link->attr('onclick'), \%prog, $title );
-          } else {
-            # The text for the <a> tag contains the title without the sub-title so we can use that to separate the two. However
-            # the text for the <a> tag may have been truncated so it fits the slot on the page. Also some titles may contain
-            # a ' - '. Still the heuristic works very well.
-            my $subtitle;
-            my $text = $link->as_text();
-            if ($text =~ s/\.\.\.$//) {
-              if ($title =~ s/^\Q$text\E([^-]+)\s+-\s+//) {
-                $prog{'title'} = [ [ tidy($text).tidy($1) ] ];
-                $prog{'sub-title'} = [ [ tidy($title) ] ];
-              }
-            }
-            elsif ($title =~ s/^\Q$text\E\s+-\s+//) {
-              $prog{'title'} = [ [ tidy($text) ] ];
-              $prog{'sub-title'} = [ [ tidy($title) ] ];
-            }
-          }
-          if ( !$results{$prog{start}.$chid} ) {
-            $results{$prog{start}.$chid} = "1";
-            $writer->write_programme(\%prog);
-          }
-        }
-      $myrow->replace_with("REPLACED");
+          process_fucking_damned_page( $writer, $myrow, $dateindex, $slot);
+          $myrow->replace_with("REPLACED");
+      }
     }
   }
   $t->delete(); undef $t;
