@@ -10,12 +10,14 @@ tv_grab_ee - Grab TV listings for Estonia.
 
 tv_grab_ee --help
 
-tv_grab_ee [--config-file FILE] --configure [--gui OPTION]
+tv_grab_ee --configure [--config-file FILE] [--gui OPTION]
 
-tv_grab_ee [--config-file FILE] [--output FILE] [--days N]
-           [--offset N] [--quiet]
+tv_grab_ee [--config-file FILE]
+           [--days N] [--offset N]
+           [--output FILE] [--quiet] [--debug]
 
-tv_grab_ee --list-channels
+tv_grab_ee --list-channels  [--config-file FILE]
+           [--output FILE] [--quiet] [--debug]
 
 tv_grab_ee --capabilities
 
@@ -23,15 +25,19 @@ tv_grab_ee --version
 
 =head1 DESCRIPTION
 
-Output TV listings for several channels available in Estonia.
-The data comes from http://ajaviide.delfi.ee/events/tv/.
+Output TV listings in XMLTV format for many stations available in Estonia.
+The data comes from www.kava.ee.
 
-First run B<tv_grab_ee --configure> to choose, which channels you want
-to download. Then running B<tv_grab_ee> with no arguments will output
-listings in XML format to standard output.
+First you must run B<tv_grab_ee --configure> to choose which stations
+you want to receive.
 
-B<--configure> Prompt for which channels,
-and write the configuration file.
+Then running B<tv_grab_ee> with no arguments will get a listings in XML
+format for the stations you chose for available days including today.
+
+=head1 OPTIONS
+
+B<--configure> Prompt for which stations to download and write the
+configuration file.
 
 B<--config-file FILE> Set the name of the configuration file, the
 default is B<~/.xmltv/tv_grab_ee.conf>.  This is the file written by
@@ -42,15 +48,17 @@ OPTION may be 'Tk', or left blank for the best available choice.
 Additional allowed values of OPTION are 'Term' for normal terminal output
 (default) and 'TermNoProgressBar' to disable the use of XMLTV::ProgressBar.
 
-B<--output FILE> Write to FILE rather than standard output.
+B<--output FILE> When grabbing, write output to FILE rather than
+standard output.
 
-B<--days N> Grab N days.  The default is -1 which means everything
+B<--days N> When grabbing, grab N days rather than all available days.
 
-B<--offset N> Start N days in the future.  The default is to start
-from today.
+B<--offset N> Start grabbing at today + N days.  N may be negative.
 
-B<--quiet> Suppress the progress messages normally written to standard
-error.
+B<--quiet> Suppress the progress-bar normally shown on standard error.
+
+B<--debug> Provide more information on progress to stderr to help in
+debugging.
 
 B<--list-channels> Write output giving <channel> elements for every
 channel available (ignoring the config file), but no programmes.
@@ -62,268 +70,290 @@ B<--version> Show the version of the grabber.
 
 B<--help> Print a help message and exit.
 
+=head1 ERROR HANDLING
+
+If the grabber fails to download data for some channel on a specific day, 
+it will print an errormessage to STDERR and then continue with the other
+channels and days. The grabber will exit with a status code of 1 to indicate 
+that the data is incomplete. 
+
+=head1 ENVIRONMENT VARIABLES
+
+The environment variable HOME can be set to change where configuration
+files are stored. All configuration is stored in $HOME/.xmltv/. On Windows,
+it might be necessary to set HOME to a path without spaces in it.
+
+=head1 SUPPORTED CHANNELS
+
+For information on supported channels, see http://www.kava.ee/
+
+=head1 AUTHOR
+
+Cougar < cougar at random.ee >. This documentation and parts of the code
+based on various other tv_grabbers from the XMLTV-project.
+
 =head1 SEE ALSO
 
 L<xmltv(5)>.
 
-=head1 AUTHOR
-
-Cougar < cougar at random.ee >
-
-=head1 BUGS
-
-The data source does not include full channels information and the
-channels are identified by short names rather than the RFC2838 form
-recommended by the XMLTV DTD.
-
 =cut
 
-my $xmlurl = 'http://glen.alkohol.ee/xmltv.xml';
-
-my $langs = ['et', 'en', 'ru'];
+my $default_root_url = 'http://xmltv.kava.ee/files';
 
 use strict;
-use XMLTV::Version '$Id$ ';
-use XMLTV::Capabilities qw/baseline manualconfig cache/;
-use XMLTV::Description 'Estonia';
-use Getopt::Long;
-use LWP::Simple;
-use Time::Local;
-use Date::Manip;
 
 use XMLTV;
-use XMLTV::Ask;
-use XMLTV::Config_file;
-use XMLTV::Mode;
-use XMLTV::Date;
+use XMLTV::ProgressBar;
+use XMLTV::Options qw/ParseOptions/;
+use XMLTV::Configure::Writer;
 use XMLTV::Memoize; XMLTV::Memoize::check_argv 'get';
 
-my $xmlstr;
-my $xmldata;
+use XML::LibXML;
+use Date::Manip;
+use Compress::Zlib;
+use File::Path;
+use File::Basename;
+use LWP::Simple qw($ua get);
 
-my %channels;
-my ($encoding, $credits, $ch, $progs);
+$ua->agent("xmltv/$XMLTV::VERSION");
 
-my $ds1;		# start timestamp YYYYMMDD
-my $ds2;		# end + 1 day
+sub t;
 
-my $opt_days = -1;	# return all data
-my $opt_offset = 0;
-my $opt_help;
-my $opt_configure;
-my $opt_config_file;
-my $opt_gui;
-my $opt_output;
-my $opt_quiet = 0;
-my $opt_list_channels;
+my $warnings = 0;
+my $all_days = 1;
 
-my $bar;
-
-use XMLTV::Usage <<END
-$0: get Estonian television listings in XMLTV format
-To configure: $0 --configure [--config-file FILE]
-To grab listings: $0 [--config-file FILE] [--output FILE] [--days N]
-        [--offset N]
-To list channels: $0 --list-channels
-To show capabilities: $0 --capabilities
-To show version: $0 --version
-END
-;
-
-sub get_xmlstr
-{
-	$xmlstr = get($xmlurl);
-	die "get_xmldata: could not open \"$xmlurl\": $!" unless defined $xmlstr;
-
-	# Correct occasional malformed data on site.
-	$xmlstr =~ s!<desc lang="et"></desc>!!g;
-	return $xmlstr;
+# Hack to override XMLTV defaults for $opt{days} even if --days was not given
+if ((scalar(@ARGV) > 0) && (join(':', @ARGV) =~ /--days/)) {
+	$all_days = 0;
 }
 
-sub parse_xmlstr
-{
-	$xmldata = XMLTV::parse($xmlstr);
-	($encoding, $credits, $ch, $progs) = @$xmldata;
+my ($opt, $conf) = ParseOptions({
+	grabber_name		=> "tv_grab_ee",
+	capabilities		=> [qw/baseline manualconfig tkconfig apiconfig cache/],
+	stage_sub		=> \&config_stage,
+	listchannels_sub	=> \&list_channels,
+	load_old_config_sub	=> \&load_old_config,
+	version			=> '$Id$',
+	description		=> "Estonia (www.kava.ee)",
+});
+
+if (not defined ($conf->{'root-url'})) {
+	print STDERR "No root-url defined.\n" .
+	             "Please run the grabber with --configure.\n";
+	exit(1);
 }
 
-sub filter_xmldata
+my ($encoding, $credits, $ch, $progs) = fetch_channels($conf);
+
+my $bar = undef;
+$bar = new XMLTV::ProgressBar({
+	name	=> 'downloading listings',
+	count	=> scalar(@{$conf->{channel}}),
+}) if (not $opt->{quiet}) && (not $opt->{debug});
+
+my @alldata;
+
+foreach my $channel_id (@{$conf->{channel}}) {
+	if (exists $ch->{$channel_id}) {
+		(my $id = $channel_id) =~ s/^(\d\d).*/$1/;
+		t "$channel_id -> $id";
+		my $dataurl = $conf->{'root-url'}->[0] . '/' . $id . '_channeldata.xml';
+		my $xmlstr = get($dataurl) or warning('Failed to fetch ' . $dataurl);
+		if (defined $xmlstr) {
+			my $data = XMLTV::parse($xmlstr);
+			push @alldata, $data;
+		}
+	} else {
+		warning('Missing channel: ' . $channel_id);
+	}
+	$bar->update() if defined $bar;
+}
+$bar->finish() if defined $bar;
+
+my %w_args;
+
+if (((defined $opt->{offset}) && ($opt->{offset} != 0)) || (! $all_days)) {
+	$w_args{offset} = (defined $opt->{offset} ? $opt->{offset} : 0);
+	$w_args{days} = ($all_days ? 60 : $opt->{days});
+	$w_args{cutoff} = '000000';
+}
+
+# XML::Writer doesn't use default ouput but STDOUT directly if not specified
+if (defined $opt->{output}) {
+	my $fd = select();
+	$w_args{OUTPUT} = $fd;
+}
+
+my $data = XMLTV::cat(@alldata);
+
+$data->[1]{'generator-info-name'} = '$Id$';
+$data->[1]{'generator-info-url'} = 'mailto:cougar@random.ee';
+
+XMLTV::write_data($data, %w_args);
+
+# Signal that something went wrong if there were warnings.
+exit(1) if $warnings;
+
+# All data fetched ok.
+t 'Exiting without warnings.';
+exit(0);
+
+##############################################################################
+
+sub t
 {
+	my ($message) = @_;
+	print STDERR $message . "\n" if $opt->{debug};
+}
+
+sub warning
+{
+	my ($message) = @_;
+	print STDERR $message . "\n";
+	$warnings++;
+}
+
+sub fetch_channels
+{
+	my ($conf) = @_;
+
+	t 'Fetching channels';
+	my $compressed = get($conf->{'root-url'}->[0] . '/channels.xml.gz')
+		or die 'Failed to fetch ' . $conf->{'root-url'}->[0] . '/channels.xml.gz';
+	my $xmlstr = Compress::Zlib::memGunzip(\$compressed);
+	my $data = XMLTV::parse($xmlstr);
+	return @$data;
+}
+
+sub list_channels
+{
+	my ($conf, $opt) = @_;
+
+	my ($encoding, $credits, $ch, $progs) = fetch_channels($conf);
+
+	my $result;
+
 	my %w_args;
 	$w_args{encoding} = $encoding;
-	if (defined $opt_output) {
-		my $fh = new IO::File(">$opt_output");
-		die "cannot write to $opt_output: $!" if not defined $fh;
-		$w_args{OUTPUT} = $fh;
-	}
-
-	$bar = new XMLTV::ProgressBar('writing XMLTV data', 1) if not $opt_quiet;
+	$w_args{OUTPUT} = \$result;
 
 	my $writer = new XMLTV::Writer(%w_args);
-
 	$writer->start($credits);
-
 	foreach (sort keys %$ch) {
-		next unless ((defined $channels{$ch->{$_}->{'id'}}) ||
-		             (defined $opt_list_channels));
 		$writer->write_channel($ch->{$_});
 	}
-
-	if (! defined $opt_list_channels) {
-		foreach (@$progs) {
-			my ($start, $stop, $channel)
-			  = ($_->{start}, $_->{stop}, $_->{channel});
-			next unless (defined $channels{$channel});
-			next unless (&checktime($start));
-
-			# Occasionally the upstream data has
-			# programmes that stop before they start!
-			#
-			if (defined $stop) {
-				my $start_parsed = ParseDate $start;
-				die "bad start time $start" if not $start_parsed;
-				my $stop_parsed = ParseDate $stop;
-				die "bad stop time $stop" if not $stop_parsed;
-				if (Date_Cmp($start_parsed, $stop_parsed) > 0) {
-					warn "stop time $stop later than start time $start on $channel - blanking out stop time\n";
-					undef $_->{stop};
-				}
-			}
-			$writer->write_programme($_);
-		}
-	}
-
 	$writer->end();	
-
-	update $bar if not $opt_quiet;
-	$bar->finish() if not $opt_quiet;
+	return $result;
 }
 
-sub get_begin_and_end_ds
+sub config_stage
 {
-	my ($offset, $num) = @_;
-	my ($sec, $min, $hour, $mday, $mon, $year, $wday, $yday, $isdst);
-	my ($ds1, $ds2);
-	my $time = time();
-	($sec, $min, $hour, $mday, $mon, $year, $wday, $yday, $isdst)
-		= localtime($time + ($offset * 86400));
-	$ds1 = sprintf("%04d%02d%02d", $year + 1900, $mon + 1, $mday);
-	if ($num == -1) {
-		$ds2 = "99999999";
+	my ($stage, $conf) = @_;
+
+	if ($stage eq 'start') {
+		return config_stage_start($stage, $conf);
 	} else {
-		($sec, $min, $hour, $mday, $mon, $year, $wday, $yday, $isdst)
-			= localtime($time + (($offset + $num) * 86400));
-		$ds2 = sprintf("%04d%02d%02d", $year + 1900, $mon + 1, $mday);
+		die "Unknown stage $stage";
 	}
-	return ($ds1, $ds2);
 }
 
-sub checktime
+sub config_stage_start
 {
-	my ($d) = @_;
+	my ($stage, $conf) = @_;
 
-	my $dp = XMLTV::Date::parse_date($d);
-	$dp =~ s/^(\d\d\d\d\d\d\d\d).*/$1/;	# keep only YYYYMMDD
-	my $r = (($dp >= $ds1) && ($dp < $ds2));
-	return $r;
+	die "Unknown stage $stage" if $stage ne "start";
+
+	my $result;
+	my $writer = new XMLTV::Configure::Writer(OUTPUT   => \$result,
+	                                          encoding => 'utf-8');
+	$writer->start({grabber => 'tv_grab_ee'});
+	$writer->write_string({
+		id		=> 'root-url', 
+		title		=> [ 
+				     [ 'Root URL for grabbing data',	'en' ],
+				     [ 'Kavade kataloogi URL',		'et' ]
+				   ],
+		description	=> [ 
+				     [ 'This URL describes root directory ' .
+				       'where channels file and all ' .
+				       'channel data can be found.',	'en' ],
+				     [ 'Selles kataloogis peavad asuma ' .
+				       'kanaleid kirjeldav fail ning ' .
+				       'kõikide kanalite telekavad.',	'et' ]
+				   ],
+		default		=> $default_root_url,
+	});
+
+	$writer->end('select-channels');
+
+	return $result;
 }
 
-GetOptions(
-	'days=i'	=> \$opt_days,
-	'offset=i'	=> \$opt_offset,
-	'help'		=> \$opt_help,
-	'configure'	=> \$opt_configure,
-	'config-file=s'	=> \$opt_config_file,
-	'gui:s'		=> \$opt_gui,
-	'output=s'	=> \$opt_output,
-	'quiet'		=> \$opt_quiet,
-	'list-channels'	=> \$opt_list_channels,
-	) or usage(0);
+sub load_old_config
+{
+	my ($config_file) = @_;
 
-usage(1) if $opt_help;
+	my %chanmap = (
+		'10'	=>	'11',	# ETV
+		'12'	=>	'13',	# TV 3
+		'13'	=>	'12',	# Kanal 2
+		'14'	=>	'131',	# STV
+		'15'	=>	'15',	# YLE 1
+		'16'	=>	'16',	# YLE 2
+		'17'	=>	'17',	# MTV 3
+		'20'	=>	'18',	# Nelonen
+		'22'	=>	'54',	# PRO 7
+		'23'	=>	'105',	# NTV+ Vene
+		'24'	=>	'53',	# RTL2
+		'25'	=>	'50',	# RTL
+		'27'	=>	'28',	# PBK
+		'29'	=>	'14',	# TV1000 Eesti
+		'32'	=>	'46',	# Viasat Explorer
+		'35'	=>	'27',	# TV3+
+		'36'	=>	'41',	# Discovery Channel
+		'37'	=>	'125',	# NTV Discovery
+		'38'	=>	'44',	# Discovery Travel&Living
+		'39'	=>	'42',	# Discovery Civilisation
+		'40'	=>	'43',	# Discovery Science
+		'41'	=>	'22',	# National Geographic
+		'42'	=>	'45',	# Viasat History
+		'43'	=>	'59',	# Arte
+		'44'	=>	'60',	# Eurosport
+		'45'	=>	'70',	# MTV
+		'46'	=>	'72',	# VH1
+		'47'	=>	'73',	# Viva
+		'48'	=>	'74',	# Mezzo
+		'49'	=>	'128',	# NTV Sport
+		'50'	=>	'123',	# NTV Jalgpall
+	);
 
-XMLTV::Ask::init($opt_gui);
+	t 'Loading old config format';
+	my @lines = XMLTV::Config_file::read_lines($config_file);
 
-my $mode = XMLTV::Mode::mode('grab',	# default
-                             $opt_configure => 'configure',
-                             $opt_list_channels => 'list-channels',);
+	my $conf = {};
+	$conf->{'root-url'}->[0] = $default_root_url;
+	$conf->{'channel'} = [];
+	$conf->{'no_channel'} = [];
 
-my $config_file
-	= XMLTV::Config_file::filename($opt_config_file, 'tv_grab_ee', $opt_quiet);
-
-my @config_lines;			# used only in grab mode
-if ($mode eq 'configure') {
-	XMLTV::Config_file::check_no_overwrite($config_file);
-} elsif ($mode eq 'grab') {
-	@config_lines = XMLTV::Config_file::read_lines($config_file);
-} elsif ($mode eq 'list-channels') {
-	# Config file not used
-} else {
-	die
-}
-
-$bar = new XMLTV::ProgressBar('getting XMLTV data', 1) if not $opt_quiet;
-&get_xmlstr();
-update $bar if not $opt_quiet;
-$bar->finish() if not $opt_quiet;
-
-$bar = new XMLTV::ProgressBar('parsing XMLTV data', 1) if not $opt_quiet;
-&parse_xmlstr();
-update $bar if not $opt_quiet;
-$bar->finish() if not $opt_quiet;
-
-if ($mode eq 'configure') {
-	my @chs;
-	my @names;
-
-	open(CONF, ">$config_file") or die "cannot write to $config_file: $!";
-
-	foreach (values %$ch) {
-		my ($text, $lang) = @{XMLTV::best_name($langs, $_->{'display-name'})};
-		push @chs, $_->{id};
-		push @names, $text;
-	}
-	my @qs = map { "add channel $_?" } @names;
-	my @want = ask_many_boolean(1, @qs);
-
-	foreach (@chs) {
-		my $w = shift @want;
-		warn("cannot read input, stopping channel questions"), last if not defined $w;
-		# No need to print to user - XMLTV::Ask is verbose enough.
-
-		# Print a config line, but comment it out if channel not wanted.
-		print CONF '#' if not $w;
-		my $name = shift @names;
-		print CONF "channel $_ $name\n";
-	}
-
-	close CONF or warn "cannot close $config_file: $!";
-	say("Finished configuration.");
-	exit();
-} elsif ($mode eq 'list-channels') {
-	&filter_xmldata();
-	exit();
-} elsif ($mode eq 'grab') {
-	$bar = new XMLTV::ProgressBar('reading configuration data', 1) if not $opt_quiet;
-	my $line_num = 1;
-	foreach (@config_lines) {
-		++ $line_num;
-		next if not defined;
-		if (/^channel:?\s+(\S+)\s+([^\#]+)/) {
-			my $ch_did = $1;
-			my $ch_name = $2;
-			$ch_name =~ s/\s*$//;
-			$channels{$ch_did} = $ch_name;
+	foreach my $line (@lines) {
+		next unless defined $line;
+		if ($line !~ /^(#?)channel (\d+)\.tv\.delfi\.ee /) {
+			t 'Illegal config line "' . $line . '"';
+			next;
+		}
+		my $status = $1;
+		my $oldchan = $2;
+		if (! defined $chanmap{$oldchan}) {
+			t 'Unknown channel ' . $2 . ' from "' . $line . '"';
+			next;
+		}
+		if ($status eq '') {
+			push @{$conf->{'channel'}}, "$oldchan.xmltv.kava.ee";
+			t 'Converting ' . $line . ' -> ' . "channel=$oldchan.xmltv.kava.ee";
 		} else {
-			warn "$config_file:$line_num: bad line\n";
+			push @{$conf->{'no_channel'}}, "$oldchan.xmltv.kava.ee";
+			t 'Converting ' . $line . ' -> ' . "channel!$oldchan.xmltv.kava.ee";
 		}
 	}
-	update $bar if not $opt_quiet;
-	$bar->finish() if not $opt_quiet;
-
-	die "No channels specified, run me with --configure\n" if not keys %channels;
-
-	($ds1, $ds2) = get_begin_and_end_ds($opt_offset, $opt_days);
-	&filter_xmldata();
-} else {
-	die
+	return $conf;
 }

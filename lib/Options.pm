@@ -2,6 +2,7 @@ package XMLTV::Options;
 
 use strict;
 use warnings;
+use vars qw($fd);
 
 BEGIN {
     use Exporter   ();
@@ -341,14 +342,14 @@ sub ParseOptions
 
     if( defined( $opt->{output} ) )
     {
-	if( not open( OUT, "> $opt->{output}" ) )
+	if( not open( $fd, "> $opt->{output}" ) )
 	{
 	    print STDERR "Cannot write to $opt->{output}.";
 	    exit 1;
 	}
 	
 	# Redirect STDOUT to the file.
-	select( OUT );
+	select( $fd );
     }
 
     if( $opt->{configure} )

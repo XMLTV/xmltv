@@ -190,6 +190,8 @@ sub configure_stage
     my $xml = XML::LibXML->new;
     my $doc = $xml->parse_string($stage);
     
+    binmode(STDERR, ":utf8") if ($doc->encoding eq "utf-8");
+
     my $ns = $doc->find( "//xmltvconfiguration/*" );
   
     foreach my $p ($ns->get_nodelist)
@@ -322,12 +324,13 @@ sub SelectChannelsStage
     my $xml = XML::LibXML->new;
     my $doc;
     $doc = $xml->parse_string($channels);
+    my $encoding = $doc->encoding;
     
     my $ns = $doc->find( "//channel" );
 
     my $result;
     my $writer = new XMLTV::Configure::Writer( OUTPUT => \$result,
-					       encoding => 'iso-8859-1' );
+					       encoding => $encoding );
     $writer->start( { grabber => $grabber_name } );
     $writer->start_selectmany( {
 	id => 'channel', 
