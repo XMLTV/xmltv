@@ -174,7 +174,7 @@ sub basicVerificationOfIndexes($)
 
     # check that the imdbdir is invalid and up and running
     my $title="Army of Darkness";
-    my $year=1993;
+    my $year=1992;
 
     $self->openMovieIndex() || return("basic verification of indexes failed\n".
 				      "database index isn't readable");
