@@ -99,6 +99,8 @@ L<xmltv(5)>.
 =cut
 
 my $default_root_url = 'http://xmltv.kava.ee/files';
+my $default_cachedir = get_default_cachedir();
+my $default_reformatxmltv = 'yes';
 
 use strict;
 
@@ -117,9 +119,22 @@ use LWP::Simple qw($ua get);
 
 $ua->agent("xmltv/$XMLTV::VERSION");
 
+my $usecache;
+
+BEGIN {
+	eval { require HTTP::Cache::Transparent };
+	if ($@) {
+		$usecache = 0;
+	} else {
+		$usecache = 1;
+	}
+}
+
 sub t;
+sub reformat_programmes (@);
 
 my $warnings = 0;
+my $bar = undef;
 
 my ($opt, $conf) = ParseOptions({
 	grabber_name		=> "tv_grab_ee",
@@ -138,9 +153,40 @@ if (not defined ($conf->{'root-url'})) {
 	exit(1);
 }
 
+my $reformatxmltv;
+
+if (!defined ($conf->{'reformat-xmltv'})) {
+	$reformatxmltv = $default_reformatxmltv;
+} else {
+	if ($conf->{'reformat-xmltv'} =~ /(y|yes|j|jah|1|on)/i) {
+		$reformatxmltv = 1;
+	} elsif ($conf->{'reformat-xmltv'} =~ /(n|no|e|ei|0|off)/i) {
+		$reformatxmltv = 0;
+	} else	{
+		print STDERR "Illegal reformat-xmltv value\n" .
+		             "Please run the grabber with --configure.\n";
+		exit(1);
+	}
+}
+
+if ($usecache && not defined ($conf->{'cachedir'})) {
+	print STDERR "No cachedir defined.\n" .
+	             "Please run the grabber with --configure.\n";
+	exit(1);
+}
+
+init_cachedir($conf->{cachedir}->[0]) if ($usecache);
+
+if ($usecache) {
+	HTTP::Cache::Transparent::init({ 
+		BasePath	=> $conf->{cachedir}->[0],
+		NoUpdate	=> 15 * 60,
+		Verbose		=> $opt->{debug},
+		});
+}
+
 my ($encoding, $credits, $ch, $progs) = fetch_channels($conf);
 
-my $bar = undef;
 $bar = new XMLTV::ProgressBar({
 	name	=> 'downloading listings',
 	count	=> scalar(@{$conf->{channel}}),
@@ -155,6 +201,8 @@ foreach my $channel_id (@{$conf->{channel}}) {
 		my $dataurl = $conf->{'root-url'}->[0] . '/' . $id . '_channeldata.xml';
 		my $xmlstr = get($dataurl) or warning('Failed to fetch ' . $dataurl);
 		if (defined $xmlstr) {
+			# remove illegal '<desc lang="et"> </desc>'
+			$xmlstr =~ s/<desc lang=[^>]+>\s+<\/desc>//g;
 			my $data = XMLTV::parse($xmlstr);
 			push @alldata, $data;
 		}
@@ -180,12 +228,27 @@ if (defined $opt->{output}) {
 	$w_args{OUTPUT} = $fd;		# is $XMLTV::Options::fd
 }
 
-my $data = XMLTV::cat(@alldata);
+my $data;
+
+if ($reformatxmltv) {
+	my $olddata = XMLTV::cat(@alldata);
+	$data = reformat_programmes(@$olddata);
+} else {
+	$data = XMLTV::cat(@alldata);
+}
 
 $data->[1]{'generator-info-name'} = '$Id$';
 $data->[1]{'generator-info-url'} = 'mailto:cougar@random.ee';
 
+$bar = new XMLTV::ProgressBar({
+	name	=> 'writing XMLTV',
+	count	=> 1,
+	}) if (not $opt->{quiet}) && (not $opt->{debug});
+
 XMLTV::write_data($data, %w_args);
+
+$bar->update() if defined $bar;
+$bar->finish() if defined $bar;
 
 # Signal that something went wrong if there were warnings.
 exit(1) if $warnings;
@@ -264,12 +327,12 @@ sub config_stage_start
 	                                          encoding => 'utf-8');
 	$writer->start({grabber => 'tv_grab_ee'});
 	$writer->write_string({
-		id		=> 'root-url', 
-		title		=> [ 
+		id		=> 'root-url',
+		title		=> [
 				     [ 'Root URL for grabbing data',	'en' ],
 				     [ 'Kavade kataloogi URL',		'et' ]
 				   ],
-		description	=> [ 
+		description	=> [
 				     [ 'This URL describes root directory ' .
 				       'where channels file and all ' .
 				       'channel data can be found.',	'en' ],
@@ -278,6 +341,41 @@ sub config_stage_start
 				       'kõikide kanalite telekavad.',	'et' ]
 				   ],
 		default		=> $default_root_url,
+	});
+	$writer->write_string({
+		id		=> 'cachedir',
+		title		=> [
+				     [ 'Directory to store the cache in', 'en' ],
+				     [ 'Puhverdamise kataloog',		'et' ]
+				   ],
+		description	=> [
+				     [ 'Please specify where to cache ' .
+				       'already downloaded data ',	'en' ],
+				     [ 'Sellesse kataloogi tehakse kohalik ' .
+				       'puhver (cache) juba eelnevalt ' .
+				       'tõmmatud failide hoidmiseks',	'et' ]
+				   ],
+		default		=> $default_cachedir,
+	}) if ($usecache);
+	$writer->write_string({
+		id		=> 'reformat-xmltv',
+		title		=> [
+				     [ 'Reformat original XMLTV',	'en' ],
+				     [ 'Algse XMLTV muutmine',		'et' ]
+				   ],
+		description	=> [
+				     [ 'Original XMLTV data is very geneal ' .
+				       'and often inconsistent. This option ' .
+				       'enables XMLTV postprocessing and ' .
+				       'reformatting in grabber. Update grabber ' .
+				       'more often when enabled.',	'en' ],
+				     [ 'Algne XMLTV fail ei ole eriti detailne. ' .
+				       'Tõmbaja võib seda ise edasi töödelda ' .
+				       'ning formaadis olevaid pisivigu ' .
+				       'parandada. Selle lubamisel tuleks tõmbajat ' .
+				       'tihemini uuendada.',		'et' ]
+				   ],
+		default		=> $default_reformatxmltv,
 	});
 
 	$writer->end('select-channels');
@@ -328,6 +426,7 @@ sub load_old_config
 
 	my $conf = {};
 	$conf->{'root-url'}->[0] = $default_root_url;
+	$conf->{'cachedir'}->[0] = $default_cachedir if ($usecache);
 	$conf->{'channel'} = [];
 	$conf->{'no_channel'} = [];
 
@@ -353,3 +452,317 @@ sub load_old_config
 	}
 	return $conf;
 }
+
+sub get_default_cachedir
+{
+	my $winhome = $ENV{HOMEDRIVE} . $ENV{HOMEPATH}
+		if defined($ENV{HOMEDRIVE}) and defined($ENV{HOMEPATH});
+
+	my $home = $ENV{HOME} || $winhome || ".";
+
+	return "$home/.xmltv/cache";
+}
+
+sub init_cachedir
+{
+	my ($path) = @_;
+	if (not -d $path) {
+		mkpath($path) or die "Failed to create cache-directory $path: $@";
+	}
+}
+
+##############################################################################
+# Optional function to parse, reformat and extract useful information
+# from simple XMLTV data
+##############################################################################
+
+sub reformat_programmes (@)
+{
+	my ($encoding, $credits, $channels, $programmes) = @_;
+
+	my $stripgenres = 'animasari|dokkaader|dokumentaalfilm|dokumentaalsari|draamafilm|draamasari|ffriigisari|komöödiasari|kriminaalsari|kriminull|mängufilm|multifilm|muusikadokumentaal|noortesaade|noortesari|õudusfilm|perefilm|põnevus|põnevusfilm|romantiline draama|romantiline komöödia|seiklus';
+
+	my @newprogrammes;
+
+	$bar = new XMLTV::ProgressBar({
+		name	=> 'reformatting XMLTV',
+		count	=> scalar(@{$programmes}),
+		}) if (not $opt->{quiet}) && (not $opt->{debug});
+
+	foreach (@$programmes) {
+		my $genre = "";
+		my @titles;
+		my @descs;
+		my @categories;
+		my @subtitles;
+		my @episodenum;
+		my $date;
+		my @country;
+		my @subtitlez;
+		my @languages;
+		my %video;
+		my %audio;
+		my $ismovie = 0;
+		my $isnew = 0;
+		my $repeat = 0;
+
+		# $_->{'title'} should always exist
+		foreach (@{$_->{'title'}}) {
+			my ($title, $lang) = @$_;
+			my $subtitle;
+
+			# FST: Vene keel turistidele
+			# TV2: Himpulat: Sinine
+			if ($title =~ /^(?:FST|TV2): (.*)$/) {
+				$title = $1;
+			}
+
+			if ($title =~ /^(.*)\s+($stripgenres)$/) {
+				$title = $1;
+				$genre = $2;
+			}
+
+			# Multifilm Simpsonid: Öised varastajad
+			# Mängufilm: Kadunud 60 sekundiga (Gone in 60 seconds )
+			if ($title =~ /^($stripgenres):?\s+(.*)$/i) {
+				$genre = $1;
+				$title = $2;
+			}
+
+			if ($title =~ /^Mf:\s(.*)$/) {
+				$title = $1;
+				$ismovie = 1;
+			}
+
+			if ($title =~ /^(.*)\*$/) {
+				$title = $1;
+				$repeat = 1;
+			}
+
+			# Black Hawk Down ( Black Hawk Down, USA 2001 )
+			if ($title =~ /\s+(\d{4}) ?\)\.?$/) {
+				$date = $1;
+			}
+			if ($title =~ /(?:, |\()((USA|\u\w[\u\w\l\w]+)(?:[\-\/]\u\w[\u\w\l\w]+)*) \d{4} ?\)\.?$/) {
+				foreach (split(/\//, $1)) {
+					push (@country, [ $_, $lang ]);
+				}
+			}
+
+			if ($title =~ /^((?:[^:\(]+)|(?:C.S.I.:[^:]+)): ([\p{IsUpper}][^:]*)$/) {
+				# C.S.I.: Kriminalistid: Sundlus
+				$title = $1;
+				$subtitle = $2;
+			} elsif ($title =~ /^(.*)(?:\*:)\s*(.*)$/) {
+				# Lastetaltsutaja*: McCafferty pere
+				$title = $1;
+				$subtitle = $2;
+				$repeat = 1;
+			} elsif ($title =~ /^([^:\(]+):\s+([^:]*)$/) {
+				# !!! Lend 285 kaaperdamine (Hijacked: Flight 285, USA 1996)
+				# RD: 101 inimkehast eemaldatud eset*
+				# Ffriigisari Star Trek: Uus põlvkond: Laps (Star Trek: The Next Generation, USA 1988)
+				# Noortesaade 15:15
+				$title = $1;
+				$subtitle = $2;
+			}
+
+			if ($title =~ /^(.*)\*$/) {
+				$title = $1;
+				$repeat = 1;
+			}
+
+			if ($title =~ /^(.*)(?:[,:] | ,)(\d+)([\/\-])(\d+)\.?$/) {
+				# 10 otsustavat aastat, 4/16
+				# Dokumentaalsari Elu kosmoses, 1-8
+				# Armastuse teed: 183/220
+				if (($3 ne "-") || (($2 + 1) < $4)) {
+					# mach if not multiple series
+					$title = $1;
+					@episodenum = [ sprintf(". %d/%d .", $2 - 1, $4), 'xmltv_ns'];
+				}
+			} elsif ($title =~ /^(.*)(?:, | ,)(\d+)([\/\-])(\d+)((\.?)|(\s*\(.*))$/) {
+				# Noortesari Punk`d, 5/8 (USA 2003)
+				# Noortesari Punk`d, 6-8 (USA 2003)
+				if (($3 ne "-") || (($2 + 1) < $4)) {
+					# skip: Õnne 13, 53-54 (ETV 1997)
+					$title = $1 . $5;
+					@episodenum = [ sprintf(". %d/%d .", $2 - 1, $4), 'xmltv_ns'];
+				}
+			} elsif ($title =~ /^(.*)(?:, | ,)(\d+)([\/\-])(\d+):\s(.*)$/) {
+				# Kriminaalsari Alice Nevers - naine kohtumõistjaks, 1-4: Kohtumõistjad ...
+				if (($3 ne "-") || (($2 + 1) < $4)) {
+					# mach if not multiple series
+					$title = $1;
+					if (defined $subtitle) {
+						$title .= $5;
+					} else {
+						$subtitle = $5;
+					}
+					@episodenum = [ sprintf(". %d/%d .", $2 - 1, $4), 'xmltv_ns'];
+				}
+			} elsif ($title =~ /^(.*), (\d+)\.?$/) {
+				$title = $1;
+				@episodenum = [ sprintf(". %d .", $2 - 1), 'xmltv_ns'];
+			}
+			if ($title =~ /^(.*)\. Sari\.$/) {
+				$title = $1;
+				@episodenum = [ '. . .', 'xmltv_ns'];
+			}
+			if (defined $subtitle) {
+				if ($subtitle =~ /^(.*)\s+(\d+)\/(\d+)\.?$/) {
+					# <sub-title>Tere tulemast koju, Rose 1/2</sub-title>
+					$subtitle = $1;
+					@episodenum = [ sprintf(". %d/%d .", $2 - 1, $3), 'xmltv_ns'];
+				} elsif ($subtitle =~ /^(.*)(?:, | ,)(\d+)\/(\d+)\.?$/) {
+					$subtitle = $1;
+					@episodenum = [ sprintf(". %d/%d .", $2 - 1, $3), 'xmltv_ns'];
+				} elsif ($subtitle =~ /^(.*)(?:, | ,)(\d+)\/(\d+)((\.?)|(\(.*))$/) {
+					@episodenum = [ sprintf(". %d/%d .", $2 - 1, $3), 'xmltv_ns'];
+				} elsif ($subtitle =~ /^(.*), (\d+)\.?$/) {
+					$subtitle = $1;
+					@episodenum = [ sprintf(". %d .", $2 - 1), 'xmltv_ns'];
+				}
+				if ($subtitle =~ /^(.*)\*$/) {
+					$subtitle = $1;
+					$repeat = 1;
+				}
+				push (@subtitles, [ $subtitle, $lang ]);
+			}
+
+			if ($title =~ /^(.*)\*$/) {
+				$title = $1;
+				$repeat = 1;
+			}
+
+			if ($title =~ /^(.*) \(([[:alpha:]]+) keeles\)\.?$/) {
+				push (@languages, $2 , 'et');
+			}
+
+			push (@titles, [ $title, $lang ]);
+		}
+
+		# it is not needed to check $_->{'desc'} existence
+		foreach (@{$_->{'desc'}}) {
+			my ($desc, $lang) = @$_;
+
+			$desc =~ s/^ //g;
+			$desc =~ s/ $//g;
+
+			if ($desc =~ /^(.*)\s+Stereo\.?(.*)$/) {
+				$desc = $1 . $2;
+				$audio{'stereo'} = 'stereo';
+			} elsif ($desc =~ /^(.*)\s+Stereo surround\.?(.*)$/) {
+				$desc = $1 . $2;
+				$audio{'stereo'} = 'surround';
+			} elsif ($desc =~ /^Stereo\.?$/) {
+				$desc = '';
+				$audio{'stereo'} = 'stereo';
+			}
+
+			if ($desc =~ /^(.*)\s+Uusinta\.?(.*)$/) {
+				$desc = $1 . $2;
+				$isnew = 1;
+			}
+
+			if ($desc =~ /^(.*)\s16:9\.?(.*)$/) {
+				$desc = $1 . $2;
+				$video{'aspect'} = '16:9';
+			}
+
+			if ($desc =~ /^(.*)\s+Kordus$/) {
+				$desc = $1;
+				$repeat = 1;
+			} elsif ($desc =~ /^(.*)\s+Kordus\.(.*)$/) {
+				$desc = $1 . $2;
+				$repeat = 1;
+			}
+
+			if ($desc =~ /^Osa (\d+)\/(\d+):\s+([[:^punct:]]+[[:punct:]])\s(.*)$/) {
+				# Osa 3/5: Marseille ja Provence. Dokumentaalsari Prantsusmaas...
+				# Osa 2/5: Lyon ja selle ümbrus. Dokumentaalsari ...
+				push (@subtitles, [ $3, $lang ]);
+				$desc = $4;
+				@episodenum = [ sprintf(". %d/%d .", $1 - 1, $2), 'xmltv_ns'];
+			} elsif ($desc =~ /^Osa (\d+):\s+([[:^punct:]]+[[:punct:]])\s(.*)$/) {
+				# Osa 1: Runolaulust kirikulauluni. Soome muusika ...
+				push (@subtitles, [ $2, $lang ]);
+				$desc = $3;
+				@episodenum = [ sprintf(". %d .", $1 - 1), 'xmltv_ns'];
+			} elsif ($desc =~ /^Osa (\d+)\/(\d+)\.\s+(.*)$/) {
+				# Osa 3/12. Pääosissa Mari Perankoski ...
+				$desc = $3;
+				@episodenum = [ sprintf(". %d/%d .", $1 - 1, $2), 'xmltv_ns'];
+			} elsif ($desc =~ /^Osa (\d+)\.\s+(.*)$/) {
+				# Osa 3. Novembris 2005 filmitud ...
+				$desc = $2;
+				@episodenum = [ sprintf(". %d .", $1 - 1), 'xmltv_ns'];
+			} elsif ($desc =~ /^(\d+)\/(\d+)[\s:\.\,]+(.*)/) {
+				# 1/4: Miks me valetame?...
+				$desc = $3;
+				@episodenum = [ sprintf(". %d/%d .", $1 - 1, $2), 'xmltv_ns'];
+			} elsif ($desc =~ /^(.*)\s+Osa (\d+)\/(\d+)\.?(.*)$/) {
+				# ... liikaa. Osa 5/6. Tuotanto ...
+				$desc = $1 . $4;
+				@episodenum = [ sprintf(". %d/%d .", $2 - 1, $3), 'xmltv_ns'];					
+			} elsif ($desc =~ /^([[:^punct:]]+[[:punct:]])\s+Osa (\d+)\.\s*(.*)$/) {
+				# Õhk. Osa 2. Miks lennuk lendab
+				unless (@subtitles) {
+					my $subtitle = $1;
+					$desc = $3;
+					@episodenum = [ sprintf(". %d .", $2 - 1), 'xmltv_ns'];
+					$subtitle =~ s/\.$//;
+					push (@subtitles, [ $subtitle, $lang ]);
+				}
+			}
+
+			if ($desc =~ /Tekstitys Teksti-tv:n/) {
+				push (@subtitlez, { 'type' => 'teletext' });
+			}
+
+			push (@descs, [ $desc, $lang ]) if ($desc ne "");
+		}
+
+		foreach (@{$_->{'category'}}) {
+			my ($category, $lang) = @$_;
+			$category = uc(substr($category, 0, 1)) . lc(substr($category, 1));
+			push (@categories, [ $category, $lang ]);
+		}
+
+		if ($ismovie && ! @categories) {
+			push (@categories, [ 'Movie', 'en' ]);
+			push (@categories, [ 'Filmid', 'et' ]);
+		} elsif (@episodenum && ! @categories) {
+			push (@categories, [ 'Serial', 'en' ]);
+			push (@categories, [ 'Telesarjad', 'et' ]);
+		}
+
+		$_->{'title'} = \@titles if @titles;
+		if (@descs) {
+			$_->{'desc'} = \@descs;
+		} else {
+			delete $_->{'desc'};
+		}
+		$_->{'sub-title'} = \@subtitles if @subtitles;
+		$_->{'category'} = \@categories if @categories;
+		$_->{'episode-num'} = \@episodenum if @episodenum;
+		$_->{'date'} = $date if (defined $date);
+		$_->{'country'} = \@country if @country;
+		$_->{'language'} = \@languages if @languages;
+		$_->{'previously-shown'} = {'channel' => $_->{'channel'}} if ($repeat);
+		$_->{'audio'} = \%audio if %audio;
+		$_->{'video'} = \%video if %video;
+		$_->{'subtitles'} = \@subtitlez if @subtitlez;
+		$_->{'new'} = 'presence' if ($isnew);
+		push @newprogrammes, $_;
+		$bar->update() if defined $bar;
+	}
+	$bar->finish() if defined $bar;
+
+	return [$encoding, $credits, $channels, \@newprogrammes];
+}
+
+=END
+
+TODO list:
+	- extract credits
