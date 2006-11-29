@@ -49,7 +49,7 @@ B<--output FILE> Write to FILE rather than standard output.
 B<--days N> Grab N days.  The default is fourteen.
 
 B<--offset N> Start N days in the future.  The default is to start
-from now on (= zero).
+>from now on (= zero).
 
 B<--quiet> Suppress the progress messages normally written to standard
 error.
@@ -72,6 +72,7 @@ L<xmltv(5)>.
 =head1 AUTHOR
 
 Daniel Bittel <daniel.bittel@solnet.ch>. Inspired by tv_grab_ch by Stefan Siegl.
+Adaption to the new design of bluewin by René Bühlmann.
 
 =head1 BUGS
 
@@ -83,6 +84,7 @@ at http://sourceforge.net/projects/xmltv/.
 
 use warnings;
 use strict;
+use Time::Local;
 use Date::Manip;
 use XMLTV::Version '$Id$ ';
 use XMLTV::Capabilities qw/baseline manualconfig cache share/;
@@ -110,7 +112,7 @@ To show version: $0 --version
 
 Don't try to run this grabber between midnight and ~6 o'clock in the morning
 to get data for the current day (ergo: without offset):
-When viewing Bluewin's website after midnight, I found they only display 
+When viewing Bluewins website after midnight, I found they only display 
 data from early in the morning of that day.
 END
   ;
@@ -134,17 +136,18 @@ BEGIN {
 sub get_channels();
 sub channel_id($);
 sub get_page($);
-sub grab_channel($);
+sub grab_channel_group($$);
 
 ## attributes of xmltv root element
 my $head = { 
-    'source-data-url'      => 'http://fernsehen.bluewin.ch/programm/',
-    'source-info-url'      => 'http://fernsehen.bluewin.ch/',
+    'source-data-url'      => 'http://epg.sso.bluewin.ch/de/index.php/channelview/',
+    'source-info-url'      => 'http://epg.sso.bluewin.ch/de/detailview.php?action=DetailView&BroadcastID=',
     'generator-info-name'  => 'XMLTV',
     'generator-info-url'   => 'http://membled.com/work/apps/xmltv/',
 };
 
-
+my @groupid = ('10','11','12','13','14','15','16','17','18','20','22','25');
+#my @groupid = ('12');
 
 ## the timezone fernsehen.ch lives in is, CET/CEST
 my constant $TZ = "+0100";
@@ -216,12 +219,11 @@ else { die("never heard of XMLTV mode $mode, sorry :-(") }
 
 
 
-## hey, we can't live without channel data, so let's get those now!
-my $bar = new XMLTV::ProgressBar( 'getting list of channels', 1 )
+## hey, we cant live without channel data, so lets get those now!
+my $bar = new XMLTV::ProgressBar( 'getting list of channels', scalar(@groupid) )
     if not $opt_quiet;
 
 my %channels = get_channels();
-$bar->update() if not $opt_quiet;
 $bar->finish() if not $opt_quiet;
 
 
@@ -348,7 +350,8 @@ $writer->start($head);
 if ($mode eq 'list-channels') {
     foreach (keys %channels) {
         my %channel = ('id'           => channel_id($_), 
-                       'display-name' => [[$channels{$_}, $lang]]); 
+                       'display-name' => [[$channels{$_}, $lang]],
+			'icon'        => [(0 => "http://epg.sso.bluewin.ch/images/tvchannel_logos/$_")]); 
         $writer->write_channel(\%channel);
     }
 
@@ -367,8 +370,10 @@ die "No channels specified, run me with --configure flag\n" unless(scalar(@reque
 ## write out <channel> tags
 foreach(@requests) {
     my $id = channel_id($_);
+    my %icon = ('src' => "http://epg.sso.bluewin.ch/images/tvchannel_logos/$_");
     my %channel = ('id'           => $id, 
-                   'display-name' => [[$channels{$_}, $lang]]); 
+                   'display-name' => [[$channels{$_}, $lang]],
+		    'icon'        => [{'src' => "http://epg.sso.bluewin.ch/images/tvchannel_logos/$_"}]); 
     $writer->write_channel(\%channel);
 }
 
@@ -380,12 +385,11 @@ my ($cur_year, $cur_month) = ParseDate('now') =~ m/(....)(..)/;
 
 
 ## write out <programme> tags
-$bar = new XMLTV::ProgressBar('grabbing channels       ', scalar(@requests))
+$bar = new XMLTV::ProgressBar('grabbing channels       ', scalar(@requests)*13*$opt_days)
   if not $opt_quiet;
 
-foreach my $channel (@requests) {
-    grab_channel $channel;
-    update $bar if not $opt_quiet;
+foreach my $id (@groupid) {
+    grab_channel_group($id,\@requests);
 }
 
 $bar->finish()
@@ -399,137 +403,192 @@ $writer->end();
 ## channel_id($s) :: turn site channel id into an xmltv id
 sub channel_id($) {  
     for (my $s = shift) {
-	$_ = lc(defined($chid_mapping{$_}) ? $chid_mapping{$_} : "$_.bluewin.ch");
+        $_ = lc(defined($chid_mapping{$_}) ? $chid_mapping{$_} : "$_.bluewin.ch");
 	$_ = "C$_" if /^\d/;
 	return $_;
     }
 }
 
 
+sub array_contains($$) {
 
+    my $reqs = shift;
+    my $element = shift;
 
+    foreach (@$reqs) {
+	
+        if ($_ eq $element) {
+            return 1;
+        }
+    }
+    return 0;
+}
 
 ## grab_channel($start, $laststart, $laststop, $stop)
-sub grab_channel($) {
+sub grab_channel_group($$) {
     my ($start, $laststart, $laststop, $stop);
 
-    my $channel = shift;
+    my $group = shift;   
+    my $requests = shift;
+
+    my $channel;
+
     my $grabDate = $grab_start;
   grab_channel_loop:
     my $tb = HTML::TreeBuilder->new();
     my $got = 0;
 
+    my $loop_date = timelocal(0,0,6,substr($grabDate,6,2),substr($grabDate,4,2)-1,substr($grabDate,0,4));     
+
     
-    my $loop_date = substr($grabDate,0,4) . '-' . substr($grabDate,4,2) . '-' . substr($grabDate,6,2);
+    my $url=$head->{q(source-data-url)};
     
-    $tb->parse(get_page("http://fernsehen.bluewin.ch/programm/station/?id=$channel&day=$loop_date"))
-      or die "cannot parse content of http://fernsehen.bluewin.ch/programm/station/?id=$channel&day=$loop_date";    
-    $tb->eof;
-    
-    for($tb->look_down('_tag' => 'form', 'action' => '/memberzone/alert/mytv/')) {
 
-
-        foreach($_->look_down('_tag' => 'table', 'width' => '100%', 'border' => 0, 'cellspacing' => 0, 'cellpadding' => 4)) {
-            my %show;
-            die unless(ref($_)) eq 'HTML::Element';
-
-
-            $show{channel} = channel_id($channel);
-      		my  $checkbox = $_->look_down('_tag' => 'input', 'type' => 'checkbox');
-      		next unless (ref($checkbox)) eq 'HTML::Element';
-      
-	    	$start = parse_local_date( substr(($_->look_down('_tag' => 'input', 'type' => 'checkbox'))->attr('value'),0,12), $TZ );
-
-      		my $tmpStr = $_->look_down('_tag' => 'td', 'class' => 'textdat', 'width' => 35)->as_text();
-      		$tmpStr =~ s/^(.*)(\W)bis(\W)(.*)/$4/;
-
-      		$stop = parse_local_date( ( substr($start, 0, 8).$tmpStr), $TZ);
-
-    		if ( Date_Cmp ($start, $stop ) > 0 ) { # if the end time is before the start time, the show goes over midnight.
-    			 $stop=DateCalc ( $stop, "+ 1 day");
-    		}
-			my ($start_base, $start_tz) = @{ date_to_local($start, $TZ) };
-    		$show{start} = UnixDate($start_base, '%q') . " $start_tz";
-    		
-			
-			my ($stop_base, $stop_tz) = @{ date_to_local($stop, $TZ) };
-    		$show{stop} = UnixDate($stop_base, '%q') . " $stop_tz";
-
-   		
-    		my $categoryElement = $_->look_down('_tag' => 'td', 'class' => 'textdat', 'width' => 90, 'align' => 'right' );
-    		
-    		if (ref($categoryElement) eq 'HTML::Element')
-    		{
-    			my $category = $categoryElement->as_text();
-    		
-    			$category =~ s/^\s+//;
-    			$category =~ s/\s+$//;
-    		
-    		 
-    			$show{'category'} = [[$category, $lang]] if ( length($category) ) ;
-    		}
-    		
-            my $title = "";
-            my $link_detail = "";
-
-            my $link = "";
-       		my $DescAvailable = 0;
-      		foreach($_->look_down('_tag' => 'img', 'src' => '/img/jump2_right.gif')) {
-            	my %show;
-            	die unless(ref($_)) eq 'HTML::Element';
-      			$DescAvailable = 1;
-      		}
-
-      	   foreach my $blah (@{$_->extract_links()}) {
-                my($my_link, $element, $attr, $tag) = @$blah;
-                next if ( $element->as_text() eq '' );
-
-                my @title = split ( / - /, $element->as_text());
-      	        my $title = $element->as_text();  
-
-      			$link = $my_link;
-            	$link  =~ s/^(.*),\'(.*)\'\)/$2/;
-              
-
-            	my @details = get_details ( $link,  $element->as_text() );
-
-            	$show{'title'} = [[$details[0], $lang]];
-            	$show{'sub-title'} = [[$details[1], $lang]] if(length($details[1]));
-            	if ( $DescAvailable  == 1 ) {
-		            $show{desc} = [[ $details[2], $lang ]] if(length($details[2]));
-            	}            
-            
-            	if ( $details[3] ne "" ) {
-                	my @actors = split(m/\s*,\s*/, $details[3]);
-                	$show{credits}{actor} = \@actors;            
-            	}
-  	    		
-  	    		if(length($details[4])) {
-                	my @directors = split(m/\s*,\s*/, $details[4]);
-                	$show{credits}{director} = \@directors;
-            	}
-            	
-            	if(length($details[5])) {
-					my @writers = split(m/\s*,\s*/, $details[5]);
-					$show{credits}{writer} = \@writers;
-            	}
+    $url = "$url?action=ChannelView&SupergroupID=".$group."&date=$loop_date&segments=11111";
 	
-				if(length($details[6])) {
-					my @presenters = split(m/\s*,\s*/, $details[6]);
-					$show{credits}{presenter} = \@presenters;
-            	}
+    $tb->parse(get_page($url))
+      or die "cannot parse content of $url";    
+    $tb->eof;
 
-            	$show{audio}{stereo} = $details[7] if(length($details[7]) );
-            
-	    		$show{subtitles} = [{ type => $details[8] }] if(length($details[8]));
-            
-            	$show{'previously-shown'} = {} if(length($details[9]));
-				$writer->write_programme(\%show);
-			}	
+    my $col=0;
 
-			
-		}	
-   }
+    my @channels;
+
+    #We need to know the channel order
+
+    foreach($tb->look_down('_tag' => 'div', 'class' => 'segment_logo' )) {
+        next unless(ref($_) eq "HTML::Element");
+
+        my $chan = $_;
+	
+        my $img=undef;
+	
+        foreach($chan->look_down('_tag' => 'img')) {
+	    next unless(ref($_) eq "HTML::Element");
+
+	    if (ref($img) eq "HTML::Element") {
+                die "Multiple img tags!";
+            }
+	    if ($_->attr('title')) {
+                $img=$_;
+            }
+        }
+
+        my $channel_name = $img->attr('title');
+        my $logo = $img->attr('src');
+        $logo =~ m/tvchannel_logos\/(.+\.[a-z][a-z][a-z])/ or die "unable to extract logo";
+        $logo = $1;
+
+        push(@channels,$logo);
+	$col++;
+    }
+
+    $col=0;
+    
+    foreach($tb->look_down('_tag' => 'div', 'class' => 'segment')) {
+        next unless(ref($_) eq "HTML::Element");
+
+        if (not array_contains($requests,$channels[$col])) {
+            my $len =@channels;
+            $col = ($col+1) % $len;
+            next;
+        }
+
+        	$bar->update() if not $opt_quiet;
+
+	my $segment = $_;
+	
+	foreach($segment->look_down('_tag' => 'div', 'class' => 'segment_content')) {
+            next unless(ref($_) eq "HTML::Element");
+
+
+            my $segment_content = $_;
+
+	    my $id=undef;
+
+            for (@{$segment_content->extract_links('a')}) {
+		if ($id) {
+                    die "Multiple link tags!";
+		}
+                my($link, $element, $attr, $tag) = @$_;
+		$link =~ m/\(([0-9]+)\)/ or die "Unable to extract id!";
+		$id = $1;
+            }
+
+            if (not $id) {
+		#$segment_content->dump();
+		next;
+                die "Unable to get id!";
+	    }
+
+
+            my $prog_time=$segment_content->look_down('_tag' => 'div', 'class' => 'programm_time ');
+            if (ref($prog_time) ne "HTML::Element") {
+               die "Time tag not found";
+            }
+            my @content = $prog_time->content_list();
+            my $time = $content[0];
+
+            if (not $time) {
+                die "Unable to get time!";
+	    }
+
+	    
+
+            my ($hh,$mm) = split(/:/,$time);
+            my $realstartdate = $grabDate;
+            if ($hh<6) {
+                $realstartdate = &DateCalc($realstartdate,"+ 1 day");
+            }
+            my $file_date = substr($realstartdate,6,2).'.'.substr($realstartdate,4,2). '.'.substr($realstartdate,0,4);
+
+	    my @details = get_details($id,$channels[$col],$file_date,$time); 
+
+            my $realenddate = $realstartdate;
+
+            my $emm;
+            my $ehh;
+            if (length($details[4])) {
+                ($ehh,$emm) = split(/:/,$details[4]);
+            }
+            else {
+                $emm=$mm;
+                $ehh=($hh+1)%24;
+            }
+            
+            if ($ehh<$hh) {
+                $realenddate = &DateCalc($realenddate,"+ 1 day");
+            }
+            if (length($ehh)<2) { 
+                $ehh="0$ehh"; 
+            } 
+
+            my %show;
+	    $show{channel} = channel_id($channels[$col]);
+
+
+            my $startdate = substr($realstartdate,0,4) . substr($realstartdate,4,2) . substr($realstartdate,6,2);
+            my $enddate = substr($realenddate,0,4) . substr($realenddate,4,2) . substr($realenddate,6,2);
+
+            $show{start} = "$startdate".$hh.$mm."00 $TZ";
+            $show{stop} = "$enddate".$ehh.$emm."00 $TZ";
+            $show{category} = [[$details[2],$lang]];
+            $show{'title'} = [[$details[0],$lang]];
+            if (length($details[1])) {
+                $show{'sub-title'} = [[$details[1],$lang]];
+            }
+            if (length($details[5])) {
+                $show{'year'} = [[$details[5],$lang]];
+            }
+
+
+	    $writer->write_programme(\%show);
+
+       }        
+
+	my $len =@channels;
+        $col = ($col+1)%$len;
+    }
     $tb->delete();    
 	
     $grabDate = &DateCalc($grabDate,"+ 1 day");
@@ -540,169 +599,98 @@ sub grab_channel($) {
 	
 }
 
-## separate_titles ($title, fullTitle )
+## get_details ($id, $channel, $date, $time)
+sub get_details ($$$$) {
+	my $id= shift;
+        my $channel = shift;
+        my $date = shift;
+        my $time = shift;
 
-sub separate_titles ($$) {
-    my ($title, $fullTitle );
-	
-	$title = shift;
-	$fullTitle = shift;
+	my $url=$head->{q(source-info-url)} . $id;
 
-	my @result = ("","");
-	my @specialChars = (":","!", "'", "&" );
-
-
-	## this is the _really_ ugly part: bluewin.ch does not provide the tile and 
-	## sub/episode-title seperately or with a unique seperator ($fullTitle).
-	##
-	## they do include a javascript containing the title only as a property of an
-	## object. 
-	## so we could seperate title and sub/episode title with a substr using the 
-	## length of the object.property ($title).
-	##
-	## BUT: $title does not contain special characters like : or !
-	## for example:
-	## title: Fussball: WM 2006 Deutschland Vorrunde - Frankreich - Schweiz aus Stuttgart/GER
-	## 'javascript-title': Fussball+WM+2006+Deutschland+Vorrunde
-	##
-	## so we first have to loop over $title and search for the special chars and insert a char 
-	## at the same position in $title.
-
-	foreach(@specialChars)
-	{
-	my $pos = 0;
-		while ( ( index ( $fullTitle, $_, $pos ) != -1) && 
-			  ( index ( $fullTitle, $_, $pos ) <= length ( $title ) ) ) {
-  			$pos = index ( $fullTitle, $_, $pos );
-  			$title = substr ( $title, 0, $pos )." ".substr ( $title, $pos );
-  			$pos++;
- 		}
- 	}
- 	## now we can do the substr-stuff, and remove whitespaces.
- 	
-	$result[0] = substr ($fullTitle, 0, length ($title ) );
-	$result[0] =~ s/^\s+//;
- 
- 	$result[1] = substr ($fullTitle, length ($title ) ) if ( length ($title) < length $fullTitle ) ;
- 
- 	$result[1] =~ s/^\s+// if ( $result[1] ne "" ); 
- 	$result[1] =~ s/^-\s+// if ( $result[1] ne "" );
-
- 	return @result;
-}
-
-
-## get_details ($url, $title)
-
-sub get_details ($) {
-	my $url= "http://fernsehen.bluewin.ch" . shift;        # no slash after .ch!
-	my $title = shift;
-	## http://fernsehen.bluewin.ch/programm/detail/index.php?const_id=.....
-
-	my @result = ("","","","","","","","","","");
-	## tilte, episode title, description, actors, director, 
+	my @result = ("","","","","","","","","","","","","");
+	## tilte, episode title, cat, description, endtime, year, actors, director, 
 	## writer, presenter, audio, subtitles, previously-shown
+        my $len = @result;
+        for (my $i=0; $i<$len;$i++) {
+            $result[$i]="";
+        }
  
 	my $tb=new HTML::TreeBuilder();
 	$tb->parse(get_page($url))
 	  or die "cannot parse content of $url";	
 	$tb->eof;
+
+        my $tit1 = $tb->look_down('_tag' => 'span', 'class' => 'tit1');
+        if (ref($tit1) ne "HTML::Element") {
+           die "Title tag not found";
+        }
+
+        my @content = $tit1->content_list();
+        $result[0] = $content[0];
+        chop($result[0]);
+        chomp($result[0]);
+
+        foreach($tit1->look_down('_tag' => 'wbr')) {
+            my $stit = $_;
+            if (ref($stit) eq "HTML::Element") {
+               $stit = $stit->right();
+            }
+            if (length($stit)) {
+               if (length($result[1])) {
+                   chop($result[1]);
+                   chomp($result[1]);
+                   $result[0].="- $result[1]";
+               }
+               $result[1] = $stit;
+            }
+        }
+
+        my $titd = $tb->look_down('_tag' => 'span', 'class' => 'titdblue');
+        if (ref($titd) ne "HTML::Element") {
+           die "Category tag not found";
+        }
+
+        @content = $titd->content_list();
+	$content[0] =~ m/([^:]+):/ or die "unable to extract category";
+        $result[2] = $1;
+
+        if ($content[0] =~ m/([1-2][0-9][0-9][0-9])/) {
+            $content[5] = $1;
+        }
+
+
+        my $desc = $tb->look_down('_tag' => 'div', 'class' => 'text');
+        if (ref($desc) ne "HTML::Element") {
+           die "Text tag not found";
+        }
+
+        @content = $desc->content_list();
+        $result[3] = $content[$#content];
+
+        #<table border="0" cellpadding="0" cellspacing="5" width="100%" style="border: 1px solid #99ccff;"
+        my $bc = $tb->look_down('_tag' => 'table', 'border' => '0', 'cellspacing' => '5', 'width' => '100%');
+        @content = $bc->content_list();
+        foreach(@content) {
+            next unless(ref($_) eq "HTML::Element");
+
+            my $check = $_->look_down('_tag' => 'img', 'src' => '/images/tvchannel_logos/'.$channel);
+            if (ref($check) ne "HTML::Element") {
+                next;
+            }
+
+            if (not $_->as_text() =~ m/$date.*$time \- ([0-2][0-9]:[0-6][0-9])/) {
+                next;
+            }
+
+            $result[4] = $1;
+            
+
+        }
+
     
-    ## description
-    foreach($tb->look_down('_tag' => 'td', 'class' => 'text', 'style' => 'padding:3px', 'valign' => 'top')) {
-		next unless(ref($_) eq "HTML::Element");
-
-		$result[2] = $_->as_text();
-		$result[2] =~ s/\226/-/g; # replace 0x96 separator by '-'
-		$result[2] =~ s/([\x00-\x1F])//g; # bluewin tends to include some strange special chars :(
-
-		#print $result[2]."\n";
-    }
+    $tb->delete();
     
-    ## credits
-    my @info  = $tb->look_down('_tag' => 'td', 'class' => 'textdat', 'style' => 'padding:3px' );
-    my $infoTd = $info[-2]->as_HTML();
-
-	## a bit ugly: bluewin.ch does not always use linebreaks to seperate the credits. so we have to do a little
-	## REGEXPing to ensure the correct format.
-
-	$infoTd =~ s/Besetzung:/<br><b>Besetzung:<\/b>/s;
-	$infoTd =~ s/Musik:/<br><b>Musik:<\/b>/s;
-	$infoTd =~ s/Musik:/<br><b>Musik:<\/b>/s;
-	$infoTd =~ s/Kamera:/<br><b>Kamera:<\/b>/s;
-	$infoTd =~ s/Regie:/<br><b>Regie:<\/b>/s;
-	$infoTd =~ s/Buch:/<br><b>Buch:<\/b>/s;
-	$infoTd =~ s/Moderation:/<br><b>Moderation:<\/b>/s;
-	$infoTd =~ s/<b><br>//g;
-	$infoTd =~ s/<\/b><\/b>/<\/b>/g;
-
-    my $infoTB=HTML::TreeBuilder->new_from_content ("");
-  
-	## actors
-    my $tmpStr = $infoTd;
-    if ( $tmpStr =~ s/(.*)<b>Besetzung:<\/b> (.+?)<br>(.*)/$2/s ) {
-    	$tmpStr =~ s/ \((.*?)+\)//g;
-    	$tmpStr =~ s/, /,/g;
-    	$infoTB=HTML::TreeBuilder->new_from_content ($tmpStr);
-        $tmpStr= $infoTB->look_down('_tag' => 'body')->as_text;
-        
-    	$result[3] = $tmpStr;
-	}
-    
-	## director
-    $tmpStr = $infoTd;
-    if ( $tmpStr =~ s/(.*)<b>Regie:<\/b> (.+?)<br>(.*)/$2/s ) {
-    	$infoTB=HTML::TreeBuilder->new_from_content ($tmpStr);
-        $tmpStr= $infoTB->look_down('_tag' => 'body')->as_text;
-    	$result[4] = $tmpStr;
-    }
-
-    ## Writer
-    $tmpStr = $infoTd;
-    if ( $tmpStr =~ s/(.*)<b>Buch:<\/b> (.+?)<br>(.*)/$2/s ) {
-    	$infoTB=HTML::TreeBuilder->new_from_content ($tmpStr);
-        $tmpStr= $infoTB->look_down('_tag' => 'body')->as_text;
-		$result[5] = $tmpStr;
-    }   
-
-	## Presenter    
-    $tmpStr = $infoTd;
-    if ( $tmpStr =~ s/(.*)<b>Moderation:<\/b> (.+?)<br>(.*)/$2/s ) {
-    	$infoTB=HTML::TreeBuilder->new_from_content ($tmpStr);
-        $tmpStr= $infoTB->look_down('_tag' => 'body')->as_text;
-    	$result[6] = $tmpStr;
-    }       
-    
-    $infoTB->delete();
-    
-    ## parse some additional info
-    
-    $infoTd = $info[-1]->as_HTML();
-
-	## audio options ( bluewin.ch also provides info for '2-kanal ton', 
-	## but there is no audio-value defined in xmltv for this  )
-    $result[7] = "surround" if ( index ($infoTd, "(Dolby Surround)" ) ne -1 );
-	$result[7] = "stereo"   if ( index ($infoTd, "(Stereo)" ) ne -1 );
-	
-	## subtitles
-	$result[8] = "teletext" if ( index ($infoTd, "(TXT-Untertitelt)" ) ne -1 );
-    
-	## is it a rerun 
-	$result[9] = "rerun" if ( index ($infoTd, "(Wiederholung)" ) ne -1 );
-
-
-	my @script = $tb->look_down('_tag' => 'script', 'language' => 'javascript');
-   	my $mainTitle = $script[0]->as_HTML();
-	$mainTitle =~ s/(.*)hbx.pn=\"(.*)\"(.*)bx.pndef=(.*)/$2/s;
-	my @titles = separate_titles( $mainTitle, $title );
-   	
-	$result[0] = $titles[0];
-	$result[1] = $titles[1];
-	$result[0] =~ s/\226/-/g; # replace 0x96 separator by '-'
-	$result[1] =~ s/\226/-/g; # replace 0x96 separator by '-'
-
-
-	$tb->delete;
 	return @result;
 }
 
@@ -712,34 +700,42 @@ sub get_channels() {
     my $url=$head->{q(source-data-url)};
 
     my $tb=new HTML::TreeBuilder();
-    $tb->parse(get_page($url))
-	  or die "cannot parse content of $url";    
-    $tb->eof;
+    
+    ## getting the channels directly selectable
+    foreach(@groupid) {
 
-	## getting the channels directly selectable
-	foreach($tb->look_down('_tag' => 'table', 'width' => '100%', 'border' => 0, 'cellspacing' => 0, 'cellpadding' => 0, 'bgcolor' => '#ffffff' )) {
-        next unless(ref($_) eq "HTML::Element");
+        $tb->parse(get_page($url ."?action=ChannelView&SupergroupID=".$_."&date=1164430800&segments=00000")) 
+            or die "cannot parse content of $url";    
+        $tb->eof;
 
-        foreach(@{$_->extract_links('a')}) {
+        foreach($tb->look_down('_tag' => 'div', 'class' => 'segment_logo' )) {
+            next unless(ref($_) eq "HTML::Element");
 
-            my($link, $element, $attr, $tag) = @$_;
-			my $channel_name = (($element->content_list())[0]->attr('alt'));
-			$channel_name = (split (/zu /, $channel_name))[1];
-            $link =~ m/id=(\S+)/
-                or die "unable to extract chid from $link";
+            my $chan = $_;
+	
+            my $img=undef;
+	
+            foreach($chan->look_down('_tag' => 'img')) {
+	        next unless(ref($_) eq "HTML::Element");
 
-            $channels{uri_escape($1)} = $channel_name;
+	        if (ref($img) eq "HTML::Element") {
+	            die "Multiple img tags!";
+                }
+	        if ($_->attr('title')) {
+	            $img=$_;
+                }
+            }
+
+            my $channel_name = $img->attr('title');
+            my $logo = $img->attr('src');
+            $logo =~ m/tvchannel_logos\/(.+\.[a-z][a-z][a-z])/ or die "unable to extract logo";
+            $logo = $1;
+
+            $channels{$logo} = $channel_name;
         }
-    }
+	$bar->update() if not $opt_quiet;
+	
 
-    ## foreign-, satelite and paytv -channels are located separately.
-	foreach($tb->look_down('_tag' => 'select', 'name' => 'station[]' )) {
-		next unless(ref($_) eq "HTML::Element");
-
-        foreach($_->look_down('_tag' => 'option' )) {
-	         my $channel_name = $_->as_text();
-            $channels{uri_escape($_->attr('value'))} = $channel_name;
-        }
     }
 
     $tb->delete;
