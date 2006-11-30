@@ -70,6 +70,9 @@ my %cap_options = (
 		   share => [qw/
 			     share:se
 			     /],
+		   preferredmethod => [qw/
+				       preferredmethod
+				       /],
 		   );
 
 my %cap_defaults = (
@@ -101,6 +104,9 @@ my %cap_defaults = (
 		    },
 		    share => {
 			share => undef,
+		    },
+		    preferredmethod => {
+			preferredmethod => 0,
 		    },
 		    );
 
@@ -150,6 +156,11 @@ ParseOptions handles the following options automatically without returning:
 
 =item --description
 
+=item --preferredmethod 
+
+Handled automaticall if the preferredmethod capability has been set and
+the preferredmethod option has been specified in the call to ParseOptions.
+ 
 =back
 
 ParseOptions also takes care of the following options without returning,
@@ -244,6 +255,21 @@ XMLTV::Configure::LoadConfig fails to parse the configuration file. This
 allows the grabber to load configuration files created with an older
 version of the grabber.
 
+=item preferredmethod
+
+A value to return when the grabber is called with the --preferredmethod
+parameter. Example:
+
+  my( $opt, $conf ) = ParseOptions( {
+    grabber_name => 'tv_grab_test',
+    version => '$Id$',
+    description => 'Sweden (tv.swedb.se)',
+    capabilities => [qw/baseline manualconfig apiconfig preferredmethod/],
+    stage_sub => \&config_stage,
+    listchannels_sub => \&list_channels,
+    preferredmethod => 'allatonce',
+  } );
+
 =item defaults
 
 Optional. Default {}. A hashref that contains default values for the
@@ -266,6 +292,12 @@ sub ParseOptions
 
     my @optdef=();
     my $opt={};
+    my $capabilities = {};
+
+    foreach my $cap (keys %{cap_options}) 
+    {
+	$capabilities->{$cap} = 0;
+    }
 
     if( not defined( $p->{version} ) )
     {
@@ -276,6 +308,7 @@ sub ParseOptions
     {
 	croak "No description specified in call to ParseOptions";
     }
+
 
     push( @optdef, @{$cap_options{all}} );
     hash_push( $opt, $cap_defaults{all} );
@@ -293,6 +326,20 @@ sub ParseOptions
 	
 	push( @optdef, @{$cap_options{$cap}} );
 	hash_push( $opt, $cap_defaults{$cap} );
+	$capabilities->{$cap} = 1;
+    }
+
+    if( $capabilities->{preferredmethod} 
+	and not exists($p->{preferredmethod}) )
+    {
+	croak "You must specify which preferredmethod to use";
+    }
+
+    if( exists($p->{preferredmethod}) 
+	and not $capabilities->{preferredmethod} )
+    {
+	croak "You must include the capability preferredmethod to specify " .
+	    "which preferredmethod to use.";
     }
 
     push( @optdef, @{$p->{extra_options}} )
@@ -311,6 +358,11 @@ sub ParseOptions
     elsif( $opt->{capabilities} )
     {
 	print join( "\n", @{$p->{capabilities}} ) . "\n";
+	exit 0;
+    }
+    elsif( $opt->{preferredmethod} )
+    {
+	print $p->{preferredmethod} . "\n";
 	exit 0;
     }
     elsif( $opt->{version} )
