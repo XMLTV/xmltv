@@ -194,6 +194,8 @@ sub ValidateFile {
 	$desc = $p->findvalue('desc/text()')
 	    if $p->findvalue( 'count(desc)' );
 
+	my $xmltv_episode = $p->findvalue('episode-num[@system="xmltv_ns"]' );
+
 	if ($REQUIRE_CHANNEL_ID and not exists( $channels{$channelid} )) {
 	    $w->( $p, "Channel '$channelid' does not have a <channel>-entry.",
 		  'unknownid' );
@@ -214,6 +216,12 @@ sub ValidateFile {
 	$w->( $p, "Invalid stop-time '$stop'", 'badstop' )
 	    if $stop ne "" and not verify_time( $stop );
 
+	if( $xmltv_episode =~ /\S/ ) {
+	    $w->($p, "Invalid episode-number '$xmltv_episode'", 'badepisode' )
+		if $xmltv_episode !~ /^\s*\d*(\/\s*\d+)*\s*\. 
+		                       \s*\d*(\/\s*\d+)*\s*\. 
+		                       \s*\d*(\/\s*\d+)*\s*$/x; 
+	}
     }
 
     foreach my $channel (keys %channels) {
