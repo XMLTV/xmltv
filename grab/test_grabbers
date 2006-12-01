@@ -14,9 +14,13 @@ use Getopt::Long;
 use File::chdir;
 use FindBin qw($Bin);
 use lib "$Bin/../blib/lib";
+use IO::Scalar;
     
 use XMLTV::ValidateFile qw/LoadDtd/;
 use XMLTV::ValidateGrabber qw/ValidateGrabber ConfigureGrabber/;
+
+use threads;
+use threads::shared;
 
 sub w;
 
@@ -25,15 +29,19 @@ our $opt_only;          # run just one grabber
 our $opt_list_channels; # run with --list-channels
 our $opt_help=0;
 our $root = "$Bin/..";
+our $opt_threads = 1;
 
 # Store the status of each grabber to print a summary at the end.
-my %status;
-my %untested;
+my %status : shared;
+my %results : shared;
+my %untested : shared;
+my @grabbers : shared; 
 
 my $result = GetOptions('configure' => \$opt_configure,
 			'only=s' => \$opt_only,
 			'list-channels' => \$opt_list_channels,
 			'xmltv-root=s' => \$root,
+                        'threads=s' => \$opt_threads,
 			'help|h' => \$opt_help,
 			);
 
@@ -48,7 +56,7 @@ Valid options:
 --xmltv-root dir  Root directory for the xmltv distribution. Only necessary
                   if text_grabbers is moved outside of the xmltv distribution
                   directory.
-
+--threads <num>   Number of grabbers to test simultaneously. Default 1.
 --help            Print this text.
 
 EOH
@@ -68,7 +76,6 @@ if (not -e $dtd_in_root) {
 
 LoadDtd( $dtd_in_root );
 
-my @grabbers; 
 {
     local $CWD = "$root/grab";
     if (defined $opt_only) {
@@ -80,42 +87,19 @@ my @grabbers;
     }
 }
 
-foreach (@grabbers) {
-    /^[a-z_]+$/ or die "bad grabber name $_";
-    my $exe = "tv_grab_$_";
-    my $cmd = "perl -I $root/blib/lib $root/blib/script/$exe";
-    my $conf = "$root/grab/$_/test.conf";
-    my $output_prefix = "t_${_}_";
+my @threads;
 
-    if ( not -f "$root/blib/script/$exe" ) {
-#	w "No such grabber $exe.";
-        $untested{$exe} = "no exe";
-	next;
-    }
+for( my $i=0; $i<$opt_threads; $i++ ) {
+  push @threads, threads->create( 'process_grabbers', $opt_threads );
+}
 
-    if( $opt_configure ) {
-      w "Configuring $exe";
-      ConfigureGrabber( $cmd, $conf );
-    }
+# Wait for all threads to finish.
+foreach my $t (@threads) {
+  $t->join();
+}
 
-    if( not -f $conf ) {
-#      w "$exe not configured. Skipping.";
-      $untested{$exe} = "no test.conf";
-      next;
-    }
-
-    w "Testing $exe";
-
-    my @errors = ValidateGrabber( $exe,  $cmd, $conf, $output_prefix, 
-				  "$root/blib/share/", 1 );
-
-    if (scalar( @errors )) {
-        $status{$exe} = join ", ", @errors;
-	w "$exe has errors: @errors";
-    }
-    else {
-        $status{$exe} = "ok";
-    }
+foreach my $grabber (sort keys %status) {
+  print $results{$grabber};
 }
 
 my $summary_file = 't_summary.log';
@@ -144,3 +128,64 @@ close SUMMARY or die "cannot close t_summary.log: $!";
 sub w {
     print "$_[0]\n";
 }
+
+sub process_grabbers {
+  my( $threads ) = @_;
+
+  while( my $grabber = shift @grabbers ) {
+    print "$grabber\n";
+    my $result = "";
+    my( $out, $oldout );
+
+    # Redirect output to a string only if we are running multiple threads.
+    if( $threads > 1 ) {
+      $out = new IO::Scalar \$result;
+      $oldout = select $out;
+    }
+
+    $grabber =~ /^[a-z_]+$/ or die "bad grabber name $_";
+    my $exe = "tv_grab_$grabber";
+    my $cmd = "perl -I $root/blib/lib $root/blib/script/$exe";
+    my $conf = "$root/grab/$grabber/test.conf";
+    my $output_prefix = "t_${grabber}_";
+
+    if ( not -f "$root/blib/script/$exe" ) {
+#	w "No such grabber $exe.";
+        $untested{$exe} = "no exe";
+	goto done;
+    }
+
+    if( $opt_configure ) {
+      w "Configuring $exe";
+      ConfigureGrabber( $cmd, $conf );
+    }
+
+    if( not -f $conf ) {
+#      w "$exe not configured. Skipping.";
+      $untested{$exe} = "no test.conf";
+      goto done;
+    }
+
+    w "Testing $exe";
+
+    my @errors = ValidateGrabber( $exe,  $cmd, $conf, $output_prefix, 
+				  "$root/blib/share/", 1 );
+
+    if (scalar( @errors )) {
+        $status{$exe} = join ", ", @errors;
+	w "$exe has errors: @errors";
+    }
+    else {
+        $status{$exe} = "ok";
+    }
+
+  done:
+    if( $threads > 1 ) {
+      select $oldout;
+      close( $out ); 
+    }
+
+    $results{$exe} = $result;
+  }
+}
+
