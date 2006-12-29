@@ -525,6 +525,11 @@ my @opt_components
        prereqs => { 'HTML::TreeBuilder' => 0,
                     'HTML::Entities' => 1.27 } },
 
+     { name => 'tv_grab_combiner',
+       blurb => 'Grabber that combines data from other grabbers',
+       exes => [ 'grab/combiner/tv_grab_combiner' ],
+       prereqs => { 'XML::LibXML' => 0 } },
+
      { name => 'tv_check',
        blurb => 'Program to report exceptions and changes in a schedule',
        exes => [ 'choose/tv_check/tv_check' ],

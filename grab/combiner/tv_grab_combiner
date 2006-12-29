@@ -1,0 +1,282 @@
+#!/usr/bin/perl -w
+
+=pod
+
+=head1 NAME
+
+tv_grab_combiner - Grab listings by combining data from several grabbers.
+
+=head1 SYNOPSIS
+
+tv_grab_combiner --help
+
+tv_grab_combiner --configure [--config-file FILE]
+
+tv_grab_combiner [--config-file FILE] 
+                 [--days N] [--offset N]
+                 [--output FILE] [--quiet]
+
+=head1 DESCRIPTION
+
+Output TV and listings in XMLTV format by combining data from several
+other grabbers.
+
+First you must run B<tv_grab_combiner --configure> to choose which grabbers
+you want to grab data with and how these grabbers should be configured.
+
+Then you can run B<tv_grab_combiner> with the --days and --offset options
+to grab data. Omitting these options will use the default values for these
+parameters for each grabber. Since these defaults differs between grabbers,
+you might end up with data for different periods of time for different
+channels.
+
+=head1 OPTIONS
+
+B<--configure> Prompt for which grabbers to use, how these grabbers shall
+be configured and write the configuration file.
+
+B<--config-file FILE> Set the name of the configuration file, the
+default is B<~/.xmltv/tv_grab_combiner.conf>.  This is the file written by
+B<--configure> and read when grabbing.
+
+B<--output FILE> When grabbing, write output to FILE rather than
+standard output.
+
+B<--days N> When grabbing, grab N days rather than 5.
+
+B<--offset N> Start grabbing at today + N days.  N may be negative.
+
+B<--quiet> Suppress the progress-bar normally shown on standard error.
+
+B<--version> Show the version of the grabber.
+
+B<--help> Print a help message and exit.
+
+=head1 ERROR HANDLING
+
+If any of the called grabbers exit with an error, tv_grab_combiner will 
+exit with a status code of 1 to indicate that the data is incomplete. If any
+grabber produces output that is not well-formed xml, the output from that
+grabber will be ignored and tv_grab_combiner will exit with a status code of 1.
+
+=head1 ENVIRONMENT VARIABLES
+
+The environment variable HOME can be set to change where configuration
+files are stored. All configuration is stored in $HOME/.xmltv/. 
+
+=head1 AUTHOR
+
+Mattias Holmlund, mattias -at- holmlund -dot- se. 
+
+=head1 BUGS
+
+=cut
+
+use strict;
+
+use XMLTV::Version '$Id$';
+use XMLTV::Capabilities qw/baseline manualconfig/;
+use XMLTV::Description "Combine data from several other grabbers";
+use XMLTV::Usage << "END";
+To configure: $0 --configure [--config-file FILE]
+To grab listings: $0 [--config-file FILE] [--output FILE] [--quiet]
+
+END
+
+use XMLTV::Ask;
+use XMLTV::Config_file;
+
+use XML::LibXML;
+use Getopt::Long;
+use File::Temp qw/tempfile/;
+
+my $opt = {
+           help => 0,
+           configure => 0,
+           'config-file' => 
+             XMLTV::Config_file::filename(undef, 'tv_grab_combiner', 1 ),
+           days => undef,
+           offset => undef,
+           quiet => 0,
+           output => undef,
+           };
+
+GetOptions( $opt, qw/help configure config-file=s days=s offset=s quiet
+                     output=s/ )
+  or usage();
+
+if( $opt->{configure} ) {
+  configure();
+  exit;
+}
+
+if( grab_data() > 0 ) {
+  exit 1;
+}
+else { 
+  exit 0;
+}
+
+sub grab_data {
+  my @lines = XMLTV::Config_file::read_lines( $opt->{'config-file'} );
+
+  my $parser = XML::LibXML->new();
+  my $result;
+  my $errors=0;
+
+  my $grabber;
+  foreach my $line (@lines) {
+    next if not defined $line;
+    my( $key, $value ) = split( '=', $line, 2 );
+    die "Unknown key $key in $opt->{'config-file'}" unless $key eq 'grabber';
+
+    my( $grabber, $config ) = split( /;/, $value, 2 );
+    my( $exitcode, $data ) = run_grabber( $grabber, $config );
+    if( $exitcode ) {
+      print STDERR "$grabber exited with an error-code.\n";
+      $errors++;
+    }
+
+    my $t;
+    eval {
+      $t = $parser->parse_string( $data );
+    };
+
+    if( not defined $t ) {
+      print STDERR "$grabber returned invalid data. Ignoring.\n";
+      $errors++;
+      next;
+    }
+
+    if( defined $result ) {
+      concatenate( $result, $t );
+    }
+    else {
+      $result = $t;
+    }
+  }
+  
+  if( defined $result ) {
+    if( defined( $opt->{output} ) ) {
+      $result->toFile( $opt->{output}, 1 );
+    }
+    else {
+      $result->toFH( *STDOUT, 1 );
+    }
+  }
+
+  return $errors;
+}
+
+sub run_grabber {
+  my( $grabber, $config ) = @_;
+
+  my( $fh, $filename ) = tempfile();
+  write_config( $config, $fh );
+  close($fh);
+
+  my $options = "";
+  $options .= " --quiet" if $opt->{quiet};
+  $options .= " --days $opt->{days}" if defined $opt->{days};
+  $options .= " --offset $opt->{offset}" if defined $opt->{offset};
+
+  print STDERR "Running $grabber with $filename\n" unless $opt->{quiet};
+
+  my $result = qx/$grabber $options --config-file $filename/;
+
+  return ($? >> 8, $result );
+}
+
+sub configure_grabber {
+  my( $grabber ) = @_;
+
+  print "Configuring $grabber\n";
+ 
+  my( $fh, $filename ) = tempfile();
+  system( $grabber, '--configure', '--config-file', $filename );
+
+  return read_config( $filename );
+}
+
+# Read a config-file from disk and encode it into a one-line string.
+sub read_config {
+  my( $filename ) = @_;
+
+  my $result = slurp( $filename )
+    or die "Failed to read from $filename";
+
+  $result =~ s/&/&a/g;
+  $result =~ s/\n/&n/g;
+  $result =~ s/#/&c/g;
+
+  return $result;
+}
+
+sub write_config {
+  my( $config, $fh ) = @_;
+
+  $config =~ s/&c/#/g;
+  $config =~ s/&n/\n/g;
+  $config =~ s/&a/&/g;
+  
+  print $fh $config;
+}
+
+sub configure {
+  print STDERR "Looking for grabbers...\n";
+  my @result = qx/tv_find_grabbers baseline manualconfig/;
+  my %grabbers;
+
+  XMLTV::Config_file::check_no_overwrite( $opt->{'config-file'} );
+
+  foreach (@result) { 
+    chomp;
+    chomp;
+    my($g, $t) = split( /\|/, $_ ); 
+    $grabbers{$t}=$g 
+      unless $g=~/tv_grab_combiner/;
+  }
+
+  open( CONF, "> " . $opt->{'config-file'});
+  while( 1 ) {
+    my $t = ask_choice( "Select a grabber:", "Done", 
+                        "Done", sort( keys %grabbers) );
+    last if $t eq "Done";
+    my $g = $grabbers{$t};
+
+    my $config = configure_grabber( $g );
+    print CONF "grabber=$g;$config\n";
+  }
+  close( CONF );
+}
+
+# Takes two XML::LibXML representations of XMLTV files as parameters
+# and merges the second tree into the first.
+sub concatenate {
+  my( $t1, $t2 ) = @_;
+
+  $t1->setEncoding('UTF-8');
+
+  my $root = $t1->findnodes( '/tv' )->[0];
+  my $last_chan = $root->findnodes( 'channel[last()]' )->[0]
+    or die "Failed to find any channel entries";
+
+  foreach my $chan (  $t2->findnodes( '//channel' ) ) {
+    $root->insertAfter( $chan, $last_chan );
+    $last_chan = $chan;
+  }
+
+  my $last_prog = $root->findnodes( 'programme[last()]' )->[0]
+    or return;
+
+  foreach my $prog ( $t2->findnodes( '//programme' ) ) {
+    $root->insertAfter( $prog, $last_prog );
+    $last_prog = $prog;
+  }
+  
+}
+
+sub slurp { 
+  local( $/, @ARGV ) = ( wantarray ? $/ : undef, @_ ); 
+  return <ARGV>;
+}
