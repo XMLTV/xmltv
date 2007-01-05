@@ -1,0 +1,629 @@
+#!/usr/bin/perl -w
+=pod
+
+=head1 NAME
+
+tv_grab_ar - Grab TV listings for Argentina.
+
+=head1 SYNOPSIS
+
+tv_grab_ar --help
+
+tv_grab_ar [--config-file FILE] --configure [--gui OPTION]
+
+tv_grab_ar [--config-file FILE] [--output FILE] [--days N]
+           [--offset N] [--quiet]
+
+tv_grab_ar --list-channels
+
+tv_grab_ar --capabilities
+
+tv_grab_ar --version
+
+=head1 DESCRIPTION
+
+Output TV listings for several channels available in Argentina.
+Now supports the terrestrial analog tv listings, which is the most common tv 
+viewed in Argentina. 
+The tv listings comes from http://www.buscadormulticanal.com.ar/
+The grabber relies on parsing HTML so it might stop working at any time.
+
+First run B<tv_grab_ar --configure> to choose, which channels you want
+to download. Then running B<tv_grab_ar> with no arguments will output
+listings in XML format to standard output.
+
+B<--configure> Prompt for which channels,
+and write the configuration file.
+
+B<--config-file FILE> Set the name of the configuration file, the
+default is B<~/.xmltv/tv_grab_ar.conf>.  This is the file written by
+B<--configure> and read when grabbing.
+
+B<--gui OPTION> Use this option to enable a graphical interface to be used.
+OPTION may be 'Tk', or left blank for the best available choice.
+Additional allowed values of OPTION are 'Term' for normal terminal output
+(default) and 'TermNoProgressBar' to disable the use of XMLTV::ProgressBar.
+
+B<--output FILE> Write to FILE rather than standard output.
+
+B<--days N> Grab N days.  The default is 3.
+
+B<--offset N> Start N days in the future.  The default is to start
+from today.
+
+B<--quiet> Suppress the progress messages normally written to standard
+error.
+
+B<--capabilities> Show which capabilities the grabber supports. For more
+information, see L<http://membled.com/twiki/bin/view/Main/XmltvCapabilities>
+
+B<--version> Show the version of the grabber.
+
+B<--help> Print a help message and exit.
+
+=head1 SEE ALSO
+
+L<xmltv(5)>.
+
+=head1 AUTHOR
+
+Lic. Christian A. Rodriguez, car@cespi.unlp.edu.ar, based on tv_grab_es, from Ramon Roca.
+
+=head1 BUGS
+
+=cut
+
+# Author's TODOs & thoughts
+#
+# Add support for logos
+#
+
+
+######################################################################
+# initializations
+
+use strict;
+use XMLTV::Version '$Id$ ';
+use XMLTV::Capabilities qw/baseline manualconfig cache/;
+use XMLTV::Description 'Argentina';
+use Getopt::Long;
+use Date::Manip;
+use HTML::TreeBuilder;
+use HTML::Entities; # parse entities
+use IO::File;
+
+use XMLTV;
+use XMLTV::Memoize;
+use XMLTV::ProgressBar;
+use XMLTV::Ask;
+use XMLTV::Config_file;
+use XMLTV::DST;
+use XMLTV::Get_nice;
+use XMLTV::Mode;
+use XMLTV::Date;
+# Todo: perhaps we should internationalize messages and docs?
+use XMLTV::Usage <<END
+$0: get Argentinian television listings in XMLTV format
+To configure: $0 --configure [--config-file FILE]
+To grab listings: $0 [--config-file FILE] [--output FILE] [--days N]
+        [--offset N] [--quiet]
+To list channels: $0 --list-channels
+To show capabilities: $0 --capabilities
+To show version: $0 --version
+END
+  ;
+
+# Attributes of the root element in output.
+my $HEAD = { 'source-info-url'     => 'http://www.buscadormulticanal.com.ar/',
+	     'source-data-url'     => "http://www.buscadormulticanal.com.ar/",
+	     'generator-info-name' => 'XMLTV',
+	     'generator-info-url'  => 'http://membled.com/work/apps/xmltv/',
+	   };
+		   
+# Whether zero-length programmes should be included in the output.
+my $WRITE_ZERO_LENGTH = 0;
+
+# default language
+my $LANG="es";
+
+# Global channel_data
+our @ch_all;
+
+######################################################################
+# get options
+
+# Get options, including undocumented --cache option.
+XMLTV::Memoize::check_argv('XMLTV::Get_nice::get_nice_aux');
+my ($opt_days, $opt_offset, $opt_help, $opt_output,
+    $opt_configure, $opt_config_file, $opt_gui,
+    $opt_quiet, $opt_list_channels);
+$opt_days  = 3; # default
+$opt_offset = 0; # default
+$opt_quiet  = 0; # default
+GetOptions('days=i'        => \$opt_days,
+	   'offset=i'      => \$opt_offset,
+	   'help'          => \$opt_help,
+	   'configure'     => \$opt_configure,
+	   'config-file=s' => \$opt_config_file,
+       'gui:s'         => \$opt_gui,
+	   'output=s'      => \$opt_output,
+	   'quiet'         => \$opt_quiet,
+	   'list-channels' => \$opt_list_channels
+	  )
+  or usage(0);
+die 'number of days must not be negative'
+  if (defined $opt_days && $opt_days < 0);
+usage(1) if $opt_help;
+
+XMLTV::Ask::init($opt_gui);
+
+my $mode = XMLTV::Mode::mode('grab', # default
+			     $opt_configure => 'configure',
+			     $opt_list_channels => 'list-channels',
+			    );
+
+# File that stores which channels to download.
+my $config_file
+  = XMLTV::Config_file::filename($opt_config_file, 'tv_grab_ar', $opt_quiet);
+
+my @config_lines; # used only in grab mode
+if ($mode eq 'configure') {
+    XMLTV::Config_file::check_no_overwrite($config_file);
+}
+elsif ($mode eq 'grab') {
+    @config_lines = XMLTV::Config_file::read_lines($config_file);
+}
+elsif ($mode eq 'list-channels') {
+    # Config file not used.
+}
+else { die }
+
+# Whatever we are doing, we need the channels data.
+my %channels = get_channels(); # sets @ch_all
+my @channels;
+
+######################################################################
+# write configuration
+
+if ($mode eq 'configure') {
+    open(CONF, ">$config_file") or die "cannot write to $config_file: $!";
+
+    # Ask about each channel.
+    my @chs = sort keys %channels;
+    my @names = map { $channels{$_} } @chs;
+    my @qs = map { "add channel $_?" } @names;
+    my @want = ask_many_boolean(1, @qs);
+    foreach (@chs) {
+        my $w = shift @want;
+        warn("cannot read input, stopping channel questions"), last
+          if not defined $w;
+        # No need to print to user - XMLTV::Ask is verbose enough.
+
+        # Print a config line, but comment it out if channel not wanted.
+        print CONF '#' if not $w;
+        my $name = shift @names;
+        print CONF "channel $_ $name\n";
+        # TODO don't store display-name in config file.
+    }
+
+    close CONF or warn "cannot close $config_file: $!";
+    say("Finished configuration.");
+
+    exit();
+}
+
+
+# Not configuration, we must be writing something, either full
+# listings or just channels.
+#
+die if $mode ne 'grab' and $mode ne 'list-channels';
+
+# Options to be used for XMLTV::Writer.
+my %w_args;
+if (defined $opt_output) {
+    my $fh = new IO::File(">$opt_output");
+    die "cannot write to $opt_output: $!" if not defined $fh;
+    $w_args{OUTPUT} = $fh;
+}
+$w_args{encoding} = 'ISO-8859-1';
+my $writer = new XMLTV::Writer(%w_args);
+$writer->start($HEAD);
+
+if ($mode eq 'list-channels') {
+    $writer->write_channel($_) foreach @ch_all;
+    $writer->end();
+    exit();
+}
+
+######################################################################
+# We are producing full listings.
+die if $mode ne 'grab';
+
+# Read configuration
+my $line_num = 1;
+foreach (@config_lines) {
+    ++ $line_num;
+    next if not defined;
+    if (/^channel:?\s+(\S+)\s+([^\#]+)/) {
+	my $ch_did = $1;
+	my $ch_name = $2;
+	$ch_name =~ s/\s*$//;
+	push @channels, $ch_did;
+	$channels{$ch_did} = $ch_name;
+    }
+    else {
+	warn "$config_file:$line_num: bad line\n";
+    }
+}
+
+######################################################################
+# begin main program
+
+# Assume the listings source uses CET (see BUGS above).
+my $now = DateCalc(parse_date('now'), "$opt_offset days");
+die "No channels specified, run me with --configure\n"
+  if not keys %channels;
+my @to_get;
+
+
+foreach my $ch_did (@channels) {
+    my $index=0;
+    my $ch_name=$channels{$ch_did};
+    my $ch_xid="$ch_did.multicanal";
+    while (${$ch_all[$index]}{'id'} ne $ch_xid) {
+        $index=$index+1;
+    }
+    my $ch_num=${ch_all[$index]}{'channel-num'};
+    $writer->write_channel({ id => $ch_xid,
+			     'display-name' => [ [ $ch_name ],
+						 [ $ch_num ] ] });
+    my $day=UnixDate($now,'%Q');
+    for (my $i=0;$i<$opt_days;$i++) {
+        push @to_get, [ $day, $ch_did, $ch_num ];
+        #for each day
+        $day=nextday($day); die if not defined $day;
+    }
+}
+
+
+# This progress bar is for both downloading and parsing.  Maybe
+# they could be separate.
+#
+my $bar = new XMLTV::ProgressBar('getting listings', scalar @to_get)
+  if not $opt_quiet;
+foreach (@to_get) {
+	foreach (process_table($_->[0], $_->[1], $_->[2])) {
+		$writer->write_programme($_);
+	}
+	update $bar if not $opt_quiet;
+}
+$bar->finish() if not $opt_quiet;
+$writer->end();
+
+######################################################################
+# subroutine definitions
+
+# Use Log::TraceMessages if installed.
+BEGIN {
+    eval { require Log::TraceMessages };
+    if ($@) {
+	*t = sub {};
+	*d = sub { '' };
+    }
+    else {
+	*t = \&Log::TraceMessages::t;
+	*d = \&Log::TraceMessages::d;
+	Log::TraceMessages::check_argv();
+    }
+}
+
+####
+# process_table: fetch a URL and process it
+#
+# arguments:
+#    Date::Manip object giving the day to grab
+#    xmltv id of channel
+#    id of channel from multicanal
+#
+# returns: list of the programme hashes to write
+#
+sub process_table {
+    my ($date, $ch_xmltv_id, $ch_ar_id) = @_;
+    my $weekNr = GetWeekNumber($date);
+    my $url = "http://www.buscadormulticanal.com.ar/index.php?template=fgrilla_semanal.tpl&canal=$ch_xmltv_id&cantidadPasa=$weekNr";
+    my $url_head = "http://www.buscadormulticanal.com.ar/index.php?template=main_grilla_semanal.tpl&canal=$ch_xmltv_id&cantidadPasa=$weekNr";
+    t $url;
+    local $SIG{__WARN__} = sub {
+        warn "$url: $_[0]";
+    };
+
+    # Need to disable redirects to work
+    $XMLTV::Get_nice::ua->max_redirect(0);
+    # parse the page to a document object
+    my $tree = get_nice_tree $url;
+    my $tree_head = get_nice_tree $url_head;
+    my @program_data = get_program_data($date,$tree,$tree_head,$ch_xmltv_id);
+    
+    my @r;
+    while (@program_data) {
+        my $cur = shift @program_data;
+
+        my $p = make_programme_hash($date, "$ch_xmltv_id.multicanal", $ch_ar_id, $cur);
+        if (not $p) {
+            require Data::Dumper;
+            my $d = Data::Dumper::Dumper($cur);
+            warn "cannot write programme on $ch_xmltv_id.multicanal on $date:\n$d\n";
+        }
+        else {
+            push @r, $p;
+        }
+    }
+    return @r;
+}
+
+# Hashes the program for future saving in XMLTV format
+sub make_programme_hash {
+    my ($date, $ch_xmltv_id, $ch_ar_id, $cur ) = @_;
+
+    my %prog;
+
+    $prog{channel}=$ch_xmltv_id;
+    $prog{title}=[ [ $cur->{title}, $LANG ] ];
+    t "turning local time $cur->{time}, on date $date, into UTC";
+    eval { $prog{start}=utc_offset("$date $cur->{time}", '-0300') };
+    if ($@) {
+        warn "bad time string: $cur->{time}";
+        return undef;
+    }
+    t "...got $prog{start}";
+    eval { $prog{stop}=utc_offset("$date $cur->{stoptime}", '-0300') };
+    if ($@) {
+        warn "bad time string: $cur->{stoptime}";
+        return undef;
+    }
+    t "...got $prog{stop}";
+    #     $prog{desc}=[ [ $cur->{desc}, $LANG ] ] if defined $cur->{desc};
+    return \%prog;
+}
+
+
+# Returns an array of programs for the specified day in the global variable now.
+# All work is done by private get_programs_for function
+sub get_program_data {
+    my ($date,$tree,$tree_head,$chan) = @_;
+    my @nowarr=(
+        UnixDate($date,"%Y"),
+        UnixDate($date,"%m"),
+        UnixDate($date,"%d"));
+    my $weekday=Date_DayOfWeek($nowarr[1],$nowarr[2],$nowarr[0])-1;
+
+    my $offset_left=get_grid_offset_left($tree);
+    my $offset_top=get_grid_offset_top($tree);
+    my $height=get_grid_row_height($tree);
+    my $width=get_grid_row_width($tree_head);
+
+    return () if  $offset_left < 0 or $offset_top < 0 or $height < 0;
+    
+
+    # So we select a value that sould be inside the range 
+    #   [offset_left+(width*weekday), offset_left+(width*weekday)+width]
+    # The chossen value is: offset_left+(width*weekday)+(width/2)
+    my $middle_left_value= ($width*$weekday)+($width/2);
+    #print "Date is $date\n";
+    #print "\nWEEKDAY: $weekday\n\nLEFT: $offset_left\nTOP: $offset_top\nHEIGHT: $height\nWIDTH: $width\n";
+    #print "\nSEARCHING FOR: $middle_left_value\n";
+    return get_programs_for($tree,$offset_left,$middle_left_value,$offset_top,$height);
+}
+
+
+# get channel listing
+sub get_channels {
+    my $bar = new XMLTV::ProgressBar('getting list of channels', 1)
+	if not $opt_quiet;
+    my %channels;
+    my $url="http://www.buscadormulticanal.com.ar/index.php?template=main_grilla_semanal.tpl";
+    t $url;
+    # Need to disable redirects to work
+    $XMLTV::Get_nice::ua->max_redirect(0);
+    my $tree = get_nice_tree $url;
+    my @menus = $tree->find_by_tag_name("_tag"=>"select");
+    foreach my $elem (@menus) {
+        my $cname = $elem->attr('name');
+        if ($cname eq "canal") {
+            my @ocanals = $elem->find_by_tag_name("_tag"=>"option");
+            @ocanals = sort @ocanals;
+            foreach my $opt (@ocanals) {
+                if (not $opt->attr('value') eq "") {
+                    my @opt_txt_elem=get_txt_elems($opt);
+                    my @str;
+                    if ($#opt_txt_elem > 0){
+                        @str=@opt_txt_elem;
+                    }else{
+                        @str=split(/-/,$opt_txt_elem[0]);
+                    }
+                    my $channel_id = $opt->attr('value');
+                    my $channel_name=$str[1];
+                    my $channel_num = $str[0];
+                    $channels{$channel_id}=$channel_name;
+                    push @ch_all, { 
+                                'display-name' => [[ $channel_name, $LANG ],[$channel_num]],
+                                'channel-num' => $channel_num  ,
+                                'id'=> "$channel_id.multicanal" };
+                    }
+            }
+        }
+    }
+    die "no channels could be found" if not keys %channels;
+    update $bar if not $opt_quiet;
+    $bar->finish() if not $opt_quiet;
+    return %channels;
+}
+
+
+sub get_txt_elems {
+    my ($tree) = @_;
+
+    my @txt_elem;
+    my @txt_cont = $tree->look_down(
+                        sub { ($_[0]->descendants() eq 0  ) },       
+			sub { defined($_[0]->attr ("_content") ) } );
+	foreach my $txt (@txt_cont) {
+        	my @children=$txt->content_list;
+		if (defined($children[0])) {
+                  for (my $tmp=$children[0]) {
+			s/^\s+//;s/\s+$//;
+			push @txt_elem, $_;
+                      }
+                }
+	}
+    return @txt_elem;
+}
+
+
+# Bump a YYYYMMDD date by one.
+sub nextday {
+    my $d = shift;
+    my $p = parse_date($d);
+    my $n = DateCalc($p, '+ 1 day');
+    return UnixDate($n, '%Q');
+}
+
+sub GetWeekNumber {
+    my $date=shift;
+    my $today=UnixDate(parse_date('now'),"%Q"); 
+    
+    my @datearr=(
+        UnixDate($date,"%Y"),
+        UnixDate($date,"%m"),
+        UnixDate($date,"%d"));
+
+    my @todayarr=(
+        UnixDate($today,"%Y"),
+        UnixDate($today,"%m"),
+        UnixDate($today,"%d"));
+    my $weekdate=Date_WeekOfYear($datearr[1],$datearr[2],$datearr[0],1);
+    my $weektoday=Date_WeekOfYear($todayarr[1],$todayarr[2],$todayarr[0],1);
+    if ($datearr[0]==$todayarr[0]){
+        return $weekdate - $weektoday; 
+    }
+    return $weekdate; 
+}
+
+
+sub bump_start_day {
+    my ($cur,$next) = @_;
+    if (!defined($next)) {
+	return undef;
+    }
+    my $start = UnixDate($cur->{time},'%H:%M');
+    my $stop = UnixDate($next->{time},'%H:%M');
+    if (Date_Cmp($start,$stop)>0) {
+	return 1;
+    } else {
+	return 0;
+    }
+}
+################################################################################
+# 
+# Because Multicanal uses a grid made of DIV containers, we detect programs by 
+# looking for coordinates
+#
+################################################################################
+
+# Get top most container
+sub get_grid_offset_top {
+    my ($tree) = @_;
+    my $elem=$tree->look_down(
+        '_tag', 'div',sub {
+            defined $_[0]->attr('id') and $_[0]->attr('id')=~ /layerHora0/i
+        });
+    return -1 if not defined $elem;
+    my ($top)=($elem->attr('style') =~ /top:\s*(\d+)\s*(px|)/i);
+    return $top; 
+    return 0;
+}
+
+# Get left most offset for containers
+sub get_grid_offset_left {
+    my ($tree) = @_;
+    my $elem=$tree->look_down(
+        '_tag', 'div',sub {
+            defined $_[0]->attr('id') and $_[0]->attr('id')=~ /layerHora0/i
+        });
+    return -1 if not defined $elem;
+    my ($left)=($elem->attr('style') =~ /width:\s*(\d+)\s*(px|)/i);
+    return $left;
+}
+
+# Get default row height
+sub get_grid_row_height {
+    my ($tree) = @_;
+    my $elem=$tree->look_down(
+        '_tag', 'div',sub {
+            defined $_[0]->attr('id') and $_[0]->attr('id')=~ /layerHora0/i
+        });
+    return -1 if not defined $elem;
+    my ($height)=($elem->attr('style') =~ /height:\s*(\d+)\s*(px|)/i);
+    return $height;
+}
+
+# Get default row width
+sub get_grid_row_width {
+    my ($tree) = shift;
+    my @rowDia=$tree->look_down(
+        '_tag', 'td',sub {
+            defined $_[0]->attr('class') && $_[0]->attr('class')=~ /layerDia/i
+        });
+    return $rowDia[int ($#rowDia/2)]->attr('width');
+}
+
+################################################################################
+# 
+# Private function that recognizes which programs to return for specified time
+# and the coordinates received as parameters.
+# Returns a hash with:
+#   time
+#   title
+#   description
+# 
+################################################################################
+sub get_programs_for {
+    my ($tree,$top_most_left,$middle_left,$offset_top,$default_height)=@_;
+    my @data;
+    my @row=$tree->look_down(
+        '_tag', 'div',sub {
+            $_[0]->attr('id')=~ /layer\d{1,2}/i and
+            $_[0]->attr('class')=~ /layerPrograma/i
+        });
+    foreach my $elem (@row){
+        my %ret;
+        my ($top)=($elem->attr('style') =~ /top:\s*(-{0,1}\d+)\s*(px|)/i);
+        my ($left)=($elem->attr('style') =~ /left:\s*(-{0,1}\d+)\s*(px|)/i);
+        my ($height)=($elem->attr('style') =~ /height:\s*(-{0,1}\d+)\s*(px|)/i);
+        my ($width)=($elem->attr('style') =~ /width:\s*(-{0,1}\d+)\s*(px|)/i);
+        if (    $left >= $top_most_left and $top >= $offset_top and
+                $left-$top_most_left <= $middle_left and $left+$width >= $middle_left and length $elem->as_text > 0){
+        # We found a program!!!
+            %ret = (
+                time =>         get_start_time($top,$offset_top,$default_height),
+                stoptime =>     get_start_time($top+$height-1,$offset_top,$default_height),
+                title=>         $elem->as_text,
+                desc =>         $elem->as_text);
+#            print "\n*****Returned because $top <= $middle_top and ",($top+$height)," >= $middle_top and
+#                $left <= $middle_left and ",($left+$width), ">= $middle_left\n";
+            push @data, \%ret;
+        }
+    }
+    return @data;
+}
+
+# Returns the time based on coordinates
+sub get_start_time {
+ my ($curr_top,$offset_top,$default_height)=@_;
+    # default_height ===> 30 mins
+    # curr_top - offset top ==> (curr_top-offset_top)*30/default_height
+ my $mins=int (($curr_top-$offset_top)*30/$default_height);
+    return "23:59" if $mins >= 1440;
+    return UnixDate(DateCalc("00:00","+ $mins minutes"),"%H:%M");
+}
+

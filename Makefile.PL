@@ -256,6 +256,12 @@ END
 my @opt_components
   = (
 
+     { name => 'tv_grab_ar',
+       blurb => 'Grabber for Argentina',
+       exes => [ 'grab/ar/tv_grab_ar' ],
+       prereqs => { 'HTML::TreeBuilder' => 0,
+                    'HTML::Entities'    => 0 } },
+
 # tv_grab_de not currently working
 #     { name => 'tv_grab_de',
 #       blurb => 'Grabber for Germany and Austria',
