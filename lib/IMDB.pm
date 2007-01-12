@@ -1885,6 +1885,25 @@ sub dbinfoCalcEstimate($$$)
 	die ("invalid call");
     }
     my $fileSize=int(-s "$self->{imdbListFiles}->{$key}");
+
+    # if compressed, then attempt to run gzip -l
+    if ( $self->{imdbListFiles}->{$key}=~m/.gz$/) {
+	if ( open(my $fd, "gzip -l ".$self->{imdbListFiles}->{$key}."|") ) {
+	    # if parse fails, then defalt to wild ass guess of compression of 65%
+	    $fileSize=int($fileSize*100)/(100-65);
+
+	    while(<$fd>) {
+		if ( m/^\s*\d+\s+(\d+)/ ) {
+		    $fileSize=$1;
+		}
+	    }
+	    close($fd);
+	}
+	else {
+	    # wild ass guess of compression of 65%
+	    $fileSize=int($fileSize*100)/(100-65);
+	}
+    }
     my $countEstimate=int($fileSize/$estimateSizePerEntry);
 
     $self->dbinfoAdd($key."_list_file", $self->{imdbListFiles}->{$key});
@@ -1950,7 +1969,7 @@ sub invokeStage($$)
     elsif ( $stage == 2 ) {
 	$self->status("parsing Directors list for stage $stage..");
 
-	my $countEstimate=$self->dbinfoCalcEstimate("directors", 162);
+	my $countEstimate=$self->dbinfoCalcEstimate("directors", 184);
 
 	my $num=$self->readCastOrDirectors("Directors", $countEstimate, "$self->{imdbListFiles}->{directors}");
 	if ( $num < 0 ) {
@@ -2016,7 +2035,7 @@ sub invokeStage($$)
 	$self->status("parsing Actors list for stage $stage..");
 
 	#print "re-reading movies into memory for reverse lookup..\n";
-	my $countEstimate=$self->dbinfoCalcEstimate("actors", 290);
+	my $countEstimate=$self->dbinfoCalcEstimate("actors", 349);
 
 	my $num=$self->readCastOrDirectors("Actors", $countEstimate, "$self->{imdbListFiles}->{actors}");
 	if ( $num < 0 ) {
@@ -2066,7 +2085,7 @@ sub invokeStage($$)
     elsif ( $stage == 4 ) {
 	$self->status("parsing Actresses list for stage $stage..");
 
-	my $countEstimate=$self->dbinfoCalcEstimate("actresses", 250);
+	my $countEstimate=$self->dbinfoCalcEstimate("actresses", 311);
 	my $num=$self->readCastOrDirectors("Actresses", $countEstimate, "$self->{imdbListFiles}->{actresses}");
 	if ( $num < 0 ) {
 	    if ( $num == -2 ) {
@@ -2114,7 +2133,7 @@ sub invokeStage($$)
     }
     elsif ( $stage == 5 ) {
 	$self->status("parsing Genres list for stage $stage..");
-	my $countEstimate=$self->dbinfoCalcEstimate("genres", 60);
+	my $countEstimate=$self->dbinfoCalcEstimate("genres", 61);
 
 	my $num=$self->readMoviesOrGenres("Genres", $countEstimate, "$self->{imdbListFiles}->{genres}");
 	if ( $num < 0 ) {
@@ -2163,7 +2182,7 @@ sub invokeStage($$)
     }
     elsif ( $stage == 6 ) {
 	$self->status("parsing Ratings list for stage $stage..");
-	my $countEstimate=$self->dbinfoCalcEstimate("ratings", 60);
+	my $countEstimate=$self->dbinfoCalcEstimate("ratings", 63);
 
 	my $num=$self->readRatings($countEstimate, "$self->{imdbListFiles}->{ratings}");
 	if ( $num < 0 ) {
