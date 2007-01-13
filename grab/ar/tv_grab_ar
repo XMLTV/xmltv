@@ -1,4 +1,5 @@
 #!/usr/bin/perl -w
+
 =pod
 
 =head1 NAME
@@ -67,16 +68,23 @@ L<xmltv(5)>.
 
 =head1 AUTHOR
 
-Lic. Christian A. Rodriguez, car@cespi.unlp.edu.ar, based on tv_grab_es, from Ramon Roca.
+Christian A. Rodriguez, car@cespi.unlp.edu.ar, based on tv_grab_es, from Ramon Roca.
 
 =head1 BUGS
+
+This grabber extracts all information from multicanal website. Any change in this
+web page may cause this grabber to stop working.
+
+When two programs are overlapped, it is mostly because stoptime equals startime.
+Corrected modifying stoptime within threshold of 3 minutes
 
 =cut
 
 # Author's TODOs & thoughts
 #
-# Add support for logos
-#
+# Add channel logo support
+# Add descriptions support
+
 
 
 ######################################################################
@@ -120,15 +128,14 @@ my $HEAD = { 'source-info-url'     => 'http://www.buscadormulticanal.com.ar/',
 	     'generator-info-url'  => 'http://membled.com/work/apps/xmltv/',
 	   };
 		   
-# Whether zero-length programmes should be included in the output.
-my $WRITE_ZERO_LENGTH = 0;
-
 # default language
 my $LANG="es";
 
 # Global channel_data
 our @ch_all;
 
+# Overlaping time threshold allowed in seconds
+our $allowed_overlap_tresh=180;
 ######################################################################
 # get options
 
@@ -347,15 +354,26 @@ sub process_table {
     my @r;
     while (@program_data) {
         my $cur = shift @program_data;
-
-        my $p = make_programme_hash($date, "$ch_xmltv_id.multicanal", $ch_ar_id, $cur);
-        if (not $p) {
-            require Data::Dumper;
-            my $d = Data::Dumper::Dumper($cur);
-            warn "cannot write programme on $ch_xmltv_id.multicanal on $date:\n$d\n";
+        my $next = shift @program_data;
+        unshift @program_data,$next if $next;
+        my $cur_stop=ParseDate("$date $cur->{stoptime}");
+        my $next_start;
+        if ($next){
+            $next_start=ParseDate("$date $next->{time}");
+            $cur_stop=adjust_stoptime($date,$cur,$cur_stop,$next_start,$ch_xmltv_id);
         }
-        else {
-            push @r, $p;
+        if ( ($next and ( Date_Cmp($cur_stop,$next_start) < 0 )) or !$next ){
+            my $p = make_programme_hash($date, "$ch_xmltv_id.multicanal", $ch_ar_id, $cur);
+            if (not $p) {
+                require Data::Dumper;
+                my $d = Data::Dumper::Dumper($cur);
+                warn "cannot write programme on $ch_xmltv_id.multicanal on $date:\n$d\n";
+            }
+            else {
+                push @r, $p;
+            }
+        }else {
+                warn "Detected duplicate programme on $ch_xmltv_id.multicanal date $date:\n\t$cur->{title} Start: $cur->{time} Ends: $cur->{stoptime} <=== Not writting\n\t$next->{title} Start: $next->{time} Ends: $next->{stoptime}\n";
         }
     }
     return @r;
@@ -441,9 +459,9 @@ sub get_channels {
                     }else{
                         @str=split(/-/,$opt_txt_elem[0]);
                     }
-                    my $channel_id = $opt->attr('value');
-                    my $channel_name=$str[1];
-                    my $channel_num = $str[0];
+                    my $channel_id = trim($opt->attr('value'));
+                    my $channel_name=trim($str[1]);
+                    my $channel_num = trim($str[0]);
                     $channels{$channel_id}=$channel_name;
                     push @ch_all, { 
                                 'display-name' => [[ $channel_name, $LANG ],[$channel_num]],
@@ -593,7 +611,8 @@ sub get_programs_for {
     my @row=$tree->look_down(
         '_tag', 'div',sub {
             $_[0]->attr('id')=~ /layer\d{1,2}/i and
-            $_[0]->attr('class')=~ /layerPrograma/i
+            $_[0]->attr('class')=~ /layerPrograma/i and 
+            defined $_[0]->attr('style') 
         });
     foreach my $elem (@row){
         my %ret;
@@ -614,7 +633,7 @@ sub get_programs_for {
             push @data, \%ret;
         }
     }
-    return @data;
+    return sort { Date_Cmp(ParseDate($a->{time}),ParseDate($b->{time})) } @data;
 }
 
 # Returns the time based on coordinates
@@ -627,3 +646,31 @@ sub get_start_time {
     return UnixDate(DateCalc("00:00","+ $mins minutes"),"%H:%M");
 }
 
+# Remove empty spaces from string
+sub trim {
+    my $string = shift;
+    $string =~ s/^\s+//;
+    $string =~ s/\s+$//;
+    return $string;
+}
+
+# Adjusts stop time from a program to a time that doesn't overlaps considering a threshold
+sub adjust_stoptime {
+    my ($date,$prog_cur,$curstop,$nextstart,$ch_xmltv_id)=@_;
+    if ( Date_Cmp($curstop,$nextstart) >= 0 ){
+        my $secscur=UnixDate($curstop,"%o");
+        my $secsnext=UnixDate($nextstart,"%o");
+        my $delta=$secscur-$secsnext;
+        if ( $delta <= $allowed_overlap_tresh ){
+            if ( $delta == 0){
+                $delta=60;
+            }
+            my $before=$prog_cur->{stoptime};
+            $prog_cur->{stoptime}=UnixDate(DateCalc($prog_cur->{stoptime},"- $delta seconds"),"%H:%M");
+            my $after=$prog_cur->{stoptime};
+            warn "Correcting stop time for programme $prog_cur->{title} on $ch_xmltv_id.multicanal date $date:\n\tFrom $before to $after";
+            $curstop=ParseDate("$date $prog_cur->{stoptime}");
+        }
+    }
+    return $curstop;
+}
