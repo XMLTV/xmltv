@@ -32,6 +32,7 @@ tv_grab_it [--config-file FILE] [--output FILE]
            [--days N] [--offset N] [--quiet]
            [--slow] [--verbose] [--errors-in-xml]
            [--backend SITE1[,SITE2[,SITE3]]]
+		   [--cache-slow]
         
 
 =head1 DESCRIPTION
@@ -51,6 +52,8 @@ Currently configured backends are (in default order):
 =item B<wfactory> - grabs data from www.wfactory.net
 
 =item B<skytv>    - grabs data from www.skytv.it
+
+=item B<boingtv>  - grabs data from www.boingtv.it
 
 =back
 
@@ -82,6 +85,10 @@ error.
 B<--slow> Downloads more details (descriptions, actors...). This means
 downloading a new file for each programme, so itE<39>s off by default to
 save time.
+
+B<--cache-slow> If you use the --cache option to speed up thing when you 
+grab data several times a week, using this option you will cache only the
+--slow data, so you shouldnE<39>t miss changes in schedules.
 
 B<--verbose> Prints out verbose information useful for debugging.
 
@@ -156,6 +163,7 @@ tv_grab_it [--config-file FILE] [--output FILE]
            [--days N] [--offset N] [--quiet]
            [--slow] [--verbose] [--errors-in-xml]
            [--backend SITE1[,SITE2[,SITE3]]]
+		   [--cache-slow]
         
 
 =head1 DESCRIZIONE
@@ -177,6 +185,8 @@ Le fonti configurate al momento sono: (in ordine di utilizzo):
 =item B<wfactory> - prende i dati da www.wfactory.net
 
 =item B<skytv>    - prende i dati da www.skytv.it
+
+=item B<boingtv>  - prende i dati da www.boingtv.it
 
 =back
 
@@ -205,6 +215,8 @@ B<--quiet> non usa i messaggi di avanzamento che normalmente vengono scritti su 
 
 B<--slow> scarica piuE<39> dettagli (trame, attori...). Questo vuol dire scaricare un nuovo file per ogni programma, quindi di default eE<39> disabilitato per risparmiare tempo.
 
+B<--cache-slow> Se usi lE<39>opzione --cache per accelerare le cose se usi il programma piuE<39> volte alla settimana, con questa opzione verranno messe in cache solo le informazioni --slow, cosiE<39> non dovresti perdere cambiamenti nei palinsesti.
+
 B<--verbose> scrive piuE<39> informazioni su quello che sta facendo il programma, utile per il debugging.
 
 B<--errors-in-xml> scrive gli errori sotto forma di programmi nel file XML, cosiE<39> possono essere visti nel tuo frontend preferito oltre che in STDERR.
@@ -221,10 +233,10 @@ file XML vuoto (o opzionalmente con solo i warning).
 La sorgente mytv backend al momento eE<39> disabilitata (il sito non fornisce piuE<39> dati).
 
 La qualitaE<39> dei dati delle varie sorgenti cambia molto. Per esempio, mytv
-era molto semplica, ma completa e usava la minor banda possibile. Skytv ha molti
+era molto semplice, ma completa e usava la minor banda possibile. Skytv ha molti
 canali, ma i dati non sono molto buoni a meno che non si usi lE<39>opzione --slow, 
 (ed in quel caso serve MOLTO tempo). wfactory eE<39> tutto sommato un buon sito se 
-non hai bisogno di tutto i pacchetto sky.
+non hai bisogno di tutto il pacchetto sky.
 
 =head1 ESEMPI
 
