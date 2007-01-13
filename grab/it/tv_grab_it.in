@@ -16,6 +16,9 @@
 # 16/08/2006
 # - fixes to skytv
 # - skytv now handles categories when using --slow
+# 11/01/2007
+# - added backend boingtv
+# - new option --cache-slow
 #################################################
 # TODO
 # - find channel icons somewhere
@@ -58,7 +61,7 @@ $0: get Italian television listings in XMLTV format
 To configure: $0 --configure [--config-file FILE]
 To grab listings: $0 [--config-file FILE] [--output FILE] [--days N]
         [--offset N] [--quiet] [--slow] [--verbose] [--backend]
-        [--errors-in-xml] 
+        [--errors-in-xml] [--cache-slow]
 To list available channels: $0 [--output FILE] [--quiet] --list-channels
 To show capabilities: $0 --capabilities
 To show version: $0 --version
@@ -86,7 +89,7 @@ my $MAX_DAYS=7;
 my $LANG="it";
 my $date_today = UnixDate("today", '%Y-%m-%d');
 
-my @default_backends = ('skytv', 'wfactory');
+my @default_backends = ('skytv', 'wfactory', 'boingtv');
 
 my %channels; #to store display names
 
@@ -125,6 +128,18 @@ my %backend_info
        fetch_data_sub =>   \&skytv_fetch_data,
        channel_list_sub => \&skytv_get_channels_list,
      },
+
+     'boingtv' =>
+     { domain => 'boingtv.it',
+       base_chan => 'http://www.boingtv.it/palinsesto/palinsesto.shtml',
+       base_data => 'http://www.boingtv.it/palinsesto/palinsesto.shtml',
+       rturl => "http://www.boingtv.it/palinsesto/palinsesto.shtml",
+       needs_login => 0,
+       needs_cookies => 0,
+       fetch_data_sub =>   \&boingtv_fetch_data,
+       channel_list_sub => \&boingtv_get_channels_list,
+     },
+
     );
 
 ######################################################################
@@ -148,6 +163,7 @@ my ($opt_days,
     $opt_errors_in_xml,
     @opt_backends,
     $opt_list_channels,
+	$opt_cache_slow,
    );
 
 # server only holds 7 days, so if there is an offset days must be
@@ -172,6 +188,7 @@ GetOptions('days=i'       => \$opt_days,
        'errors-in-xml'    => \$opt_errors_in_xml,
        'backend=s'        => \@opt_backends,
        'list-channels'    => \$opt_list_channels,
+       'cache-slow'       => \$opt_cache_slow,
       )
   or usage(0);
 
@@ -191,6 +208,8 @@ if ($opt_quiet) {
 }
 
 $opt_days = $opt_days || $MAX_DAYS;
+
+$opt_slow = 1 if ($opt_cache_slow);
 
 my $mode = XMLTV::Mode::mode('grab',
 			     $opt_list_channels => 'list-channels',
@@ -922,6 +941,17 @@ sub wfactory_fetch_data {
     $date_grab = UnixDate($date_grab, '%Y-%m-%d');
 
     my $url = $backend_info{wfactory}{base_data}.'FRM_CHAN_CHAN='.$channel_num.'&FRM_CHAN_DATE='.$date_grab.'&FRM_CHAN_NAME='.$channel_name;
+
+	#to trick memoize into not caching data with add a string to the url, based on time, with hourly resolution
+	#so if we redownload data within 5 minutes (we are within the same run) it comes from the cache
+	#but if we download it tomorrow it doesn't.
+	#this makes sense if you use the --cache option and you want to cache only the --slow data, to speed up things 
+	#when you grab data every two-three days, but you don't want to miss schedule changes
+	#this string is ignored by the server
+	if ($opt_cache_slow) {
+	    my $cachestring = "&pippo=".UnixDate("today","%Y%m%d%H");
+		$url.=$cachestring;
+	}
     warn ($DEF_LANG eq 'eng' ? 
                   "VERBOSE: fetching $url\n" :
                   "VERBOSE: scarico $url\n") if ($opt_verbose);
@@ -1212,7 +1242,16 @@ sub skytv_fetch_data {
     #this is technically tomorrow, but i need to know at what time the last prog ends
     push @urls, [$url.'?giorno='.$date.'&orario=3&tema=1&temaTVGuide='.$num.'&TypeSearch=2&TimeSearch=2&strStartTimeHidden=22%3A00%3A00&temaTimeNavigation='.$num.'&giornoTimeNavigation='.$date, '24:00', 0];
 
-    my @prog_to_check = ();
+	#to trick memoize into not caching data with add a string to the url, based on time, with hourly resolution
+	#so if we redownload data within 5 minutes (we are within the same run) it comes from the cache
+	#but if we download it tomorrow it doesn't.
+	#this makes sense if you use the --cache option and you want to cache only the --slow data, to speed up things 
+	#when you grab data every two-three days, but you don't want to miss schedule changes
+	#this string is ignored by the server
+	my $cachestring = "&pippo=".UnixDate("today","%Y%m%d%H");
+
+	    
+	my @prog_to_check = ();
     foreach (@urls) {
         my $url2 = $_->[0];
         my $starttime = $_->[1];
@@ -1226,6 +1265,8 @@ sub skytv_fetch_data {
         }
 
         die 'date calculation failed' if (! $starttime);
+
+		$url2.=$cachestring if ($opt_cache_slow);
 
         warn "VERBOSE: fetching $url2\n"  if ($opt_verbose);
 
@@ -1460,4 +1501,112 @@ sub skytv_fetch_data_slow {
         $programme->{desc}=[[tidy($desc), $LANG ]] if ($desc ne '');
     }
 
+}
+
+########################
+# boingtv.it functions #
+########################
+
+#########################################################
+# boingtv_get_channels_list
+# since this site only has one channel this is a fake sub
+sub boingtv_get_channels_list {
+    my %chan_hash = ( 'boingtv' ,'www.boingtv.it');
+
+    return %chan_hash;
+}
+
+####################################################
+# boingtv_fetch_data
+# 2 parameters: xmltv_id of channel 
+#               day offset
+# returns an error or an array of data
+sub boingtv_fetch_data {
+    my ($xmltv_id, $offset) = @_;
+    my $content;
+
+    # build url to grab
+    # very strange site: only has data till next sunday. if the offset it's too big we return an empty array 
+	# but we don't return an error
+	my $day_of_week = UnixDate("today", '%w'); #1 (Monday) to 7 (Sunday)
+	if ($day_of_week + $offset > 7) {
+        return (0, ());
+	}
+
+
+    # the channels hash holds 1/0 if the channel is sat/ter
+    my $site_id = $backend_info{boingtv}{site_ids}{$xmltv_id}{site_id};
+
+    if (not defined $site_id) {
+        warn ($DEF_LANG eq 'eng' ?
+                         "VERBOSE: \tThis site doesn't know about $xmltv_id!\n" : 
+                         "VERBOSE: \tQuesto sito non sa niente di $xmltv_id!\n" ) if ($opt_verbose);
+        return (1, ());
+    }
+
+    my $date_grab = &DateCalc("today","+ ".$offset." days");
+    die ($DEF_LANG eq 'eng' ? 'date calculation failed' : 'errore di calcolo di data') if not defined $date_grab;
+    $date_grab = UnixDate($date_grab, '%d/%m/%Y');
+
+
+    my $url = $backend_info{boingtv}{base_data}."?".$date_grab;
+    warn ($DEF_LANG eq 'eng' ?
+                  "VERBOSE: fetching $url\n" :
+                  "VERBOSE: scarico $url\n") if ($opt_verbose);
+
+    eval { $content=get_nice($url) };
+    if ($@) {   #get_nice has died
+        warn ($DEF_LANG eq 'eng' ? 
+                          "VERBOSE: Error fetching $url channel $xmltv_id day $offset backend boingtv\n" :
+                          "VERBOSE: Errore nello scaricare $url, canale $xmltv_id, giorno $offset, fonte boingtv\n") if ($opt_verbose);
+
+        # Indicate to the caller that we had problems
+        return (1, ());
+    } 
+
+    my @programmes = ();
+    warn "VERBOSE: parsing...\n" if ($opt_verbose);
+
+
+	$content=~/<div class="progdate">(.*)/;
+    $content = $1;
+
+	my @lines = split /<div class="prog">/, $content;
+
+    #split the lines
+    foreach my $line (@lines) {
+		$line=~/<div class="progtime">(.*?)<\/div><div class="progname">(.*?)<\/div>/;
+
+        my %programme = ();
+        my ($title, $time_start) = ($2, $1);
+
+        # Three mandatory fields: title, start, channel.
+        if (not defined $title) {
+            warn 'no title found, skipping programme';
+            next;
+        }
+            $programme{title}=[[tidy($title), $LANG] ];
+        if (not defined $time_start) {
+            warn "no start time for title $title, skipping programme";
+            next;
+        }
+        my $past_midnight = 0;
+        $time_start =~/(..).(..)/; my $time_start2 = "$1.$2";
+        $past_midnight = 1 if ($time_start2 < 7); #they can work as decimals, 0.32 < 23.44
+
+        $programme{start}=xmltv_date($time_start, $offset + $past_midnight);
+        $programme{channel}=$xmltv_id;
+
+        #put info in array
+        push @programmes, {%programme};
+    }
+
+    if (scalar @programmes) {
+        return (0, @programmes);
+    }
+    else {
+        # there is a number of reasons why we could get an empty array.
+        # so we return an error 
+        return (1, @programmes);
+    }
 }
