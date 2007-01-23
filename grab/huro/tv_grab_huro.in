@@ -737,15 +737,28 @@ sub add_person ( $$$ ) {
 sub get_infourl_data( $$ ) {
 	my $prog = shift;
 	my $d = domain();
-	my $url = "http://www.$d" .	shift;
+	my $url = shift;
 
+    # add port.hu/port.ro base url only if url is not contains the "://" uri separator
+	if (! ($url =~ "://")) {
+	  $url = "http://www.$d" . $url;
+    }
+
+    # no info, so don't add it to anywhere
+    # -> calendar.event_popup 
+    if ($url =~ "calendar\.event_popup") {
+        t "SKIP fetching of slow url: $url";
+        return;
+    }
 
 	# do not grab:
 	# -> pictures: ... pls/me/picture.popup?i_area_id
 	# -> dvd rent links page: ... pls/w/logging.page_log?i_page_id=20...
 	# -> sample movie ... video.link_popup?i_object_id=18822
+    # -> dvd sales page: www.divido.hu...
+    # -> bet on a sport event -> sprotingbet
 
-	if ($url =~ "(picture.popup|logging.page_log|video.link_popup)") {
+    if ($url =~ "(picture.popup|logging.page_log|video.link_popup|www\.divido\.hu|sportingbet)") {
 		# add this url to the program
 		push @{$prog->{q(url)}}, $url;
 		t "SKIP fetching of slow url: $url";
@@ -855,62 +868,56 @@ sub get_infourl_data( $$ ) {
 	}
 
 	# LONG DESCRIPTION:
-	# long descr is preceded with the following HTML block, called "dots"
-	# <table border="0" cellpadding="0" cellspacing="0" width="100%">
-	# ...
-	# <td background="/cc/hdots.gif"><img src="/cc/t.gif"
-	# ...
-	# </table>
+	# new format uses the <div class="separator"><!-- ++++++++++ --></div> block
+	# to separate contents 
 	# anchor point: 
-	# long desc is in the 3. block; blocks are delimited with dots (images),
-	# to get the information:
-	# after the 2. founded dots find the containing table element: this is
-	# the nearest parent table
-	# collect all text until the next table element.
-
+	# long desc is in the 3. block; this is right sibling of the 3rd separator
+	# the actual content is inbetween the <span class="txt">....</span> elements
 	t "long desc parsing ...";
-	my @dots = $tree->look_down(_tag=>"td", background => qr/hdots.gif/);
-	return if ($#dots < 1);
+	my @separators = $tree->look_down(_tag=>"div", class=>"separator");
+	return if ($#separators < 2);
 	@lines = ();
-	($anchor) = $dots[1]->look_up(_tag=>"table", width=>"100%");
-	if ($anchor) {
-		$elem = $anchor; 
-		while (($elem = $elem->right()) &&
-					((ref $elem) && ($elem->tag() ne "table"))) {
-			push @lines, get_all_text($elem);
-		}
-		$joined = join(" ", @lines);
-		$joined =~ s/\xA0//;	# remove the to_text()'s results of &npsp
-		$joined =~ s/^\s+//;	# remove blanks
-		$joined =~ s/\s+$//;	# remove blanks
-		t "long desc: anchor and right siblings found: joined:'$joined'";
-		if (length($joined)) {
-			delete($prog->{q(desc)});
+	if (($anchor) = $separators[2]->right()) {
+		$joined = $anchor->tag();
+		if ($anchor->tag() eq "span" && $anchor->attr('class') eq "txt") {
+			push @lines, get_all_text($anchor);
+			
+			$joined = join(" ", @lines);
+			$joined =~ s/\xA0//;	# remove the to_text()'s results of &npsp
+			$joined =~ s/^\s+//;	# remove blanks
+			t "found description $joined";
+			
+			if (length($joined)) {
+				delete($prog->{q(desc)});
 
-			# strip the desc at the specified command line option (if spec)
-			if (defined ($opt_max_desc_length) && 
-					($opt_max_desc_length < length($joined))) {
-				t "long desc was stripped, at: $opt_max_desc_length.";
-				$joined = substr($joined, 0, $opt_max_desc_length - 3) . "...";
+				# strip the desc at the specified command line option (if spec)
+				if (defined ($opt_max_desc_length) && 
+						($opt_max_desc_length < length($joined))) {
+					t "long desc was stripped, at: $opt_max_desc_length.";
+					$joined = substr($joined, 0, $opt_max_desc_length - 3) . "...";
+				}
+
+				$prog->{q(desc)} = [[ $joined, $COUNTRY ]]
 			}
 
-			$prog->{q(desc)} = [[ $joined, $COUNTRY ]]
 		}
 	}
+	
 
 	# SERIES NUMBER, CATEGORY, YEAR
-	# anchor point: 1st dots
-	# all text data is in/under the left siblings of the 1.st dots
-	# and collect all text data, and parse it from known datas. the dots
-	# table is the child of a td element, which holds the usable data
+	# anchor point: 2nd separator
+	# all text data is in/under the parent TD element of the 2nd separator
+	# We collect all text data, and parse it from known datas. 
 
-	return if ($#dots < 0);
-
-	if (!(($anchor) = $dots[0]->look_up(_tag=>"table", width=>"100%"))) {
+	return if ($#separators < 1);
+	
+	($anchor) = $separators[1];
+	if ($anchor->parent()->tag() ne "td" || $anchor->parent->attr('width') ne "98%") {
+		t "credits section not found";
 		return;
 	}
 
-	# collect all text lines (which are the left siblings of the achor), we
+	# collect all text lines, we
 	# achive this to jump to the parent first, and walk all the childs until
 	# the anchor is reached
 	@lines = ();
