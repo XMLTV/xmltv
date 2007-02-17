@@ -19,9 +19,10 @@
 # 11/01/2007
 # - added backend boingtv
 # - new option --cache-slow
+# 13/02/2007
+# - added backend skylife (soon to replace skytv)
 #################################################
 # TODO
-# - find channel icons somewhere
 # - add more informative errors in xml
 #
 #################################################
@@ -54,6 +55,8 @@ use XMLTV::ProgressBar;
 use XMLTV::DST;
 use XMLTV::Get_nice;
 use XMLTV::Mode;
+
+use XML::Simple;
 
 # Todo: perhaps we should internationalize messages and docs?
 use XMLTV::Usage <<END
@@ -89,7 +92,8 @@ my $MAX_DAYS=7;
 my $LANG="it";
 my $date_today = UnixDate("today", '%Y-%m-%d');
 
-my @default_backends = ('skytv', 'wfactory', 'boingtv');
+#my @default_backends = ('skylife', 'skytv', 'wfactory', 'boingtv', 'sitcom1');
+my @default_backends = ('skylife', 'wfactory', 'boingtv', 'sitcom1');
 
 my %channels; #to store display names
 
@@ -129,6 +133,17 @@ my %backend_info
        channel_list_sub => \&skytv_get_channels_list,
      },
 
+     'skylife' =>
+     { domain => 'skylife.it',
+       base_chan => 'http://www.skylife.it/epg/selectcategory.do?category=3',
+       base_data => 'http://www.skylife.it/static/epg/timeline/data/',
+       rturl => "http://www.skylife.it/",
+       needs_login => 0,
+       needs_cookies => 0,
+       fetch_data_sub =>   \&skylife_fetch_data,
+       channel_list_sub => \&skylife_get_channels_list,
+     },
+
      'boingtv' =>
      { domain => 'boingtv.it',
        base_chan => 'http://www.boingtv.it/palinsesto/palinsesto.shtml',
@@ -140,14 +155,24 @@ my %backend_info
        channel_list_sub => \&boingtv_get_channels_list,
      },
 
+     'sitcom1' =>
+     { domain => 'sitcom1.it',
+       base_chan => 'http://www.sitcom1.it/guidatv.asp',
+       base_data => 'http://www.sitcom1.it/guidatv.asp',
+       rturl => "http://www.sitcom1.it/guidatv.asp",
+       needs_login => 0,
+       needs_cookies => 0,
+       fetch_data_sub =>   \&sitcom1_fetch_data,
+       channel_list_sub => \&sitcom1_get_channels_list,
+     },
+
     );
 
 ######################################################################
 # Get options, including undocumented --cache option.
-my $func_name = 'XMLTV::Get_nice::get_nice_aux';
-XMLTV::Memoize::check_argv($func_name) # cache on disk
-  or memoize($func_name)               # cache in memory
-  or die "cannot memoize $func_name: $!";
+XMLTV::Memoize::check_argv('XMLTV::Get_nice::get_nice_aux', 'skylife_fetch_data_slow_get') # cache on disk
+  or memoize('XMLTV::Get_nice::get_nice_aux', 'skylife_fetch_data_slow_get')               # cache in memory
+  or die "cannot memoize 'XMLTV::Get_nice::get_nice_aux', 'skylife_fetch_data_slow_get': $!";
 
 my ($opt_days,
     $opt_offset,
@@ -427,12 +452,24 @@ foreach my $back (@backends) {
 if ($mode eq 'list-channels') {
     # Write all known channels then finish.
     foreach my $xmltv_id (sort keys %display_names) {
-        $w->write_channel({
-            id => $xmltv_id,
-            'display-name' => [ [ $display_names{$xmltv_id} ] ],
-#            icon => [{src => get_ch_icon($ch_id)}] #can't find it yet!
-        });
-    }
+		next if not defined $display_names{$xmltv_id};
+
+		my @display_name= [ [ $display_names{$xmltv_id} ] ];
+
+		my @chaninfo;
+		if (defined $backend_info{skylife}{site_ids}{$xmltv_id}{channum}) { #abbiamo sia il numero che l'icona; 
+			@chaninfo = ('display-name' => [ [ $display_names{$xmltv_id} ], [ $backend_info{skylife}{site_ids}{$xmltv_id}{channum}]],
+						icon => [{src => $backend_info{skylife}{site_ids}{$xmltv_id}{icon}}],
+						);
+
+		}
+		else {@chaninfo = ('display-name' => [ [ $display_names{$xmltv_id} ] ]);}
+
+		$w->write_channel({
+			id => $xmltv_id,
+			@chaninfo
+			});
+	}
     $w->end;
     exit;
 }
@@ -512,10 +549,21 @@ t "will get $days2get days from $opt_offset onwards";
 
 foreach my $xmltv_id (@channels) {
     next if not defined $display_names{$xmltv_id};
+
+    my @display_name= [ [ $display_names{$xmltv_id} ] ];
+
+	my @chaninfo;
+	if (defined $backend_info{skylife}{site_ids}{$xmltv_id}{channum}) { #abbiamo sia il numero che l'icona; 
+		@chaninfo = ('display-name' => [ [ $display_names{$xmltv_id} ], [ $backend_info{skylife}{site_ids}{$xmltv_id}{channum}]],
+			        icon => [{src => $backend_info{skylife}{site_ids}{$xmltv_id}{icon}}],
+			        );
+
+	}
+	else {@chaninfo = ('display-name' => [ [ $display_names{$xmltv_id} ] ]);}
+
     $w->write_channel({
         id => $xmltv_id,
-        'display-name' => [ [ $display_names{$xmltv_id} ] ],
-#        icon => [{src => get_ch_icon($ch_id)}] #can't find it yet!
+        @chaninfo
         });
 }
 
@@ -1124,9 +1172,9 @@ sub wfactory_fetch_data_slow {
     }
 }
 
-####################
+######################
 # skytv.it functions #
-####################
+######################
 
 ####################################################
 # skytv_get_channels_list
@@ -1525,16 +1573,6 @@ sub boingtv_fetch_data {
     my ($xmltv_id, $offset) = @_;
     my $content;
 
-    # build url to grab
-    # very strange site: only has data till next sunday. if the offset it's too big we return an empty array 
-	# but we don't return an error
-	my $day_of_week = UnixDate("today", '%w'); #1 (Monday) to 7 (Sunday)
-	if ($day_of_week + $offset > 7) {
-        return (0, ());
-	}
-
-
-    # the channels hash holds 1/0 if the channel is sat/ter
     my $site_id = $backend_info{boingtv}{site_ids}{$xmltv_id}{site_id};
 
     if (not defined $site_id) {
@@ -1543,6 +1581,14 @@ sub boingtv_fetch_data {
                          "VERBOSE: \tQuesto sito non sa niente di $xmltv_id!\n" ) if ($opt_verbose);
         return (1, ());
     }
+
+    # build url to grab
+    # very strange site: only has data till next sunday. if the offset it's too big we return an empty array 
+	# but we don't return an error
+	my $day_of_week = UnixDate("today", '%w'); #1 (Monday) to 7 (Sunday)
+	if ($day_of_week + $offset > 7) {
+        return (0, ());
+	}
 
     my $date_grab = &DateCalc("today","+ ".$offset." days");
     die ($DEF_LANG eq 'eng' ? 'date calculation failed' : 'errore di calcolo di data') if not defined $date_grab;
@@ -1568,10 +1614,10 @@ sub boingtv_fetch_data {
     warn "VERBOSE: parsing...\n" if ($opt_verbose);
 
 
-	$content=~/<div class="progdate">(.*)/;
+    $content=~/<div class="progdate">(.*)/;
     $content = $1;
 
-	my @lines = split /<div class="prog">/, $content;
+    my @lines = split /<div class="prog">/, $content;
 
     #split the lines
     foreach my $line (@lines) {
@@ -1609,4 +1655,466 @@ sub boingtv_fetch_data {
         # so we return an error 
         return (1, @programmes);
     }
+}
+
+########################
+# sitcom1.it functions #
+########################
+
+#########################################################
+# sticom1_get_channels_list
+# since this site only has one channel this is a fake sub
+sub sitcom1_get_channels_list {
+    my %chan_hash = ( 'sitcom1' ,'www.sitcom1.it');
+
+    return %chan_hash;
+}
+
+####################################################
+# sitcom1_fetch_data
+# 2 parameters: xmltv_id of channel 
+#               day offset
+# returns an error or an array of data
+sub sitcom1_fetch_data {
+    my ($xmltv_id, $offset) = @_;
+    my $content;
+
+    # date to grab
+    my $grabdate      = UnixDate(&DateCalc("today","+ ".$offset." days"), '%Y:%m:%d');
+    my ($anno, $mese, $giorno) = split /:/, $grabdate;
+    
+    # build urls to grab
+    my @urls;
+    push @urls, $backend_info{sitcom1}{base_data}."?id=1&anno=$anno&mese=$mese&giorno=$giorno";
+    push @urls, $backend_info{sitcom1}{base_data}."?id=2&anno=$anno&mese=$mese&giorno=$giorno";    
+    push @urls, $backend_info{sitcom1}{base_data}."?id=3&anno=$anno&mese=$mese&giorno=$giorno";    
+    push @urls, $backend_info{sitcom1}{base_data}."?id=4&anno=$anno&mese=$mese&giorno=$giorno";    
+
+
+    my $site_id = $backend_info{sitcom1}{site_ids}{$xmltv_id}{site_id};
+
+    if (not defined $site_id) {
+        warn ($DEF_LANG eq 'eng' ?
+                         "VERBOSE: \tThis site doesn't know about $xmltv_id!\n" : 
+                         "VERBOSE: \tQuesto sito non sa niente di $xmltv_id!\n" ) if ($opt_verbose);
+        return (1, ());
+    }
+    
+    my @programmes = ();
+    foreach my $url (@urls) {
+
+	warn ($DEF_LANG eq 'eng' ?
+    	          "VERBOSE: fetching $url\n" :
+                  "VERBOSE: scarico $url\n") if ($opt_verbose);
+
+	eval { $content=get_nice($url) };
+        if ($@) {   #get_nice has died
+            warn ($DEF_LANG eq 'eng' ? 
+                          "VERBOSE: Error fetching $url channel $xmltv_id day $offset backend boingtv\n" :
+                          "VERBOSE: Errore nello scaricare $url, canale $xmltv_id, giorno $offset, fonte boingtv\n") if ($opt_verbose);
+
+            # Indicate to the caller that we had problems
+            return (1, ());
+        } 
+
+        warn "VERBOSE: parsing...\n" if ($opt_verbose);
+	
+	$content=~s/\n+//igm;
+	$content=~s/\r+//igm;	
+        $content=~/\Q****** -->\E(.*)\Q<!-- ******\E/;
+        $content = tidy($1);
+
+        my @lines = split /height=\"20\"/, $content;
+
+        #split the lines
+        foreach my $line (@lines) {
+	    next if ($line!~/bgcolor/);
+    	    $line=~/10%\".>.(.*?)<\/td.*?href=\"(.*?)\".*?B>(.*?)<\/B.*puntate(.*?)\'.*? >(.*?)<\/a/;
+	    #warn "||$1||$2||$3||$4||$5||\n";
+
+            my %programme = ();
+            my ($title, $time_start, $subtitle) = ($3, $1, $5);
+	    my $category;
+	    if ($title=~/Film|Tv movie/i) {
+		$category = $title;
+		$title = $subtitle;
+		$subtitle = undef;
+	    }
+
+            # Three mandatory fields: title, start, channel.
+            if (not defined $title) {
+                warn 'no title found, skipping programme';
+                next;
+	    }
+            $programme{title}=[[tidy($title), $LANG] ];
+    	    if (not defined $time_start) {
+                warn "no start time for title $title, skipping programme";
+        	next;
+            }
+            $time_start =~/(..).(..)/; my $time_start2 = "$1:$2";
+    
+            $programme{start}=xmltv_date($time_start2, $offset);
+            $programme{'sub-title'}=[[tidy($subtitle), $LANG] ] if defined($subtitle);
+    	    $programme{category}=[[tidy($category), $LANG ]] if defined $category;
+	    $programme{channel}=$xmltv_id;
+
+            #put info in array
+            push @programmes, {%programme};
+        }
+    }
+
+    if (scalar @programmes) {
+        return (0, @programmes);
+    }
+    else {
+        # there is a number of reasons why we could get an empty array.
+        # so we return an error 
+        return (1, @programmes);
+    }
+}
+
+########################
+# skylife.it functions #
+########################
+
+####################################################
+# skylife_get_channels_list
+sub skylife_get_channels_list {
+    my %chan_hash;
+
+    my @categories = ('cinema', 'mondo', 'sport', 'news', 'ragazzi', 'intrattenimento');
+
+    foreach my $url (@categories) {
+	$url = $backend_info{skylife}{base_data}.$url."_1.xml";
+        warn ($DEF_LANG eq 'eng' ?
+                          "VERBOSE: Getting channel list from $url\n" :
+                          "VERBOSE: Scarico la lista dei canali da $url\n") if ($opt_verbose);
+ 
+        my $content;
+        eval { $content = get_nice($url); };
+
+                if ($@) {   #get_nice has died
+                        warn ($DEF_LANG eq 'eng' ? 
+                                                          "VERBOSE: Cannot get skylife's channel list ($url). Site down?\n" : 
+                                                          "VERBOSE: Non sono riuscito a prendere la lista dei canali di skylife ($url). Il sito non funziona?\n");
+                        return ();
+                } 
+
+
+		$content=~/<div class=\"lineatitles\">(.*)<div id=\"contenuti\"/;
+		my @canali = split /<div class=\"canale\">/, $1;
+		my $lineacount = 1;
+		foreach my $canale (@canali) {
+			$canale=~/alt=\"(.*?)\".*src=\"(.*?)\"/;
+			next if (not defined $2);
+			my $name = tidy($1);
+			my $iconurl = $backend_info{skylife}{rturl}.$2;
+			my $channum = $2; $channum=~/\/(\d+)\.gif/; $channum=$1;
+
+			#print "$lineacount|$name|$iconurl|$channum\n";
+
+
+            $chan_hash{$name} = "$url;$lineacount";
+  
+            #update backend info, in case this is a new channel not in channel_ids
+            my $xmltv_id = xmltv_chanid('skylife', $name);
+            $backend_info{skylife}{site_ids}{$xmltv_id}{site_id} = $name;
+            $backend_info{skylife}{site_ids}{$xmltv_id}{icon} = $iconurl;
+            $backend_info{skylife}{site_ids}{$xmltv_id}{channum} = $channum;
+
+	    $lineacount++;
+  	}
+
+    }
+
+    return %chan_hash;
+}
+
+#uso due variabili globali per potere usare memoize sui dati --slow, altrimenti l'url cambia ogni giorno anche se l'id rimane lo stesso
+my $OFF; my $CAT;
+
+sub skylife_fetch_data {
+    my ($xmltv_id, $offset) = @_;
+    my $content;
+
+    my $site_id = $backend_info{skylife}{site_ids}{$xmltv_id}{site_id};
+    if (not defined $site_id) {
+        warn ($DEF_LANG eq 'eng' ?
+                         "VERBOSE: \tThis site doesn't know about $xmltv_id!\n" : 
+                         "VERBOSE: \tQuesto sito non sa niente di $xmltv_id!\n" ) if ($opt_verbose);
+        return (1, ());
+    }
+
+    # build url to grab
+    #warn "site id $site_id,  ",$backend_info{skylife}{channels}{$site_id}."\n";
+    my ($url, $row) = split /;/, $backend_info{skylife}{channels}{$site_id};
+    $url=~/(.*)_\d.xml/;
+    $url = $1."_".($offset+1).".xml";
+    my $url_domani = $1."_".($offset+2).".xml";
+    my $categoria = skylife_get_cat($url);
+
+
+    $OFF=$offset; $CAT=$categoria;    
+
+    my @urls =($url, $url_domani);
+
+	#to trick memoize into not caching data with add a string to the url, based on time, with hourly resolution
+	#so if we redownload data within 5 minutes (we are within the same run) it comes from the cache
+	#but if we download it tomorrow it doesn't.
+	#this makes sense if you use the --cache option and you want to cache only the --slow data, to speed up things 
+	#when you grab data every two-three days, but you don't want to miss schedule changes
+	#this string is ignored by the server
+
+	my $cachestring = "?pippo=".UnixDate("today","%Y%m%d%H");
+
+	my $grabdate      = UnixDate(&DateCalc("today","+ ".$offset." days"), '%Y%m%d');
+	    
+	my @prog_to_check = ();
+
+    my $offset2 = 0;
+    foreach my $url2 (@urls) {
+    	my $grabdate      = UnixDate(&DateCalc("today","+ ".($offset + $offset2)." days"), '%Y%m%d');
+        my $starttime = ParseDate("$grabdate 00:00");
+        die 'date calculation failed' if (! $starttime);
+
+	$url2.=$cachestring if ($opt_cache_slow);
+
+        warn "VERBOSE: fetching $url2\n"  if ($opt_verbose);
+
+        eval { $content=get_nice($url2) };
+        if ($@) {   #get_nice has died
+                warn ($DEF_LANG eq 'eng' ? 
+                          "VERBOSE: Error fetching $url channel $xmltv_id day $offset backend skylife\n" :
+                          "VERBOSE: Errore nello scaricare $url, canale $xmltv_id, giorno $offset, fonte skylife\n") if ($opt_verbose);
+
+            # Indicate to the caller that we had problems
+            return (1, ());
+        } 
+
+	    warn "VERBOSE: parsing...\n" if ($opt_verbose);
+        
+	    #split and parse the lines
+    	    $content=~/<div id=\"contenuti\">(.*)/;
+	    my @lines = split /<div class=\"linea\">/, $content;
+
+	    #quella che ci interessa e' $row
+	    my @lines2 = split /<div class=\"p/, $lines[$row];
+
+	    foreach my $line2 (@lines2) {
+       		   $line2=~/\"width:(.*?)px\".*id=\"(.*?)\".*?>(.*?)</;
+		   if (not defined $3) { #se il primo programma non ha titolo perche' e' la fine di quello del giorno prima
+			   $line2=~/^.\" style=\"width:(\d+?)px\"> <\/div>$/;
+			   
+			   my $res = $1;
+			   #warn "ocio inizio linea diverso!\n\n";
+			   if (defined $res and $res=~/^\d+$/) {
+			   #warn "linizio 1 sarebbe |$res|\n";
+                	   $starttime = &DateCalc($starttime, "+ ".($res /4)." minutes") || die ($DEF_LANG eq 'eng' ? 'date calculation failed' : 'errore di calcolo data');
+			   }
+			   next;
+		   }
+            my ($title, $length, $id) = ($3, $1 / 4, $2);
+ 	    my $start = $starttime;
+	    $starttime = &DateCalc($starttime, "+ ".$length." minutes") || die ($DEF_LANG eq 'eng' ? 'date calculation failed' : 'errore di calcolo data');
+	    my $stop = $starttime;
+	    push @prog_to_check, [$title, $length, $id, $start, $stop];
+
+	    }
+    $offset2++;
+    }
+
+    my @programmes = ();
+    my ($oldtitle, $oldlength, $oldid, $oldstart, $oldstop) = ('', '', 0, '', '');
+    #TODO OCIO CHECK DATA NELL XML SIA QUELLA GIUSTA
+    #prendiamo l'inizio del primo programma del giorno dopo come fine dell'ultimo del giorno prima
+    my %programme = ();
+
+    my $parse_date = &DateCalc("today 00:00","+ ".$offset." days");
+    my $next_day   = &DateCalc("today 00:00","+ ".($offset + 1)." days");
+
+    foreach (@prog_to_check) {
+        my ($title, $length, $id, $start, $stop) = @$_;
+	last if ($start eq $oldstop and $start=~/00:00:00$/);
+        if ($oldtitle ne '' and UnixDate(ParseDate($oldstop), '%H%M') ne '0000') {
+            $programme{title} = [[tidy($oldtitle), $LANG] ];
+            $programme{start} = utc_offset(UnixDate($oldstart, '%Y%m%d%H%M').'00', '+0100');
+            $programme{stop}  = utc_offset(UnixDate($oldstop, '%Y%m%d%H%M').'00', '+0100');
+            $programme{channel} = $xmltv_id;
+            skylife_fetch_data_slow($oldid, \%programme) if ($opt_slow);
+            push @programmes, {%programme} if ($oldstart and $oldtitle);
+        }
+        %programme = ();
+	
+	my $d = UnixDate(ParseDate($oldstop), '%H%M');
+	if (not defined ($d) or $d ne '0000') {
+    	    ($oldtitle, $oldlength, $oldid, $oldstart, $oldstop) = @$_ ;
+	    }
+            
+        #we don't care about tomorrow's data
+	if (Date_Cmp(ParseDate($start), ParseDate($next_day)) > 0){ #abbiamo cambiato giorno
+    	    $oldstop = $start unless $start=~/00:00:00$/; #se il programma finiva esattamente a mezzanotte
+	    last;
+	}
+    }
+
+    #scrivo l'ultimo programma
+    $programme{title} = [[tidy($oldtitle), $LANG] ] if ($oldtitle);
+    $programme{start} = utc_offset(UnixDate($oldstart, '%Y%m%d%H%M').'00', '+0100') if ($oldstart);
+    $programme{stop}  = utc_offset(UnixDate($oldstop, '%Y%m%d%H%M').'00', '+0100') if ($oldstop);
+    $programme{channel} = $xmltv_id;
+    skylife_fetch_data_slow($oldid, \%programme) if ($opt_slow);
+    push @programmes, {%programme} if ($oldid ne '' and $oldstart and $oldtitle);
+
+    if (scalar @programmes) {
+        return (0, @programmes);
+    }
+    else {
+        # there is a number of reasons why we could get an empty array.
+        # so we return an error 
+        return (1, @programmes);
+    }
+}
+
+sub skylife_fetch_data_slow_get {
+    my $id = shift;
+    my $url = 'http://www.skylife.it/static/epg/timeline/data/c'.$CAT.'/d'.($OFF+1).'/'.$id.'.xml';
+    my $content;
+#warn "fetching $id, domani non dovrei farlo...\n";
+    warn ($DEF_LANG eq 'eng' ?
+                  "VERBOSE: getting --slow data from $url" :
+                  "VERBOSE: prendo dati --slow da $url") if ($opt_verbose); 
+    eval { $content=get_nice($url) };
+    if ($@) {   #get_nice has died
+	return undef;
+    }
+    
+    return $content;
+}
+
+sub skylife_fetch_data_slow {
+    my ($id, $programme) = @_;
+
+    my $content = skylife_fetch_data_slow_get($id);
+    
+    if (not defined $content) {
+        warn ($DEF_LANG eq 'eng' ?
+                      "VERBOSE: there was some error!" :
+	              "VERBOSE: c'e' stato qualche errore!") if ($opt_verbose);
+	return 0;
+    }
+
+
+    my $titolo;
+    if ($content=~/<div class=\"popupgenere\">(.*?)<\/div>/) {
+	my $category = $1;
+	my @cats = skylife_split_cats($category);
+	foreach (@cats) {push (@{$programme->{category}}, [tidy($_), $LANG ]) if ($_ ne '');}
+    }
+    
+    if ($content=~/<div class=\"parental1\">(.*?)<\/div>/) {
+        $titolo = $1;
+        @{$programme->{title}} = [tidy($titolo), $LANG]  if ($titolo ne '');
+    }
+
+   
+    if ($content=~/<div class=\"testo\">(.*?)<\/div>/) {
+	my $desc = $1;
+    
+	my ($cast, $country, $director, $year, $length, $subtitle);
+
+        if ($desc=~/(.*?) - (.*)/) {
+	    $subtitle = $1 if ($1 ne '' and $1 ne $titolo);
+            $desc = $2 if ($2 ne '');
+        }
+	
+        if ($desc=~/^\'(.*?)\' (.*)/) {
+	    $subtitle.= ' - ' if ($subtitle);
+    	    $subtitle.= $1 if ($1 ne '' and $1 ne $titolo);
+            $desc = $2 if ($2 ne '');
+        }	
+
+
+        if ($desc=~/^Regia di (.*?), con (.*?); (.*?) (\d+?) \((\d+) min\)\. (.*)/) {
+            $director = $1;
+            $cast = $2;
+            $country = $3;
+            $year = $4;
+            my $length = $5;
+            $desc = $6 || '';
+        }
+
+        if ($desc=~/^Regia di (.*?), con (.*?); (.*?) (\d+?)\. (.*)/) {
+            $director = $1;
+            $cast = $2;
+            $country = $3;
+            $year = $4;
+            $desc = $5 || '';
+        }
+
+        if ($desc=~/^Con ([A-Z].*?)\. (.*)/) {
+            $cast = $1;
+            $desc = $2 || '';
+	}
+
+	#tricky one
+        if ($desc=~/^con (.*?)\. (.*)/) {
+	   $desc = $2;
+	   $cast = $1;
+   
+	   if ($cast=~/(.*?); (.*)/) {
+    		$cast = $1;
+		$country = $2;
+	    }
+        }
+	
+	if ($cast) {
+	   my $lastcast;
+	   ($cast, $lastcast) = split / e /, $cast;
+	   my @cast = split /,/, $cast; push @cast, $lastcast if ($lastcast);
+           foreach (@cast) {
+                s/^\s+//; s/\s+$//;
+                (push @{$programme->{credits}->{actor}}, $_);
+            }
+	}
+	
+	
+    $content=~s/[\n|\r]+//gm;	
+    
+    $programme->{length}= $length*60 if ($length);
+    $programme->{date}= $year if ($year);
+    $programme->{'sub-title'}=[[$subtitle, $LANG] ] if ($subtitle);	
+    push @{$programme->{credits}->{director}}, $director if ($director);
+    push (@{$programme->{country}}, [$country, $LANG]) if ($country);
+    $programme->{desc}=[[tidy($desc), $LANG ]] if ($desc ne '');
+    }
+
+}
+
+sub skylife_get_cat {
+ my $url = shift;
+ my %categories = ('cinema' => 1, 
+		   'mondo'  => 2,
+		   'sport'  => 6, 
+		   'news'   => 5,
+		   'ragazzi'=> 4, 
+		   'intrattenimento' => 3);
+ 
+ $url =~ /data\/(.*)_\d\.xml/;
+ 
+ return $categories{$1}; 
+}
+
+sub skylife_split_cats {
+  my $text = shift;
+  my @res;
+  
+  if ($text=~/(Intrattenimento|Informazione)(.*)/) {@res=(tidy($2), tidy($1));}
+    elsif ($text=~/(Non Definito|Mondo e Tendenze|Ragazzi e Musica|Altri Programmi)(.*)/) {@res=(tidy($2));}
+    elsif ($text=~/(Film|Sport)(.*)/) {@res=(tidy($1), tidy($2));}
+    else {  
+	warn "--------------->Aggiungere categoria:|$text|\n";
+	@res=(tidy($text));
+     }
+  
+  return @res;
 }
