@@ -32,7 +32,7 @@ tv_grab_it [--config-file FILE] [--output FILE]
            [--days N] [--offset N] [--quiet]
            [--slow] [--verbose] [--errors-in-xml]
            [--backend SITE1[,SITE2[,SITE3]]]
-		   [--cache-slow]
+	   [--cache-slow]
         
 
 =head1 DESCRIPTION
@@ -49,11 +49,15 @@ Currently configured backends are (in default order):
 
 =over
 
+=item B<skylife>  - grabs data from www.skylife.it
+
 =item B<wfactory> - grabs data from www.wfactory.net
 
 =item B<skytv>    - grabs data from www.skytv.it
 
 =item B<boingtv>  - grabs data from www.boingtv.it
+
+=item B<sitcom1>  - grabs data from www.sitcom1.it
 
 =back
 
@@ -135,6 +139,12 @@ grabs the full data for the next three days using the default backend order and 
 
 =back
 
+=head1 RECOMMENDED USAGE
+
+=over 
+
+=item tv_grab_it --cache --slow --cache-slow --errors-in-xml
+
 =head1 SEE ALSO
 
 L<xmltv(5)>.
@@ -163,7 +173,7 @@ tv_grab_it [--config-file FILE] [--output FILE]
            [--days N] [--offset N] [--quiet]
            [--slow] [--verbose] [--errors-in-xml]
            [--backend SITE1[,SITE2[,SITE3]]]
-		   [--cache-slow]
+	   [--cache-slow]
         
 
 =head1 DESCRIZIONE
@@ -182,11 +192,15 @@ Le fonti configurate al momento sono: (in ordine di utilizzo):
 
 =over
 
+=item B<skylife>  - prende i dati da www.skylife.it
+
 =item B<wfactory> - prende i dati da www.wfactory.net
 
 =item B<skytv>    - prende i dati da www.skytv.it
 
 =item B<boingtv>  - prende i dati da www.boingtv.it
+
+=item B<sitcom1>  - prende i dati da www.sitcom1.it
 
 =back
 
@@ -255,6 +269,13 @@ prende solo un giorno di dati e utilizza un ordine diverso da quello di default 
 prende tutti i dati per i prossimi tre giorni ed usa una cache su disco (sempre raccomandabile).
 
 =back
+
+=head1 UTILIZZO CONSIGLIATO
+
+=over 
+
+=item tv_grab_it --cache --slow --cache-slow --errors-in-xml
+
 
 =head1 VEDERE ANCHE
 
