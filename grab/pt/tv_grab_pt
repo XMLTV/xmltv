@@ -1,5 +1,8 @@
 #!/usr/bin/perl
 
+eval 'exec /usr/bin/perl  -S $0 ${1+"$@"}'
+    if 0; # not running under some shell
+
 =pod
 
 =head1 NAME
@@ -12,7 +15,7 @@ tv_grab_pt --help
 
 tv_grab_pt [--config-file FILE] --configure [--gui OPTION]
 
-tv_grab_pt [--config-file FILE] [--output FILE] [--quiet] [--fullinfo] [--icons]
+tv_grab_pt [--config-file FILE] [--output FILE] [--quiet] [--icons]
 
 tv_grab_pt --list-channels
 
@@ -41,8 +44,6 @@ B<--output FILE> Write to FILE rather than standard output.
 
 B<--quiet> Suppress the progress messages normally written to standard
 error.
-
-B<--fullinfo> Fetches descriptions for all programs but it's slower
 
 B<--icons> Fetches channels icons/logos
 
@@ -95,7 +96,7 @@ use XMLTV::Mode;
 use XMLTV::Usage <<END
 $0: get Portuguese television listings in XMLTV format
 To configure: $0 --configure [--config-file FILE] [--gui OPTION]
-To grab listings: $0 [--config-file FILE] [--output FILE] [--quiet] [--offset OFFSET] [--days DAYS] [--fullinfo] [--icons]
+To grab listings: $0 [--config-file FILE] [--output FILE] [--quiet] [--offset OFFSET] [--days DAYS] [--icons]
 To list channels: $0 --list-channels
 END
   ;
@@ -104,7 +105,7 @@ my $DOMAIN = 'tvcabo.pt';
 
 # Attributes of the root element in output.
 my $HEAD = { 'source-info-url'     => "http://$DOMAIN",
-	     'source-data-url'     => "http://www.$DOMAIN/TV/ProgramacaoTv.aspx",
+	     'source-data-url'     => "http://www.$DOMAIN/Televisao/Programacao.aspx",
 	     'generator-info-name' => 'XMLTV',
 	     'generator-info-url'  => 'http://membled.com/work/apps/xmltv/',
 	   };
@@ -139,6 +140,12 @@ GetOptions('help'          => \$opt_help,
   or usage(0);
 usage(1) if $opt_help;
 XMLTV::Ask::init($opt_gui);
+
+#
+# Fullinfo was deprecated, we always get fullinfo now
+if ( $opt_fullinfo ) {
+  warn "--fullinfo is deprecated, we always get full info.\n"
+}
 
 # --offset and --days are ignored (we return more data than was
 # requested) but at least check the user didn't ask for something
@@ -175,6 +182,7 @@ else { die }
 # Whatever we are doing, we need the channels data.
 my $token;
 my %channels = get_channels(); # sets @ch_all
+my %channelnumbers;
 my @channels;
 
 my %icons = ();
@@ -373,9 +381,11 @@ sub process_table {
 
     for (my $k=$first_day; $k <= $last_day; $k++) {
         my $form ={
-                    "channelSigla"=>"$ch_xmltv_id",
+                    "SelectedSigla"=>$ch_xmltv_id,
+                    "SelectedChannel"=>$channelnumbers{$ch_xmltv_id},
                     "SelectedDay"=>today_offset()+$k,
-                    "programId"=>9999999,
+                    "operation"=>"search",
+                    "programId"=>'',
                     "__VIEWSTATE" => $token
                   };
 
@@ -487,11 +497,11 @@ sub get_program_data {
     );
 
 
-    my $table = $tree->find_by_attribute('id','_ctl0__ctl5_Datagrid1');
+    my $table = $tree->find_by_attribute('id','ctl00_Highlight_FullEPG_Datagrid1');
     # Actually time and title are required, but we don't check that.
 
     #lets get the day
-    my $span = $tree->find_by_attribute('id','_ctl0__ctl5_textBoxInfoResults');
+    my $span = $tree->find_by_attribute('id','ctl00_Highlight_FullEPG_textBoxInfoResults');
     my $date = trim($span->as_trimmed_text());
     $date =~ /.*, (\d+) de (.*) de (\d+)/;
     my ($day, $month, $year) = ($1,$2,$3);
@@ -508,11 +518,11 @@ sub get_program_data {
 		my @tds = $tr->find_by_tag_name("_tag"=>"td");
 		last unless( $tds[0] && $tds[1] );
 		my $time = trim($tds[0]->as_trimmed_text());
-		my $title = trim($tds[1]->as_trimmed_text());
+		my $title = trim($tds[1]->find_by_tag_name("_tag"=>"a")->as_trimmed_text());
 		my $sub_t = "";
 		my $episode = "";
-		my $desc = "";
-
+		my $desc = trim($tds[1]->find_by_tag_name("_tag"=>"a")->attr('title'));
+		
 		if ($title =~ /^(.*?)\: (.*?)$/) {
 		  $title = $1;
 		  $sub_t = $2;
@@ -522,21 +532,6 @@ sub get_program_data {
 
 		$time =~ s/://g;
 		$time = sprintf("%04d",$time);
-
-		if ($opt_fullinfo) {
-		     #lets get the description
-		     my $href = $tr->find_by_tag_name("_tag"=>"a");
-		     my $pid = $href->attr('href');
-		     $pid =~ /.*?\((\d+)\,\"(.*?)\"\).*$/;
-		     my ($id, $ch) = ($1,$2);
-		     my $url = $HEAD->{"source-data-url"}."?programId=$id&channelSigla=$ch";
-		     my $ptree = get_nice_tree $url, \&tidy;
-		     my $d = $ptree->find_by_attribute('id','_ctl0__ctl4_lblSynopsis');
-		     if ($d) {
-			 $desc = $d->as_trimmed_text();
-		     }
-		     $ptree->delete;
-		}
 
 		for ($title) { s/^\s+$//; s/\s+$// }
                 my %h = (       time =>         $time,
@@ -565,8 +560,13 @@ sub get_channels {
 
     foreach my $elem (@menus) {
 	my $cname = $elem->attr('name');
-	next unless $cname eq '_ctl0:_ctl5:channels';
+	next unless $cname eq 'ctl00$Highlight$FullEPG$channels';
         my @ocanals = $elem->find_by_tag_name("_tag"=>"option");
+	my $chanpos=0;
+	foreach my $sigla (@ocanals) {
+		$channelnumbers{$sigla->attr('value')}=$chanpos;
+		$chanpos++;	
+	}
         @ocanals = sort @ocanals;
 	foreach my $opt (@ocanals) {
 		    my $channel_id  = $opt->attr('value');
@@ -602,7 +602,7 @@ sub nextday {
 
 sub get_icons {
     my %icons;
-    my $url="http://www.$DOMAIN/Tv/ProgramacaoTv.aspx?programId=0&channelSigla=";
+    my $url="http://www.$DOMAIN/Televisao/Programacao.aspx?programId=0&channelSigla=";
     my $chan;
     my $tag;
     my $addr;
