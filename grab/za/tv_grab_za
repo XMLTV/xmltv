@@ -77,12 +77,13 @@ Does not automatically update itself, when DSTV changes their site
 use strict;
 
 use XMLTV::Version '$Id$ ';
-use XMLTV::Capabilities qw/manualconfig cache/;
+use XMLTV::Capabilities qw/baseline manualconfig cache/;
 use XMLTV::Description 'South Africa';
 
 
 use Getopt::Long;
 use List::Util qw(min);
+use List::Util qw(max);
 use Date::Manip;
 use HTML::TreeBuilder;
 use HTML::Entities; # parse entities
@@ -135,6 +136,7 @@ our %dstvchannelmap;
 our %mnetchannelmap;
 
 my %mnetchannelfixups = (
+    'Africa Magic Channel (C-Band)' => 'AfricaMagic',
     'Bloomberg Information TV' => 'Bloomberg',
     'China Central Television 4' => 'CCTV 4',
     'Channel O - Sound Television' => 'Channel O',
@@ -147,15 +149,16 @@ my %mnetchannelfixups = (
     'Hallmark Entertainment Network' => 'Hallmark',
     'K-TV World' => 'K-World',
     'M-Net Domestic' => 'M-Net',
-    'Movie Magic' => 'mnetmovies1',
-    'Movie Magic 2' => 'mnetmovies2',
+    'M-Net Movies 1' => 'mnetmovies1',
+    'M-Net Movies 2' => 'mnetmovies2',
+    'M-Net Series' => 'M-Net Series',
     'National Geographic' => 'Nat Geographic',
+    'Reality TV' => 'Zone Reality',
     'Rhema Network' => 'Rhema TV',
     'Summit' => 'Summit TV',
     'SuperSport' => 'SuperSport 1',
     'SuperSport 3' => 'SuperSport 3 (Soccer)',
     'SuperSport 5' => 'SuperSport 5 (Highlights)',
-    'The Series Channel' => 'M-Net Series',
     'Trinity Broadcasting Network' => 'TBN',
     'Turner Classic Movies' => 'TCM',
     'TV5 Afrique' => 'TV5',
@@ -201,7 +204,7 @@ my ($opt_days, $opt_offset, $opt_help, $opt_output,
 	$opt_configure, $opt_config_file, $opt_gui,
 	$opt_quiet, $opt_list_channels, $opt_opentime, 
 	$opt_opentime_combined, $opt_retries, $opt_mnet_fallback,
-	$opt_dstv_fallback);
+	$opt_dstv_fallback, $days_exceeded);
 #$opt_days  = 14; # default
 $opt_quiet  = 0; # default
 GetOptions('days=i'		=> \$opt_days,
@@ -220,28 +223,33 @@ GetOptions('days=i'		=> \$opt_days,
 		  )
   or usage(0);
 
-# For this grabber, we can only grab one of a few fixed day ranges and
-# they all start from today.  For compatibility with other grabbers,
-# try to decipher --days and --offset options and make sure we
-# download a range that includes that.  (It's allowed to get a bit
-# more data than the user asked for.)
+# dstv.com only allows us to grab one of a few fixed day ranges and
+# they all start from today.  For baseline compliance, data outside 
+# the range specified is stripped. mnet.co.za doesn't have this issue,
+# so it's now the default site to use. An extra day is also downloaded
+# just to calculate the end time of the last program of the previous day
 #
 my @allowed_days = qw(1 7 14 30);
 die "--offset cannot be negative" if defined $opt_offset and $opt_offset < 0;
 die "--days must be positive" if defined $opt_days and $opt_days <= 0;
 if ($opt_offset) {
 	$opt_days += $opt_offset;
-	warn "--offset is not really supported; getting at least $opt_days days to cover the range requested\n";
-}
+} else { $opt_offset = 0; }
+
 my $use_days;
 if ($opt_days) {
     $use_days = min grep { $_ >= $opt_days } @allowed_days;
-    die "cannot get $opt_days days; choose one of @allowed_days\n"
-      if not defined $use_days;
-    warn "rounding up to $use_days days (must be one of @allowed_days)\n"
-      if $use_days != $opt_days;
+    if (not defined $use_days) {
+        $opt_days = $use_days = max @allowed_days;
+        warn "rounding down to $use_days days for download (must be one of @allowed_days)\n";
+        $days_exceeded = 1;
+    } elsif (($use_days != $opt_days) && (!$opt_quiet)) {
+        warn "dstv.com only supports the following days: @allowed_days. $use_days day(s) will be downloaded and extraneous ones skipped\n";
+    }
 # OK, now $use_days has the number of days to grab starting from now,
-# if that was specified on the command line.
+# if that was specified on the command line. If this is specified in the 
+# config file it will also set this variable. $opt_days will contain the 
+# number of days we actually want to keep data for.
 }
 
 # Default retries = 3;
@@ -282,11 +290,11 @@ read_config(\%channels);
 
 if (not defined $use_days) {
     # Not got from command line or config file; default it.
-    $use_days = 14;
+    $opt_days = $use_days = 14;
 }
 
 
-$opt_mnet_fallback = 1 if !(defined $opt_mnet_fallback  || defined $opt_dstv_fallback);
+$opt_dstv_fallback = 1 if !(defined $opt_mnet_fallback  || defined $opt_dstv_fallback);
 
 
 
@@ -353,6 +361,11 @@ foreach (keys %channels) {
 $bar->finish() if not $opt_quiet;
 $writer->end();
 
+if (defined $days_exceeded) {
+    $! = 9;
+    die;
+}
+
 ######################################################################
 # subroutine definitions
 
@@ -386,7 +399,8 @@ sub dstv_channel_uri( $ ) {
 	die "cannot look up '$ch' in map" if not defined $mapped;
 	die if not defined $use_days;
 	my $days_param = $use_days == 1 ? 0 : $use_days;
-	return "http://www.dstv.com/DStv_Guide/print.aspx?Channel=$mapped&time=$days_param&submit=true&Channels";
+#	return "http://www.dstv.com/DStv_Guide/print.aspx?Channel=$mapped&time=$days_param&submit=true&Channels";
+	return "http://www.dstv.com/DStv_Guide/default.aspx?Channel=$mapped&time=$days_param&submit=true&Channels";
 }
 
 # Returns the option ID on the DSTV site for a given channel name
@@ -439,7 +453,10 @@ sub process_dstv_html {
 
 	# Find the date headers on the page
 	my @date_headers = $tree->look_down(_tag => "td", class => 'srch_date_chnl_head');
+    my $offset_counter = 0;
 	foreach my $td (@date_headers) {
+        $offset_counter++;
+        next if (($offset_counter <= $opt_offset) || ($offset_counter > $opt_days+1));
 		my $date = $td->as_text();
 		$date =~ s/^[^\w]+//g;
 		
@@ -490,6 +507,7 @@ sub process_dstv_html {
 			}
 			
 			my $subtitle = undef;
+            my $episode_num = undef;
 			my $year = undef;
 			my $actors = undef;
 			my $director = undef;
@@ -506,7 +524,13 @@ sub process_dstv_html {
 				t "New desc = $desc";
 				$category = "series";
 			}
-			
+
+            if ($subtitle && $subtitle =~ /(^\d+)\/(\d+) - (.*)$/) {
+                $episode_num = ($1-1) . "." . ($2-1) . ".0/1";
+                $subtitle = $3;
+                t "FOUND EPISODE NUMBER: $episode_num";
+            }			
+
 			if ($desc =~ /^Aka ([^\.]+)\. (.*)/) {
 				$desc = $2;
 				my $aka = $1;
@@ -555,6 +579,7 @@ sub process_dstv_html {
 			$title =~ s/(^\s+|\s+$)//g;
 			$desc =~ s/(^\s+|\s+$)//g;
 			$subtitle =~ s/(^\s+|\s+$)//g if $subtitle;
+			$rating =~ s/(^\s+|\s+$)//g if $rating;
 
 			# Fix "Press 'i'" entries
 			if ($title =~ /^Press .i.$/) {
@@ -562,10 +587,19 @@ sub process_dstv_html {
 				$subtitle = undef;
 			}
 
+			if ($desc eq "") {
+				$desc = "No description available";
+			}
+			
+			if (not $rating) { $rating = "Family"; }
+            
+            $start = $start . " $TZ";
+
 			$r = undef;
 			$r->{title} = [[$title]];
 			$r->{'sub-title'} = [[$subtitle]] if $subtitle;
-			$r->{rating} = [[$rating, "DSTV"]];
+            $r->{'episode-num'} = [[$episode_num, "xmltv_ns"]] if $episode_num;
+            $r->{rating} = [[$rating, "DSTV"]];
 			$r->{start} = $start;
 			$r->{channel} = "$chanid.dstv.com";
 			$r->{desc} = [[$desc]];
@@ -610,7 +644,10 @@ sub process_dstv_html {
 			}
 			$prev_time = $time;
 			$prev_r = $r;
-
+            if ($offset_counter > $opt_days) {
+                $offset_counter++;
+                last;
+            }
 		}
 	}
 	# Write opentime-combined data
@@ -667,6 +704,7 @@ sub process_mnet_html {
 
 
 	my ($date,$time,$title,$rating);
+    my $days_done = 0;
 	foreach my $tag (@tags) {
 		my $tag_text = $tag->as_text;
 		if ($tag->attr('class') && lc($tag->attr('class')) =~ /date$/ ) {
@@ -674,6 +712,7 @@ sub process_mnet_html {
 			$tag_text =~ s/\240/ /g;
 			$tag_text =~ /(\d+) (.*) (\d{4})/;
 			$date = "$1 $2";
+            $days_done++;
 			next;
 		}
 		if ($tag->attr('class') && lc($tag->attr('class')) =~ /time$/) {
@@ -720,6 +759,7 @@ sub process_mnet_html {
 			}
 			
 			my $subtitle = undef;
+            my $episode_num = undef;
 			my $year = undef;
 			my $actors = undef;
 			my $director = undef;
@@ -737,6 +777,12 @@ sub process_mnet_html {
 				$category = "series";
 			}
 			
+            if ($subtitle && $subtitle =~ /(^\d+)\/(\d+) - (.*)$/) {
+                $episode_num = ($1-1) . "." . ($2-1) . ".0/1";
+                $subtitle = $3;
+                t "FOUND EPISODE NUMBER: $episode_num";
+            }			
+
 			if ($desc =~ /^Aka ([^\.]+)\. (.*)/) {
 				$desc = $2;
 				my $aka = $1;
@@ -785,6 +831,7 @@ sub process_mnet_html {
 			$title =~ s/(^\s+|\s+$)//g;
 			$desc =~ s/(^\s+|\s+$)//g;
 			$subtitle =~ s/(^\s+|\s+$)//g if $subtitle;
+			$rating =~ s/(^\s+|\s+$)//g if $rating;
 
 			# Fix "Press 'i'" entries
 			if ($title =~ /^Press .i.$/) {
@@ -797,11 +844,14 @@ sub process_mnet_html {
 			}
 			
 			if (not $rating) { $rating = "Family"; }
+            
+            $start = $start . " $TZ";
 
 			$r = undef;
 			$r->{title} = [[$title]];
 			$r->{'sub-title'} = [[$subtitle]] if $subtitle;
-			$r->{rating} = [[$rating, "DSTV"]];
+            $r->{'episode-num'} = [[$episode_num, "xmltv_ns"]] if $episode_num;
+           	$r->{rating} = [[$rating, "DSTV"]];
 			$r->{start} = $start;
 			$r->{channel} = "$chanid.dstv.com";
 			$r->{desc} = [[$desc]];
@@ -850,9 +900,11 @@ sub process_mnet_html {
 			$prev_r = $r;
 			undef $title;
 			undef $time;
+            if ($days_done > ($opt_days-$opt_offset)) { last; }
 		}
 
 	}
+    
 	
 	# Write opentime-combined data
 	if (@array_ot) {
@@ -918,7 +970,7 @@ sub get_channels {
 	my $channels = shift;
 	
 	my @urls = (
-		'Backup' , 'http://www.tangent.co.za/~chrisp/dstv.channels.html',
+        'Google' , 'http://www.google.com/search?q=cache%3Awww.dstv.com%2Fmain.aspx%3FID%3D136',
 		'DSTV'   , 'http://www.dstv.com/main.aspx?ID=136', 
 	);
 	
@@ -1031,7 +1083,7 @@ sub mode_configure {
 	print CONF "option timeout $timeout\n";
 
 	say ("This grabber can get the listings from either mnet.co.za, or dstv.com");
-	say ("Which site would you like to use as the main site");
+	say ("Which site would you like to use as the main site (mnet recommended)");
 	@choices = ('dstv','mnet');
 	my $fallback_option = ask_choice("Select one of: ",$choices[1], @choices);
 	if ($fallback_option eq 'dstv') {
@@ -1174,7 +1226,7 @@ sub get_dstv() {
 	my $url = dstv_channel_uri $channame;
 	
 	t "Getting Listings for '$channame' from $url";
-	
+
 	my $result = get_url("GET", $url, 'http://www.dstv.com/DStv_Guide/default.aspx');
 	if ($result =~ /^:error:/) {
 		# Always attempt a refresh of channel mappings once
@@ -1203,8 +1255,13 @@ sub get_mnet() {
 	    return ":error:$msg";
 	}
 
-	my $start_date = POSIX::strftime("%Y/%m/%d", localtime(time()));
-	my $end_date = POSIX::strftime("%Y/%m/%d", localtime(time()+(($use_days-1)*86400)));
+	my $start_date = POSIX::strftime("%Y/%m/%d", gmtime(time()+(($opt_offset)*86400)));
+    my $end_date;
+    if ($opt_days < max @allowed_days) {
+    	$end_date = POSIX::strftime("%Y/%m/%d", gmtime(time()+(($opt_days)*86400)));
+    } else {
+    	$end_date = POSIX::strftime("%Y/%m/%d", gmtime(time()+(($opt_days-1)*86400)));
+    }    
 	my %info = (
 		'startDate' => $start_date,
 		'EndDate' => $end_date, 
@@ -1237,14 +1294,14 @@ sub gen_start_time {
 	# str2time sometimes gets the wrong year
 	# Append the current year to the date
 	# If we are in Nov or Dec, reading for Jan or Feb, year++
-	my $year = (localtime($now))[5] + 1900;
-	my $mon = (localtime($now))[4] + 1;
+	my $year = (gmtime($now))[5] + 1900;
+	my $mon = (gmtime($now))[4] + 1;
 	if (($mon == 11 || $mon == 12) && ($date =~ /(January|February)/)) {
 		$year++;
 	}
 	my $timestamp = UnixDate("$date $year $time", "%s");
 #	my $timestamp = str2time("$date $year $time");
-	return POSIX::strftime("%Y%m%d%H%M", localtime($timestamp));
+	return POSIX::strftime("%Y%m%d%H%M", gmtime($timestamp));
 }
 
 
@@ -1298,14 +1355,14 @@ sub read_config {
 	    $ua->timeout($conf_value) if $conf_option eq 'timeout';
 			
 	    if ($conf_option eq 'days') {
-		if (defined $opt_days or defined $opt_offset) {
+		if (defined $opt_days) {
 		    # Day stuff was given on the command line.  This
 		    # should override whatever's in the config file.
 		    #
 		} else {
 		    # Set the number of days from the config file.  It
 		    # must be one of the numbers allowed by the site.
-		    $use_days = $conf_value;
+		    $opt_days = $use_days = $conf_value;
 		    die "bad number of days $use_days in config file\n"
 		      if not grep { $_ == $use_days } @allowed_days;
 		}
@@ -1335,6 +1392,7 @@ sub get_url($$$$$) {
 
 	my $tries = 0;
 	my $data;
+    my $offset_counter = 0;
 	while ($tries < $opt_retries && not defined $data) {
 		$tries++;
 		my $res;
@@ -1351,7 +1409,7 @@ sub get_url($$$$$) {
 			 ($res->headers()->header('Content-Encoding') eq 'gzip')) {
 				$res->content(Compress::Zlib::memGunzip($res->content));
 			}
-			if ($res->content =~ /did not return any results/) {
+			if (($res->content =~ /did not return any results/) || ($res->content =~ /No Results Found/)) {
 				t "No results found - skipping";
 				$data = ":error:no data:";   
 			} else {
