@@ -580,6 +580,13 @@ my @opt_components
                     'HTML::Entities'    => 0 } },
     );
 
+    { name => 'tv_grab_nc',
+      blurb => 'Grabber for Nouvelle Caledonie Island (France)',
+      exes => [ 'grab/nc/tv_grab_nc' ],
+      prereqs => { 'HTML::TreeBuilder' => 0 ,
+                   'HTML::Entities'    => 0 } },
+    );
+
 # Now we need to prompt about each optional component.  The style of
 # prompting, though not the code, is based on SOAP::Lite.  I would
 # like to add '--noprompt' and '--with tv_grab_nl' options to help
