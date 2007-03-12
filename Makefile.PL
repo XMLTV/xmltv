@@ -578,13 +578,13 @@ my @opt_components
        exes => [ 'grab/re/tv_grab_re' ],
        prereqs => { 'HTML::TreeBuilder' => 0 ,
                     'HTML::Entities'    => 0 } },
-    );
 
     { name => 'tv_grab_nc',
       blurb => 'Grabber for Nouvelle Caledonie Island (France)',
       exes => [ 'grab/nc/tv_grab_nc' ],
       prereqs => { 'HTML::TreeBuilder' => 0 ,
                    'HTML::Entities'    => 0 } },
+
     );
 
 # Now we need to prompt about each optional component.  The style of
