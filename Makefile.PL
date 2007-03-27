@@ -335,7 +335,7 @@ my @opt_components
      },
 
      { name => 'tv_grab_uk_rt',
-       blurb => 'Alternative grabber for Britain',
+       blurb => 'Grabber for the UK',
        exes => [ 'grab/uk_rt/tv_grab_uk_rt' ],
        pl_files => { 'grab/uk_rt/tv_grab_uk_rt.PL' => 'grab/uk_rt/tv_grab_uk_rt' },
        share_files => { 'grab/uk_rt/channel_ids' => 'tv_grab_uk_rt/channel_ids' },
