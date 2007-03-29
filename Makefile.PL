@@ -381,6 +381,8 @@ my @opt_components
        to_clean => [ 'grab/it/tv_grab_it', 'grab/it/tv_grab_it.in2' ],
        deps => [ 'grab/it/tv_grab_it' => [ 'grab/it/tv_grab_it.in' ] ],
        grab_need_share => [ 'it' ],
+       prereqs => { 'XML::Simple' => 0, }
+
      },
 
      { name     => 'tv_grab_na_dd',
