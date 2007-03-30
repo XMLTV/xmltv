@@ -488,8 +488,7 @@ my @opt_components
 		 => [ 'grab/de_tvtoday/tv_grab_de_tvtoday.in' ] ],
        grab_need_share => [ 'de_tvtoday' ],
        prereqs => { 'HTML::Entities' => 1.27,
-  		            'HTML::TreeBuilder' => 0 ,
-  		            'Time::Local'=> 0 },
+  		            'HTML::TreeBuilder' => 0 }, 
      },
 
      { name => 'tv_grab_se_swedb',
