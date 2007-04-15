@@ -250,6 +250,8 @@ if ($mode eq 'list-channels') {
 die if $mode ne 'grab';
 
 # Read configuration.
+my %title;
+my %description;
 my $line_num = 1;
 foreach (@config_lines) {
     ++ $line_num;
@@ -260,6 +262,16 @@ foreach (@config_lines) {
 	$ch_name =~ s/\s*$//;
 	push @channels, $ch_did;
 	$channels{$ch_did} = $ch_name;
+    }
+    elsif (/^series:?\s+title:?\s+([^\#]+)/) {
+	my $name = $1;
+	$name =~ s/\s*$//;
+	$title{$name}++;
+    }
+    elsif (/^series:?\s+description:?\s+([^\#]+)/) {
+	my $name = $1;
+	$name =~ s/\s*$//;
+	$description{$name}++;
     }
     else {
 	warn "$config_file:$line_num: bad line\n";
@@ -377,7 +389,6 @@ sub make_programme_hash {
     my %prog;
 
     $prog{channel}=$ch_xmltv_id;
-    $prog{title}=[ [ $cur->{title}, $LANG ] ];
 
     my $cur_time = $cur->{time};
     t 'raw time for programme: ' . d $cur_time;
@@ -414,7 +425,50 @@ sub make_programme_hash {
 	$prog{stop}=UnixDate($stop_base, '%q') . " $stop_tz";
     }	
 
-    # FIXME: parse description field further
+    # Check for series.
+    #
+    # Check 1: episode name of series in title.
+    # If title contains a colon (:), check to see if the string on the 
+    # left-hand side of the colon has been defined as a series in the 
+    # conf-file. If it has, assume that the string on the left-hand side
+    # of the colon is the name of the series, and the string on the
+    # right-hand side is the name of the episode. For example, if the 
+    # following line has been defined in the tv_grab_fi.conf-file:
+    # "series title Prisma", and the title of the program is 
+    # "Prisma: Totuus tappajadinosauruksista", then the script will assume 
+    # that the title of the program is actually "Prisma", and the episode 
+    # name/sub-title is "Totuus tappajadinosauruksista".
+    if (($cur->{title} =~ m/([^:]+):\s*(.*)/) &&
+	(exists $title{$1})) {
+	my $new_title = $1;
+	my $episode = $2;
+	t "series $new_title, episode title $episode"; 
+	$prog{title}=[ [ $new_title, $LANG ] ];
+	$prog{'sub-title'} = [ [ $episode, $LANG ] ];	
+    }
+    else {
+	$prog{title}=[ [ $cur->{title}, $LANG ] ];
+    }
+    # Check 2: episode name of series in description.
+    # Check if the program has a description. If so, also check if the title
+    # of the program has been defined as a series in the conf-file. If it
+    # has, assume that the first sentence (i.e. the text before the first
+    # period) marks the name of the episode. For example, if the following
+    # line has been defined in the tv_grab_fi.conf-file:
+    # "series description Batman", the title of of the program is "Batman",
+    # and the description of the program is "Pingviinin paluu. Amerikkalainen
+    # animaatiosarja. Outojen ryˆstˆjen sarja johdattaa Batmanin Pingviinin
+    # j‰ljille.", then the script will assume that the episode name/sub-title
+    # is "Pingviinin paluu", and that the description is actually 
+    # "Amerikkalainen animaatiosarja. Outojen ryˆstˆjen sarja johdattaa 
+    # Batmanin Pingviinin j‰ljille."
+    if ((defined $cur->{desc}) &&
+	(exists $description{$cur->{title}})   &&
+	($cur->{desc} =~ s/^\s*([^.]+)\.\s*//)) {
+	my $episode = $1;
+	t "series $cur->{title}, episode title $episode"; 
+	$prog{'sub-title'} = [ [ $episode, $LANG ] ];	
+    }
     $prog{desc}=[ [ $cur->{desc}, $LANG ] ] if defined $cur->{desc};
 
     return \%prog;
@@ -449,15 +503,15 @@ sub bump_start_day {
 # corresponding html special characters. This means that the following 
 # program element
 #
-# <b>12:10 T‰n‰‰n otsikoissa</b><br />Aamu-tv:n ajankohtaiset aiheet koosteena.<br /><br />
+# <b>12.10 T‰n‰‰n otsikoissa</b><br />Aamu-tv:n ajankohtaiset aiheet koosteena.<br /><br />
 # 
 # ends up looking like this (with TreeBuilder v. 3.21 and below):
 #
-# <b>12:10 T&auml;n&auml;&auml;n otsikoissa</b><br>Aamu-tv:n ajankohtaiset aiheet koosteena.<br><br>
+# <b>12.10 T&auml;n&auml;&auml;n otsikoissa</b><br>Aamu-tv:n ajankohtaiset aiheet koosteena.<br><br>
 #
 # or with TreeBuilder v. 3.22 and above:
 #
-# <b>12:10 T&auml;n&auml;&auml;n otsikoissa</b><br />Aamu-tv:n ajankohtaiset aiheet koosteena.<br /><br />
+# <b>12.10 T&auml;n&auml;&auml;n otsikoissa</b><br />Aamu-tv:n ajankohtaiset aiheet koosteena.<br /><br />
 #
 sub get_program_data {
     my $tree = shift;
