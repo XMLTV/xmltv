@@ -521,6 +521,21 @@ my @opt_components
                   },
      },
 
+     { name => 'tv_grab_no_gfeed',
+       blurb => 'Grabber for Norway (gfeed.info)',
+       exes => [ 'grab/no_gfeed/tv_grab_no_gfeed' ],
+       pl_files => { 'grab/no_gfeed/tv_grab_no_gfeed.PL'
+		     => 'grab/no_gfeed/tv_grab_no_gfeed' },
+       to_clean => [ 'grab/no_gfeed/tv_grab_no_gfeed' ],
+       deps => [ 'grab/no_gfeed/tv_grab_no_gfeed'
+		 => [ 'grab/se_swedb/tv_grab_se_swedb.in' ] ],
+       prereqs => { 'XML::LibXML' => 0,
+                    'Compress::Zlib' => 0,
+                    'IO::Stringy' => 0,
+		    'HTTP::Cache::Transparent' => 0,
+                  },
+     },
+
      { name => 'tv_grab_fr',
        blurb => 'Grabber for France',
        exes => [ 'grab/fr/tv_grab_fr' ],
