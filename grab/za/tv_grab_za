@@ -16,7 +16,7 @@ tv_grab_za --help
 tv_grab_za [--config-file FILE] --configure [--gui OPTION]
 
 tv_grab_za [--config-file FILE] [--output FILE] [--days N]
-	   [--quiet] [--opentime] [--opentime-combined]
+	   [--quiet] [--retries N]
 
 =head1 DESCRIPTION
 
@@ -47,9 +47,7 @@ B<--days N> grab N days.  Can be 1, 7, 14 or 30.  Default is 14
 B<--quiet> suppress the progress messages normally written to standard
 error.
 
-B<--opentime> Discard all M-Net programs outside of opentime
-
-B<--opentime-combined> Generate both Opentime and normal M-Net programs
+B<--retries> number of retries before failing channel download.
 
 B<--help> print a help message and exit.
 
@@ -115,7 +113,7 @@ use XMLTV::Usage <<END
 $0: get South African television listings in XMLTV format
 To configure: $0 --configure [--config-file FILE]
 To grab listings: $0 [--config-file FILE] [--output FILE] [--days N]
-		[--quiet] [--opentime] [--opentime-combined] [--retries]
+		[--quiet] [--retries]
 END
   ;
 
@@ -252,9 +250,6 @@ if ($opt_days) {
 # Default retries = 3;
 $opt_retries = 3 if !$opt_retries;
 
-
-die '--opentime and --opentime-combined are mutually exclusive' 
-	if (defined $opt_opentime && $opt_opentime_combined);
 usage(1) if $opt_help;
 
 
@@ -341,11 +336,6 @@ foreach my $chanid (keys %channels) {
 	my $n=$channels{$chanid};
 	my $ch_xid="$chanid.dstv.com";
 	$writer->write_channel({ id => $ch_xid, 'display-name' => [ [ $n , 'en' ] ] });
-	if ($n eq 'M-Net' && $opt_opentime_combined) {
-		$ch_xid="$chanid-o.dstv.com";
-		$n.=" Opentime";
-		$writer->write_channel({ id => $ch_xid, 'display-name' => [ [ $n, 'en' ] ] });
-	}
 }
 
 my $bar = new XMLTV::ProgressBar('getting listings', (scalar keys %channels))
@@ -417,6 +407,139 @@ sub mnet_channel_map ($) {
 	return $mnetchannelmap{$ch};
 }
 
+sub post_process($$) {
+	my $title = shift;
+	my $desc = shift;
+
+	my $r = undef;
+	my $subtitle = undef;
+        my $episode_num = undef;
+	my $year = undef;
+	my $actors = undef;
+	my $director = undef;
+	my $writers = undef;	   # Unused right now
+	my $commentators = undef;  # Unused right now
+	my $category = undef;
+	my $subtitles = undef;
+	my $dolby = undef;
+
+	# Try to get full title from description if title seems cut off
+	$title =~ s/(^\s+|\s+$)//g;
+	if ($title =~ /\.\.\.$/ ) {
+		my $temp = $title;
+		$temp =~ s/.\.\.\.$//g;
+		# Try get full title from description;
+		if ($desc =~ /^'?(${temp}[^\.]+[^\'])'?\.\s+(.+)/i) {
+			t "REMAPPING TITLE from $title to $1";
+			$title = $1;
+			$desc = $2;
+			$title =~ s/(^\s+|\s+$)//g;
+			$desc =~ s/(^\s+|\s+$)//g;
+			t "New desc = $desc";
+		}
+	}
+
+	if ($desc =~ /^'([^\.]+)'\.\s+(.+)/) {
+		$subtitle = $1;
+		$desc = $2;
+		t "FOUND EPISODE TITLE: $subtitle";
+		t "Title: $title";
+		t "New desc = $desc";
+		$category = "series";
+	}
+
+	if ($subtitle && $subtitle =~ /(^\d+)\/(\d+) - (.*)$/) {
+		$episode_num = ($1-1) . "." . ($2-1) . ".0/1";
+		$subtitle = $3;
+		t "FOUND EPISODE NUMBER: $episode_num";
+		$category = "series";
+	}			
+
+	if ($desc =~ /^Aka ([^\.]+)\. (.*)/) {
+		$desc = $2;
+		my $aka = $1;
+		t "Aka found: $aka\n";
+		# TODO - do something with the aka
+	}
+			
+	if ($desc =~ /,? HI Subtitles\.?/) {
+		$desc =~ s/,? HI Subtitles\.?//g;
+		t "REMOVING Subtitle string";
+		$subtitles = 1;
+	}
+
+	if ($desc =~ /,? DD\.?/) {
+		$desc =~ s/,? DD\.?//g;
+		t "REMOVING DD string";
+		$dolby = 1;
+	}
+
+	if ($title =~ /^Press .i.$/) {
+		$title = $subtitle;
+		$subtitle = undef;
+	}
+
+	if ($desc =~ /(.*) \((\d{4})\)\s*([^\.]+)\.?\s*$/) {
+		$year = $2;
+		$director = $3;
+		$desc = $1;
+		t "desc = $desc\n";
+		t "Year = $year\n";
+		t "Director = $director\n";
+	}
+			
+	if ($desc =~ /(.*) \((\d{4})\)\s*$/) {
+		$desc = $1;
+		$year = $2;
+		t "desc = $desc\n";
+		t "Year = $year\n";
+	}
+			
+	if (defined $year && $desc =~ /(.*\.)\s+([^\.]+ [A-Z][^\.]+)\.\s*/) {
+		$desc = $1;
+		$actors = $2;
+		if (defined $actors) {
+			$actors =~ s/^\s+//g;
+			$actors =~ s/\s+$//g;
+			my @a = split(/,\s+/, $actors);
+			$actors = [];
+			foreach my $a (@a) {
+				push @$actors, $a;
+			}
+		}
+		$category = "movie";
+	}
+
+	# Trim whitespace from elements
+	$title =~ s/(^\s+|\s+$)//g;
+	$desc =~ s/(^\s+|\s+$)//g;
+	$subtitle =~ s/(^\s+|\s+$)//g if $subtitle;
+
+	$desc = "No description available" if ($desc eq "");
+
+	$desc .= " [Dolby 5.1]" if ($dolby);
+
+	$r->{title} = [[$title]];
+	$r->{'sub-title'} = [[$subtitle]] if $subtitle;
+	$r->{'episode-num'} = [[$episode_num, "xmltv_ns"]] if $episode_num;
+	$r->{desc} = [[$desc]];
+	$r->{category} = [[ $category, 'en' ]] if $category;
+	$r->{'subtitles'} = [ { type => 'teletext' } ] if $subtitles;
+	$r->{'audio'}->{"stereo"} = "dolby digital" if $dolby;
+	# credits
+	my %c;
+	$c{director} = [ $director ] if $director;
+	$c{actor} = $actors if $actors;
+	$c{writer} = $writers if $writers;
+	$c{commentator} = $commentators if $commentators;
+	$c{director} = [ $director ] if $director;
+	$r->{date} = $year if $year;
+
+	$r->{credits} = \%c if %c;
+
+	return $r;
+}
+
 sub process_dstv_html {
 	my $chanid = shift;
 	my $name = $channels{$chanid};
@@ -446,28 +569,28 @@ sub process_dstv_html {
 	$tree->eof;
 	my ($prev_r, $r, $prev_time);
 	
-   my @array_ot;
+	my @array_ot;
 
 	# Find the date headers on the page
 	my @date_headers = $tree->look_down(_tag => "td", class => 'srch_date_chnl_head');
-    my $offset_counter = 0;
+	my $offset_counter = 0;
 	foreach my $td (@date_headers) {
-        $offset_counter++;
-        next if (($offset_counter <= $opt_offset) || ($offset_counter > $opt_days+1));
+        	$offset_counter++;
+	        next if (($offset_counter <= $opt_offset) || ($offset_counter > $opt_days+1));
 		my $date = $td->as_text();
 		$date =~ s/^[^\w]+//g;
-		
+
 		my $table = $td->look_up(_tag => "table");
 		my @times = $table->look_down(_tag => "td", class => 'srch_rslt1');
 		foreach my $result (@times) {
-		$result = $result->parent();
-		
-		my $temp;
-		$temp = $result->look_down(_tag => "td", class => 	'srch_rslt1');
-		my $time = $temp->look_down(_tag => 'b');
-		die 'no <b> thing (for time) found' if not defined $time;
-		$time = $time->as_text;
-		$time =~ /^(\d)(\d):(\d)(\d)$/ or die "bad time '$time'";
+			$result = $result->parent();
+
+			my $temp;
+			$temp = $result->look_down(_tag => "td", class => 	'srch_rslt1');
+			my $time = $temp->look_down(_tag => 'b');
+			die 'no <b> thing (for time) found' if not defined $time;
+			$time = $time->as_text;
+			$time =~ /^(\d)(\d):(\d)(\d)$/ or die "bad time '$time'";
 			
 			my $title = $result->look_down(_tag => "td", class => 'srch_rslt2')->look_down(_tag => "b")->as_text;
 
@@ -475,190 +598,49 @@ sub process_dstv_html {
 			$temp = $result->look_down(_tag => "td", class => 'srch_rslt2')->as_HTML;
 			if (defined $temp) {
 				if ($temp =~ /Rating: \((.+)\)\<br\>/) {
-				$rating = $1;
+					$rating = $1;
 				}
 				if ($temp =~ /Duration: ([0-9:]+)/) {
-				$duration = $1;
+					$duration = $1;
 				}
 			}
 
 			t "$title: $rating: $duration\n";
-			
+
 			$temp = $result->look_down(_tag => "td", class => 	'srch_rslt4');
 			my $desc = ($temp->content_list())[0];
 			$desc =~ s/(^\s+|\s+$)//g;
 			t "---\n$desc\n---\n";
-			
+
 			my $start = gen_start_time($date, $time, $now);
-			
-			# Try to get full title from description if title seems cut off
-			if ($title =~ /\.\.\.$/ ) {
-				   $title =~ s/\.\.\.$//g;
-				  # Try get full title from description;
-				 if ($desc =~ /^'(${title}[^\.]+[^\'])'?\.\s+(.+)/) {
-					   t "REMAPPING TITLE from $title to $1";
-					$title = $1;
-					$desc = $2;
-					  t "New desc = $desc";
-				}
-			}
-			
-			my $subtitle = undef;
-            my $episode_num = undef;
-			my $year = undef;
-			my $actors = undef;
-			my $director = undef;
-			my $writers = undef;	   # Unused right now
-			my $commentators = undef;  # Unused right now
-			my $category = undef;
 
-				
-			if ($desc =~ /^'([^\.]+)'\.\s+(.+)/) {
-				$subtitle = $1;
-				$desc = $2;
-				t "FOUND EPISODE TITLE: $subtitle";
-				t "Title: $title";
-				t "New desc = $desc";
-				$category = "series";
-			}
+			my $r = post_process($title, $desc);
 
-            if ($subtitle && $subtitle =~ /(^\d+)\/(\d+) - (.*)$/) {
-                $episode_num = ($1-1) . "." . ($2-1) . ".0/1";
-                $subtitle = $3;
-                t "FOUND EPISODE NUMBER: $episode_num";
-            }			
+			$start = $start . " $TZ";
 
-			if ($desc =~ /^Aka ([^\.]+)\. (.*)/) {
-				$desc = $2;
-				my $aka = $1;
-				t "Aka found: $aka\n";
-				# TODO - do something with the aka
-			}
-			
-			if ($desc =~ /(.*)\. HI Subtitles$/) {
-				$desc = $1;
-				t "REMOVING Subtitle string";
-				# TODO: Encode subtitles in output
-			}
-				
-			if ($desc =~ /(.*) \((\d{4})\)\s*([^\.]+)\.?\s*$/) {
-				$year = $2;
-				$director = $3;
-				$desc = $1;
-				t "desc = $desc\n";
-				t "Year = $year\n";
-				t "Director = $director\n";
-			}
-			
-			if ($desc =~ /(.*) \((\d{4})\)\s*$/) {
-				$desc = $1;
-				$year = $2;
-				t "desc = $desc\n";
-				t "Year = $year\n";
-			}
-			
-			if (defined $year && $desc =~ /(.*\.)\s+([^\.]+ [A-Z][^\.]+)\.\s*/) {
-				$desc = $1;
-				$actors = $2;
-				if (defined $actors) {
-					$actors =~ s/^\s+//g;
-					$actors =~ s/\s+$//g;
-					my @a = split(/,\s+/, $actors);
-					$actors = [];
-					foreach my $a (@a) {
-						push @$actors, $a;
-					}
-				}
-				$category = "movie";
-			}
+			if ($rating) { $rating =~ s/(^\s+|\s+$)//g; }
+			else { $rating = "Family"; }
 
-			# Trim whitespace from elements
-			$title =~ s/(^\s+|\s+$)//g;
-			$desc =~ s/(^\s+|\s+$)//g;
-			$subtitle =~ s/(^\s+|\s+$)//g if $subtitle;
-			$rating =~ s/(^\s+|\s+$)//g if $rating;
-
-			# Fix "Press 'i'" entries
-			if ($title =~ /^Press .i.$/) {
-				$title = $subtitle;
-				$subtitle = undef;
-			}
-
-			if ($desc eq "") {
-				$desc = "No description available";
-			}
-			
-			if (not $rating) { $rating = "Family"; }
-            
-            $start = $start . " $TZ";
-
-			$r = undef;
-			$r->{title} = [[$title]];
-			$r->{'sub-title'} = [[$subtitle]] if $subtitle;
-            $r->{'episode-num'} = [[$episode_num, "xmltv_ns"]] if $episode_num;
-            $r->{rating} = [[$rating, "DSTV"]];
+			$r->{rating} = [[$rating, "DSTV"]];
 			$r->{start} = $start;
 			$r->{channel} = "$chanid.dstv.com";
-			$r->{desc} = [[$desc]];
-			$r->{category} = [[ $category, 'en' ]] if $category;
-				
-			# credits
-			my %c;
-			$c{director} = [ $director ] if $director;
-			$c{actor} = $actors if $actors;
-			$c{writer} = $writers if $writers;
-			$c{commentator} = $commentators if $commentators;
-			$c{director} = [ $director ] if $director;
-			$r->{date} = $year if $year;
 
-			$r->{credits} = \%c if %c;
-				
 			if (defined $prev_r) {
 				$prev_r->{stop} = $start;
-
-				my $write = 1;
-
-				my ($hr, $min) = split(/:/, $time);
-				my ($prev_hr, $prev_min) = split(/:/, $prev_time);
-				if ($name eq 'M-Net' && ($opt_opentime || 
-						$opt_opentime_combined)) {
-					if ($hr <= 17) { # $prev ends before 17:00
-						$write = 0;
-					}
-					if ($prev_hr >= 19) { # $prev starts after 19:00
-						$write = 0;
-					}
-				}
-				if ($name eq 'M-Net' && $opt_opentime_combined) {
-					$writer->write_programme($prev_r);
-					if ($write == 1) {
-						$prev_r->{channel} = "$chanid-o.dstv.com";
-						push @array_ot, $prev_r;
-					}
-				} elsif ($write == 1) {
-					$writer->write_programme($prev_r);
-				}
+				$writer->write_programme($prev_r);
 			}
+
 			$prev_time = $time;
 			$prev_r = $r;
-            if ($offset_counter > $opt_days) {
-                $offset_counter++;
-                last;
-            }
+			if ($offset_counter > $opt_days) {
+				$offset_counter++;
+		                last;
+			}
 		}
-	}
-	# Write opentime-combined data
-	if (@array_ot) {
-		for my $ot_prog ( @array_ot ) {
-			$writer->write_programme($ot_prog);
-		}
-		@array_ot = undef;
-		
 	}
 	$data = "success";
 	$tree->delete;
 	return $data;
-
 }
 
 
@@ -701,7 +683,7 @@ sub process_mnet_html {
 
 
 	my ($date,$time,$title,$rating);
-    my $days_done = 0;
+	my $days_done = 0;
 	foreach my $tag (@tags) {
 		my $tag_text = $tag->as_text;
 		if ($tag->attr('class') && lc($tag->attr('class')) =~ /date$/ ) {
@@ -709,7 +691,7 @@ sub process_mnet_html {
 			$tag_text =~ s/\240/ /g;
 			$tag_text =~ /(\d+) (.*) (\d{4})/;
 			$date = "$1 $2";
-            $days_done++;
+			$days_done++;
 			next;
 		}
 		if ($tag->attr('class') && lc($tag->attr('class')) =~ /time$/) {
@@ -725,14 +707,14 @@ sub process_mnet_html {
 			$title = $tag_text;
 			next;
 		}
-		
+
 		if ($tag->attr('_tag') && $tag->attr('_tag') eq 'a' &&
 			$tag->attr('onclick') && $tag->attr('onclick') =~ /OpenAgeRestriction/) {
 		# Rating
-				$rating = $tag_text;
-				next;
+			$rating = $tag_text;
+			next;
 		}
-		
+
 		if ($tag->attr('_tag') && $tag->attr('_tag') eq 'p' &&
 			$date && $time && $title) {
 		# Description
@@ -740,181 +722,35 @@ sub process_mnet_html {
 			my $desc = $tag_text;
 			$desc =~ s/(^\s+|\s+$)//g;
 			t "---\n$desc\n---\n";
-			
+
 			my $start = gen_start_time($date, $time, $now);
 			
-			# Try to get full title from description if title seems cut off
-			if ($title =~ /\.\.\.$/ ) {
-				   $title =~ s/\.\.\.$//g;
-				  # Try get full title from description;
-				 if ($desc =~ /^'(${title}[^\.]+[^\'])'?\.\s+(.+)/) {
-					   t "REMAPPING TITLE from $title to $1";
-					$title = $1;
-					$desc = $2;
-					  t "New desc = $desc";
-				}
-			}
-			
-			my $subtitle = undef;
-            my $episode_num = undef;
-			my $year = undef;
-			my $actors = undef;
-			my $director = undef;
-			my $writers = undef;	   # Unused right now
-			my $commentators = undef;  # Unused right now
-			my $category = undef;
+			my $r = post_process($title, $desc);
 
-				
-			if ($desc =~ /^'([^\.]+)'\.\s+(.+)/) {
-				$subtitle = $1;
-				$desc = $2;
-				t "FOUND EPISODE TITLE: $subtitle";
-				t "Title: $title";
-				t "New desc = $desc";
-				$category = "series";
-			}
-			
-            if ($subtitle && $subtitle =~ /(^\d+)\/(\d+) - (.*)$/) {
-                $episode_num = ($1-1) . "." . ($2-1) . ".0/1";
-                $subtitle = $3;
-                t "FOUND EPISODE NUMBER: $episode_num";
-            }			
+			$start = $start . " $TZ";
 
-			if ($desc =~ /^Aka ([^\.]+)\. (.*)/) {
-				$desc = $2;
-				my $aka = $1;
-				t "Aka found: $aka\n";
-				# TODO - do something with the aka
-			}
-			
-			if ($desc =~ /(.*)\. HI Subtitles$/) {
-				$desc = $1;
-				t "REMOVING Subtitle string";
-				# TODO: Encode subtitles in output
-			}
-				
-			if ($desc =~ /(.*) \((\d{4})\)\s*([^\.]+)\.?\s*$/) {
-				$year = $2;
-				$director = $3;
-				$desc = $1;
-				t "desc = $desc\n";
-				t "Year = $year\n";
-				t "Director = $director\n";
-			}
-			
-			if ($desc =~ /(.*) \((\d{4})\)\s*$/) {
-				$desc = $1;
-				$year = $2;
-				t "desc = $desc\n";
-				t "Year = $year\n";
-			}
-			
-			if (defined $year && $desc =~ /(.*\.)\s+([^\.]+ [A-Z][^\.]+)\.\s*/) {
-				$desc = $1;
-				$actors = $2;
-				if (defined $actors) {
-					$actors =~ s/^\s+//g;
-					$actors =~ s/\s+$//g;
-					my @a = split(/,\s+/, $actors);
-					$actors = [];
-					foreach my $a (@a) {
-						push @$actors, $a;
-					}
-				}
-				$category = "movie";
-			}
+			if ($rating) { $rating =~ s/(^\s+|\s+$)//g; }
+			else { $rating = "Family"; }
 
-			# Trim whitespace from elements
-			$title =~ s/(^\s+|\s+$)//g;
-			$desc =~ s/(^\s+|\s+$)//g;
-			$subtitle =~ s/(^\s+|\s+$)//g if $subtitle;
-			$rating =~ s/(^\s+|\s+$)//g if $rating;
-
-			# Fix "Press 'i'" entries
-			if ($title =~ /^Press .i.$/) {
-				$title = $subtitle;
-				$subtitle = undef;
-			}
-
-			if ($desc eq "") {
-				$desc = "No description available";
-			}
-			
-			if (not $rating) { $rating = "Family"; }
-            
-            $start = $start . " $TZ";
-
-			$r = undef;
-			$r->{title} = [[$title]];
-			$r->{'sub-title'} = [[$subtitle]] if $subtitle;
-            $r->{'episode-num'} = [[$episode_num, "xmltv_ns"]] if $episode_num;
-           	$r->{rating} = [[$rating, "DSTV"]];
+			$r->{rating} = [[$rating, "DSTV"]];
 			$r->{start} = $start;
 			$r->{channel} = "$chanid.dstv.com";
-			$r->{desc} = [[$desc]];
-			$r->{category} = [[ $category, 'en' ]] if $category;
-				
-			# credits
-			my %c;
-			$c{director} = [ $director ] if $director;
-			$c{actor} = $actors if $actors;
-			$c{writer} = $writers if $writers;
-			$c{commentator} = $commentators if $commentators;
-			$c{director} = [ $director ] if $director;
-			$r->{date} = $year if $year;
 
-			$r->{credits} = \%c if %c;
-
-
-				
 			if (defined $prev_r) {
 				$prev_r->{stop} = $start;
-
-				my $write = 1;
-
-				my ($hr, $min) = split(/:/, $time);
-				my ($prev_hr, $prev_min) = split(/:/, $prev_time);
-				if ($name eq 'M-Net' && ($opt_opentime || 
-						$opt_opentime_combined)) {
-					if ($hr <= 17) { # $prev ends before 17:00
-						$write = 0;
-					}
-					if ($prev_hr >= 19) { # $prev starts after 19:00
-						$write = 0;
-					}
-				}
-				if ($name eq 'M-Net' && $opt_opentime_combined) {
-					$writer->write_programme($prev_r);
-					if ($write == 1) {
-						$prev_r->{channel} = "$chanid-o.dstv.com";
-						push @array_ot, $prev_r;
-					}
-				} elsif ($write == 1) {
-					$writer->write_programme($prev_r);
-				}
+				$writer->write_programme($prev_r);
 			}
 			$prev_time = $time;
 			$prev_r = $r;
 			undef $title;
 			undef $time;
-            if ($days_done > ($opt_days-$opt_offset)) { last; }
+			if ($days_done > ($opt_days-$opt_offset)) { last; }
 		}
-
 	}
-    
 	
-	# Write opentime-combined data
-	if (@array_ot) {
-		for my $ot_prog ( @array_ot ) {
-			$writer->write_programme($ot_prog);
-		}
-		@array_ot = undef;
-		
-	}
 	$data = "success";
 	$tree->delete;
 	return $data;
-
 }
 
 
@@ -967,7 +803,7 @@ sub get_channels {
 	my $channels = shift;
 	
 	my @urls = (
-        'Google' , 'http://www.google.com/search?q=cache%3Awww.dstv.com%2Fmain.aspx%3FID%3D136',
+		'Google' , 'http://www.google.com/search?q=cache%3Awww.dstv.com%2Fmain.aspx%3FID%3D136',
 		'DSTV'   , 'http://www.dstv.com/main.aspx?ID=136', 
 	);
 	
@@ -1043,40 +879,26 @@ sub mode_configure {
 	my @chs = sort {uc($channels{$a}) cmp uc($channels{$b})} keys %channels;
 	my @qs = map { "add channel '$channels{$_}'? " } @chs;
 	my @want = ask_many_boolean(1, @qs);
-	my $handle_mnet;
 	foreach (@chs) {
 		my $w = shift @want;
-			warn("cannot read input, stopping channel questions"), last
-			  if not defined $w;
-
-			# Print a config line, but comment it out if channel not wanted.
-			print CONF '#' if not $w;
-			my $name = $channels{$_};
-			print CONF "channel $_ $name\n";
-			if ($name eq 'M-Net' && $w) {
-				$handle_mnet = 1
-			}
+		warn("cannot read input, stopping channel questions"), last
+			if not defined $w;
+		# Print a config line, but comment it out if channel not wanted.
+		print CONF '#' if not $w;
+		my $name = $channels{$_};
+		print CONF "channel $_ $name\n";
 	}
 
-	if ($handle_mnet) {
-		if (ask_boolean( "Create limited M-Net Opentime Schedule?")) {
-			if (ask_boolean( "Retrieve only Opentime?")) {
-				print CONF "option opentime 1\n";
-			} else {
-				print CONF "option opentime-combined 1\n";
-			}
-		}
-	}
 	my @choices = (1,7,14,30);
 	my $days = ask_choice("Number of days to retrieve",$choices[2], @choices);
 	print CONF "option days $days\n";
-	
+
 	my $retries = ask("Number of retries for failed downloads? (3)");
-    $retries = 3 if $retries eq "";
+	$retries = 3 if $retries eq "";
 	print CONF "option retries $retries\n";
 
 	my $timeout = ask("Timeout for requests? (240)");
-    $timeout = 240 if $timeout eq "";
+	$timeout = 240 if $timeout eq "";
 	print CONF "option timeout $timeout\n";
 
 	say ("This grabber can get the listings from either mnet.co.za, or dstv.com");
@@ -1344,8 +1166,6 @@ sub read_config {
 	if (/^option/) {
 	    my (undef, $conf_option, $conf_value) = split(/\s+/, $_, 3);
 			
-	    $opt_opentime = 1 if $conf_option eq 'opentime';
-	    $opt_opentime_combined = 1 if $conf_option eq 'opentime-combined';
 	    $opt_mnet_fallback = 1 if $conf_option eq 'mnet-fallback';
 	    $opt_dstv_fallback = 1 if $conf_option eq 'dstv-fallback';
 	    $opt_retries = $conf_value if $conf_option eq 'retries';
@@ -1366,8 +1186,6 @@ sub read_config {
 	    }
 	}
     }
-    die 'config file: --opentime and --opentime-combined are mutually exclusive' 
-      if (defined $opt_opentime && $opt_opentime_combined);
     die 'config file: --mnet-fallback and --dstv-fallback are mutually exclusive' 
       if (defined $opt_mnet_fallback && $opt_dstv_fallback);
 }
