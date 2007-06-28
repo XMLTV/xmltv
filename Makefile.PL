@@ -328,6 +328,12 @@ my @opt_components
 	        'HTML::TreeBuilder' => 0 },
      },
 
+     { name => 'tv_grab_dtv_la',
+       blurb => 'Grabber for Latin America',
+       exes => [ 'grab/dtv/tv_grab_dtv_la' ],
+       prereqs => { 'HTML::TreeBuilder' => 0,
+                    'HTML::Form'    => 0 } },
+
      { name => 'tv_grab_uk_rt',
        blurb => 'Grabber for the UK',
        exes => [ 'grab/uk_rt/tv_grab_uk_rt' ],
