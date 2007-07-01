@@ -159,11 +159,24 @@ my @offsets = (2, 3, 4, 5, 6, 7);
 # Slot of days for day per day grabbing 
 my @days = (2, 3, 4, 5, 6, 7, 8, 9);
 
+##patch: tigerlol: correction des chevauchements d'horaire
+  my $progexist=0;
+  my $prevstart;
+  my $prevstop;
+  my $prevtitle;         
+  my %prevprog;
+##/patch
+
 #***************************************************************************
 # Global variables allocation according to options
 #***************************************************************************
 XMLTV::Memoize::check_argv('XMLTV::Get_nice::get_nice_aux');
-my ($opt_days,  $opt_help,  $opt_output,  $opt_per_days, $opt_per_weeks, $opt_offset,  $opt_gui, $opt_quiet,  $opt_list_channels, $opt_config_file, $opt_configure, $opt_slow);
+#my ($opt_days,  $opt_help,  $opt_output,  $opt_per_days, $opt_per_weeks, $opt_offset,  $opt_gui, $opt_quiet,  $opt_list_channels, $opt_config_file, $opt_configure, $opt_slow);
+
+##patch: tigerlol: correction des chevauchements d'horaire
+my ($opt_days,  $opt_help,  $opt_output,  $opt_per_days, $opt_per_weeks, $opt_offset,  $opt_gui, $opt_quiet,  $opt_list_channels, $opt_config_file, $opt_configure, $opt_slow, $opt_autocorrect);
+##/patch
+
 $opt_quiet  = 0;
 # The website is able to store up to nine days from now
 my $default_opt_days = 9;
@@ -179,7 +192,10 @@ GetOptions('days=i'    => \$opt_days,
      'list-channels' => \$opt_list_channels,
      'slow' => \$opt_slow, 
      'perdays' => \$opt_per_days,
-     'perweeks' => \$opt_per_weeks
+     'perweeks' => \$opt_per_weeks,
+##patch: tigerlol: correction des chevauchements d'horaire
+     'autocorrect' => \$opt_autocorrect
+##/patch
     )
   or usage(0);
 
@@ -213,6 +229,14 @@ So the grabber is now configure with --offset $opt_offset --days $opt_days
 END
 ;
 }
+
+##patch: tigerlol: correction des chevauchements d'horaire
+if ( $opt_autocorrect ) {
+  print STDERR "Autocorrect ACTIVE!\n";
+} else {
+  print STDERR "Autocorrect DESACTIVE!\n";
+}    
+##/patch
 
 #***************************************************************************
 # Last init before doing real work
@@ -469,6 +493,21 @@ foreach (@to_get) {
     process_channel_grid_page($writer, $chid, $url, $slot);
     update $bar if not $opt_quiet;
 }
+
+##patch: tigerlol: correction des chevauchements d'horaire
+if ( $opt_autocorrect ) {
+  if ( $progexist ) {
+    # Ecriture du programme restant en memoire (au cas ou)
+    if ( !$results{$prevprog{start}.$chid} ) {
+      #print STDERR "!!!Ecriture du dernier programme sauvegarde: " . $prevtitle . "(" . $prevprog{channel} . ")\n";
+      $results{$prevprog{start}.$chid} = "1";
+      $writer->write_programme(\%prevprog);
+    }
+    $progexist = 0;
+  }
+}
+##/patch
+
 $writer->end();
 $bar->finish() if not $opt_quiet;
 
@@ -514,7 +553,7 @@ sub process_fucking_damned_page( $$$$$ ) {
   my ($writer, $chid, $myrow, $dateindex, $slot) = @_;
   my ($genre, $lastshowview, $showview, $hours, $starthour, $endhour) = 0;
   my ($title, $subgenre, $star_rating, $datecreate) = 0;
-          
+
   # Each show is described in a table cell with a 'prog' class
   foreach my $show ($myrow->look_down('_tag', 'td', 'class', 'prog') ) {
     # Each cell contains zero or more links describing the show.
@@ -677,10 +716,94 @@ sub process_fucking_damned_page( $$$$$ ) {
         $prog{'sub-title'} = [ [ tidy($title) ] ];
       }
     }
-    if ( !$results{$prog{start}.$chid} ) {
-      $results{$prog{start}.$chid} = "1";
-      $writer->write_programme(\%prog);
+
+
+##patch: tigerlol: correction des chevauchements d'horaire
+    if ( $opt_autocorrect ) {
+      if ( $progexist ) {
+        #print STDERR "*** " . $prevprog{channel} . " / " . $prog{channel} . " ***\n";
+        if ( $prevprog{channel} ne $prog{channel} ) {
+          # changement de chaine on ecrit le dernier programme de la chaine precedente
+          # et on remet progexist a 0
+          #print STDERR "*************\nChangement de chaine...\n*************\n";
+          if ( !$results{$prevprog{start}.$chid} ) {
+            #print STDERR "Ecriture du dernier programme sauvegarde: " . $prevtitle . "(" . $prevprog{channel} . ")\n";
+            $results{$prevprog{start}.$chid} = "1";
+            $writer->write_programme(\%prevprog);
+          }
+          $progexist = 0;
+        }
+      }
+      if ( !$progexist ) {
+        #premier programme => sauvegarde du programme courant
+        $prevtitle = tidy($title);
+        $prevstart = $start;
+        $prevstop = $stop;
+        %prevprog = %prog;
+        $progexist = 1;
+      } else {
+        #print STDERR "prev. channel = " . $prevprog{channel} . "\n";
+        #print STDERR "current channel = " . $prog{channel} . "\n";
+        #il existe deja un programme
+        #if (( $prog{start} > $prevprog{start} ) && ( $prog{stop} != $prevprog{stop} )) {
+        if ( $prog{start} > $prevprog{start} ) {
+          # programme courant != programme sauvegarde
+          my $savedstop = $prevprog{stop};
+          #print STDERR "savedstop = $savedstop\n";
+          if ( $prevprog{stop} > $prog{start} ) {
+            #chevauchement => modification de l'heure de fin du programme precedent
+            #print STDERR "Chevauchement:\n";
+            #print STDERR "  - " . $prevtitle . " (start: " . $prevprog{start} . " / stop: " . $prevprog{stop} . ")\n";
+            #print STDERR "  - " . $title . " (start: " . $start . " / stop: " . $stop . ")\n";
+            $prevprog{stop} = $prog{start};
+          }
+          if ( $prevprog{stop} - $prevprog{start} > 400 ) {
+            #prevprog n'est pas trop court donc ecriture du programme precedent
+            if ( !$results{$prevprog{start}.$chid} ) {
+              #print STDERR "Ecriture du programme: " . $prevtitle . "(" . $prevprog{channel} . ")\n";
+              $results{$prevprog{start}.$chid} = "1";
+              $writer->write_programme(\%prevprog);
+            }
+          } else {
+            if (( $savedstop == $prog{stop} ) || ( $prevprog{title} eq $prog{title} )) {
+              #prevprog est un programme trop court ou duplique => on le zap! ;-)
+              #et on modifie le start du programme courant avant de le sauvegarder
+              my $dureeprog = $prevprog{stop} - $prevprog{start};
+              #print STDERR "Programme court zappe: $prevtitle ($dureeprog)\n";
+              $prog{start} = $prevprog{start};
+              $start = $prog{start};
+            } else {
+              #prevprog est valide, on l'ecrit...
+              if ( !$results{$prevprog{start}.$chid} ) {
+                #print STDERR "Ecriture du programme: " . $prevtitle . "(" . $prevprog{channel} . ")\n";
+                $results{$prevprog{start}.$chid} = "1";
+                $writer->write_programme(\%prevprog);
+              }
+            }
+          }
+          #sauvegarde du programme courant
+          $prevtitle = tidy($title);
+          $prevstart = $start;
+          $prevstop = $stop;
+          %prevprog = %prog;
+        } else {
+          # programme courant = programme sauvegarde
+          # on passe au suivant
+          #if ( $prog{start} <= $prevprog{start} ) {
+          #  print STDERR "prevstart >= start: $prevtitle/$title\n";
+          #}
+          #if ( $prog{stop} = $prevprog{stop} ) {
+          #  print STDERR "prevstop = stop: $prevtitle/$title\n";
+          #}
+        }
+      }
+    } else {
+      if ( !$results{$prog{start}.$chid} ) {
+        $results{$prog{start}.$chid} = "1";
+        $writer->write_programme(\%prog);
+      }
     }
+##/patch
   }
 }
 
@@ -900,7 +1023,10 @@ sub get_detailed_fic( $$$ )
     } elsif ($name =~ /^R.*alisateur/i) {
       push @{$prog->{credits}{director}}, parse_name_list(tidy($value));
     } elsif ($name =~ /^Pr.*sentateur/i) {
-      push @{$prog->{credits}{presenter}}, parse_name_list(tidy($value));
+      my $presenter = parse_name_list(tidy($value));
+      if ( $presenter != "" ) {
+      	push @{$prog->{credits}{presenter}}, $presenter ;
+      }
     } elsif ($name =~ /^Sc.*nariste/i) {
       push @{$prog->{credits}{writer}}, parse_name_list(tidy($value));
     } elsif ($name =~ /Musique/i) {
