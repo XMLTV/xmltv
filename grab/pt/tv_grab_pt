@@ -371,7 +371,9 @@ sub process_table {
 
     t "Getting channel $ch_xmltv_id\n";
 
-    my $url = $HEAD->{"source-data-url"};
+    #my $url = $HEAD->{"source-data-url"};
+    my $url = $HEAD->{"source-info-url"};
+    $url .= "/Televisao/ListaProgramas.aspx?";
     t $url;
     use LWP::UserAgent;
 
@@ -379,30 +381,18 @@ sub process_table {
     $ua->timeout(30);
 
     $ch_xmltv_id =~ /(.+?)\.tvcabo\.pt/;
+
     my @all_programs = ();
 
     for (my $k=$first_day; $k <= $last_day; $k++) {
-        my $form ={
-                    "SelectedSigla"=>$ch_xmltv_id,
-                    "SelectedChannel"=>$channelnumbers{$ch_xmltv_id},
-                    "SelectedDay"=>today_offset()+$k,
-                    "operation"=>"search",
-                    "programId"=>'',
-
-		    #"IntervalStart"=>39416,
-		    #"SelectedChannel"=>3,
-
-                    "__VIEWSTATE" => $token
-                  };
-
-    	my $r = $ua->post($url, $form);
+        my @program_data = ();
+	my $ch_url = $url . "cat=&channelSigla=$ch_xmltv_id&dia=".(today_offset()+$k)."&package=9";
+        my $r = $ua->get($ch_url);
 
     	if ( ! $r->is_success ) {
             die "Could not fetch $url ($ch_xmltv_id): ".$r->status_line;
     	}
 
-#print STDERR $r->content;
-#exit;
     	my $data=tidy($r->content);
 
     	if (not defined $data) {
@@ -417,7 +407,96 @@ sub process_table {
     	my $tree = HTML::TreeBuilder->new();
    	$tree->parse($data) or die "cannot parse content of $url\n";
 	$tree->eof;
-    	my @program_data = get_program_data($tree);
+
+    	my %month_conv = (
+		'Janeiro'  => 'Jan',
+		'Fevereiro'=> 'Feb',
+		'Março'    => 'Mar',
+		'Abril'    => 'Apr',
+		'Maio'     => 'May',
+		'Junho'    => 'Jun',
+		'Julho'    => 'Jul',
+		'Agosto'   => 'Aug',
+		'Setembro' => 'Sep',
+		'Outubro'  => 'Oct',
+		'Novembro' => 'Nov',
+		'Dezembro' => 'Dec',
+    	);
+
+
+    	#lets get the day
+    	my $span = $tree->find_by_tag_name('_tag'=>'strong');
+    	my $date = trim($span->as_trimmed_text());
+
+
+        $date =~ /(\d+) (\w+?)$/;
+    	my ($day, $month ) = ($1,$2);
+    	$month = $month_conv{$month};
+
+    	#lets calc the year
+    	my @local_time = localtime(time());
+    	my $current_year  = $local_time[5] + 1900;
+    	my $current_month = $local_time[4] + 1;
+    	my $year = $current_year;
+    	if ( $month eq 'Jan' && $current_month != 1 ) {
+		$year++;
+    	}
+
+    	my $parsed_date = ParseDate(sprintf("%02d %3s %04d",$day, $month, $year));
+    	die "Parse error, could not parse date" unless $parsed_date;
+    	my $f_date = $parsed_date;
+    	$f_date =~ s/^(\d{4})(\d{2})(\d{2}).*/$1$2$3/;
+
+    	my $epgdiv = $tree->find_by_attribute('id','epgFrame');
+    	my $table = $epgdiv->find_by_tag_name('_tag','table');
+    	# Actually time and title are required, but we don't check that.
+    	if ($table) {
+      		my @trs = $table->find_by_tag_name("_tag"=>"tr");
+      		foreach my $tr (@trs) {
+			my @tds = $tr->find_by_tag_name("_tag"=>"td");
+			last unless( $tds[0] && $tds[1] );
+			my $time = trim($tds[0]->as_trimmed_text());
+			my $title = trim($tds[1]->find_by_tag_name("_tag"=>"a")->as_trimmed_text());
+			my $sub_t = "";
+			my $episode = "";
+			my $desc = "";
+			if ( $tds[1]->find_by_tag_name("_tag"=>"div") &&
+                	     $tds[1]->find_by_tag_name("_tag"=>"div")->find_by_tag_name("_tag"=>"p") ) {
+			   $desc = trim($tds[1]->find_by_tag_name("_tag"=>"div")->find_by_tag_name("_tag"=>"p")->as_trimmed_text());
+			}
+
+			if ($title =~ /^(.*?)\: (.*?)$/) {
+			  $title = $1;
+			  $sub_t = $2;
+			  $sub_t =~ s/^\s*?(.*?)/$1/;
+			  $title =~ s/(.*?)\s*?$/$1/;
+			}
+
+			#lets get the description
+			my $link = $tds[1]->find_by_tag_name("_tag"=>"a")->attr('href');
+			my ($program_id) = ( $link =~ /\"(\d+)\"/ );
+			if ( $program_id ) {
+        			my $r_desc = $ua->get($ch_url.'&programid='.$program_id);
+				my $descr = $r_desc->content();
+				if ( $descr =~ /<\/h4>\s*\n\s*<p>(.+?)<\/p>/ms) {
+				  $desc = $1 
+				}
+			}
+
+			$time =~ s/://g;
+			$time = sprintf("%04d",$time);
+
+			for ($title) { s/^\s+$//; s/\s+$// }
+                	my %h = (       time =>         $time,
+                	                title=>         $title,
+					date =>         $f_date,
+					"episode-num" =>$episode,
+                	                subtitle=>      $sub_t,
+                	                desc =>         $desc);
+                	push @program_data, \%h;
+      		}
+	}
+
     	if (not @program_data) {
 		warn "$url ($ch_xmltv_id) : no programmes found\n";
 		last;
@@ -483,83 +562,6 @@ sub trim( $ ) {
     }
 }
 
-#
-sub get_program_data {
-    my ($tree) = @_;
-
-    my @data;
-
-    my %month_conv = (
-		'Jan' => 'Jan',
-		'Fev' => 'Feb',
-		'Mar' => 'Mar',
-		'Abr' => 'Apr',
-		'Mai' => 'May',
-		'Jun' => 'Jun',
-		'Jul' => 'Jul',
-		'Ago' => 'Aug',
-		'Set' => 'Sep',
-		'Out' => 'Oct',
-		'Nov' => 'Nov',
-		'Dez' => 'Dec',
-    );
-
-
-    my $table = $tree->find_by_attribute('id','ctl00_Highlight_FullEPG_Datagrid1');
-    # Actually time and title are required, but we don't check that.
-
-    #lets get the day
-    my $span = $tree->find_by_attribute('id','ctl00_Highlight_FullEPG_textBoxInfoResults');
-    my $date = trim($span->as_trimmed_text());
-    $date =~ /.*, (\d+) de (.*) de (\d+)/;
-    my ($day, $month, $year) = ($1,$2,$3);
-    $month =~ s/^(\w{3}).*$/$1/;
-    $month = $month_conv{$month};
-    my $parsed_date = ParseDate(sprintf("%02d %3s %04d",$day, $month, $year));
-    die "Parse error, could not parse date" unless $parsed_date;
-    my $f_date = $parsed_date;
-    $f_date =~ s/^(\d{4})(\d{2})(\d{2}).*/$1$2$3/;
-
-    if ($table) {
-      my @trs = $table->find_by_tag_name("_tag"=>"tr");
-      foreach my $tr (@trs) {
-		my @tds = $tr->find_by_tag_name("_tag"=>"td");
-		last unless( $tds[0] && $tds[1] );
-		my $time = trim($tds[0]->as_trimmed_text());
-		my $title = trim($tds[1]->find_by_tag_name("_tag"=>"a")->as_trimmed_text());
-		my $sub_t = "";
-		my $episode = "";
-		my $desc = "";
-		if ( $tds[1]->find_by_tag_name("_tag"=>"div") &&
-                     $tds[1]->find_by_tag_name("_tag"=>"div")->find_by_tag_name("_tag"=>"p") ) {
-		   $desc = trim($tds[1]->find_by_tag_name("_tag"=>"div")->find_by_tag_name("_tag"=>"p")->as_trimmed_text());
-		}
-
-		$desc =~ s/Sinopse\: //;
-		
-		if ($title =~ /^(.*?)\: (.*?)$/) {
-		  $title = $1;
-		  $sub_t = $2;
-		  $sub_t =~ s/^\s*?(.*?)/$1/;
-		  $title =~ s/(.*?)\s*?$/$1/;
-		}
-
-		$time =~ s/://g;
-		$time = sprintf("%04d",$time);
-
-		for ($title) { s/^\s+$//; s/\s+$// }
-                my %h = (       time =>         $time,
-                                title=>         $title,
-				date =>         $f_date,
-				"episode-num" =>$episode,
-                                subtitle=>      $sub_t,
-                                desc =>         $desc);
-                push @data, \%h;
-      }
-    }
-    return @data;
-}
-
 # get channel listing
 sub get_channels {
     my $bar = new XMLTV::ProgressBar('getting list of channels', 1)
@@ -574,7 +576,7 @@ sub get_channels {
 
     foreach my $elem (@menus) {
 	my $cname = $elem->attr('name');
-	next unless $cname eq 'ctl00$Highlight$FullEPG$channels';
+	next unless $cname eq 'channels';
         my @ocanals = $elem->find_by_tag_name("_tag"=>"option");
 	my $chanpos=0;
 	foreach my $sigla (@ocanals) {
@@ -587,6 +589,9 @@ sub get_channels {
 		    next if $channel_id eq 'ALL';
                     # Remove channels with illegal ids.
                     #next if $channel_id =~ /:/; 
+
+		    $channel_id =~ s/\s/\_/g;
+
 		    my $channel_name= trim($opt->content->[0]);
 			$channel_name = $uref->toUTF8("iso-8859-1",$channel_name);
 		    $channels{$channel_id}=$channel_name;
