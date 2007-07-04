@@ -375,6 +375,7 @@ my %lineups;            # DD channel mapping data
 my %program;            # DD program data
 my %crew;               # DD crew data
 my %programGenre;       # DD Genre data
+my @schedules;          # DD schedule list
 
 my $bar;                # handle for status bar
 my $count;              # record count (for status bar)
@@ -383,7 +384,7 @@ my $SOAP_DEBUG     =0;  # special SOAP debug mode
 my $config_file;        # config file name
 my $tz_offset=0;
 my $start_time=time();
-my $prog_count=0;        # record count;
+my $sched_count=0;        # record count;
 my %old_lineups=();      # used for DD schema 1.2 -> 1.3 migration
 my %icons=();            # holds icons (if present)
 
@@ -412,11 +413,11 @@ my $opt_dd_data    =''; # save dd data
 my $opt_reprocess  =''; # reprocess dd data
 my $opt_auto_config  =''; # auto add/ignore channels
 my $opt_list_channels='';  
-my $opt_list_lineups='' ; 
-my $opt_list_times=''   ; 
+my $opt_list_lineups='' ;
+my $opt_list_times=''   ;
 my $opt_padd=0;         ;
 my $opt_dropbadchar=0;  ;
-my $opt_down_only=0     ; 
+my $opt_down_only=0     ;
 my $opt_beta_data=0     ; # undocumented flag to grab beta DD schema
 my $opt_tz_offset=undef;
 
@@ -730,44 +731,12 @@ else
 #
 exit(0) if $opt_down_only;
 
-unless ($opt_quiet)
-{
-    $bar = new XMLTV::ProgressBar('loading data',$dd_data_size+1);
-}
-
-
-#
-# check for errors (and less error checking since TMS errors seem to generate bad XML)
-#
-my $found_fault=0;
-my $twig=XML::Twig->new(   
-         twig_roots    => { faultstring => 1},
-		 twig_handlers => 
-		      {
-                 faultstring => sub {
-                                  printf STDERR "\nFAULT: %s\n",$_->first_child_text;
-                                  $_->twig->purge;
-                                  $found_fault=1;
-                                  return 1;
-                                 },
-	         },
-	      );
-
-seek($dd_data,0,0);  #rewind
-eval { $twig->parse( $dd_data ) };
-die "ERROR:
-
-*** FAULT Message from Data Direct detected.
-*** This is probably a known issue, please try again later.  If the problem
-*** persists, check the XMLTV-USERS list or the DataDirect forums for known issues
-*** and assistance.\n\n" if $found_fault;
-
 #
 # load supporting details
 #
-$twig=XML::Twig->new(   
+my $found_fault=0;
+my $twig=XML::Twig->new(   
          twig_roots    => { HTML => 1, message => 1, xtvd =>1},
-         ignore_elts   => { schedules => 1 },
 		 twig_handlers => 
 		      {
 		         HTML     => sub {
@@ -841,7 +810,7 @@ $twig=XML::Twig->new(
                                   {
                                     $program{$_->att('id')}=$hash;
                                   }
-                                  $_->twig->purge;  
+                                  $_->twig->purge;
                                   return 0;
                 		         },  
                  productionCrew => sub { $_->twig->purge;  return 0;},
@@ -851,7 +820,7 @@ $twig=XML::Twig->new(
                                     my $hash=$_->simplify;
                                     $crew{$_->att('program')}=$hash;
                                   }
-                                  $_->twig->purge;  
+                                  $_->twig->purge;
                                   return 0;
                   		          },
                  genres       => sub { $_->twig->purge;  return 0;},
@@ -861,9 +830,21 @@ $twig=XML::Twig->new(
                                     my $hash=$_->simplify;
                                     $programGenre{$_->att('program')}=$hash;
                                   }
-                                  $_->twig->purge;  
+                                  $_->twig->purge;
                                   return 0;
                   		          },
+                schedule     => sub {
+                                  my $twig=$_;
+                                  push @schedules,$twig->simplify;
+                                  $_->twig->purge;
+                                  return 0;
+                                  },
+                 faultstring => sub {
+                                  printf STDERR "\nFAULT: %s\n",$_->first_child_text;
+                                  $_->twig->purge;
+                                  $found_fault=1;
+                                  return 1;
+                                 },
 		         _all_ => sub {  # for some reason this is not being processed last, can't do the purge
                                   unless ( $opt_quiet || $count++ % 1000 )
                                   {
@@ -871,9 +852,15 @@ $twig=XML::Twig->new(
                                      else      { print STDERR "."            };
                                   }
                                   return 0;
-                  		          },
-	         },
+                  		      },
+               } # end of handlers
           );
+
+die "ERROR:
+*** FAULT Message from Data Direct detected.
+*** This is probably a known issue, please try again later.  If the problem
+*** persists, check the XMLTV-USERS list or the DataDirect forums for known issues
+*** and assistance.\n\n" if $found_fault;
 
 
 unless ($opt_quiet)
@@ -1183,7 +1170,7 @@ for my $map (@{$lineups{$dd_lineup}{map}})
        $chan_config{$key}=0; # default ignore
        if ($opt_auto_config)
        {
-          $chan_config{$key}=1 if $opt_auto_config eq 'add'; 
+          $chan_config{$key}=1 if $opt_auto_config eq 'add';
           print STDERR ( $opt_auto_config eq 'add' ? "Adding" : "Ignoring" )," new channel: $key\n";
 
           open(CONF,">>$config_file") or die "ERROR: can't open config file for update: $config_file\n";
@@ -1258,30 +1245,27 @@ if ($opt_list_channels)
 #
 # prepare to output schedule
 #
-$twig=XML::Twig->new( twig_roots => { schedule => 1 },
-                      twig_handlers => {                 
-    schedule => sub {
-                     $prog_count++;
-                     unless ( $opt_quiet || $count++ % 10 )
-                     {
-                       if ($bar) { $bar->update(tell($dd_data)) }
-                      else      { print STDERR "."            };
-                     }
+unless ($opt_quiet)
+{
+    $bar = new XMLTV::ProgressBar('Writing schedule',$#schedules);
+}
 
-                     my %prog=();
-                     my $ptr;
-                     my $twig=$_;
-                     $_=$twig->simplify;
+foreach $_ (@schedules) {
+     $sched_count++;
+     unless ( $opt_quiet || $sched_count % 10 )
+     {
+       if ($bar) { $bar->update($sched_count) }
+       else      { print STDERR "."           };
+    }
+
+   my %prog=();
+   my $ptr;
 
 # Skip programs not in our lineup and shows that start before our start time
 # (dd provides shows in progress and it messes up splitting/merging)
-		              if (exists $chan_id{$_->{station}}
-		                  &&      $_->{time} ge $dd_start ) {
+  next unless exists $chan_id{$_->{station}};
+  next unless $_->{time} ge $dd_start;
         
-#
-# start with elements from schedule tag
-#
-
 #
 # we generated a TZ offset a while back... this is twice as fast as Date::Manip!
 #
@@ -1497,25 +1481,12 @@ $twig=XML::Twig->new( twig_roots => { schedule => 1 },
 # write record
 #
                      $writer->write_programme(\%prog);
-                     $twig->twig->purge;
-       		     }
-                return 0;
-       		 }, # schedule subroutine
-	         }); #twig setup
+}; # schedule loop
 
 #
 # rescan data, looking for schedule items
 #
-unless ($opt_list_channels)
-{
-    seek($dd_data,0,0);  #rewind
-    unless ($opt_quiet)
-    {
-        $bar = new XMLTV::ProgressBar('Writing schedule',$dd_data_size+1);
-    }
-    my $time=time();
-    $twig->parse( $dd_data );
-    $bar->update($dd_data_size+1) if $bar;
+    $bar->update($#schedules+1) if $bar;
     $bar->finish() if $bar;
 
     $writer->end();
@@ -1526,9 +1497,9 @@ unless ($opt_list_channels)
         print STDERR "MESSAGE FROM DATA DIRECT: $_\n";
     }
     
-    printf STDERR "Downloaded %d programs in %d seconds\n",$prog_count,time()-$start_time
+    printf STDERR "Downloaded %d programs in %d seconds\n",$sched_count,time()-$start_time
         unless $opt_quiet;
-}
+
 
 exit(0);
 
