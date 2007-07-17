@@ -138,6 +138,7 @@ my %mnetchannelfixups = (
     'Bloomberg Information TV' => 'Bloomberg',
     'China Central Television 4' => 'CCTV 4',
     'Channel O - Sound Television' => 'Channel O',
+    'CNBC' => 'CNBC Africa',
     'CNN International' => 'CNN',
     'Deukom - DW' => 'Deutchse Welle',
     'E-Entertainment' => 'E! Entertainment',
@@ -147,13 +148,14 @@ my %mnetchannelfixups = (
     'K-TV World' => 'K-All Day',
     'M-Net Domestic' => 'M-Net',
     'M-Net Series' => 'M-Net Series',
-    'National Geographic' => 'Nat Geographic',
+    'Parliamentary Service' => 'Parliamentary',
     'Reality TV' => 'Zone Reality',
     'Rhema Network' => 'Rhema TV',
     'Summit' => 'Summit TV',
     'SuperSport' => 'SuperSport 1',
     'SuperSport 3' => 'SuperSport 3 (Soccer)',
     'SuperSport 5' => 'SuperSport 5 (Highlights)',
+    'SuperSport Zone Mosaic' => 'SuperSport Zone',
     'Trinity Broadcasting Network' => 'TBN',
     'Turner Classic Movies' => 'TCM',
     'TV5 Afrique' => 'TV5',
@@ -517,8 +519,6 @@ sub post_process($$) {
 
 	$desc = "No description available" if ($desc eq "");
 
-	$desc .= " [Dolby 5.1]" if ($dolby);
-
 	$r->{title} = [[$title]];
 	$r->{'sub-title'} = [[$subtitle]] if $subtitle;
 	$r->{'episode-num'} = [[$episode_num, "xmltv_ns"]] if $episode_num;
@@ -789,7 +789,7 @@ sub process_html {
 		if ($result !~ /^:error:(.*):/) {
 			return;
 		}
-		say("\nSite $site failed - attempting next site for $name");
+		say("\nSite $site returned no data - attempting next site for $name");
 	}
 	say("\nskipping channel '$name'. All sites failed");
 }
@@ -920,30 +920,46 @@ sub mode_configure {
 
 # Initialize cookies and retrieve current channel ID's
 sub get_dstv_channel_mappings {
-
 	t "refreshing dstv channel mappings";
 	
-	my $url = "http://www.dstv.com/DStv_Guide/default.aspx";
-	my $data	= get_url("GET", $url);
+	my $url = "http://www.dstv.com/main.aspx?ID=136";
+	my $data = get_url("GET", $url);
 	
 	if ($data =~ /^:error:/) {
 		print STDERR  "Error Getting dstv channel mappings: $data\n"
 			if not $opt_quiet;
 		return;
 	}
-	my $chantree = HTML::TreeBuilder->new();
-	$chantree->parse($data) or die "cannot parse content of $url\n";
-	$chantree->eof;
-	
-	t "Data = $data";
 
-	my $chanselect = $chantree->look_down(_tag => 'select', id => 'Channel');
-  	my @chan_list = $chanselect->look_down(_tag => "option");
-	foreach my $chanentry (@chan_list) {
-		$dstvchannelmap{$chanentry->as_text} = $chanentry->attr('value') if ($chanentry->as_text =~ /^[^-]/);
+	my $chantree = HTML::TreeBuilder->new();
+	$chantree->parse($data) or die "cannot parse content of channels page\n";
+	$chantree->eof;
+
+	my @list = $chantree->look_down(
+		_tag   => 'img',
+		class => 'artcl_img',
+		height => '70',
+	);
+	foreach my $entry (@list) {
+		my $table = $entry->parent()->parent()->parent();
+		
+		my $temp   = $table->look_down(_tag => 'a', class => 'img_btn') or next;
+		my $name   = $temp->look_down(_tag => 'b')->as_text();
+		my $chanid = $temp->parent->look_down(_tag => 'i')->as_text();
+		$chanid =~ s/(^\s*|\s*$)//g;
+		
+		# Skip radio channels;
+		next if $chanid =~ /^\s*Channel:\s*/;
+
+		my $tempid = $temp->parent->parent->parent->look_down(_tag => 'select', name => 'search');
+		$tempid = $tempid->attr('onchange');
+		$tempid =~ /GoToSchedule\('(\d+)'/;
+
+		$dstvchannelmap{$name} = $1;
 	}
 	$chantree->delete;
 	t "Refresh successful";
+	die "no channels could be found" if not keys %dstvchannelmap;
 }
 
 # Initialize cookies and retrieve current channel ID's
@@ -1079,8 +1095,8 @@ sub get_mnet() {
  
 	my $chanid = mnet_channel_map($channame); 
 	if (not defined $chanid) {
-	    my $msg = "cannot look up '$channame' in map";
-	    warn $msg if not $opt_quiet;
+	    my $msg = "no corresponding mnet channel found for $channame";
+	    print STDERR "\n$msg" if not $opt_quiet;
 	    # This seems to be the convention for returning errors.
 	    return ":error:$msg";
 	}
