@@ -3,6 +3,9 @@
 eval 'exec /usr/bin/perl  -S $0 ${1+"$@"}'
     if 0; # not running under some shell
 
+eval 'exec /usr/bin/perl  -S $0 ${1+"$@"}'
+    if 0; # not running under some shell
+
 =pod
 
 =head1 NAME
@@ -382,7 +385,13 @@ sub process_table {
 
     for (my $k=$first_day; $k <= $last_day; $k++) {
         my @program_data = ();
-	my $ch_url = $url . "cat=&channelSigla=".encode_entities($ch_xmltv_id)."&dia=".(today_offset()+$k)."&package=9";
+	my $ch_url_id = $ch_xmltv_id;
+
+	$ch_url_id =~ s/\+/%2B/g;
+	$ch_url_id =~ s/\s/+/g;
+
+	my $ch_url = $url . "cat=&channelSigla=".encode_entities($ch_url_id)."&dia=".(today_offset()+$k)."&package=9";
+
         my $r = $ua->get($ch_url);
 
     	if ( ! $r->is_success ) {
@@ -475,11 +484,20 @@ sub process_table {
 			  $sub_t = $2;
 			  $sub_t =~ s/^\s*?(.*?)/$1/;
 			  $title =~ s/(.*?)\s*?$/$1/;
+			} elsif ($title =~ /^(.*?)\#\#(.*?)$/) {
+			  $title = $1;
+			  $sub_t = $2;
+			  $sub_t =~ s/^\s*?(.*?)/$1/;
+			  $title =~ s/(.*?)\s*?$/$1/;
 			}
 
 			#lets get the description
 			my $link = $tds[1]->find_by_tag_name("_tag"=>"a")->attr('href');
 			my ($program_id) = ( $link =~ /\"(\d+)\"/ );
+
+			my %credits;
+			my $year;
+
 			if ( $program_id && $opt_fullinfo ) {
 
 				my ($base_url,undef) = split(/\?/,$ch_url);
@@ -488,8 +506,29 @@ sub process_table {
         			my $r_desc = $ua->post($base_url,\%descform);
 				
 				my $descr = $r_desc->content();
-				if ( $descr =~ /<\/h4>\s*\n\s*<p>(.*?)<\/p>/ms) {
+
+
+				if ( $descr =~ /<\/h4>.*<strong>De:<\/strong>(.*?)<\/p>\s*\n\s*<p><strong>Com:<\/strong>(.*?)<\/p>\s*\n\s*<p>(.*?)<\/p>/ms) {
+					my $director=$1;
+					my $actors=$2;
+					$desc=$3;
+					
+					$director=~s/&nbsp;//g;
+					my @directors=split(/,/,$director);
+					$actors=~s/&nbsp;//g;
+					my @actors=split(/,/,$actors);
+					$credits{actor} = \@actors;
+					$credits{director} = \@directors;
+
+				} elsif ( $descr =~ /<\/h4>\s*\n\s*<p>(.*?)<\/p>/ms) {
 				  $desc = $1 
+				}
+
+				if ($desc =~ /\sREPLAY:\s.*tecla verde.*/) {
+					$desc =~ s/\sREPLAY:\s.*//g;
+				}
+				if ($desc =~ /\s*Ano:\s*(\d{4})\.\s*$/) {
+					$year = $1;
 				}
 			}
 
@@ -516,6 +555,10 @@ sub process_table {
                 	                subtitle=>      $sub_t,
 					category =>     $category,
                 	                desc =>         $desc);
+
+			$h{credits} = \%credits if %credits;
+			$h{year} = $year if $year;
+
                 	push @program_data, \%h;
       		}
 	}
@@ -546,6 +589,7 @@ sub make_programme_hash {
     my %prog;
 
     $prog{channel}       = "$ch_xmltv_id.$DOMAIN";
+    $prog{channel} 	 =~ s/\s/_/g;
     $prog{title}         =[ [ $cur->{title}, $LANG ] ];
     $prog{"sub-title"}   =[ [ $cur->{subtitle}, $LANG ] ] if $cur->{subtitle};
     $prog{category}      =[ [ $cur->{category}, $LANG ] ] if $cur->{category};
@@ -570,6 +614,9 @@ sub make_programme_hash {
     }
 
     $prog{desc}=[ [ $cur->{desc}, $LANG ] ] if $cur->{desc};
+
+    $prog{credits}= $cur->{credits} if $cur->{credits};
+    $prog{date}= $cur->{year} if $cur->{year};
 
     return \%prog;
 }
@@ -610,11 +657,6 @@ sub get_channels {
 	foreach my $opt (@ocanals) {
 		    my $channel_id  = $opt->attr('value');
 		    next if $channel_id eq 'ALL';
-
-    		    #TODO: When tvcabo guys fix this remove this line
-    		    #      the current site cannot handle this char, 
-    		    #      not even using the site interface
-    		    next if $channel_id =~ /\+/;
 
 		    my $channel_name= trim($opt->content->[0]);
 			$channel_name = $uref->toUTF8("iso-8859-1",$channel_name);
