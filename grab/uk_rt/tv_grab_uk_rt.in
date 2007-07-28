@@ -3,24 +3,28 @@
 
 =head1 NAME
 
-tv_grab_uk_rt - Grab TV listings for Britain and Ireland
+tv_grab_uk_rt - Grab TV listings for United Kingdom and Republic of Ireland
 
 =head1 SYNOPSIS
 
 tv_grab_uk_rt --help
 
-tv_grab_uk_rt [--config-file FILE] --configure [--gui OPTION]
+tv_grab_uk_rt --configure [--config-file FILE]
 
-tv_grab_uk_rt [--config-file FILE] [--output FILE] [--quiet]
-              [--days N] [--offset N]
-              [--list-channels]
+tv_grab_uk_rt [--config-file FILE] [--output FILE] [--days N] [--offset N]
+              [--gui OPTION] [--quiet]
+
+tv_grab_uk_rt --list-channels
+
+tv_grab_uk_rt --capabilities
+
+tv_grab_uk_rt --version
 
 =head1 DESCRIPTION
 
-Output TV and radio listings in XMLTV format for many stations
-available in the United Kingdom and Republic of Ireland.  The data
-comes from a machine-readable file produced by the Radio Times
-website.
+Output TV listings in XMLTV format for many stations available in the 
+United Kingdom and Republic of Ireland.  The data comes from a 
+machine-readable file produced by the Radio Times website.
 
 =head1 USAGE
 
@@ -49,7 +53,11 @@ B<--days N> When grabbing, grab N days of data instead of all available.
 
 B<--offset N> Start grabbing at today + N days.
 
-B<--list-channels> List channels.
+B<--list-channels> Write output giving <channel> elements for every channel
+available, but no programmes.
+
+B<--capabilities> Show which capabilities the grabber supports. For more
+information, see L<http://membled.com/twiki/bin/view/Main/XmltvCapabilities>
 
 B<--version> Show the version of the grabber.
 
@@ -85,9 +93,13 @@ use XMLTV::ProgressBar;
 use XMLTV::Memoize; XMLTV::Memoize::check_argv 'get_nice';
 use XMLTV::DST;
 use XMLTV::Usage <<END
+$0: Get TV listings for United Kingdom and Ireland in XMLTV format
 To configure: $0 --configure [--config-file FILE]
-To grab listings: $0 [--config-file FILE] [--output FILE] [--quiet]
-List channels only: $0 --list-channels [--output FILE] [--quiet]
+To grab listings: $0 [--config-file FILE] [--output FILE] [--days N] [--offset N]
+                     [--gui OPTION] [--quiet]
+To list channels: $0 --list-channels
+To show capabilities: $0 --capabilities
+To show version: $0 --version
 END
   ;
 $XMLTV::Get_nice::Delay = 0; # since this is intended for grabbing
@@ -161,15 +173,21 @@ foreach (XMLTV::Config_file::read_lines($CHANNEL_NAMES_FILE, 1)) {
     next unless defined;
     my $where = "$CHANNEL_NAMES_FILE:$line_num";
     my @fields = split /\|/;
-    die "$where: wrong number of fields"
+    die "$where: Wrong number of fields in XMLTV channel_ids file"
       if @fields < 2 or @fields > 4;
 
     my ($xmltv_id, $rt_id, $extra_dn, $icon_url) = @fields;
-    warn "$where: RT id $rt_id seen already\n"
-      if defined $rt_to_xmltv{$rt_id};
+
+    if (not $opt_quiet) {
+        warn "$where: RT id $rt_id already seen in XMLTV channel_ids file\n"
+          if defined $rt_to_xmltv{$rt_id};
+    }
     $rt_to_xmltv{$rt_id} = $xmltv_id;
-    warn "$where: XMLTV id $xmltv_id seen already\n"
-      if defined $xmltv_to_rt{$xmltv_id};
+
+    if (not $opt_quiet) {
+        warn "$where: XMLTV id $xmltv_id already seen in XMLTV channel_ids file\n"
+          if defined $xmltv_to_rt{$xmltv_id};
+    }
     $xmltv_to_rt{$xmltv_id} = $rt_id;
 
     $extra_dn{$xmltv_id} = $extra_dn if defined $extra_dn;
@@ -184,22 +202,27 @@ END
 ;
 
 # Whatever we're doing, we need the channel list.
-my $bar = new XMLTV::ProgressBar({name => 'finding channels', count => 1})
+my $bar = new XMLTV::ProgressBar({name => 'Finding channels', count => 1})
   if not $opt_quiet;
 my $channel_list = get_nice $channel_list_uri;
 my (%channels, %seen_rt_id, %seen_name);
 foreach (split /\n/, $channel_list) {
     chomp;
-    /^(\d+)\|(.+)/ or die "bad line in channel list: $_";
+    /^(\d+)\|(.+)/ or die "Bad line seen in RT channels.dat: $_";
     my ($rt_id, $name) = ($1, $2);
-    $seen_rt_id{$rt_id}++ && die "channel with RT id $rt_id seen multiple times";
-    $seen_name{$name}++ && warn "channel with RT name '$name' seen multiple times";
+    if ($seen_rt_id{$rt_id}++) {
+        die "Channel with RT id $rt_id already seen in RT channels.dat";
+    }
+    if ($seen_name{$name}++) {
+        warn "Channel with RT name '$name' already seen in RT channels.dat\n"
+          if not $opt_quiet;
+    }
     # drop RT entries which are flagged as bad in channel_ids
     next if $extra_dn{ $rt_to_xmltv{$rt_id} } =~ /.*Do\ Not\ Use.*/;
     my $xmltv_id = $rt_to_xmltv{$rt_id};
     if (not defined $xmltv_id) {
         if (not $opt_quiet) {
-            warn "RT id $rt_id ($name) not known in channel_ids file\n";
+            warn "RT id $rt_id ($name) not known in XMLTV channel_ids file\n";
         }
         $xmltv_id = "C$rt_id.radiotimes.com";
     }
@@ -208,7 +231,7 @@ foreach (split /\n/, $channel_list) {
     my $icon_url = $icon_urls{$xmltv_id};
     my @icon = { 'src' => $icon_url } if $icon_url;
     for ($extra_dn{$xmltv_id}) { push @names, [ $_ ] if defined }
-    if(@icon) {
+    if (@icon) {
         $channels{$xmltv_id} = { id => $xmltv_id,
 			         rt_id => $rt_id,
 			         'display-name' => \@names,
@@ -226,7 +249,7 @@ if (not $opt_quiet) {
     foreach (keys %xmltv_to_rt) {
         # ignore channels flagged as bad in channel_ids
         next if $extra_dn{$_} =~ /.*Do\ Not\ Use.*/;
-        warn "channel $_ ($xmltv_to_rt{$_}) not seen on RT site"
+        warn "Channel $_ ($xmltv_to_rt{$_}) not seen on RT site\n"
           if not exists $channels{$_};
     }
 }
@@ -234,13 +257,13 @@ if (not $opt_quiet) {
 my %g_args = ();
 if (defined $opt_output) {
     my $fh = new IO::File ">$opt_output";
-    die "cannot write to $opt_output\n" if not $fh;
+    die "Cannot write to $opt_output" if not $fh;
     #    binmode $fh or die "cannot set binmode for output: $!";
     %g_args = (OUTPUT => $fh);
 }
 
 if ($opt_list_channels) {
-    die "--list-channels can't be given with --configure\n"
+    die "--list-channels can't be given with --configure, exiting.\n"
       if $opt_configure;
     my $writer = new XMLTV::Writer(%g_args, encoding => 'ISO-8859-1');
     $writer->start(\%tv_credits);
@@ -273,7 +296,7 @@ sub configure() {
     XMLTV::Config_file::check_no_overwrite($config_file);
 
     # FIXME need to make directory
-    open(CONF, ">$config_file") or die "cannot write to $config_file: $!";
+    open(CONF, ">$config_file") or die "Cannot write to $config_file: $!";
     t 'channels: ' . d \%channels;
 
     my %chan_id_to_name;
@@ -311,7 +334,8 @@ foreach (XMLTV::Config_file::read_lines $config_file) {
     /^\s*channel\s+(\S+)\s*$/ or die "$config_file: $n: bad line $_\n";
     my $id = $1;
     if (not exists $channels{$id}) {
-        warn "channel $id mentioned in $config_file but not on site\n";
+        warn "Channel $id mentioned in $config_file but not on RT site\n"
+          if not $opt_quiet;
         next;
     }
     push @wanted_chs, $id;
@@ -336,7 +360,7 @@ foreach (@wanted_chs) {
     $writer->write_channel(\%h);
 }
 
-$bar = new XMLTV::ProgressBar({name => 'grabbing', count => scalar @wanted_chs})
+$bar = new XMLTV::ProgressBar({name => 'Grabbing', count => scalar @wanted_chs})
   if not $opt_quiet;
 my %warned_wrong_num_fields; # give that warning once per channel file
 foreach my $ch (@wanted_chs) {
@@ -369,8 +393,10 @@ foreach my $ch (@wanted_chs) {
     foreach (split /\n/, $page) {
 	my @fields = split /\~/;
 	if (@fields != 23) {
-	    warn "wrong number of fields in line:\n$_\n"
-	      unless $warned_wrong_num_fields{$ch}++;
+	    if (not $opt_quiet) {
+	        warn "Wrong number of fields in line:\n$_\n"
+	          unless $warned_wrong_num_fields{$ch}++;
+            }
 	    next;
 	}
 	foreach (@fields) { s/^\s+//; s/\s+$//; undef $_ if not length }
@@ -387,11 +413,14 @@ foreach my $ch (@wanted_chs) {
 	    else { die "bad true/false value $_" }
 	}
 
-	warn "ignoring sub-title $sub_title since episode also given\n"
-	  if defined $sub_title and defined $episode;
+	warn "Ignoring sub-title $sub_title since episode also given\n"
+	  if defined $sub_title and defined $episode and not $opt_quiet;
 	$sub_title = $episode if defined $episode;
 
-	warn("missing title in: $_"), next if not defined $title;
+	if (not defined $title) {
+	    warn("Missing title in: $_") if not $opt_quiet;
+	    next;
+        }
 
 	# Roundabout the summer time changeover they include timezone
 	# in the title.
@@ -427,7 +456,7 @@ foreach my $ch (@wanted_chs) {
 		# character.
 		#
 		foreach (@cast) {
-		    s/^.*[*]// or warn "bad bit of cast list: $_";
+		    s/^.*[*]// or warn "Bad bit of cast list: $_" if not $opt_quiet;
 		}
 	    }
 	    else {
@@ -458,8 +487,8 @@ foreach my $ch (@wanted_chs) {
 	# Date, start and stop time.
 	my ($yyyy, $mm, $dd);
 	for ($date) {
-	    die "missing date in $_" if not defined;
-	    m!(\d\d)/(\d\d)/(\d{4})$! or die "bad date $_";
+	    die "Missing date in $_" if not defined;
+	    m!(\d\d)/(\d\d)/(\d{4})$! or die "Bad date $_";
 	    ($dd, $mm, $yyyy) = ($1, $2, $3);
 	}
 
