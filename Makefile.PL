@@ -397,6 +397,17 @@ my @opt_components
        grab_need_share => [ 'na_dd' ],
      },
 
+     { name     => 'tv_grab_na_sd',
+       blurb => 'Grabber for North America using SchedulesDirect.org',
+       exes     => [ 'grab/na_sd/tv_grab_na_sd' ],
+       pl_files => { 'grab/na_sd/tv_grab_na_sd.PL' => 'grab/na_sd/tv_grab_na_sd' },
+       deps     => [ 'grab/na_sd/tv_grab_na_sd' => [ 'grab/na_sd/tv_grab_na_sd.in' ] ],
+       to_clean => [ 'grab/na_sd/tv_grab_na_sd' ],
+       prereqs => { 'SOAP::Lite' => 0.67,
+		    'Term::ReadKey' => 0 },
+       grab_need_share => [ 'na_sd' ],
+     },
+
      { name     => 'tv_grab_na_icons',
        blurb    => 'Grabber for North American Channel Icons',
        exes     => [ 'grab/na_icons/tv_grab_na_icons' ],
