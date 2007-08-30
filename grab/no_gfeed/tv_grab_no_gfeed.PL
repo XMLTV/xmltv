@@ -14,8 +14,8 @@ while (<$in_fh>) {
     s/\@\@nspc/                /;
     s/\@\@country/Norway/;
     s/\@\@desc/Norway (beta)/;
-    s%\@\@url%http://www.gfeed.info/xmltv/channels.xml.gz%;
-    s%\@\@site%http://www.gfeed.info/%;
+    s%\@\@url%http://epg.mspc.no/xmltv/channels.xml.gz%;
+    s%\@\@site%http://epg.mspc.no/%;
     print $out_fh $_;
 }
 close $out_fh or die "cannot close $out: $!";
