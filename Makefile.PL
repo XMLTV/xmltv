@@ -273,12 +273,12 @@ my @opt_components
 #       grab_need_share => [ 'au' ],
 #     },
 
-     { name => 'tv_grab_br',
-       blurb => 'Grabber for Brazil',
-       exes => [ 'grab/br/tv_grab_br' ],
-       prereqs => { 'HTML::TreeBuilder' => 0 ,
-                    'HTML::Entities' => 1.27 , }
-     },
+#     { name => 'tv_grab_br',
+#       blurb => 'Grabber for Brazil',
+#       exes => [ 'grab/br/tv_grab_br' ],
+#       prereqs => { 'HTML::TreeBuilder' => 0 ,
+#                    'HTML::Entities' => 1.27 , }
+#     },
 
      { name => 'tv_grab_br_net',
        blurb => 'Grabber for Brazil NET Cable',
@@ -331,7 +331,7 @@ my @opt_components
 
      { name => 'tv_grab_dtv_la',
        blurb => 'Grabber for Latin America',
-       exes => [ 'grab/dtv/tv_grab_dtv_la' ],
+       exes => [ 'grab/dtv_la/tv_grab_dtv_la' ],
        prereqs => { 'HTML::TreeBuilder' => 0,
                     'HTML::Form'    => 0 } },
 
@@ -369,10 +369,10 @@ my @opt_components
        prereqs => { 'HTML::Entities' => 1.27 } ,
      },
 
-     { name => 'tv_grab_is',
-       blurb => 'Grabber for Iceland',
-       exes => [ 'grab/is/tv_grab_is' ],
-     },
+#     { name => 'tv_grab_is',
+#       blurb => 'Grabber for Iceland',
+#       exes => [ 'grab/is/tv_grab_is' ],
+#     },
 
      { name => 'tv_grab_it',
        blurb => 'Grabber for Italy',
