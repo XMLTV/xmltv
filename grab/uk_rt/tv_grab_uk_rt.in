@@ -121,7 +121,7 @@ BEGIN {
     }
 }
 
-GetOptions('help'          => \ my $opt_help,
+GetOptions('help'      => \ my $opt_help,
        'configure'     => \ my $opt_configure,
        'config-file=s' => \ my $opt_config_file,
        'gui:s'         => \ my $opt_gui,
@@ -203,9 +203,16 @@ is restricted to personal use only.\n" ) if not $opt_quiet;
 my $channel_list = get_nice $channel_list_uri;
 my (%channels, %seen_rt_id, %seen_name);
 my @rt_chans = split /\n/, $channel_list;
-my $bar = new XMLTV::ProgressBar({name   => 'Retrieving channels',
-                                  count  => scalar @rt_chans,
-                                  ETA    => 'linear', }) if not $opt_quiet;
+my $num_rt_chans = scalar @rt_chans;
+say( "Radio Times reports listings for $num_rt_chans channels available.\n")
+  if not $opt_quiet;
+
+my $chans_bar = new XMLTV::ProgressBar({name   => 'Retrieving channels',
+                                        count  => $num_rt_chans,
+                                        ETA    => 'linear', })
+                                          if not $opt_quiet;
+my $need_final_update = 0;
+
 foreach (@rt_chans) {
     chomp;
     /^(\d+)\|(.+)/ or die "Bad line seen in RT channels.dat: $_";
@@ -214,11 +221,21 @@ foreach (@rt_chans) {
         die "Channel with RT id $rt_id already seen in RT channels.dat";
     }
     if ($seen_name{$name}++) {
-        warn "Channel with RT name '$name' already seen in RT channels.dat\n"
-          if not $opt_quiet;
+        if (not $opt_quiet) {
+            warn "Channel with RT name '$name' already seen in RT channels.dat\n";
+        }
     }
-    # drop RT entries which are flagged as bad in channel_ids
-    next if $extra_dn{ $rt_to_xmltv{$rt_id} } =~ /.*Do\ Not\ Use.*/;
+    
+    # Skip any RT entries which have been flagged as bad in channel_ids file
+    if ( $extra_dn{ $rt_to_xmltv{$rt_id} } =~ /.*Do\ Not\ Use.*/ ) {
+        if (not $opt_quiet) {
+            warn "Channel '$name' flagged as bad by tv_grab_uk_rt, ignoring\n";
+        }
+        $need_final_update = 1;
+        next;
+    }
+    
+    # Handle new channels on RT site unknown to channel_ids
     my $xmltv_id = $rt_to_xmltv{$rt_id};
     if (not defined $xmltv_id) {
         if (not $opt_quiet) {
@@ -241,9 +258,19 @@ foreach (@rt_chans) {
 			         rt_id => $rt_id,
 			         'display-name' => \@names };
     }
-    $bar->update() if $bar;
+    
+    # Update the progres bar by one increment
+    if (defined $chans_bar) {
+        $chans_bar->update();
+    }
 }
-$bar->finish() if $bar;
+
+if (defined $chans_bar) {
+    # Only update the progress bar to 100% if we need to
+    $chans_bar->update($num_rt_chans) if $need_final_update;
+    $chans_bar->finish();
+    say( "\n" ) if not $opt_quiet;
+}
 
 if (not $opt_quiet) {
     foreach (keys %xmltv_to_rt) {
@@ -360,10 +387,21 @@ foreach (@wanted_chs) {
     $writer->write_channel(\%h);
 }
 
-$bar = new XMLTV::ProgressBar({name   => 'Retrieving listings',
-                               count  => scalar @wanted_chs,
-                               ETA    => 'linear', }) if not $opt_quiet;
+my $num_req_chans = scalar @wanted_chs;
+
+say("Downloading listings for $num_req_chans configured channels\n")
+  if not $opt_quiet;
+
+my $listings_bar = new XMLTV::ProgressBar({name   => 'Retrieving listings',
+                                           count  => $num_req_chans,
+                                           ETA    => 'linear', })
+                                             if not $opt_quiet;
+
 my %warned_wrong_num_fields; # give that warning once per channel file
+
+# Reset check for final progress bar update
+$need_final_update = 0;
+
 foreach my $ch (@wanted_chs) {
     my $c = $channels{$ch};
     my $rt_id = $channels{$ch}->{rt_id}; die if not defined $rt_id;
@@ -503,13 +541,23 @@ foreach my $ch (@wanted_chs) {
 	# Ignore $duration_mins since it may not be reliable.
 
 	$writer->write_programme(\%p);
+    
     }
-    $bar->update($_) if $bar;
+    
+    # Update the progres bar by one increment
+    if (defined $listings_bar) {
+        $listings_bar->update();
+    }
 }
-$bar->update(scalar @wanted_chs) if $bar;
-$bar->finish() if $bar;
 
 $writer->end;
 
+if (defined $listings_bar) {
+    # Only update the progress bar to 100% if we need to
+    $listings_bar->update($num_req_chans) if $need_final_update;
+    $listings_bar->finish();
+    say( "\n" ) if not $opt_quiet;
+}
+
 # Keep output on STDERR preserving STDOUT for XML data
-say( "\nFinished!\n" ) if not $opt_quiet;
+say( "Finished!\n" ) if not $opt_quiet;
