@@ -13,7 +13,7 @@ tv_grab_ch_search --help
 tv_grab_ch_search [--config-file FILE] --configure [--gui OPTION]
 
 tv_grab_ch_search [--config-file FILE] [--output FILE] [--quiet]
-           [--days N] [--offset N]
+           [--days N] [--offset N] [--slow]
 
 tv_grab_ch_search --list-channels
 
@@ -53,6 +53,12 @@ from now on (= zero).
 
 B<--quiet> Suppress the progress messages normally written to standard
 error.
+
+B<--slow> enables long strategy run: tv.search.ch publishes only some (vital)
+information on the actual listing pages, the rest is shown in a separate
+popup window. If you'd like to parse the data from these popups as well,
+supply this flag. But consider that the grab process takes much longer when
+doing so, since many more web pages have to be retrieved.
 
 B<--list-channels> Write output giving <channel> elements for every
 channel available (ignoring the config file), but no programmes.
@@ -103,7 +109,7 @@ use XMLTV::Usage<<END
 $0: get Swiss television listings from tv.search.ch in XMLTV format
 To configure: $0 --configure [--config-file FILE] [--gui OPTION]
 To grab data: $0 [--config-file FILE] [--output FILE] [--quiet]
-                 [--days N] [--offset N]
+                 [--days N] [--offset N] [--slow]
 Channel List: $0 --list-channels
 To show capabilities: $0 --capabilities
 To show version: $0 --version
@@ -164,6 +170,7 @@ my $opt_output;
 my $opt_days = 14;
 my $opt_offset = 0;
 my $opt_quiet = 0;
+my $opt_slow = 0;
 my $opt_list_channels;
 my $opt_help;
 my $opt_share;
@@ -176,6 +183,7 @@ GetOptions(
     'days=i'         => \$opt_days,
     'offset=i'       => \$opt_offset,
     'quiet'          => \$opt_quiet,
+    'slow'           => \$opt_slow,    
     'list-channels'  => \$opt_list_channels,
     'help'           => \$opt_help,
     'share=s'        => \$opt_share,
@@ -427,9 +435,10 @@ sub grab_channel($) {
       or die "cannot parse content of http://tv.search.ch/programm/station/detail.php?id=$channel&day=$loop_date";    
     $tb->eof;
 
-		
-    foreach my $blah (@{( ($tb->look_down('_tag' => 'table', 'width' => '100%', 'border' => 0, 'cellspacing' => 0, 'cellpadding' => 0))[3] )->extract_links()}) 
-    {
+	if ( $opt_slow ) 
+	{
+     foreach my $blah (@{( ($tb->look_down('_tag' => 'table', 'width' => '100%', 'border' => 0, 'cellspacing' => 0, 'cellpadding' => 0))[3] )->extract_links()}) 
+     {
 		my %show;
 		$show{channel} = channel_id($channel);
 		
@@ -490,7 +499,64 @@ sub grab_channel($) {
 	   $show{'country'} = [[$details[14], $lang]] if ( length($details[14]) ) ;
 
 	   $writer->write_programme(\%show);
-	}	
+	 }	
+	}
+	else
+	{
+		
+		
+			my $mainTable = ($tb->look_down('_tag' => 'table', 'width' => '100%', 'border' => 0, 'cellspacing' => 0, 'cellpadding' => 0))[3];
+			
+	
+			foreach ( $mainTable->look_down ('_tag' => 'td', 'width' => '100%' ) ) 
+			{
+			
+			next if $_->as_text() eq " TV-Guide" ;
+			my %show;
+			$show{channel} = channel_id($channel);
+
+			$show{'title'} = [[(( $_->look_down ('_tag' => 'a'))[0])->as_text(), $lang]];
+			
+			my $tmpStr = (( $_->look_down ('_tag' => 'a'))[0])->as_HTML();
+			$tmpStr =~ s/(.*)=(.{10,10})(.{2,2})(.{2,2})(.*)/$2:$3:$4/;
+						
+
+			my ($start_base, $start_tz) = @{ date_to_local(parse_local_date( ( $tmpStr), $TZ), $TZ) };
+			
+
+			$show{start} = UnixDate($start_base, '%q') . " $start_tz";
+			
+			$tmpStr = $_->as_HTML();
+			$tmpStr =~ s/(.*)<\/a>(.*)<\/td>/$2/;
+			$tmpStr =~ s/\(//g;
+			$tmpStr =~ s/\&nbsp;//g;
+			
+
+			my $tb2=new HTML::TreeBuilder();
+    		$tb2->parse($tmpStr);
+			$tmpStr = $tb2->as_text();
+			$tb2->delete();
+
+			
+			my @additional_info = split('\)', $tmpStr );
+			
+			$show{'category'} = [[$additional_info[0], $lang]] if exists $additional_info[ 0 ];
+			my $size = @additional_info;
+
+			for (my $count = 1; $count < $size; $count++) {
+			$additional_info[ $count ]  =~ s/^\s+//;
+			$additional_info[ $count ]  =~ s/\s+$//;
+
+			  $show{'previously-shown'} = {} if ( $additional_info[ $count ] eq "W" );
+			}
+
+
+			$writer->write_programme(\%show);
+			}
+
+	
+	}
+	
    
     $tb->delete();    
 	
@@ -555,7 +621,7 @@ sub get_details ($) {
 				my $stop= parse_local_date( ( $startDate.$tmpStr), $TZ);
 				
 														
-				if ( Date_Cmp ($start, $stop ) > 0 ) { # if the end time is before the start time, the show goes over midnight.
+				if ( Date_Cmp ($start, $stop ) > 0 ) { # if the end time is before the start time, the show ends after midnight.
 					$stop=DateCalc ( $stop, "+ 1 day");
 				}
 				$result[0] = $start;
