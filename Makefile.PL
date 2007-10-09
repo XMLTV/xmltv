@@ -549,6 +549,19 @@ my @opt_components
        prereqs => { 'HTML::TreeBuilder' => 0,
                     'HTML::Entities' => 1.27 } },
 
+     { name => 'tv_grab_eu_epgdata',
+       blurb => 'Commercial grabber for some European countries (see http://www.epgdata.com)',
+       exes => [ 'grab/eu_epgdata/tv_grab_eu_epgdata' ],
+       pl_files => { 'grab/eu_epgdata/tv_grab_eu_epgdata.PL' => 'grab/eu_epgdata/tv_grab_eu_epgdata' },
+       share_files => { 'grab/eu_epgdata/channel_ids' => 'tv_grab_eu_epgdata/channel_ids' },
+       to_clean => [ 'grab/uk_bleb/tv_grab_eu_epgdata' ],
+      # deps => [ 'grab/uk_bleb/tv_grab_uk_bleb' => [ 'grab/uk_bleb/tv_grab_uk_bleb.in' ] ],
+       grab_need_share => [ 'eu_epgdata' ],
+       prereqs => { 'XML::Twig' => 0, 'Archive::Zip' => 0, 'HTML::Entities' => 0, 'LWP::Simple' => 0, 'File::Temp' => 0 },
+     },
+
+
+
      { name => 'tv_grab_combiner',
        blurb => 'Grabber that combines data from other grabbers',
        exes => [ 'grab/combiner/tv_grab_combiner' ],
