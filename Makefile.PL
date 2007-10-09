@@ -423,7 +423,7 @@ my @opt_components
        blurb => 'Grabber for Israel',
        exes => [ 'grab/il/tv_grab_il' ],
        prereqs => { 'HTML::TreeBuilder' => 0, 
-                    'Locale::Hebrew' => 0 } },
+                    'Text::Bidi' => 0 } },
 
 #
 # tv_grab_es_digital no longer functioning due to site changes
