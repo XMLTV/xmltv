@@ -601,6 +601,17 @@ my @opt_components
       prereqs => { 'HTML::TreeBuilder' => 0 ,
                    'HTML::Entities'    => 0 } },
 
+     { name => 'tv_grab_na_dtv',
+       blurb => 'Grabber for DirecTV in North America',
+       exes => [ 'grab/na_dtv/tv_grab_na_dtv' ],
+       prereqs => {
+         'WWW::Mechanize' => 0,
+         'HTML::TokeParser' => 0,
+         'Date::Parse' => 0,
+         'Time::Local' => 0
+       },
+     },
+
     );
 
 # Now we need to prompt about each optional component.  The style of
