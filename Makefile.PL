@@ -387,7 +387,7 @@ my @opt_components
      },
 
      { name     => 'tv_grab_na_dd',
-       blurb => 'Grabber for North America using DataDirect',
+       blurb => '$$ Grabber for North America-schedulesdirect.org',
        exes     => [ 'grab/na_dd/tv_grab_na_dd' ],
        pl_files => { 'grab/na_dd/tv_grab_na_dd.PL' => 'grab/na_dd/tv_grab_na_dd' },
        deps     => [ 'grab/na_dd/tv_grab_na_dd' => [ 'grab/na_dd/tv_grab_na_dd.in' ] ],
@@ -550,7 +550,7 @@ my @opt_components
                     'HTML::Entities' => 1.27 } },
 
      { name => 'tv_grab_eu_epgdata',
-       blurb => 'Commercial grabber for some European countries (see http://www.epgdata.com)',
+       blurb => '$$ Grabber for some European countries-epgdata.com',
        exes => [ 'grab/eu_epgdata/tv_grab_eu_epgdata' ],
        pl_files => { 'grab/eu_epgdata/tv_grab_eu_epgdata.PL' => 'grab/eu_epgdata/tv_grab_eu_epgdata' },
        share_files => { 'grab/eu_epgdata/channel_ids' => 'tv_grab_eu_epgdata/channel_ids' },
