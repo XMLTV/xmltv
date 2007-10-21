@@ -19,19 +19,8 @@ while (<$in_fh>) {
     s/\@\@name/tv_grab_eu_epgdata/;
     s/\@\@nspc/                /;
     s/\@\@desc/Parts of Europe (commercial) (www.epgdata.com)/;
-    s/^our \$share =.*/our \$share='$share_dir'; \# by $0/ && $seen++;
     print $out_fh $_;
 }
-if ($seen == 0) {
-    die "did not see SHARE_DIR line in $in";
-}
-elsif ($seen == 1) {
-    # Okay.
-}
-elsif ($seen >= 2) {
-    warn "more than one SHARE_DIR line in $in";
-}
-else { die }
 close $out_fh or die "cannot close $out: $!";
 close $in_fh or die "cannot close $in: $!";
 
