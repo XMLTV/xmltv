@@ -132,16 +132,18 @@ my $XML_PRELUDE =
 
 my $XML_POSTLUDE = "</tv>\n";
 
-# Compute the time difference in hours between here and GMT.
-# In North America this will always be negative.
-my $now = time;
-my $timeoff = (localtime($now))[2] - (gmtime($now))[2];
-$timeoff -= 24 if ($timeoff > 0);
-
-my $year = (localtime)[5] + 1900;
-my $daysinyear = (0 == $year % 4 && 0 != $year % 100 || 0 == $year % 400) ? 366 : 365;
+my %zones = (
+  'e' => -5,
+  'c' => -6,
+  'm' => -7,
+  'p' => -8,
+  'a' => -9,
+  'h' => -10,
+);
 
 # Global stuff shared by the parent and child processes.
+my $timeoff = 0;
+my $daysinyear = 365;
 my $browser;
 my $fhq;
 my $proc_number;
@@ -249,6 +251,39 @@ exit 0;
 #                        General Subroutines                         #
 ######################################################################
 
+# Determine if Daylight Saving Time is in effect, given the non-DST
+# values for month, day of month, day of week and hour.  As of 2007
+# the transition days are the second Sunday in March and the first
+# Sunday in November.
+#
+sub isDST {
+  my ($month, $mday, $wday, $hour) = @_;
+  return 1 if ($month > 2 && $month < 10);
+  if ($month == 2) {
+    my $secsun = ($mday + 6 - $wday) % 7 + 8;
+    return 1 if ($mday > $secsun);
+    return 1 if ($mday == $secsun && $hour >= 2);
+  }
+  elsif ($month == 10) {
+    my $firsun = ($mday + 6 - $wday) % 7 + 1;
+    return 1 if ($mday < $firsun);
+    return 1 if ($mday == $firsun && $hour < 1);
+  }
+  return 0;
+}
+
+# Compute the time difference in hours between here and GMT.
+# In North America this will always be negative.
+#
+sub calcTimeOffset {
+  my $zonechar = shift;
+  $timeoff = $zones{$zonechar};
+  if ($zonechar ne 'h') { # Hawaii does not use DST
+    my @tmp = gmtime($timeoff * 3600 + time);
+    $timeoff += &isDST($tmp[4], $tmp[3], $tmp[6], $tmp[2]);
+  }
+}
+
 # For escaping characters not valid in xml.  More needed here?
 #
 sub xmltr {
@@ -322,6 +357,12 @@ sub prepare_queue {
   # If we get here, then we are generating data normally.
 
   $VERBOSE = !$opt->{quiet};
+  calcTimeOffset($conf->{zone}->[0]);
+
+  my $year = (localtime)[5] + 1900;
+  $daysinyear = (0 == $year % 4 && 0 != $year % 100 || 0 == $year % 400) ? 366 : 365;
+
+  print STDERR "Selected time zone offset is $timeoff hours.\n" if ($VERBOSE);
 
   # This hash will contain accumulated channel and program information.
   # Key is channel number, value is (a reference to) a 3-element array:
@@ -576,6 +617,10 @@ sub list_channels {
   my ($conf, $opt) = @_;
 
   $VERBOSE = !$opt->{quiet};
+  calcTimeOffset($conf->{zone}->[0]);
+
+  my $year = (localtime)[5] + 1900;
+  $daysinyear = (0 == $year % 4 && 0 != $year % 100 || 0 == $year % 400) ? 366 : 365;
 
   my $browser = WWW::Mechanize->new();
   $browser->post($START_URL, [
@@ -727,11 +772,11 @@ sub scrape_program {
       if (@tmp) {
         # directv omits the year, so figure it out.
         unless ($tmp[5]) {
-          my @now = localtime;
+          my @now = gmtime;
           $tmp[5] = $now[5];
           ++$tmp[5] if ($tmp[4] < 3 && $now[4] > 8);
         }
-        @stt = localtime(timelocal(@tmp[0..5]) + $timeoff * 3600 - $tmp[6]);
+        @stt = gmtime(timegm(@tmp[0..5]) + $timeoff * 3600 - $tmp[6]);
         $starttime = sprintf('%04u%02u%02u%02u%02u%02u',
           $stt[5] + 1900, $stt[4] + 1, $stt[3], $stt[2], $stt[1], $stt[0]);
         $xml_start = 'start="' . $starttime . sprintf(' %+03d00"', $timeoff);
@@ -744,7 +789,7 @@ sub scrape_program {
       if ($attval =~ /(\d+)\s+minutes/i) {
         if (@stt) {
           # Compute stop time as start time + duration.
-          my @tmp = localtime($1 * 60 + timelocal(@stt[0..5]));
+          my @tmp = gmtime($1 * 60 + timegm(@stt[0..5]));
           $xml_stop = sprintf('stop="%04u%02u%02u%02u%02u%02u %+03d00"',
             $tmp[5] + 1900, $tmp[4] + 1, $tmp[3], $tmp[2], $tmp[1], $tmp[0],
             $timeoff);
