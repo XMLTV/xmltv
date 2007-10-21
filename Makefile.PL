@@ -137,6 +137,7 @@ my %pm
      'lib/ProgressBar/Term.pm'    => '$(INST_LIBDIR)/XMLTV/ProgressBar/Term.pm',
      'lib/ProgressBar/Tk.pm'      => '$(INST_LIBDIR)/XMLTV/ProgressBar/Tk.pm',
      'lib/Summarize.pm'           => '$(INST_LIBDIR)/XMLTV/Summarize.pm',
+     'lib/Supplement.pm'          => '$(INST_LIBDIR)/XMLTV/Supplement.pm',
      'lib/IMDB.pm'                => '$(INST_LIBDIR)/XMLTV/IMDB.pm',
      'lib/Gunzip.pm'              => '$(INST_LIBDIR)/XMLTV/Gunzip.pm',
      'lib/Capabilities.pm'        => '$(INST_LIBDIR)/XMLTV/Capabilities.pm',
@@ -177,6 +178,7 @@ my %pl_files = ('filter/tv_grep.PL'     => 'filter/tv_grep',
                 'tools/tv_validate_file.PL'     => 'tools/tv_validate_file',
                 'tools/tv_validate_grabber.PL'     => 'tools/tv_validate_grabber',
 		'lib/XMLTV.pm.PL'       => 'lib/XMLTV.pm',
+		'lib/Supplement.pm.PL'     => 'lib/Supplement.pm'
 	       );
 
 # Some tools which are generated from .PL files need the share/
@@ -184,6 +186,7 @@ my %pl_files = ('filter/tv_grep.PL'     => 'filter/tv_grep',
 #
 my @need_share = ( 'tools/tv_validate_file',
                    'tools/tv_validate_grabber',
+                   'lib/Supplement.pm',
                    );
 
 # Files to be installed in the system-wide share/ directory.
@@ -195,13 +198,14 @@ my %share_files = ('xmltv.dtd' => 'xmltv.dtd');
 my @to_clean = ('filter/tv_grep',
                 'tools/tv_validate_file',
                 'tools/tv_validate_grabber',
-		'lib/XMLTV.pm');
+		'lib/XMLTV.pm', 'lib/Supplement.pm');
 
 # Extra dependencies to add to the Makefile.
 my @deps = ('filter/tv_grep' => [ qw(filter/tv_grep.in pm_to_blib) ],
             'tools/tv_validate_file' => [ qw(tools/tv_validate_file.in) ],
             'tools/tv_validate_grabber' => [ qw(tools/tv_validate_grabber.in) ],
-	    'lib/XMLTV.pm' => [ 'lib/XMLTV.pm.in' ]);
+	    'lib/XMLTV.pm' => [ 'lib/XMLTV.pm.in' ],
+	    'lib/Supplement.pm' => [ 'lib/Supplement.pm.in' ],);
 
 # Some grabbers which are generated from .PL files need the share/
 # directory passed as an extra argument.
@@ -550,12 +554,13 @@ my @opt_components
                     'HTML::Entities' => 1.27 } },
 
      { name => 'tv_grab_eu_epgdata',
-       blurb => '$$ Grabber for some European countries-epgdata.com',
+       blurb => 'Grabber for some European countries (epgdata.com)',
        exes => [ 'grab/eu_epgdata/tv_grab_eu_epgdata' ],
        pl_files => { 'grab/eu_epgdata/tv_grab_eu_epgdata.PL' => 'grab/eu_epgdata/tv_grab_eu_epgdata' },
        share_files => { 'grab/eu_epgdata/channel_ids' => 'tv_grab_eu_epgdata/channel_ids' },
-       to_clean => [ 'grab/uk_bleb/tv_grab_eu_epgdata' ],
-      # deps => [ 'grab/uk_bleb/tv_grab_uk_bleb' => [ 'grab/uk_bleb/tv_grab_uk_bleb.in' ] ],
+       to_clean => [ 'grab/eu_epgdata/tv_grab_eu_epgdata' ],
+       deps => [ 'grab/eu_epgdata/tv_grab_eu_epgdata' => 
+		 [ 'grab/eu_epgdata/tv_grab_eu_epgdata.in' ] ],
        grab_need_share => [ 'eu_epgdata' ],
        prereqs => { 'XML::Twig' => 0, 'Archive::Zip' => 0, 'HTML::Entities' => 0, 'LWP::Simple' => 0, 'File::Temp' => 0 },
      },
@@ -1150,7 +1155,7 @@ sub MY::makefile {
 sub MY::manifypods {
     package MY;
     for (my $inherited = shift->SUPER::manifypods(@_)) {
-	foreach my $s (qw(Grab_XML DST Config_file Get_nice Mode Summarize Gunzip GUI Date)) {
+	foreach my $s (qw(Grab_XML DST Config_file Get_nice Mode Summarize Gunzip GUI Date Supplement)) {
 	    s!\$\(INST_MAN3DIR\)/(?:grab::|)$s[.]\$\(MAN3EXT\)!"\$(INST_MAN3DIR)/XMLTV::$s.\$(MAN3EXT)"!;
 	    s!\$\(INSTALLMAN3DIR\)/$s.\$\(MAN3EXT\)!"\$(INSTALLMAN3DIR)/XMLTV::$s.\$(MAN3EXT)"!;
 	}
