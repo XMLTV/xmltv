@@ -68,7 +68,7 @@ my %cap_options = (
                              cache:s
                              /],
 		   share => [qw/
-			     share:se
+			     share=s
 			     /],
 		   preferredmethod => [qw/
 				       preferredmethod
