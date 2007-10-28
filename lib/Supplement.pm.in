@@ -15,6 +15,10 @@ our @EXPORT_OK;
 
 use File::Slurp qw/read_file/;
 use File::Spec;
+use File::Path;
+use LWP::UserAgent;
+use HTTP::Status qw/RC_NOT_MODIFIED RC_OK/;
+use XMLTV; # We only need VERSION...
 
 =head1 NAME
 
@@ -25,6 +29,12 @@ XMLTV::Supplement
 Utility library that loads supplementary files for xmltv-grabbers and other
 programs in the xmltv-distribution.
 
+Supplementary files can be loaded either via http or from a local
+file, depending on the configuration of the module. The default is to
+load the files from http://supplementary.xmltv.org. This can be
+changed by setting the environment variable XMLTV_SUPPLEMENT to the
+new root-directory or root-url for supplementary files.
+
 =head1 EXPORTED FUNCTIONS
 
 All these functions are exported on demand.
@@ -33,6 +43,63 @@ All these functions are exported on demand.
 
 =cut
 
+sub d {
+#  print STDERR "$_[0]\n";
+}
+
+my $cachedir;
+
+sub create_cachedir {
+  my $base;
+  if ($^O eq 'MSWin32') {
+    require Win32;
+    Win32->import( qw(CSIDL_LOCAL_APPDATA) ); 
+    $base =  Win32::GetFolderPath( CSIDL_LOCAL_APPDATA() );
+    $base =~ s/ /\ /g;
+    if( not -d $base ) {
+      $base =~ s/(.*?)\\Local Settings(.*)/$1$2/;
+    } elsif( not -d $base ) {
+      die "Unable to find suitable cache-directory: $base";
+      exit 1;
+    }
+    $cachedir = File::Spec->catfile( $base, "xmltv", "supplement" );
+  }
+  else {
+    $cachedir = File::Spec->catfile( $ENV{HOME}, ".xmltv", "supplement" );
+  }
+
+  print STDERR "XMLTV::Supplement: Using cachedir '$cachedir'\n";
+  create_dir( $cachedir );
+}
+
+sub create_dir {
+  my( $dir ) = @_;
+
+  eval { mkpath($dir) };
+  if ($@) {
+    print STDERR "Failed to create $dir: $@";
+    exit 1;
+  }
+}
+
+my $supplement_root;
+
+sub set_supplement_root {
+  if( defined( $ENV{XMLTV_SUPPLEMENT} ) ) {
+    $supplement_root = $ENV{XMLTV_SUPPLEMENT};
+  }
+  else {
+    $supplement_root = "http://supplement.xmltv.org/";
+  }
+}
+
+my $ua;
+
+sub init_ua {
+  $ua = LWP::UserAgent->new( agent => "XMLTV::Supplement/" . $XMLTV::VERSION );
+  $ua->env_proxy();
+}
+
 =item GetSupplement
 
 Load a supplement file and return it as a string. Takes two parameters: 
@@ -40,20 +107,25 @@ directory and filename.
 
     my $content = GetSupplement( 'tv_grab_uk_rt', 'channel_ids' );
 
+GetSupplement will always return a string with the content. If it fails
+to get the content, it prints an error-message and aborts the program.
+
 =cut
 
-my $supplement_root;
+sub GetSupplement {
+  my( $directory, $name ) = @_;
 
-BEGIN {
-  if( defined( $ENV{XMLTV_SUPPLEMENT} ) ) {
-    $supplement_root = $ENV{XMLTV_SUPPLEMENT};
+  set_supplement_root() if not defined $supplement_root;
+
+  if( $supplement_root =~ m%^http(s){0,1}://% ) {
+    return GetSupplementUrl( $directory, $name );
   }
   else {
-    $supplement_root = @@root;
+    return GetSupplementFile( $directory, $name );
   }
 }
 
-sub GetSupplement {
+sub GetSupplementFile {
   my( $directory, $name ) = @_;
 
   my $filename;
@@ -65,15 +137,149 @@ sub GetSupplement {
     $filename = File::Spec->catfile( $supplement_root, $name );
   }
 
-  # Force read_file to return a string and not an array.
-  return scalar( read_file( $filename ) );
+  my $result;
+
+  eval { $result = read_file( $filename ) };
+
+  if( not defined( $result ) ) {
+    print STDERR "XMLTV::Supplement: Failed to read from $filename.\n";
+    exit 1;
+  }
+
+  return $result;
 }
+
+sub GetSupplementUrl {
+  my( $directory, $name ) = @_;
+  
+  create_cachedir() if not defined $cachedir;
+  init_ua() if not defined $ua;
+
+  my $dir;
+  if( defined( $directory ) ) {
+    $dir = File::Spec->catfile( $cachedir, $directory );
+    create_dir( $dir );
+  }
+  else {
+    $dir = $cachedir;
+  }
+
+  # Remove trailing slash
+  $supplement_root =~ s%/$%%;
+
+  my $url = "$supplement_root/$directory/$name";
+
+  my $meta = read_meta( $directory, $name );
+  my $cached = read_cache( $directory, $name );
+
+  if( defined( $cached ) and defined( $meta->{'LastUpdated'} ) and
+      23*60*60 > (time - $meta->{'LastUpdated'} ) ) {
+    d("LastUpdated ok. Using cache.");
+    return $cached;
+  }
+
+  my %p;
+  if( defined( $cached ) ) {
+    $p{'If-Modified-Since'} = $meta->{LastModified} 
+      if defined $meta->{LastModified};
+    $p{'If-None-Match'} = $meta->{ETag}
+      if defined $meta->{ETag};
+  }
+
+  my $resp = $ua->get( $url, %p );
+
+  if( $resp->code == RC_NOT_MODIFIED ) {
+    write_meta( $directory, $name, $resp );
+    d("Not Modified. Using cache.");
+    return $cached;
+  }
+  elsif( $resp->is_success ) {
+    write_meta( $directory, $name, $resp );
+    write_cache( $directory, $name, $resp );
+    d("Cache miss.");
+    return $resp->content;
+  }
+  elsif( defined( $cached ) ) {
+    print STDERR "XMLTV::Supplement: Failed to fetch $url. " . 
+	"Using cached info.\n";
+    return $cached;
+  }
+  else {
+    print STDERR "XMLTV::Supplement: Failed to fetch $url. ";
+    exit 1;
+  }
+}
+
+sub write_meta {
+  my( $directory, $file, $resp ) = @_;
+
+  my $metafile = cache_filename( $directory, "$file.meta" );
+
+  open OUT, "> $metafile" or die "Failed to write to $metafile";
+  print OUT "LastUpdated " . time() . "\n";
+  print OUT "Last-Modified " . $resp->header( 'Last-Modified' ) . "\n" 
+      if defined $resp->header( 'Last-Modified' );
+  print OUT "ETag " . $resp->header( 'ETag' )  . "\n"
+      if defined $resp->header( 'ETag' );
+  close( OUT );
+}
+
+sub read_meta {
+  my( $directory, $file ) = @_;
+
+  my $metafile = cache_filename( $directory, "$file.meta" );
+
+  return {} if not -f( $metafile );
+
+  my $str = read_file( $metafile );
+  my @lines = split( "\n", $str );
+  my $result = {};
+  foreach my $line (@lines) {
+    my($key, $value ) = ($line =~ /(.*?) (.*)/);
+    $result->{$key} = $value;
+  }
+
+  return $result;
+}
+
+sub read_cache {
+  my( $directory, $file ) = @_;
+
+  my $filename = cache_filename( $directory, $file );
+
+  my $result;
+  eval { $result = read_file( $filename ) };
+  return $result;
+}
+
+sub write_cache {
+  my( $directory, $file, $resp ) = @_;
+
+  my $filename = cache_filename( $directory, $file );
+
+  open OUT, "> $filename" or die "Failed to write to $filename";
+  print OUT $resp->content;
+  close( OUT );
+}
+
+sub cache_filename {
+  my( $directory, $file ) = @_;
+
+  if( defined( $directory ) ) {
+    return File::Spec->catfile( $cachedir, $directory, $file );
+  }
+  else {
+    return File::Spec->catfile( $cachedir, $file );
+  }
+}
+
 
 =item SetSupplementRoot
 
 Set the root directory for loading supplementary files.
 
     SetSupplementRoot( '/usr/share/xmltv' );
+    SetSupplementRoot( 'http://my.server.org/xmltv' );
 
 =cut
 
@@ -87,8 +293,11 @@ sub SetSupplementRoot {
 
 =head1 ENVIRONMENT VARIABLES
 
-The XMLTV_SUPPLEMENT environment variable can be used to tell a
-grabber where the supplementary files are found.
+The XMLTV_SUPPLEMENT environment variable can be used to tell the
+module where the supplementary files are found. 
+
+  XMLTV_SUPPLEMENTARY=/usr/share/xmltv
+  XMLTV_SUPPLEMENTARY=http://supplementary.xmltv.se
 
 =head1 COPYRIGHT
 

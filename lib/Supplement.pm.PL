@@ -14,7 +14,6 @@ my $in_fh = new IO::File "< $in" or die "cannot read $in: $!";
 my $out_fh = new IO::File "> $out" or die "cannot write to $out: $!";
 my $seen = 0;
 while (<$in_fh>) {
-    s/\@\@root/'$share'/;
     print $out_fh $_;
 }
 close $out_fh or die "cannot close $out: $!";
