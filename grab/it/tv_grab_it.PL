@@ -14,6 +14,8 @@
 
 use strict;
 
+use File::Copy qw/copy/;
+
 #here are the pods...
 my $ENG_POD=<<END;
 =pod
@@ -344,4 +346,5 @@ close IN_FH or die "cannot close $in: $!";
 die "usage: $_ output_file share_dir" if @ARGV != 2;
 require 'lib/set_share_dir.pl';
 #warn "faccio $ARGV[0] $ARGV[1]\n";
-set_share_dir('grab/it/tv_grab_it.in2', $ARGV[0], $ARGV[1]);
+#set_share_dir('grab/it/tv_grab_it.in2', $ARGV[0], $ARGV[1]);
+copy( 'grab/it/tv_grab_it.in2', $ARGV[0] );

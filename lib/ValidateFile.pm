@@ -15,6 +15,7 @@ our @EXPORT_OK;
 
 use XML::LibXML;
 use File::Slurp qw/read_file/;
+use XMLTV::Supplement qw/GetSupplement/;
 
 our $REQUIRE_CHANNEL_ID=1;
 
@@ -54,10 +55,6 @@ sub LoadDtd {
 	or die "Failed to read $dtd_file";
 
     $dtd = XML::LibXML::Dtd->parse_string($dtd_str);
-    
-    $parser = XML::LibXML->new();
-    $parser->line_numbers(1);
-    
 }
 
 =item ValidateFile
@@ -136,8 +133,15 @@ my %timezoneerrors;
 sub ValidateFile {
     my( $file ) = @_;
 
-    die "ValidateFile called without previous call to LoadDtd" 
-	unless defined $dtd;
+    if( not defined( $parser ) ) {
+	$parser = XML::LibXML->new();
+	$parser->line_numbers(1);
+    }
+
+    if( not defined( $dtd ) ) {
+	my $dtd_str = GetSupplement( undef, 'xmltv.dtd');
+	$dtd = XML::LibXML::Dtd->parse_string( $dtd_str );
+    }
 
     %errors = ();
 

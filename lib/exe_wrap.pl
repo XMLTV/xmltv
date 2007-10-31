@@ -90,17 +90,8 @@ END
 #
 # some programs use a "share" directory
 #
-if ($cmd eq 'tv_grab_uk_rt'
- or $cmd eq 'tv_grab_au'
- or $cmd eq 'tv_grab_ch_bluewin'
- or $cmd eq 'tv_grab_ch_search'
- or $cmd eq 'tv_grab_be'
- or $cmd eq 'tv_grab_uk_bleb'
- or $cmd eq 'tv_grab_it'
- or $cmd eq 'tv_grab_na_dd',
+if ($cmd eq 'tv_grab_na_dd',
  or $cmd eq 'tv_grab_na_icons',
- or $cmd eq 'tv_grab_huro',
- or $cmd eq 'tv_grab_de_tvtoday'
  )
 {
     unless (grep(/^--share/i,@ARGV))  # don't add our --share if one supplied
