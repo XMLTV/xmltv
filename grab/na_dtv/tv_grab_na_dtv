@@ -95,7 +95,6 @@ use HTML::TokeParser;
 use Date::Parse;
 use Time::Local;
 use Errno qw(EAGAIN);
-# use Fcntl qw(:DEFAULT :flock);
 
 ######################################################################
 #                              Globals                               #
@@ -111,7 +110,6 @@ my $TMP_FILEBASE = $ENV{TEMP} || $ENV{TMP} || '/tmp';
 $TMP_FILEBASE .= '/na_dtv_';
 
 my $queue_filename = "$TMP_FILEBASE" . "q";
-# my $lock_filename = "$TMP_FILEBASE" . "lock";
 
 my $SITEBASE = "http://www.directv.com";
 
@@ -142,6 +140,7 @@ my %zones = (
 );
 
 # Global stuff shared by the parent and child processes.
+my $zonechar = 'h';
 my $timeoff = $zones{h};
 my $daysinyear = 365;
 my $browser;
@@ -158,7 +157,6 @@ my $proc_number;
 #
 my $total_programs = &prepare_queue();
 if ($total_programs) {
-  # open LOCKFILE, "> $lock_filename"; close LOCKFILE;
 
   # Reopen the queue file so the child processes will share its handle.
   open $fhq, "< $queue_filename";
@@ -210,7 +208,6 @@ if ($total_programs) {
 
   close $fhq;
   unlink $queue_filename;
-  # unlink $lock_filename;
 
   my @cdata = ();
 
@@ -272,16 +269,17 @@ sub isDST {
   return 0;
 }
 
-# Compute the time difference in hours between here and GMT.
-# In North America this will always be negative.
+# Compute a time string for display given a time in non-DST local time.
 #
-sub calcTimeOffset {
-  my $zonechar = shift;
-  $timeoff = $zones{$zonechar};
-  if ($zonechar ne 'h') { # Hawaii does not use DST
-    my @tmp = gmtime($timeoff * 3600 + time);
-    $timeoff += &isDST($tmp[4], $tmp[3], $tmp[6], $tmp[2]);
+sub localTimeString {
+  my @tmp = @_;
+  my $toff = $zones{$zonechar};
+  if ($zonechar ne 'h' && &isDST($tmp[4], $tmp[3], $tmp[6], $tmp[2])) {
+    @tmp = gmtime(timegm(@tmp) + 3600);
+    ++$toff;
   }
+  return sprintf('%04u%02u%02u%02u%02u%02u %+03d00',
+    $tmp[5] + 1900, $tmp[4] + 1, $tmp[3], $tmp[2], $tmp[1], $tmp[0], $toff);
 }
 
 # For escaping characters not valid in xml.  More needed here?
@@ -357,6 +355,7 @@ sub prepare_queue {
   # If we get here, then we are generating data normally.
 
   $VERBOSE = !$opt->{quiet};
+  $zonechar = $conf->{zone}->[0];
 
   my @htime = gmtime($timeoff * 3600 + time);
   my $year = $htime[5] + 1900;
@@ -562,6 +561,39 @@ sub config_stage
       encoding => 'utf-8');
     $writer->start( { grabber => 'tv_grab_na_dtv' } );
 
+    # DirecTV wants a time zone.
+    #
+    $writer->start_selectone( {
+      id => 'zone',
+      title => [ [ 'Time Zone', 'en' ] ],
+      description => [ [ 'Which is your time zone?', 'en' ] ],
+    } );
+    $writer->write_option( {
+      value=>'e',
+      text=> => [ [ 'Eastern', 'en' ] ]
+      } );
+    $writer->write_option( {
+      value=>'c',
+      text=> => [ [ 'Central', 'en' ] ]
+      } );
+    $writer->write_option( {
+      value=>'m',
+      text=> => [ [ 'Mountain', 'en' ] ]
+      } );
+    $writer->write_option( {
+      value=>'p',
+      text=> => [ [ 'Pacific', 'en' ] ]
+      } );
+    $writer->write_option( {
+      value=>'a',
+      text=> => [ [ 'Alaska', 'en' ] ]
+      } );
+    $writer->write_option( {
+      value=>'h',
+      text=> => [ [ 'Hawaii', 'en' ] ]
+      } );
+    $writer->end_selectone();
+
     # Entering a zip code will cause local channels to be included, if
     # available.  In some cases a county ID will also be desirable, but we
     # do not support that yet.  Sorry.
@@ -582,6 +614,7 @@ sub list_channels {
   my ($conf, $opt) = @_;
 
   $VERBOSE = !$opt->{quiet};
+  $zonechar = $conf->{zone}->[0];
 
   my @htime = gmtime($timeoff * 3600 + time);
   my $year = $htime[5] + 1900;
@@ -657,16 +690,12 @@ sub child_logic {
   my $fname = "$TMP_FILEBASE" . $proc_number;
   my $fh;
   open $fh, "> $fname" or die "Cannot create $fname: $!";
-  # open LOCKFILE, "< $lock_filename" or die "Cannot open $lock_filename\n";
 
   # Here we use low-level I/O to read the shared queue file, so that seek
-  # pointer sharing will work properly.  We expect the sysreads to be atomic,
-  # but have left the "flock" stuff as comments just in case anyone needs it.
+  # pointer sharing will work properly.  We expect the sysreads to be atomic.
   while (1) {
-    # flock(LOCKFILE, LOCK_EX) or die("Lock failed!\n");
     my $line = '';
     my $readlen = sysread $fhq, $line, 40;
-    # flock(LOCKFILE, LOCK_UN) or die("Unlock failed!\n");
     last unless ($readlen);
     if ($line =~ /^(\d\d\d\d\.\S+)\s+(\S+)\s*$/) {
       print $fh &scrape_program($browser, $2, $1);
@@ -677,7 +706,6 @@ sub child_logic {
     }
   }
 
-  # close LOCKFILE;
   close $fh;
   return 0;
 }
@@ -741,11 +769,12 @@ sub scrape_program {
           $tmp[5] = $now[5];
           ++$tmp[5] if ($tmp[4] < 3 && $now[4] > 8);
         }
-        @stt = gmtime(timegm(@tmp[0..5]) + $timeoff * 3600 - $tmp[6]);
+        @stt = gmtime(timegm(@tmp[0..5]) + $zones{$zonechar} * 3600 - $tmp[6]);
         $starttime = sprintf('%04u%02u%02u%02u%02u%02u',
           $stt[5] + 1900, $stt[4] + 1, $stt[3], $stt[2], $stt[1], $stt[0]);
-        $xml_start = 'start="' . $starttime . sprintf(' %+03d00"', $timeoff);
-      } else {
+        $xml_start = 'start="' . &localTimeString(@stt) . '"';
+      }
+      else {
         print STDERR "Unable to parse Air Time \"$attval\".\n";
         $xml_start = 'start=""';
       }
@@ -755,10 +784,9 @@ sub scrape_program {
         if (@stt) {
           # Compute stop time as start time + duration.
           my @tmp = gmtime($1 * 60 + timegm(@stt[0..5]));
-          $xml_stop = sprintf('stop="%04u%02u%02u%02u%02u%02u %+03d00"',
-            $tmp[5] + 1900, $tmp[4] + 1, $tmp[3], $tmp[2], $tmp[1], $tmp[0],
-            $timeoff);
-        } else {
+          $xml_stop = 'stop="' . &localTimeString(@tmp) . '"';
+        }
+        else {
           print STDERR "Cannot process Duration without Air Time.\n";
         }
         # $xml_length = "    <length units=\"minutes\">$1</length>\n";
