@@ -26,7 +26,7 @@ $SIG{__WARN__} = sub {
 # given explicitly -
 # <http://article.gmane.org/gmane.comp.tv.xmltv.devel/3634>.
 #
-unless ($ExtUtils::MakeMaker::VERSION >= 6.21) {
+unless ($ExtUtils::MakeMaker::VERSION ge 6.21) {
     if (not grep /^PREFIX=/, @ARGV) {
 	warn "You may want to explicitly give PREFIX to work around MakeMaker bugs.\n";
     }
