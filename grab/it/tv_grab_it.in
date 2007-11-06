@@ -27,6 +27,8 @@
 # - fixed skylife after site change (thanks Marco Coli)
 # 20/09/2007
 # fixes for warnings when in quiet mode
+# 06/11/2007
+# added backend mtv.it, as skylife strangely doesn't carry it, and wfactory is a stuttering site.
 #################################################
 # TODO
 # - add more informative errors in xml
@@ -100,7 +102,7 @@ my $date_today = UnixDate("today", '%Y-%m-%d');
 
 #searchch is experimental
 #my @default_backends = ('skylife', 'wfactory', 'searchch', 'boingtv', 'sitcom1');
-my @default_backends = ('skylife', 'wfactory', 'boingtv', 'sitcom1');
+my @default_backends = ('skylife', 'mtvit', 'wfactory', 'boingtv', 'sitcom1');
 
 
 my %channels; #to store display names
@@ -184,6 +186,18 @@ my %backend_info
        fetch_data_sub =>   \&searchch_fetch_data,
        channel_list_sub => \&searchch_get_channels_list,
      },
+
+     'mtvit' =>
+     { domain => 'www.mtv.it',
+       base_chan => 'http://www.mtv.it/tv/palinsesto/index.asp',
+       base_data => 'http://www.mtv.it/tv/palinsesto/index.asp',
+       rturl => "http://www.mtv.it/tv/palinsesto/index.asp",
+       needs_login => 0,
+       needs_cookies => 0,
+       fetch_data_sub =>   \&mtvit_fetch_data,
+       channel_list_sub => \&mtvit_get_channels_list,
+     },
+
 
     );
 
@@ -1658,6 +1672,122 @@ sub boingtv_fetch_data {
     }
 
 	if (scalar @programmes) {
+        return (0, @programmes);
+    }
+    else {
+        # there is a number of reasons why we could get an empty array.
+        # so we return an error 
+        return (1, @programmes);
+    }
+}
+
+########################
+# mtv.it functions     #
+########################
+
+#########################################################
+# mtvit_get_channels_list
+# since this site only has one channel this is a fake sub
+sub mtvit_get_channels_list {
+    my %chan_hash = ( 'mtvit' ,'www.mtv.it');
+
+    return %chan_hash;
+}
+
+####################################################
+# mtvit_fetch_data
+# 2 parameters: xmltv_id of channel 
+#               day offset
+# returns an error or an array of data
+sub mtvit_fetch_data {
+    my ($xmltv_id, $offset) = @_;
+    my $content;
+
+    my $site_id = $backend_info{mtvit}{site_ids}{$xmltv_id}{site_id};
+
+    if (not defined $site_id) {
+        warn ($DEF_LANG eq 'eng' ?
+                         "VERBOSE: \tThis site doesn't know about $xmltv_id!\n" : 
+                         "VERBOSE: \tQuesto sito non sa niente di $xmltv_id!\n" ) if ($opt_verbose);
+        return (1, ());
+    }
+
+    # build url to grab
+    my $grabdate      = UnixDate(&DateCalc("today","+ ".$offset." days"), '%Y:%m:%d');
+    my ($anno, $mese, $giorno) = split /:/, $grabdate;
+
+    my $url = $backend_info{mtvit}{base_data}.'?canaleSel=MTV&giorno_guid='.$giorno.'%2F'.$mese.'%2F'.$anno;
+
+    warn ($DEF_LANG eq 'eng' ?
+                  "VERBOSE: fetching $url\n" :
+                  "VERBOSE: scarico $url\n") if ($opt_verbose);
+
+    eval { $content=get_nice($url) };
+
+    if ($@) {   #get_nice has died
+        warn ($DEF_LANG eq 'eng' ? 
+                          "VERBOSE: Error fetching $url channel $xmltv_id day $offset backend mtvit\n" :
+                          "VERBOSE: Errore nello scaricare $url, canale $xmltv_id, giorno $offset, fonte mtvit\n") if ($opt_verbose);
+
+        # Indicate to the caller that we had problems
+        return (1, ());
+    } 
+
+    $content=~/colonna centrale(.*)colonna destra/s; $content=$1;
+    $content=~s/[\n|\r]+//gm;
+
+    my @programmes = ();
+    warn "VERBOSE: parsing...\n" if ($opt_verbose);
+
+    my @lines = split /><strong>/, $content;
+
+    #split the lines
+    foreach my $line (@lines) {
+	next unless $line=~/TITOLO-LANCIO/;
+	$line=~/(.*?) - (.*?)<\/strong> - <STRONG CLASS=\"TITOLO-LANCIO\">(.*?)<\/STRONG><br>(.*?)<br>(.*?)<\/td>/;
+
+        my %programme = ();
+        my ($title, $time_start, $time_stop, $description) = ($3, $1, $2, $5);
+	my ($time_start2, $time_stop2) = ($time_start, $time_stop);
+	$time_start=~s/\./:/ || warn "$line!$time_start!$time_stop\n$1\n$2\n$3\n$4\n$5\n"; 
+	$time_stop=~s/\./:/;
+
+
+        # Three mandatory fields: title, start, channel.
+        if (not defined $title) {
+            warn 'no title found, skipping programme';
+            next;
+        }
+            $programme{title}=[[tidy($title), $LANG] ];
+        if (not defined $time_start) {
+            warn "no start time for title $title, skipping programme";
+            next;
+        }
+	
+	$programme{desc}=[[tidy($description), $LANG] ] if ($description ne '');
+        $programme{start}=xmltv_date($time_start, $offset);
+
+	if ($time_start2 <7 and $time_start2>=0) {
+	    $programme{start}=xmltv_date($time_start, $offset + 1);
+	    }
+	else {
+	    $programme{start}=xmltv_date($time_start, $offset);
+	}
+
+
+	if ($time_stop2 <=7 and $time_stop2>=0) { #they can work as decimals, 0.32 < 23.44
+	    $programme{stop}=xmltv_date($time_stop, $offset + 1);
+	    }
+	else {
+	    $programme{stop}=xmltv_date($time_stop, $offset);
+	}
+        $programme{channel}=$xmltv_id;
+
+        #put info in array
+        push @programmes, {%programme};
+    }
+
+    if (scalar @programmes) {
         return (0, @programmes);
     }
     else {
