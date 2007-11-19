@@ -92,6 +92,10 @@ use XMLTV::Config_file;
 use XMLTV::Get_nice;
 use XMLTV::Ask;
 use XMLTV::ProgressBar;
+use File::Path;
+use File::Basename;
+use LWP::Simple qw($ua get); $ua->agent("xmltv/$XMLTV::VERSION");
+use HTTP::Cache::Transparent;
 use XMLTV::Memoize; XMLTV::Memoize::check_argv 'get_nice';
 use XMLTV::DST;
 use XMLTV::Supplement qw/GetSupplement SetSupplementRoot/;
@@ -105,16 +109,6 @@ To show capabilities: $0 --capabilities
 To show version: $0 --version
 END
   ;
-$XMLTV::Get_nice::Delay = 0; # since this is intended for grabbing
-
-# Retrieve tv_grab_uk_rt channel_ids mapping
-my $xmltv_channel_ids = GetSupplement( 'tv_grab_uk_rt', 'channel_ids' );
-
-# Provide caching for the often-missing Radio Times channel index
-SetSupplementRoot( 'http://xmltv.radiotimes.com' );
-my $rt_channels_dat = GetSupplement( 'xmltv', 'channels.dat' );
-
-sub configure();
 
 # Use Log::TraceMessages if installed.
 BEGIN {
@@ -129,6 +123,43 @@ BEGIN {
         Log::TraceMessages::check_argv();
     }
 }
+
+# This script is intended for grabbing
+$XMLTV::Get_nice::Delay = 0;
+
+# Location of Radio Times channel index file
+my $rt_channels_uri = 'http://xmltv.radiotimes.com/xmltv/channels.dat';
+
+# Retrieve tv_grab_uk_rt channel_ids mapping via XMLTV::Supplement
+my $xmltv_channel_ids = GetSupplement( 'tv_grab_uk_rt', 'channel_ids' );
+
+# Get default location to store cached listings data
+my $default_cachedir = get_default_cachedir();
+
+init_cachedir( $default_cachedir );
+HTTP::Cache::Transparent::init( {
+    BasePath => $default_cachedir,
+    NoUpdate => 15*60,
+    Verbose => 0,
+    } );
+
+sub get_default_cachedir {
+    my $winhome = $ENV{HOMEDRIVE} . $ENV{HOMEPATH}
+    if defined( $ENV{HOMEDRIVE} )
+        and defined( $ENV{HOMEPATH} );
+        
+    my $home = $ENV{HOME} || $winhome || ".";
+    return "$home/.xmltv/cache";
+}
+
+sub init_cachedir {
+    my( $path ) = @_;
+    if( not -d $path ) {
+        mkpath( $path ) or die "Failed to create cache-directory $path: $@";
+    }
+}
+
+sub configure();
 
 GetOptions('help'      => \ my $opt_help,
        'configure'     => \ my $opt_configure,
@@ -204,6 +235,7 @@ is restricted to personal use only.\n" ) if not $opt_quiet;
 
 # Process the list of available channels from the RT site
 my (%channels, %seen_rt_id, %seen_name);
+my $rt_channels_dat = get $rt_channels_uri;
 my @rt_channels = split /\n/, $rt_channels_dat;
 my $num_rt_channels = scalar @rt_channels;
 say( "Radio Times reports available listings for $num_rt_channels channels.\n")
@@ -422,7 +454,7 @@ foreach my $ch (@wanted_chs) {
     my $uri = "http://xmltv.radiotimes.com/xmltv/$rt_id.dat";
     local $SIG{__DIE__} = sub { die "$uri: $_[0]" };
     local $SIG{__WARN__} = sub { warn "$uri: $_[0]" };
-    my $page = get_nice $uri;
+    my $page = get $uri;
 
     # Tidy up HTML entities and bad characters in the Radio Times data. The 
     # data frequently contains a mixture of valid and invalid Latin-1 characters
