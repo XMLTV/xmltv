@@ -135,11 +135,12 @@ use LWP::Simple;
 my $GRID_BY_CHANNEL = 'http://telepoche.guidetele.com/gtv/semaine?openagent&d=0&c=';
 my $GRID_BY_CHANNEL_PER_DAY = 'http://telepoche.guidetele.com/gtv/journee?openagent&';
 my $GRID_FOR_CHANNEL = 'http://telepoche.guidetele.com/grille/EMWD-6KWLUE/';
-my $SHEET_URL = "http://telepoche.guidetele.com/fiche/emi_";
-my $ROOT_URL  = "http://telepoche.guidetele.com";
+my $SHEET_URL = 'http://telepoche.guidetele.com/fiche/emi_';
+my $ROOT_URL  = 'http://telepoche.guidetele.com';
+my $CHECK_CHANNEL_URL = 'http://telepoche.guidetele.com/gtv/journee?openagent&c=';
 my $LANG = "fr";
 my $MAX_STARS = 4;
-my $VERSION   = "021007-01";
+my $VERSION   = "221107-01";
 
 # FIXME: Temporary avoid XML warnings (to be investigated)
 no warnings;
@@ -163,7 +164,7 @@ my @days = (2, 3, 4, 5, 6, 7, 8, 9);
   my $progexist=0;
   my $prevstart;
   my $prevstop;
-  my $prevtitle;         
+  my $prevtitle;
   my %prevprog;
 ##/patch
 
@@ -171,10 +172,9 @@ my @days = (2, 3, 4, 5, 6, 7, 8, 9);
 # Global variables allocation according to options
 #***************************************************************************
 XMLTV::Memoize::check_argv('XMLTV::Get_nice::get_nice_aux');
-#my ($opt_days,  $opt_help,  $opt_output,  $opt_per_days, $opt_per_weeks, $opt_offset,  $opt_gui, $opt_quiet,  $opt_list_channels, $opt_config_file, $opt_configure, $opt_slow);
 
 ##patch: tigerlol: correction des chevauchements d'horaire
-my ($opt_days,  $opt_help,  $opt_output,  $opt_per_days, $opt_per_weeks, $opt_offset,  $opt_gui, $opt_quiet,  $opt_list_channels, $opt_config_file, $opt_configure, $opt_slow, $opt_noautocorrect);
+my ($opt_days,  $opt_help,  $opt_output,  $opt_per_days, $opt_per_weeks, $opt_offset,  $opt_gui, $opt_quiet,  $opt_list_channels, $opt_config_file, $opt_configure, $opt_slow, $opt_noautocorrect, $opt_morechannels );
 ##/patch
 
 $opt_quiet  = 0;
@@ -194,7 +194,9 @@ GetOptions('days=i'    => \$opt_days,
      'perdays' => \$opt_per_days,
      'perweeks' => \$opt_per_weeks,
 ##patch: tigerlol: correction des chevauchements d'horaire
-     'noautocorrect' => \$opt_noautocorrect
+     'noautocorrect' => \$opt_noautocorrect,
+##Gestion des channels non declares dans les listes "officielles"
+     'configure-more-channels' => \$opt_morechannels
 ##/patch
     )
   or usage(0);
@@ -230,13 +232,16 @@ END
 ;
 }
 
-##patch: tigerlol: correction des chevauchements d'horaire
-if ( $opt_noautocorrect ) {
-  print STDERR "Autocorrect DESACTIVE!\n";
-} else {
-  print STDERR "Autocorrect ACTIVE!\n";
-}    
-##/patch
+# Info about autocorrect mode 
+if ( !$opt_quiet ) {
+  if ( !$opt_configure && !$opt_morechannels ) {
+    if ( $opt_noautocorrect ) {
+      say "Autocorrect DESACTIVE!\n";
+    } else {
+      say "Autocorrect ACTIVE!\n";
+    }
+  }
+}
 
 #***************************************************************************
 # Last init before doing real work
@@ -248,7 +253,8 @@ my $checkDummySlot = 0;
 # Now detects if we are in configure mode
 my $mode = XMLTV::Mode::mode('grab', # default
                         $opt_configure => 'configure',
-                        $opt_list_channels => 'list-channels');
+                        $opt_list_channels => 'list-channels',
+                        $opt_morechannels  => 'confmorechannels' );
 
 # File that stores which channels to download.
 my $config_file = XMLTV::Config_file::filename($opt_config_file, 'tv_grab_fr', $opt_quiet);
@@ -257,6 +263,9 @@ my $config_file = XMLTV::Config_file::filename($opt_config_file, 'tv_grab_fr', $
 # Sub sections
 #***************************************************************************
 sub get_channels( $ );
+sub return_other_channels( );
+sub build_other_channel_filename();
+sub get_more_channel_icon( $ );
 sub process_channel_grid_page( $$$$ );
 sub get_detailed_fic( $$$ );
 sub debug_print( @ );
@@ -315,6 +324,12 @@ if ($mode eq 'configure') {
     XMLTV::Config_file::check_no_overwrite($config_file);
     open(CONF, ">$config_file") or die "Cannot write to $config_file: $!";
 
+    # Dynamic upgrade of GridType if a file OTHERCHANNELS exists
+    my $otherchan_file = build_other_channel_filename();
+    if ( (-e $otherchan_file) && ((-s $otherchan_file) > 0) ) {
+      $GridType{"AUTRES CHAINES"} = "OTHERCHANNELS";
+    }
+
     # Get a list of available channels, according to the grid type
     my @gts = sort keys %GridType;
     my @gtnames = map { $GridType{$_} } @gts;
@@ -360,6 +375,90 @@ if ($mode eq 'configure') {
     close CONF or warn "cannot close $config_file: $!";
     say("Finished configuration.");
     exit();
+}
+
+#***************************************************************************
+# "Configure more channels" mode
+#***************************************************************************
+sub display_otherchannels_list(\%) {
+  my %chlist = %{(shift)};
+
+  say ">>>>>> Current list <<<<<<";
+  foreach my $chid (keys %chlist) {
+    say "Channel ID: ". $chid." - Name: " . $chlist{$chid}{name} .
+        " - Icon: ". $chlist{$chid}{icon};
+  }
+  say ">>>>>> List end <<<<<<";
+}
+
+if ($mode eq 'confmorechannels') {
+  # Display info message, pointing to the forum thread
+  my $input_file_notempty = 0;
+  my %morechannels = return_other_channels();
+  display_otherchannels_list(%morechannels);
+  if ( (scalar keys  %morechannels) > 0 ) {
+    $input_file_notempty= 1;
+  } 
+  my $choice = "";
+  my ($chid, $chname, $chicon);
+
+  while ( !($choice eq "exit")) {
+    $choice = ask_choice( "Select command to configure OTHERCHANNELS", "add", ("add", "remove", "view list", "save&exit", "exit") );
+    my $exit = 0;
+    if ($choice eq "add" ) {
+      while ($exit == 0) {
+        $chid = ask('Enter channel ID : ');
+        $chname = ask('Enter channel name : ');
+        if ( !($chid =~ /^[0-9]*$/) ) {
+          say ("Enter a numeric value for channel id");
+        } else {
+          if ( $chname eq "" ) {
+            say ("Enter a string for the name of the channel");
+          } else {
+            $exit = 1;
+          }
+        }
+      }
+      say("Testing channel $chid - $chname ...");
+      my $chicon = get_more_channel_icon( $chid );
+      $morechannels{$chid} = {'name'=>$chname, 'icon'=>$chicon};
+    }
+    if ($choice eq "remove" ) {
+      display_otherchannels_list(%morechannels);
+      my $chid = ask('Enter the channel id to remove it (see list above): ');
+      if ( defined $morechannels{$chid} ) {
+        $chname = $morechannels{$chid}{name};
+        delete $morechannels{$chid};
+        say ("Channel $chname removed");
+      } else {
+        say("Channel $chid does not exist in the list");  
+      }
+    }
+    if ($choice eq "view list" ) {
+      display_otherchannels_list(%morechannels);
+    }
+    if ($choice eq "save&exit") {
+      my $morechannels_file = build_other_channel_filename();
+      # Then write the file
+      if ( (scalar keys  %morechannels) > 0 ) {
+        open(CONFMORE, ">$morechannels_file") or die "Cannot write to $morechannels_file: $!";
+        foreach $chid (keys %morechannels) {
+          if (!( $morechannels{$chid}{name} eq 'DELETED' )) {
+            print CONFMORE "channel $chid $morechannels{$chid}{name};$morechannels{$chid}{icon}\n";
+          }
+        }
+        close CONFMORE or warn "cannot close $morechannels_file: $!";
+        display_otherchannels_list(%morechannels);
+        say ('Channel list saved. Launch now a --configure mode to add them into the legacy config');
+      } else {
+        unlink ($morechannels_file);
+        say ('No channels to be configure, file deleted.');
+      }
+      $choice = "exit";
+    }
+  } 
+  say("Finished configuration for OTHERCHANNELS.");
+  exit();
 }
 
 #***************************************************************************
@@ -451,7 +550,7 @@ foreach (@config_lines) {
         $chname = $2;
         $chicon = $3;
         $chname =~ s/\s*$//;
-        $channels{$chid} = {'name'=>$chname, 'icon'=>$chicon};
+        $channels{$line_num} = {'chid'=>$chid, 'name'=>$chname, 'icon'=>$chicon};
     } else {
         warn "$config_file:$line_num: bad line $_\n";
     }
@@ -465,10 +564,12 @@ warn "No working channels configured, so no listings\n" if not %channels;
 my $script_duration = time();
 
 # The website stores channel information by hour area for a whole week !
-foreach $chid (sort keys %channels) {
+my $ind;
+foreach $ind (sort { $a <=> $b } keys %channels) {
+    my $chid = $channels{$ind}{chid};
     my $url;
     my $i;
-    $writer->write_channel({ id => "C".$chid.".telepoche.com", 'display-name' => [[$channels{$chid}{name}]], 'icon' => [{src=>$channels{$chid}{icon}}]});
+    $writer->write_channel({ id => "C".$chid.".telepoche.com", 'display-name' => [[$channels{$ind}{name}]], 'icon' => [{src=>$channels{$ind}{icon}}]});
     if ( $opt_per_days ) {
       for ($i=$opt_offset+2; $i < $opt_offset+$opt_days+2; $i++ ) {
         $url = $GRID_BY_CHANNEL_PER_DAY . "d=$i&c=$chid&h=0";
@@ -518,12 +619,81 @@ print STDERR "Grabber process finished in " . $script_duration . " seconds.\n" i
 #***************************************************************************
 # Specific functions for grabbing information
 #***************************************************************************
+# Build the filename used to stored channels configured manally
+sub build_other_channel_filename() { 
+  # Get the file name/path for OTHERCHANNELS
+  my $home = $ENV{HOME};
+  $home = '.' if not defined $home;
+  my $conf_dir = "$home/.xmltv";
+  (-d $conf_dir) or mkdir($conf_dir, 0777)
+  or die "cannot mkdir $conf_dir: $!";
+  return "$conf_dir/OTHERCHANNELS";
+}
+
+# Return the tables of the channels built manally
+sub return_other_channels( ) {
+
+  my $morechannels_file = build_other_channel_filename();
+
+  my @morechannels_lines;
+  if (-e $morechannels_file && ((-s $morechannels_file)>0) ) {
+    @morechannels_lines = XMLTV::Config_file::read_lines($morechannels_file);
+  } 
+  my %morechannels;
+  my ($chid, $chname, $chicon);
+  my $line_num = 0;
+
+  # Build the table and display
+  foreach (@morechannels_lines) {
+    next if not defined;
+
+    # Here we store the Channel name with the ID in the config file, as the XMLTV id = Website ID
+    if (/^channel:?\s+(\S+)\s+([^\#]+);([^\#]+)/) {
+      $chid = $1;
+      $chname = $2;
+      $chicon = $3;
+      $chname =~ s/\s*$//;
+      $morechannels{$chid} = {'name'=>$chname, 'icon'=>$chicon};
+    }
+    $line_num++;
+  }
+  return %morechannels;
+}
+
+# Return the link to the icon. Parameter : channel id
+sub get_more_channel_icon( $ ) {
+  my $chid = shift;
+  my $url = $CHECK_CHANNEL_URL.$chid;
+    
+  # Get the current page
+  my $t = get_nice_tree($url);           
+    
+  debug_print( "URL  : " . $url ."\n");
+  # Set by default an EMPTY logo
+  my $chicon = "EMPTY";
+
+  foreach my $cellTree ( $t->look_down( "_tag", "img") ) {
+    my $chiconsrc = $cellTree->attr('src');
+    if ( $chiconsrc =~ /\/c_img\/chaine\/(.*)/ ) {
+      $chicon = "http://static.guidetele.com/c_img/chaine/".$1;
+    }
+  }
+  $t->delete(); undef $t;
+  return $chicon;
+}
+
+#Get the channel from a grid id, including OTHERCHANNELS mode
 sub get_channels( $ ) {
   my $gridid = shift;
   my %channels;
-  my $url = $GRID_FOR_CHANNEL.$gridid.'/2_6.html';
-    
+
+  #Other channels mode, return the content of the file
+  if ( $gridid eq 'OTHERCHANNELS' ) {
+    return return_other_channels();
+  }   
+
   # Get the current page
+  my $url = $GRID_FOR_CHANNEL.$gridid.'/2_6.html';
   my $t = get_nice_tree($url);           
     
   debug_print( "URL  : " . $url ."\n");
