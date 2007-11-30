@@ -33,7 +33,13 @@ use strict;
 
 package XMLTV::IMDB;
 
-our $VERSION = '0.6';
+#
+# HISTORY
+# .6 = what was here for the longest time
+# .7 = fixed file size est calculations
+#    = moviedb.info now includes _file_size_uncompressed values for each downloaded file
+#
+our $VERSION = '0.7';
 
 sub new
 {
@@ -1877,9 +1883,9 @@ sub dbinfoSave($)
     return(0);
 }
 
-sub dbinfoCalcEstimate($$$)
+sub dbinfoGetFileSize($$)
 {
-    my ($self, $key, $estimateSizePerEntry)=@_;
+    my ($self, $key)=@_;
     
     if ( !defined($self->{imdbListFiles}->{$key}) ) {
 	die ("invalid call");
@@ -1890,7 +1896,7 @@ sub dbinfoCalcEstimate($$$)
     if ( $self->{imdbListFiles}->{$key}=~m/.gz$/) {
 	if ( open(my $fd, "gzip -l ".$self->{imdbListFiles}->{$key}."|") ) {
 	    # if parse fails, then defalt to wild ass guess of compression of 65%
-	    $fileSize=int($fileSize*100)/(100-65);
+	    $fileSize=int(($fileSize*100)/(100-65));
 
 	    while(<$fd>) {
 		if ( m/^\s*\d+\s+(\d+)/ ) {
@@ -1901,15 +1907,34 @@ sub dbinfoCalcEstimate($$$)
 	}
 	else {
 	    # wild ass guess of compression of 65%
-	    $fileSize=int($fileSize*100)/(100-65);
+	    $fileSize=int(($fileSize*100)/(100-65));
 	}
     }
-    my $countEstimate=int($fileSize/$estimateSizePerEntry);
+    return($fileSize);
+}
 
+sub dbinfoCalcEstimate($$$)
+{
+    my ($self, $key, $estimateSizePerEntry)=@_;
+
+    my $fileSize=$self->dbinfoGetFileSize($key);
+
+    my $countEstimate=int($fileSize/$estimateSizePerEntry);
+    
     $self->dbinfoAdd($key."_list_file", $self->{imdbListFiles}->{$key});
-    $self->dbinfoAdd($key."_list_file_size", $fileSize);
+    $self->dbinfoAdd($key."_list_file_size", int(-s "$self->{imdbListFiles}->{$key}"));
+    $self->dbinfoAdd($key."_list_file_size_uncompressed", $fileSize);
     $self->dbinfoAdd($key."_list_count_estimate", $countEstimate);
     return($countEstimate);
+}
+
+sub dbinfoCalcBytesPerEntry($$$)
+{
+    my ($self, $key, $calcActualForThisNumber)=@_;
+
+    my $fileSize=$self->dbinfoGetFileSize($key);
+    
+    return(int($fileSize/$calcActualForThisNumber));
 }
 
 sub invokeStage($$)
@@ -1929,7 +1954,8 @@ sub invokeStage($$)
 	    return(1);
 	}
 	elsif ( abs($num - $countEstimate) > $countEstimate*.05 ) {
-	    $self->status("ARG estimate of $countEstimate for movies needs updating, found $num");
+	    my $better=$self->dbinfoCalcBytesPerEntry("movies", $num);
+	    $self->status("ARG estimate of $countEstimate for movies needs updating, found $num ($better bytes/entry)");
 	}
 	$self->dbinfoAdd("db_stat_movie_count", "$num");
 
@@ -1969,7 +1995,7 @@ sub invokeStage($$)
     elsif ( $stage == 2 ) {
 	$self->status("parsing Directors list for stage $stage..");
 
-	my $countEstimate=$self->dbinfoCalcEstimate("directors", 184);
+	my $countEstimate=$self->dbinfoCalcEstimate("directors", 204);
 
 	my $num=$self->readCastOrDirectors("Directors", $countEstimate, "$self->{imdbListFiles}->{directors}");
 	if ( $num < 0 ) {
@@ -1979,7 +2005,8 @@ sub invokeStage($$)
 	    return(1);
 	}
 	elsif ( abs($num - $countEstimate) > $countEstimate*.05 ) {
-	    $self->status("ARG estimate of $countEstimate for directors needs updating, found $num");
+	    my $better=$self->dbinfoCalcBytesPerEntry("directors", $num);
+	    $self->status("ARG estimate of $countEstimate for directors needs updating, found $num ($better bytes/entry)");
 	}
 	$self->dbinfoAdd("db_stat_director_count", "$num");
 
@@ -2035,7 +2062,7 @@ sub invokeStage($$)
 	$self->status("parsing Actors list for stage $stage..");
 
 	#print "re-reading movies into memory for reverse lookup..\n";
-	my $countEstimate=$self->dbinfoCalcEstimate("actors", 349);
+	my $countEstimate=$self->dbinfoCalcEstimate("actors", 378);
 
 	my $num=$self->readCastOrDirectors("Actors", $countEstimate, "$self->{imdbListFiles}->{actors}");
 	if ( $num < 0 ) {
@@ -2045,7 +2072,8 @@ sub invokeStage($$)
 	    return(1);
 	}
 	elsif ( abs($num - $countEstimate) > $countEstimate*.05 ) {
-	    $self->status("ARG estimate of $countEstimate for actors needs updating, found $num");
+	    my $better=$self->dbinfoCalcBytesPerEntry("actors", $num);
+	    $self->status("ARG estimate of $countEstimate for actors needs updating, found $num ($better bytes/entry)");
 	}
 	$self->dbinfoAdd("db_stat_actor_count", "$num");
 
@@ -2085,7 +2113,7 @@ sub invokeStage($$)
     elsif ( $stage == 4 ) {
 	$self->status("parsing Actresses list for stage $stage..");
 
-	my $countEstimate=$self->dbinfoCalcEstimate("actresses", 311);
+	my $countEstimate=$self->dbinfoCalcEstimate("actresses", 349);
 	my $num=$self->readCastOrDirectors("Actresses", $countEstimate, "$self->{imdbListFiles}->{actresses}");
 	if ( $num < 0 ) {
 	    if ( $num == -2 ) {
@@ -2094,7 +2122,8 @@ sub invokeStage($$)
 	    return(1);
 	}
 	elsif ( abs($num - $countEstimate) > $countEstimate*.05 ) {
-	    $self->status("ARG estimate of $countEstimate for actresses needs updating, found $num");
+	    my $better=$self->dbinfoCalcBytesPerEntry("actresses", $num);
+	    $self->status("ARG estimate of $countEstimate for actresses needs updating, found $num ($better bytes/entry)");
 	}
 	$self->dbinfoAdd("db_stat_actress_count", "$num");
 
@@ -2143,7 +2172,8 @@ sub invokeStage($$)
 	    return(1);
 	}
 	elsif ( abs($num - $countEstimate) > $countEstimate*.05 ) {
-	    $self->status("ARG estimate of $countEstimate for genres needs updating, found $num");
+	    my $better=$self->dbinfoCalcBytesPerEntry("genres", $num);
+	    $self->status("ARG estimate of $countEstimate for genres needs updating, found $num ($better bytes/entry)");
 	}
 	$self->dbinfoAdd("db_stat_genres_count", "$num");
 
@@ -2192,7 +2222,8 @@ sub invokeStage($$)
 	    return(1);
 	}
 	elsif ( abs($num - $countEstimate) > $countEstimate*.05 ) {
-	    $self->status("ARG estimate of $countEstimate for ratings needs updating, found $num");
+	    my $better=$self->dbinfoCalcBytesPerEntry("ratings", $num);
+	    $self->status("ARG estimate of $countEstimate for ratings needs updating, found $num ($better bytes/entry)");
 	}
 	$self->dbinfoAdd("db_stat_ratings_count", "$num");
 
