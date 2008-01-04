@@ -86,7 +86,7 @@ use XMLTV::Capabilities qw/baseline manualconfig cache preferredmethod/;
 use XMLTV::Description 'United Kingdom/Republic of Ireland (Radio Times)';
 use XMLTV::PreferredMethod qw/allatonce/;
 use Getopt::Long;
-use HTML::Entities;
+use Unicode::UTF8simple;
 use Date::Manip; Date_Init('TZ=+0000');
 use XMLTV::Config_file;
 use XMLTV::Get_nice;
@@ -126,6 +126,9 @@ BEGIN {
 
 # This script is intended for grabbing
 $XMLTV::Get_nice::Delay = 0;
+
+# The Radio Times data is made available in UTF-8 format
+my $uref = new Unicode::UTF8simple;
 
 # Location of Radio Times channel index file
 my $rt_channels_uri = 'http://xmltv.radiotimes.com/xmltv/channels.dat';
@@ -265,7 +268,8 @@ is restricted to personal use only.\n" ) if not $opt_quiet;
 
 # Process the list of available channels from the RT site
 my (%channels, %seen_rt_id, %seen_name);
-my $rt_channels_dat = get $rt_channels_uri;
+my $rt_channels_dat_utf8 = get $rt_channels_uri;
+my $rt_channels_dat = $uref->fromUTF8( "iso-8859-1" , $rt_channels_dat_utf8 );
 my @rt_channels = split /\n/, $rt_channels_dat;
 my $num_rt_channels = scalar @rt_channels;
 say( "Radio Times reports available listings for $num_rt_channels channels.\n")
@@ -484,106 +488,41 @@ foreach my $ch (@wanted_chs) {
     my $uri = "http://xmltv.radiotimes.com/xmltv/$rt_id.dat";
     local $SIG{__DIE__} = sub { die "$uri: $_[0]" };
     local $SIG{__WARN__} = sub { warn "$uri: $_[0]" };
-    my $page = get $uri;
+    my $page_utf8 = get $uri;
+    my $page = $uref->fromUTF8( "iso-8859-1" , $page_utf8 );
 
-    # Tidy up any HTML entities and bad characters in the Radio Times data. The
-    # data frequently contains a mixture of valid and invalid Latin-1 characters
-    # and we want our output to be valid Latin-1. HTML::Entities decides to use
-    # Unicode so we have to fiddle a few entities manually first. We then
-    # replace individual characters with their valid Latin-1 counterparts.
+    # Tidy up any remaining bad characters in the Radio Times data. The
+    # data is provided in UTF-8 format which we convert to ISO 8859-1
+    # Latin-1 format, but the text may still contain bad/null characters 
+    # which should be corrected if possible before processing.
     #
-    # See http://en.wikipedia.org/wiki/ISO/IEC_8859-1 for Latin-1 charmap
+    # http://en.wikipedia.org/wiki/ISO/IEC_8859-1
+    # http://en.wikipedia.org/wiki/UTF-8
     #
     for ($page) {
-        # Replace known bad single chars with good replacements:
-        # unused->c-cedilla, unused->E-acute, unused->hyphen, unused->hyphen;
-        tr/\x87\x89\x80\x94/\xE7\xC9\x2D\x2D/;
-        
-        # Remove Unicode null (U+0000) character
+        # Remove Unicode null (U+0000) characters
         s/\x{0000}//g;
-        
-        # Replace bad characters with suitable Latin-1 replacements. The
-        # grabber includes debug output to highlight any unhandled characters.
-        
-        # Replace bad chars prefixed with A-grave (xC0)
-        #
-        # RT output seems to be using the A-grave+guillements chars in place
-        # of many \xC0-\xFF characters so we cannot use a single replacement
-        # and substitute the character with '?'
-        s/\xC0\xBB\xC0\xBB/?/g; # doubled A-grave+>> -> ?
-
-        # Replace bad chars prefixed with A-tilde (xC3)
-        s/\xC3[\xC6\xE6]/'/g;   # -> '
-        s/\xC3[\xF4\xF6]/"/g;   # -> "
-        s/\xC3[\xF9\xFB]/-/g;   # -> -
-        s/\xC3\xA6/\xB0/g;      # -> degree symbol
-        s/\xC3\xBB/\xBD/g;      # -> 1/2
-        s/\xC3\xE0/\x2E\x2E\x2E/g; # -> ...
-        s/\xC3\xE1/\x20/g;      # -> space
-        s/\xC3\xFA/\xA3/g;      # -> pound sign
-        
-        # Added 2008-01-03 after resumption of XMLTV service
-        # The sum of the second character plus 0x40 represents the 'correct'
-        # extended Latin-1 character
-        #
-        # Waiting to hear back from RT regarding correcting output in source data
-        # before extending S&R for other characers (trivial).
-        s/\xC3\x81/\xC1/g;      # -> A-acute
-        s/\xC3\x83\xC2\xA9/\xE9/g; # -> e-acute
-        s/\xC3\xA1/\xE1/g;      # -> a-acute
-        s/\xC3\xA4/\xE4/g;      # -> a-umlaut
-        s/\xC3\xA5/\xE5/g;      # -> a-ring
-        s/\xC3\xA7/\xE7/g;      # -> c-cedilla
-        s/\xC3\xA8/\xE8/g;      # -> e-grave
-        s/\xC3\xA9/\xE9/g;      # -> e-acute
-        s/\xC3\xAD/\xED/g;      # -> i-acute
-        s/\xC3\xAE/\xEE/g;      # -> i-circumflex
-        s/\xC3\xB1/\xF1/g;      # -> n-tilde
-        s/\xC3\xB3/\xF3/g;      # -> o-acute
-        s/\xC3\xB6/\xF6/g;      # -> o-umlaut
-        s/\xC3\xBC/\xFC/g;      # -> u-umlaut
-
-        # Replace bad chars prefixed with E-grave (xC8)
-        s/\xC8[\xC6\xF4]/'/g;   # -> '
-        s/\xC8\x98/\xF1/g;      # -> n-tilde
-        s/\xC8\xA1/\xED/g;      # -> i-acute
-        s/\xC8\xA6/\xFA/g;      # -> u-acute
-        s/\xC8\xA8/\xE9/g;      # -> e-acute
-        s/\xC8\xA9/\xFB/g;      # -> u-circumflex
-        s/\xC8\xAB/\xEE/g;      # -> i-circumflex
-        s/\xC8\xAC/\xEA/g;      # -> e-circumflex
-        s/\xC8\xAD/\xFC/g;      # -> u-umlaut
-        s/\xC8\xAF/\xEF/g;      # -> i-umlaut
-        s/\xC8\xB3/\xF4/g;      # -> o-circumflex
-        s/\xC8\xB5/\xF6/g;      # -> o-umlaut
-        s/\xC8\xBA/\xE7/g;      # -> c-cedilla
-        s/\xC8\xBD/\xEB/g;      # -> e-umlaut
-        s/\xC8\xBF/\xE8/g;      # -> e-grave
-        s/\xC8\xD1/\xE5/g;      # -> a-ring
-        s/\xC8\xE1/\xE0/g;      # -> a-grave
-        s/\xC8\xE8/\x20/g;      # -> space
-        s/\xC8\xED/\xE1/g;      # -> a-acute
-        s/\xC8\xF1/\xE4/g;      # -> a-umlaut
-        s/\xC8\xF3/\xE2/g;      # -> a-circumflex
-        s/\xC8\xFE/\xF3/g;      # -> o-acute
-
-        # Added 2008-01-03 after resumption of XMLTV service
-        # Some programme entries containing RT reviews or updated information
-        # have erroneous CR/space characters which we tidy up here
+        # Programme entries containing RT reviews or updated information
+        # may have erroneous CR/space characters which we tidy up here
         s/\x0D\x20//g;
-        
-        # Remove non-printing ASCII/8859-1 control characters but
-        # make sure we keep \t \n \r
+        # Incorrect UTF-8 characters may be present which we correct
+        #
+        # Even after decoding the source data from UTF-8 to Latin-1, the two 
+        # bytes replaced below (\xC3\xA9) are the *UTF-8* representation
+        # of e-grave. We need the Latin-1 code \xE9.
+        s/\xC3\xA9/\xE9/g;
+        # Remove any remaining non-printing ASCII/8859-1 control characters but
+        # make sure we keep \t \n and \r
         s/[\x00-\x08\x0B-\x0C\x0E-\x1F\x7F-\x9F]//g;
 
-        # debug output for still-unhandled xC0/xC3/xC8 bad characters
+        # Debug output for possible UTF-8-formatted characters
         if (not $opt_quiet) {
-            my @bad_chars = $page =~ /([\xC0\xC3\xC8][\xA0-\xFF]{1})/g;
-            if (@bad_chars) {
+            my @utf8_chars = $page =~ /([\xC2-\xDF][\x80-\xBF])/g;
+            if (@utf8_chars) {
                 say ("\n");
-                my $bad_char;
-                foreach $bad_char (@bad_chars) {
-                    warn "Bad character seen '$bad_char' in listings file";
+                my $utf8_char;
+                foreach $utf8_char (@utf8_chars) {
+                    warn "Possible UTF-8 character seen '$utf8_char'";
                 }
                 say("\n");
             }
@@ -644,7 +583,7 @@ foreach my $ch (@wanted_chs) {
             else { die "bad true/false value $_" }
         }
 
-        warn "Ignoring sub-title $sub_title since episode also given\n"
+        warn "Ignoring sub-title '$sub_title' as episode '$episode' provided\n"
           if defined $sub_title and defined $episode and not $opt_quiet;
         $sub_title = $episode if defined $episode;
 
