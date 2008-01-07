@@ -12,7 +12,7 @@ tv_grab_uk_rt --help
 tv_grab_uk_rt --configure [--config-file FILE]
 
 tv_grab_uk_rt [--config-file FILE] [--output FILE] [--days N] [--offset N]
-              [--gui OPTION] [--quiet]
+              [--gui OPTION] [--quiet] [--debug]
 
 tv_grab_uk_rt --list-channels
 
@@ -47,11 +47,13 @@ read when grabbing.
 B<--output FILE> When grabbing, write output to FILE rather than standard
 output.
 
-B<--quiet> Suppress the progress messages normally written to standard error.
-
 B<--days N> When grabbing, grab N days of data instead of all available.
 
 B<--offset N> Start grabbing at today + N days.
+
+B<--quiet> Suppress all progress messages normally written to standard error.
+
+B<--debug> Provide extra debugging messages to standard error.
 
 B<--list-channels> Write output giving <channel> elements for every channel
 available, but no programmes.
@@ -103,7 +105,7 @@ use XMLTV::Usage <<END
 $0: Get TV listings for United Kingdom and Republic of Ireland in XMLTV format
 To configure: $0 --configure [--config-file FILE]
 To grab listings: $0 [--config-file FILE] [--output FILE] [--days N] [--offset N]
-                     [--gui OPTION] [--quiet]
+                     [--gui OPTION] [--quiet] [--debug]
 To list channels: $0 --list-channels
 To show capabilities: $0 --capabilities
 To show version: $0 --version
@@ -124,6 +126,44 @@ BEGIN {
     }
 }
 
+# Get command-line options
+GetOptions('help'      => \ my $opt_help,
+       'configure'     => \ my $opt_configure,
+       'config-file=s' => \ my $opt_config_file,
+       'gui:s'         => \ my $opt_gui,
+       'output=s'      => \ my $opt_output,
+       'share=s'       => \ my $opt_share, # undocumented
+       'days=s'        => \ my $opt_days,
+       'offset=s'      => \ my $opt_offset,
+       'quiet'         => \ my $opt_quiet,
+       'debug'         => \ my $opt_debug,
+       'list-channels' => \ my $opt_list_channels,
+       )
+  or usage(0);
+
+if ($opt_help) {
+    usage(1);
+}
+
+if ( $opt_quiet && $opt_debug ) {
+    die "You cannot specify --quiet with --debug";
+}
+
+# Required for Tk
+XMLTV::Ask::init($opt_gui);
+
+# Keep log output on STDERR preserving STDOUT for XML data
+say( "
++--------------------------------------------------------------------------+
+| All data is the copyright of the Radio Times website and the use of this |
+| data is restricted to personal use only. <http://www.radiotimes.com>     |
++--------------------------------------------------------------------------+
+" ) if not $opt_quiet;
+
+if ( $opt_debug ) {
+    say( "It is recommended to disable any progress bars in debug mode\n" );
+}
+
 # This script is intended for grabbing
 $XMLTV::Get_nice::Delay = 0;
 
@@ -139,13 +179,14 @@ my $xmltv_channel_ids = GetSupplement( 'tv_grab_uk_rt', 'channel_ids' );
 # Get default location to store cached listings data
 my $default_cachedir = get_default_cachedir();
 
+# Initialise the cache-directory
 init_cachedir( $default_cachedir );
 
 HTTP::Cache::Transparent::init( {
     BasePath => $default_cachedir,
     MaxAge => 15*24,
     NoUpdate => 15*60,
-    Verbose => 0,
+    Verbose => $opt_debug,
     ApproveContent => \&check_content_length,
 } );
 
@@ -155,12 +196,15 @@ sub get_default_cachedir {
         and defined( $ENV{HOMEPATH} );
         
     my $home = $ENV{HOME} || $winhome || ".";
-    return "$home/.xmltv/cache";
+    my $dir = "$home/.xmltv/cache";
+    say( "Using '$dir' as cache-directory for XMLTV listings\n" ) if $opt_debug;
+    return $dir;
 }
 
 sub init_cachedir {
     my( $path ) = @_;
     if( not -d $path ) {
+        say( "Creating cache-directory '$path'\n" ) if $opt_debug;
         mkpath( $path ) or die "Failed to create cache-directory $path: $@";
     }
 }
@@ -180,7 +224,10 @@ sub init_cachedir {
 sub check_content_length {
     my $rt_file = shift @_;
     if( $rt_file->is_success ) {
-        if( $rt_file->content_length == 0 || $rt_file->content =~ /DOCTYPE/ ) {
+        if( $rt_file->content_length == 0 ) {
+            return 0;
+        }
+        elsif( $rt_file->content =~ /DOCTYPE/ ) {
             return 0;
         }
         else {
@@ -194,25 +241,6 @@ sub check_content_length {
 
 sub configure();
 
-GetOptions('help'      => \ my $opt_help,
-       'configure'     => \ my $opt_configure,
-       'config-file=s' => \ my $opt_config_file,
-       'gui:s'         => \ my $opt_gui,
-       'output=s'      => \ my $opt_output,
-       'share=s'       => \ my $opt_share, # also undocumented
-       'quiet'         => \ my $opt_quiet,
-       'list-channels' => \ my $opt_list_channels,
-       'days=s'        => \ my $opt_days,
-       'offset=s'      => \ my $opt_offset,
-       )
-  or usage(0);
-
-if ($opt_help) {
-    usage(1);
-}
-
-# Required for Tk
-XMLTV::Ask::init($opt_gui);
 
 # Stuff for the root <tv> element.
 my %tv_credits = ( # 'source-info-url'     => "todo",
@@ -231,12 +259,13 @@ my %tv_credits = ( # 'source-info-url'     => "todo",
 my @lines = split( /[\n\r]+/, $xmltv_channel_ids );
 my (%rt_to_xmltv, %xmltv_to_rt, %extra_dn, %icon_urls);
 foreach my $line (@lines) {
+    # allow comments
     next if $line =~ '^#';
     my @fields = split( /\|/, $line );
     # We need at least 2 fields (xmltv_id,rt_id) to run the grabber
     # No check on maximum number of fields to support future updates
     # to channel_ids now we are using XMLTV::Supplement
-    die "Wrong number of fields in XMLTV channel_ids file. Please update XMLTV"
+    die "Wrong number of fields in XMLTV channel_ids file.\nPlease update XMLTV"
       if @fields < 2;
 
     # First 4 fields of channel_ids file are:
@@ -246,13 +275,13 @@ foreach my $line (@lines) {
     my ($xmltv_id, $rt_id, $extra_dn, $icon_url) = @fields;
 
     if (not $opt_quiet) {
-        warn "RT ID '$rt_id' already seen in XMLTV channel_ids file\n"
+        say( "Radio Times ID '$rt_id' already seen in XMLTV channel_ids file" )
           if defined $rt_to_xmltv{$rt_id};
     }
     $rt_to_xmltv{$rt_id} = $xmltv_id;
 
     if (not $opt_quiet) {
-        warn "XMLTV ID '$xmltv_id' already seen in XMLTV channel_ids file\n"
+        say( "XMLTV ID '$xmltv_id' already seen in XMLTV channel_ids file" )
           if defined $xmltv_to_rt{$xmltv_id};
     }
     $xmltv_to_rt{$xmltv_id} = $rt_id;
@@ -261,14 +290,11 @@ foreach my $line (@lines) {
     $icon_urls{$xmltv_id} = $icon_url if defined $icon_url;
 }
 
-# Keep output on STDERR preserving STDOUT for XML data
-say( "\nAll data is the copyright of the Radio Times website
-<http://www.radiotimes.com> and the use of this data
-is restricted to personal use only.\n" ) if not $opt_quiet;
-
 # Process the list of available channels from the RT site
 my (%channels, %seen_rt_id, %seen_name);
+say( "Retrieving list of available channels from Radio Times" ) if $opt_debug;
 my $rt_channels_dat_utf8 = get $rt_channels_uri;
+say( "Converting list of available channels from UTF-8 to ISO-8859-1\n" ) if $opt_debug;
 my $rt_channels_dat = $uref->fromUTF8( "iso-8859-1" , $rt_channels_dat_utf8 );
 my @rt_channels = split /\n/, $rt_channels_dat;
 my $num_rt_channels = scalar @rt_channels;
@@ -283,14 +309,14 @@ my $need_final_update = 0;
 
 foreach (@rt_channels) {
     chomp;
-    /^(\d+)\|(.+)/ or die "Bad line seen in RT channels.dat: $_";
+    /^(\d+)\|(.+)/ or die "Bad channel entry seen in RT channels.dat: $_";
     my ($rt_id, $name) = ($1, $2);
     if ($seen_rt_id{$rt_id}++) {
-        die "RT channel ID '$rt_id' already seen in RT channels.dat, aborting";
+        die "Duplicate channnel ID '$rt_id' seen in RT channels.dat, aborting";
     }
     if ($seen_name{$name}++) {
         if (not $opt_quiet) {
-            warn "RT channel '$name' already seen in RT channels.dat\n";
+            say( "Duplicate channel named '$name' seen in RT channels.dat" );
         }
     }
     
@@ -302,17 +328,17 @@ foreach (@rt_channels) {
     if (defined $xmltv_id) {
         # Skip any RT entries which have been flagged as bad in channel_ids file
         if ( $extra_dn{ $rt_to_xmltv{$rt_id} } =~ /.*Do\ Not\ Use.*/ ) {
-    #       if (not $opt_quiet) {
-    #           warn "RT channel '$name' ($rt_id) flagged as bad, skipping\n";
-    #       }
+            say( "Channel '$name' ($rt_id) flagged as bad, skipping" ) 
+              if $opt_debug;
             $need_final_update = 1;
             next;
         }
     } else {
-        # Handle new channels on RT site unknown to channel_ids
-        if (not $opt_quiet) {
-            warn "RT channel '$name' ($rt_id) unknown in XMLTV channel_ids file\n";
-        }
+        # Handle new channels available on RT site unknown to channel_ids file
+        say( "Channel '$name' ($rt_id) unknown in XMLTV channel_ids file" )
+          if not $opt_quiet;
+        say( "Will use XMLTV ID 'C$rt_id.radiotimes.com' during configuration\n" )
+          if $opt_debug;
         $xmltv_id = "C$rt_id.radiotimes.com";
     }
 
@@ -348,13 +374,14 @@ if (not $opt_quiet) {
     foreach (keys %xmltv_to_rt) {
         # ignore channels flagged as bad in channel_ids
         next if $extra_dn{$_} =~ /.*Do\ Not\ Use.*/;
-        warn "XMLTV channel '$_' ($xmltv_to_rt{$_}) not seen on RT site\n"
+        say( "XMLTV channel '$_' ($xmltv_to_rt{$_}) not seen on RT site\n" )
           if not exists $channels{$_};
     }
 }
 
 my %g_args = ();
 if (defined $opt_output) {
+    say( "Opening XML output file '$opt_output'\n" ) if $opt_debug;
     my $fh = new IO::File ">$opt_output";
     die "Cannot write to $opt_output" if not $fh;
     #    binmode $fh or die "cannot set binmode for output: $!";
@@ -374,10 +401,12 @@ if ($opt_list_channels) {
     exit;
 }
 
-# File that stores which channels to download.
+# Config file that stores which channels to download
 my $config_file
   = XMLTV::Config_file::filename($opt_config_file, 'tv_grab_uk_rt', $opt_quiet);
+say( "Using config file '$config_file'\n" ) if not $opt_quiet;
 
+# Configure the grabber
 if ($opt_configure) {
     configure();
     exit;
@@ -420,20 +449,24 @@ sub configure() {
     }
 
     close CONF or warn "cannot close $config_file: $!";
-    say("Finished configuration.");
+    say( "Finished configuration" );
     exit();
 }
 
-# Grabbing.  Start by reading config file.
+# Grabbing starts here
+
+# Start by reading config file.
 my @wanted_chs;
 my $n = 0;
+say( "Reading config file channel entries" ) if $opt_debug;
 foreach (XMLTV::Config_file::read_lines $config_file) {
     ++$n;
     next if not defined;
     /^\s*channel\s+(\S+)\s*$/ or die "$config_file: $n: bad line $_\n";
     my $id = $1;
+    say( "  Read channel '$id'" ) if $opt_debug;
     if (not exists $channels{$id}) {
-        warn "XMLTV channel '$id' mentioned in $config_file but is not available on RT site\n"
+        say( "XMLTV channel '$id' mentioned in $config_file but is not available on RT site\n" )
           if not $opt_quiet;
         next;
     }
@@ -451,17 +484,22 @@ if (defined( $opt_days ) or defined( $opt_offset )) {
     $d_args{cutoff} = "000000";
 }
 
-my $writer = new XMLTV::Writer(%g_args, %d_args, encoding => 'ISO-8859-1');
+my $xml_encoding = "ISO-8859-1";
+say( "\nStarted writing XMLTV output using 'ISO-8859-1' encoding" ) if $opt_debug;
+my $writer = new XMLTV::Writer(%g_args, %d_args, encoding => $xml_encoding);
+say( "Started writing <tv> element" ) if $opt_debug;
 $writer->start(\%tv_credits);
+say( "Started writing <channel> elements" ) if $opt_debug;
 foreach (@wanted_chs) {
     my %h = %{$channels{$_}};
     delete $h{rt_id};
     $writer->write_channel(\%h);
 }
+say( "Finished writing <channel> elements\n" ) if $opt_debug;
 
 my $num_req_chans = scalar @wanted_chs;
 
-say("Downloading listings for $num_req_chans configured channels\n")
+say( "Downloading listings for $num_req_chans configured channels\n" )
   if not $opt_quiet;
 
 my $listings_bar = new XMLTV::ProgressBar({name   => 'Retrieving listings',
@@ -476,11 +514,13 @@ $need_final_update = 0;
 
 foreach my $ch (@wanted_chs) {
     my $c = $channels{$ch};
-    my $rt_id = $channels{$ch}->{rt_id}; die if not defined $rt_id;
+    my $rt_id = $c->{rt_id};
+    my $rt_name = $c->{'display-name'}->[0]->[0];
+    die "No Radio Times ID for channel '$rt_name'" if not defined $rt_id;
 
     # Try to get the base timezone for this channel from its name.
     my $base_tz;
-    if ($c->{'display-name'}->[0]->[0] =~ /\((UTC|GMT|CET)\)\s*$/) {
+    if ( $rt_name =~ /\((UTC|GMT|CET)\)\s*$/ ) {
         $base_tz = $1;
     }
     for ($base_tz) { $_ = 'UTC' if not defined }
@@ -488,12 +528,14 @@ foreach my $ch (@wanted_chs) {
     my $uri = "http://xmltv.radiotimes.com/xmltv/$rt_id.dat";
     local $SIG{__DIE__} = sub { die "$uri: $_[0]" };
     local $SIG{__WARN__} = sub { warn "$uri: $_[0]" };
+    say( "\nRetrieving listings file for '$rt_name' from Radio Times ($uri)" ) if $opt_debug;
     my $page_utf8 = get $uri;
+    say( "Converting listings file for '$rt_name' from UTF-8 to ISO-8859-1" ) if $opt_debug;
     my $page = $uref->fromUTF8( "iso-8859-1" , $page_utf8 );
 
     # Tidy up any remaining bad characters in the Radio Times data. The
     # data is provided in UTF-8 format which we convert to ISO 8859-1
-    # Latin-1 format, but the text may still contain bad/null characters 
+    # (Latin-1) format, but the text may still contain bad/null characters 
     # which should be corrected if possible before processing.
     #
     # 2008-01-05
@@ -506,43 +548,61 @@ foreach my $ch (@wanted_chs) {
     # http://en.wikipedia.org/wiki/ISO/IEC_8859-1
     # http://en.wikipedia.org/wiki/UTF-8
     #
+    say( "\nChecking '$rt_name' listings file contents for bad characters" ) if $opt_debug;
     for ($page) {
         # Remove any occurences of null characters
-        s/\x00//g;
+        if ( s/\x00//g ) {
+            say( "  Removed null characters from '$rt_name' listings data" ) if $opt_debug;
+        }
 
         # 2008-01-04
         # Programme entries containing RT reviews or updated information
         # may have erroneous CR+SP characters which we tidy up here
-        s/\x0D\x20//g;
+        if ( s/\x0D\x20//g ) {
+            say( "  Removed CR+SP characters from '$rt_name' listings data" ) if $opt_debug;
+        }
 
         # 2008-01-05
-        # Even after decoding the source data from UTF-8 to Latin-1, it appears
+        # Even after decoding the source data from UTF-8 to ISO 8859-1, it appears
         # that some decoded pairs of bytes may still be the *UTF-8* representation
-        # of the intended Latin-1 character, so we correct them
-        s/\xC3\xA9/\xE9/g; # <C3><A9> -> e-acute
-        s/\xC3\xAB/\xEB/g; # <C3><AB> -> e-umlaut
+        # of the intended ISO 8859-1 character, so we search for them and correct
+        # any we find manually
+        my @utf8_chars;
+        if ( @utf8_chars = $page =~ /([\xC2-\xDF][\x80-\xBF])/g ) {
+            foreach my $utf8_char (@utf8_chars) {
+                say( "  Possible UTF-8 character seen in '$rt_name' listings data: '$utf8_char'" )
+                  if $opt_debug;
+            }
+            say( "  Replacing known UTF-8 characters with valid ISO 8859-1 ones" )
+              if $opt_debug;
 
-        # Remove any remaining non-printing ASCII/8859-1 control characters but
-        # make sure we keep \t \n and \r
-        s/[\x00-\x08\x0B-\x0C\x0E-\x1F\x7F-\x9F]//g;
-
-        # Debug output for possible UTF-8-formatted characters
-        if (not $opt_quiet) {
-            my @utf8_chars = $page =~ /([\xC2-\xDF][\x80-\xBF])/g;
-            if (@utf8_chars) {
-                my $utf8_char;
-                foreach $utf8_char (@utf8_chars) {
-                    warn "Possible UTF-8 character seen '$utf8_char'";
+            s/\xC3\xA9/\xE9/g; # <C3><A9> -> e-acute
+            s/\xC3\xAB/\xEB/g; # <C3><AB> -> e-umlaut
+            
+            say( "  Checking for any remaining UTF-8 characters in '$rt_name' listings data" )
+              if $opt_debug;
+            
+            if ( @utf8_chars = $page =~ /([\xC2-\xDF][\x80-\xBF])/g ) {
+                foreach my $utf8_char (@utf8_chars) {
+                    say( "  Possible UTF-8 character still seen in '$rt_name' listings data: '$utf8_char'" )
+                      if $opt_debug;
                 }
             }
         }
+
+        # Finally, remove any remaining non-printing ISO 8859-1 control 
+        # characters but keep \t \n and \r
+        if ( s/[\x00-\x08\x0B-\x0C\x0E-\x1F\x7F-\x9F]//g ) {
+            say( "  Removing non-printing characters from $rt_name listings data" ) if $opt_debug;
+        }
     }
 
+    say( "\nStarted writing <programme> elements for '$rt_name'" ) if $opt_debug;
     foreach (split /\n/, $page) {
         my @fields = split /\~/;
         if (@fields != 23) {
-            if (not $opt_quiet) {
-                warn "Wrong number of fields in line:\n$_\n"
+            if ($opt_debug) {
+                say( "  Wrong number of fields in line:\n$_\n" )
                   unless $warned_wrong_num_fields{$ch}++;
             }
             next;
@@ -592,12 +652,12 @@ foreach my $ch (@wanted_chs) {
             else { die "bad true/false value $_" }
         }
 
-        warn "Ignoring sub-title '$sub_title' as episode '$episode' provided\n"
-          if defined $sub_title and defined $episode and not $opt_quiet;
+        say( "  Ignoring sub-title '$sub_title' as episode '$episode' provided\n" )
+          if defined $sub_title and defined $episode and $opt_debug;
         $sub_title = $episode if defined $episode;
 
         if (not defined $title) {
-            warn("Missing title in: $_") if not $opt_quiet;
+            say( "  Missing title in '$_', skipping entry\n" ) if $opt_debug;
             next;
         }
 
@@ -606,22 +666,30 @@ foreach my $ch (@wanted_chs) {
         my $explicit_tz = '';
         if ($title =~ s/^\((GMT|UTC|BST|UTC\+1)\)\s*//) {
             $explicit_tz = $1;
+            say( "  Using timezone information detected in programme title '$title'" )
+              if $opt_debug;
         }
         
         # Remove extra non-title programme information from title. Leaving
         # this information in the title results in PVR applications not
         # being able to consistently match programme titles. 
-        for($title) {
-            s/^3 Minute Wonder\s*:\s*//;
-            s/^4 Music\s*:\s*//;
-            s/^4Play\s*:\s*//;
-            s/^Bond Season\s*:\s*//;
-            s/^CBBC\s*:\s*//;
-            s/^CBeebies\s*:\s*//;
-            s/^CITV\s*:\s*//;
-            s/^Comedy Season\s*:\s*//;
-            s/^Sign Zone\s*:\s*//;
-            s/^T4\s*:\s*//;
+        my @non_title_info = ( "3 Minute Wonder",
+                               "4 Music",
+                               "4Play",
+                               "Bond Season",
+                               "CBBC",
+                               "CBeebies",
+                               "CITV",
+                               "Comedy Season",
+                               "Sign Zone",
+                               "T4",
+                              );
+
+        foreach my $non_title_info (@non_title_info) {
+            if ( s/^$non_title_info\s*:\s*// ) {
+                say( "  Removed '$non_title_info' from title '$title'" )
+                  if $opt_debug;
+            }
         }
 
         my %p = (channel => $ch, title => [ [ $title ] ]);
@@ -676,7 +744,7 @@ foreach my $ch (@wanted_chs) {
                 # we remove the 'character*' portion of the entry
                 foreach (@cast) {
                     unless ( s/^.*[*]// ) {
-                        warn "Bad cast entry for '$title': $_" if not $opt_quiet;
+                        say( "  Bad cast entry for '$title': $_" ) if $opt_debug;
                     }
                 }
             }
@@ -790,16 +858,17 @@ foreach my $ch (@wanted_chs) {
         my $rt_prog_length = ParseDateDelta( $duration_mins . " minutes" );
         my $real_prog_length = DateCalc( ParseDate( $p{start} ),
                                          ParseDate( $p{stop} ) );
-        if ($rt_prog_length ne $real_prog_length && not $opt_quiet) {
-            say "Calculated/stated programme durations do not agree for '$title':";
-            say "  Start time: '$p{start}'\t\tCalculated:  '$real_prog_length'";
-            say "  Stop time:  '$p{stop}'\t\tRadio Times: '$rt_prog_length'\n";
+        if ($rt_prog_length ne $real_prog_length && $opt_debug) {
+            say( "  Calculated/stated programme durations do not agree for '$title':" );
+            say( "    Start time: '$p{start}'\t\tCalculated:  '$real_prog_length'" );
+            say( "    Stop time:  '$p{stop}'\t\tRadio Times: '$rt_prog_length'\n" );
         }
 
         # Finally, write the programme's XML data
         $writer->write_programme(\%p);
     
     }
+    say( "Finished writing <programme> elements for channel '$rt_name'\n" ) if $opt_debug;
     
     # Update the progres bar by one increment
     if (defined $listings_bar) {
@@ -807,6 +876,7 @@ foreach my $ch (@wanted_chs) {
     }
 }
 
+say( "Finished writing <tv> element" ) if $opt_debug;
 $writer->end;
 
 if (defined $listings_bar) {
@@ -816,5 +886,4 @@ if (defined $listings_bar) {
     say( "\n" ) if not $opt_quiet;
 }
 
-# Keep output on STDERR preserving STDOUT for XML data
 say( "Finished!\n" ) if not $opt_quiet;
