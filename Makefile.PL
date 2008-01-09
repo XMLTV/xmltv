@@ -171,6 +171,7 @@ my %prereqs
      'XML::Writer' => 0.600,
      'Memoize'     => 0,
      'Storable'    => 2.04,
+     'File::Slurp' => 0,
     );
 
 # Files which are run to generate source code.
