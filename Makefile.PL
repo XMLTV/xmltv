@@ -442,7 +442,11 @@ my @opt_components
        blurb => 'Alternative grabber for Spain',
        exes => [ 'grab/es_laguiatv/tv_grab_es_laguiatv' ],
        prereqs => { 'HTML::TreeBuilder' => 0 } },
-#
+
+     { name => 'tv_grab_es_miguiatv',
+       blurb => 'Alternative grabber for Spain using miguiatv.com',
+       exes => [ 'grab/es_miguiatv/tv_grab_es_miguiatv' ],
+       prereqs => { 'HTML::TreeBuilder' => 0 } },#
 # 10/23/2007 - removed due to active agent-string blocking
 #
 #     { name => 'tv_grab_nl',
