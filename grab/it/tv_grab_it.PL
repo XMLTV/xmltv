@@ -53,9 +53,9 @@ Currently configured backends are (in default order):
 
 =item B<skylife>  - grabs data from www.skylife.it
 
-=item B<wfactory> - grabs data from www.wfactory.net
+=item B<mtvit>    - grabs data from www.mtv.it
 
-=item B<skytv>    - grabs data from www.skytv.it
+=item B<wfactory> - grabs data from www.wfactory.net
 
 =item B<boingtv>  - grabs data from www.boingtv.it
 
@@ -115,8 +115,6 @@ be warned about errors. Note also that, as opposed to previous versions,
 this grabber doesnE<39>t die if it cannot find any data, but returns an
 empty (or optionally containing just warnings) xml file instead.
 
-The mytv backend is currently disabled (site does not provide data anymore).
-
 The backendsE<39> data quality differs a lot. For example, mytv was very
 basic, yet complete and uses the least amount of bandwith. Skytv has a
 lot of channels, but unless you use it with the --slow option the data
@@ -127,13 +125,13 @@ good overall site if you donE<39>t need the whole sky package.
 
 =over 
 
-=item tv_grab_it --backend mytv --configure
+=item tv_grab_it --backend mtvit --configure
 
-configures tv_grab_it using only the backend mytv 
+configures tv_grab_it using only the backend mtvit
 
-=item tv_grab_it --backend skytv,wfactory --days 1
+=item tv_grab_it --backend skylife,wfactory --days 1
 
-grabs one day of data overiding the default order (could also be --backend skytv --backend wfactory)
+grabs one day of data overiding the default order (could also be --backend skylife --backend wfactory)
 
 =item tv_grab_it --cache --slow --days 3
 
@@ -154,6 +152,8 @@ L<xmltv(5)>.
 =head1 AUTHOR
 
 Davide Chiarini, davide.chiarini\@gmail.com
+
+you can find some more help at http://lnx.htpcpoint.it/forum/
 
 =cut
 END
@@ -196,9 +196,9 @@ Le fonti configurate al momento sono: (in ordine di utilizzo):
 
 =item B<skylife>  - prende i dati da www.skylife.it
 
-=item B<wfactory> - prende i dati da www.wfactory.net
+=item B<mtvit>    - prende i dati da www.mtv.it
 
-=item B<skytv>    - prende i dati da www.skytv.it
+=item B<wfactory> - prende i dati da www.wfactory.net
 
 =item B<boingtv>  - prende i dati da www.boingtv.it
 
@@ -246,8 +246,6 @@ avvertimento per eventuali errori. A differenza delle versioni precedenti,
 inoltre, se il grabber non riesce a scaricare nessun dato ritorna un
 file XML vuoto (o opzionalmente con solo i warning).
 
-La sorgente mytv backend al momento eE<39> disabilitata (il sito non fornisce piuE<39> dati).
-
 La qualitaE<39> dei dati delle varie sorgenti cambia molto. Per esempio, mytv
 era molto semplice, ma completa e usava la minor banda possibile. Skytv ha molti
 canali, ma i dati non sono molto buoni a meno che non si usi lE<39>opzione --slow, 
@@ -258,13 +256,13 @@ non hai bisogno di tutto il pacchetto sky.
 
 =over 
 
-=item tv_grab_it --backend mytv --configure
+=item tv_grab_it --backend mtvit --configure
 
-configura tv_grab_it usando solo la sorgente mytv 
+configura tv_grab_it usando solo la sorgente mtvit
 
-=item tv_grab_it --backend skytv,wfactory --days 1
+=item tv_grab_it --backend skylife,wfactory --days 1
 
-prende solo un giorno di dati e utilizza un ordine diverso da quello di default (si sarebbe potuto scrivere anche cosiE<39>: --backend skytv --backend wfactory)
+prende solo un giorno di dati e utilizza un ordine diverso da quello di default (si sarebbe potuto scrivere anche cosiE<39>: --backend skylife --backend wfactory)
 
 =item tv_grab_it --cache --slow --days 3
 
@@ -286,6 +284,8 @@ L<xmltv(5)>.
 =head1 AUTORE
 
 Davide Chiarini, davide.chiarini\@gmail.com
+
+puoi anche trovare varie informazioni nel forum http://lnx.htpcpoint.it/forum/
 
 =cut
 END
