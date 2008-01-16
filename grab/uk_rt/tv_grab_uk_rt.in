@@ -89,7 +89,7 @@ use XMLTV::Description 'United Kingdom/Republic of Ireland (Radio Times)';
 use XMLTV::PreferredMethod qw/allatonce/;
 use Getopt::Long;
 use Unicode::UTF8simple;
-use Date::Manip; Date_Init('TZ=+0000');
+use Date::Manip; Date_Init('TZ=+0000'); # UTC required for XMLTV::DST
 use XMLTV::Config_file;
 use XMLTV::Get_nice;
 use XMLTV::Ask;
@@ -159,10 +159,6 @@ say( "
 | data is restricted to personal use only. <http://www.radiotimes.com>     |
 +--------------------------------------------------------------------------+
 " ) if not $opt_quiet;
-
-if ( $opt_debug ) {
-    say( "It is recommended to disable any progress bars in debug mode\n" );
-}
 
 # This script is intended for grabbing
 $XMLTV::Get_nice::Delay = 0;
@@ -241,7 +237,6 @@ sub check_content_length {
 
 sub configure();
 
-
 # Stuff for the root <tv> element.
 my %tv_credits = ( # 'source-info-url'     => "todo",
            'source-info-name'    => 'Radio Times',
@@ -250,14 +245,16 @@ my %tv_credits = ( # 'source-info-url'     => "todo",
            'http://xmltv.org/wiki/',
            );
 
-
+# Read in the XMLTV channel_ids file
+#
 # Tables to convert between Radio Times and XMLTV ids of channels.
 # The way to access these is through the routines rt_to_xmltv() and
 # xmltv_to_rt(), not directly.  Those will deal sensibly with a new RT
 # channel that isn't mentioned in the file.
 #
 my @lines = split( /[\n\r]+/, $xmltv_channel_ids );
-my (%rt_to_xmltv, %xmltv_to_rt, %extra_dn, %icon_urls);
+my (%rt_to_xmltv, %xmltv_to_rt, %extra_dn, %icon_urls, %channel_offset);
+my ($num_ukrt_channels, $num_ts_channels);
 foreach my $line (@lines) {
     # allow comments
     next if $line =~ '^#';
@@ -268,18 +265,23 @@ foreach my $line (@lines) {
     die "Wrong number of fields in XMLTV channel_ids file.\nPlease update XMLTV"
       if @fields < 2;
 
-    # First 4 fields of channel_ids file are:
+    # First 5 fields of channel_ids file are:
     # i) XMLTV ID ii) RT ID iii) Name of channel iv) Icon URL
+    # v) Timeshift offset
     # The RT channels.dat provides a channel name - here we provide
     # an alternative or updated name if the channel name has changed
-    my ($xmltv_id, $rt_id, $extra_dn, $icon_url) = @fields;
+    my ($xmltv_id, $rt_id, $extra_dn, $icon_url, $channel_offset) = @fields;
 
+    # check for duplicate RT IDs having same associated XMLTV ID
     if (not $opt_quiet) {
-        say( "Radio Times ID '$rt_id' already seen in XMLTV channel_ids file" )
-          if defined $rt_to_xmltv{$rt_id};
+        foreach (@{$rt_to_xmltv{$rt_id}}) {
+            say( "Radio Times ID '$rt_id' already seen in XMLTV channel_ids file" )
+                if defined $_ and $_ eq $xmltv_id;
+        }
     }
-    $rt_to_xmltv{$rt_id} = $xmltv_id;
+    push @{$rt_to_xmltv{$rt_id}}, $xmltv_id;
 
+    # check for duplicated XMLTV IDs
     if (not $opt_quiet) {
         say( "XMLTV ID '$xmltv_id' already seen in XMLTV channel_ids file" )
           if defined $xmltv_to_rt{$xmltv_id};
@@ -288,8 +290,18 @@ foreach my $line (@lines) {
 
     $extra_dn{$xmltv_id} = $extra_dn if defined $extra_dn;
     $icon_urls{$xmltv_id} = $icon_url if defined $icon_url;
+    $channel_offset{$xmltv_id} = $channel_offset if defined $channel_offset;
+    
+    $num_ukrt_channels++ if $extra_dn !~ /\(Do\ Not\ Use\)/;
+    $num_ts_channels++ if $xmltv_id =~ /^tsod/;
 }
 
+say( "The XMLTV tv_grab_uk_rt software has support for $num_ukrt_channels channels,
+of which $num_ts_channels +1/+2 channels use timeshifted original data. These 
+channels may also have listings data available separately from Radio Times.\n" ) if not $opt_quiet;
+
+# Read in the Radio Times channels.dat file
+#
 # Process the list of available channels from the RT site
 my (%channels, %seen_rt_id, %seen_name);
 say( "Retrieving list of available channels from Radio Times" ) if $opt_debug;
@@ -298,65 +310,80 @@ say( "Converting list of available channels from UTF-8 to ISO-8859-1\n" ) if $op
 my $rt_channels_dat = $uref->fromUTF8( "iso-8859-1" , $rt_channels_dat_utf8 );
 my @rt_channels = split /\n/, $rt_channels_dat;
 my $num_rt_channels = scalar @rt_channels;
-say( "Radio Times reports available listings for $num_rt_channels channels.\n")
+say( "Radio Times reports available listings for $num_rt_channels channels.
+Some of these listings may be empty, so we check for this during processing.\n")
   if not $opt_quiet;
 
 my $chans_bar = new XMLTV::ProgressBar({name   => 'Retrieving channels',
                                         count  => $num_rt_channels,
                                         ETA    => 'linear', })
-                                          if not $opt_quiet;
+                                          if not $opt_quiet and not $opt_debug;
 my $need_final_update = 0;
-
+my $num_good_rt_channels;
 foreach (@rt_channels) {
     chomp;
     /^(\d+)\|(.+)/ or die "Bad channel entry seen in RT channels.dat: $_";
-    my ($rt_id, $name) = ($1, $2);
+    my ($rt_id, $rt_name) = ($1, $2);
     if ($seen_rt_id{$rt_id}++) {
         die "Duplicate channnel ID '$rt_id' seen in RT channels.dat, aborting";
     }
-    if ($seen_name{$name}++) {
+    if ($seen_name{$rt_name}++) {
         if (not $opt_quiet) {
-            say( "Duplicate channel named '$name' seen in RT channels.dat" );
+            say( "Duplicate channel named '$rt_name' seen in RT channels.dat" );
         }
     }
     
-    my $xmltv_id = $rt_to_xmltv{$rt_id};
+    # check to ensure whether there is at least one XMLTV ID associated with
+    # the RT ID
+    my $xmltv_id = $rt_to_xmltv{$rt_id}[0];
     
     # If the current RT channel has a known XMLTV ID, check it against known bad
     # channels and skip it if required. If the channel does not have an 
     # XMLTV ID, create one and continue.
     if (defined $xmltv_id) {
         # Skip any RT entries which have been flagged as bad in channel_ids file
-        if ( $extra_dn{ $rt_to_xmltv{$rt_id} } =~ /.*Do\ Not\ Use.*/ ) {
-            say( "Channel '$name' ($rt_id) flagged as bad, skipping" ) 
+        if ( $extra_dn{ $rt_to_xmltv{$rt_id}[0] } =~ /\(Do\ Not\ Use\)/ ) {
+            say( "Channel '$rt_name' ($rt_id) flagged as bad, skipping" ) 
               if $opt_debug;
             $need_final_update = 1;
             next;
         }
     } else {
         # Handle new channels available on RT site unknown to channel_ids file
-        say( "Channel '$name' ($rt_id) unknown in XMLTV channel_ids file" )
+        say( "Channel '$rt_name' ($rt_id) unknown in XMLTV channel_ids file" )
           if not $opt_quiet;
         say( "Will use XMLTV ID 'C$rt_id.radiotimes.com' during configuration\n" )
           if $opt_debug;
-        $xmltv_id = "C$rt_id.radiotimes.com";
+        push @{$rt_to_xmltv{$rt_id}}, "C$rt_id.radiotimes.com";
     }
 
-    my @names = ([ $name ]);
-    my $icon_url = $icon_urls{$xmltv_id};
-    my @icon = { 'src' => $icon_url } if $icon_url;
-    for ($extra_dn{$xmltv_id}) { push @names, [ $_ ] if defined }
-    if (@icon) {
-        $channels{$xmltv_id} = { id => $xmltv_id,
-                                 rt_id => $rt_id,
-                                 'display-name' => \@names,
-                                 'icon' => \@icon };
-    } else {
-        $channels{$xmltv_id} = { id => $xmltv_id,
-                                 rt_id => $rt_id,
-                                 'display-name' => \@names };
+    foreach (@{$rt_to_xmltv{$rt_id}}) {
+        my @names = ();
+        if ( defined $extra_dn{$_} ) {
+            @names = ([ $extra_dn{$_} ]);
+        } else {
+            @names = ([ $rt_name ]);
+        }
+        my $icon_url = $icon_urls{$_};
+        my @icon = { 'src' => $icon_url } if $icon_url;
+
+        # add channel to channels hash
+        if (@icon) {
+            $channels{$_} = { id             => $_,
+                              rt_id          => $rt_id,
+                              'display-name' => \@names,
+                              'icon'         => \@icon,
+                            };
+        } else {
+            $channels{$_} = { id             => $_,
+                              rt_id          => $rt_id,
+                              'display-name' => \@names,
+                            };
+        }
     }
     
+    $num_good_rt_channels++;
+
     # Update the progres bar by one increment
     if (defined $chans_bar) {
         $chans_bar->update();
@@ -369,6 +396,9 @@ if (defined $chans_bar) {
     $chans_bar->finish();
     say( "\n" ) if not $opt_quiet;
 }
+
+say( "\nRadio Times has $num_good_rt_channels usable listing files available\n" ) 
+  if not $opt_quiet;
 
 if (not $opt_quiet) {
     foreach (keys %xmltv_to_rt) {
@@ -428,9 +458,13 @@ sub configure() {
     t 'channels: ' . d \%channels;
 
     my %chan_id_to_name;
+    my $chan_name;
+    # only add the non-RT sourced timeshifted channels during configuration
     foreach my $chan_id (keys %channels) {
-        $chan_id_to_name{$chan_id} =
-            $channels{$chan_id}->{'display-name'}->[0]->[0];
+        $chan_name = $channels{$chan_id}->{'display-name'}->[0]->[0];
+        if ( $chan_name !~ /\(RT\)$/ ) {
+            $chan_id_to_name{$chan_id} = $chan_name;
+        }
     }
 
     my @chan_ids = sort {$chan_id_to_name{$a} cmp $chan_id_to_name{$b}}
@@ -453,9 +487,9 @@ sub configure() {
     exit();
 }
 
-# Grabbing starts here
+### Grabbing starts here ###
 
-# Start by reading config file.
+# Start by reading the config file containing a list of channels to grab.
 my @wanted_chs;
 my $n = 0;
 say( "Reading config file channel entries" ) if $opt_debug;
@@ -505,7 +539,7 @@ say( "Downloading listings for $num_req_chans configured channels\n" )
 my $listings_bar = new XMLTV::ProgressBar({name   => 'Retrieving listings',
                                            count  => $num_req_chans,
                                            ETA    => 'linear', })
-                                             if not $opt_quiet;
+                                             if not $opt_quiet and not $opt_debug;
 
 my %warned_wrong_num_fields; # give that warning once per channel file
 
@@ -517,23 +551,30 @@ $need_final_update = 0;
 # 'manufactured' titles which may include temporary 'season' information
 my %prog_titles;
 
+# Process all of the channels we want listings for
 foreach my $ch (@wanted_chs) {
     my $c = $channels{$ch};
+    my $xmltv_id = $c->{id};
     my $rt_id = $c->{rt_id};
     my $rt_name = $c->{'display-name'}->[0]->[0];
     die "No Radio Times ID for channel '$rt_name'" if not defined $rt_id;
+    
+    say( "\nProcessing listings for '$rt_name' ($xmltv_id)" ) if $opt_debug;
 
-    # Try to get the base timezone for this channel from its name.
+    # If the Radio Times name for the channel contains timezone information,
+    # use it, otherwise set the timezone to default of UTC
     my $base_tz;
     if ( $rt_name =~ /\((UTC|GMT|CET)\)\s*$/ ) {
         $base_tz = $1;
+        say( "Timezome of '$base_tz' seen in channel's name" ) if $opt_debug
+    } else {
+        $base_tz = 'UTC';
     }
-    for ($base_tz) { $_ = 'UTC' if not defined }
 
     my $uri = "http://xmltv.radiotimes.com/xmltv/$rt_id.dat";
     local $SIG{__DIE__} = sub { die "$uri: $_[0]" };
     local $SIG{__WARN__} = sub { warn "$uri: $_[0]" };
-    say( "\nRetrieving listings file for '$rt_name' from Radio Times ($uri)" ) if $opt_debug;
+    say( "\nRetrieving listings file for '$rt_name' ($uri)" ) if $opt_debug;
     my $page_utf8 = get $uri;
     say( "Converting listings file for '$rt_name' from UTF-8 to ISO-8859-1" ) if $opt_debug;
     my $page = $uref->fromUTF8( "iso-8859-1" , $page_utf8 );
@@ -553,7 +594,7 @@ foreach my $ch (@wanted_chs) {
     # http://en.wikipedia.org/wiki/ISO/IEC_8859-1
     # http://en.wikipedia.org/wiki/UTF-8
     #
-    say( "\nChecking '$rt_name' listings file contents for bad characters" ) if $opt_debug;
+    say( "Checking '$rt_name' listings file contents for bad characters" ) if $opt_debug;
     for ($page) {
         # Remove any occurences of null characters
         if ( s/\x00//g ) {
@@ -602,7 +643,8 @@ foreach my $ch (@wanted_chs) {
         }
     }
 
-    say( "\nStarted writing <programme> elements for '$rt_name'" ) if $opt_debug;
+    say( "Started writing <programme> elements for channel '$rt_name'\n" ) if $opt_debug;
+    my $num_titles;
     foreach (split /\n/, $page) {
         my @fields = split /\~/;
         if (@fields != 23) {
@@ -657,22 +699,23 @@ foreach my $ch (@wanted_chs) {
             else { die "bad true/false value $_" }
         }
 
-        say( "  Ignoring sub-title '$sub_title' as episode '$episode' provided\n" )
-          if defined $sub_title and defined $episode and $opt_debug;
-        $sub_title = $episode if defined $episode;
+        say( "  Processing <programme> title '$title'" ) if $opt_debug;
 
         if (not defined $title) {
             say( "  Missing title in '$_', skipping entry\n" ) if $opt_debug;
             next;
         }
 
-        # Parse out any explicit GMT/BST timing information the RT may include 
-        # in the title for a programme.
-        my $explicit_tz = '';
+        say( "  Ignoring sub-title '$sub_title' as episode '$episode' provided\n" )
+          if defined $sub_title and defined $episode and $opt_debug;
+        $sub_title = $episode if defined $episode;
+
+        # Check for any DST-related information the RT may include in the title
+        # for a programme. If we find any explicit DST information we store it 
+        # for use later and remove it from the title.
+        my $explicit_tz;
         if ($title =~ s/^\((GMT|UTC|BST|UTC\+1)\)\s*//) {
             $explicit_tz = $1;
-            say( "  Using timezone information detected in programme title '$title'" )
-              if $opt_debug;
         }
         
         # Remove extra non-title programme information from title. Leaving
@@ -702,7 +745,7 @@ foreach my $ch (@wanted_chs) {
 
             foreach my $non_title_info (@non_title_info) {
                 if ( $title =~ s/^$non_title_info\s*:\s*// ) {
-                    say( "  Removed '$non_title_info' from title. New title is '$title'" )
+                    say( "  Removed '$non_title_info' from title" )
                       if $opt_debug;
                 }
             }
@@ -804,7 +847,7 @@ foreach my $ch (@wanted_chs) {
         # The Radio Times sometime explicitly flags a programme's start/stop
         # times as being in a specific timezone (GMT or BST). We parse this
         # information out when processing the programme's title and apply it
-        # to the start/stop times of any such programmes.
+        # to the start/stop times of any such programmes ($explicit_tz).
         #
         # For the majority of programmes where the timezone is not flagged 
         # explicity, we determine the TZ/offset of the programme's start time
@@ -828,18 +871,19 @@ foreach my $ch (@wanted_chs) {
         # (0100 +0000).
         #
         my ($yyyy, $mm, $dd);
+        my $implicit_tz;
         for ($date) {
             die "Missing date in $_" if not defined;
             m!(\d\d)/(\d\d)/(\d{4})$! or die "Bad date $_";
             ($dd, $mm, $yyyy) = ($1, $2, $3);
         }
 
-        # First we handle an explicit TZ (GMT/BST) found in the programme's
-        # title.
-        #
-        if ( $explicit_tz ) {
-            $p{start} = utc_offset "$yyyy$mm$dd$start $explicit_tz", $base_tz;
-            $p{stop} = utc_offset "$yyyy$mm$dd$stop $explicit_tz", $base_tz;
+        # First we handle an explicit timezone (GMT/BST) found in the 
+        # programme's title.
+        if ( defined $explicit_tz ) {
+            say( "  Explicit timezone '$explicit_tz' detected in title" ) if $opt_debug;
+            $p{start} = utc_offset( "$yyyy$mm$dd$start $explicit_tz", $base_tz );
+            $p{stop} = utc_offset( "$yyyy$mm$dd$stop $explicit_tz", $base_tz );
             if (Date_Cmp($p{start}, $p{stop}) > 0) {
                 $p{stop} = utc_offset(
                                DateCalc(
@@ -854,13 +898,17 @@ foreach my $ch (@wanted_chs) {
         # Otherwise, we determine the timezone of the programme's start time
         # and apply the same TZ to the stop time.
         else {
-            $p{start} = utc_offset "$yyyy$mm$dd$start", $base_tz;
-            my $implicit_tz;
+            # Parse the given time with utc_offset() to determine the correct
+            # UTC offset to use for this programme's start/stop times
+            $p{start} = utc_offset( "$yyyy$mm$dd$start", $base_tz );
             for ($p{start}) {
                 m!([+-]\d{4})$! or die "Bad UTC offset for programme $title";
                 $implicit_tz = $1;
+                say( "  Timezone calculated to be '$implicit_tz'" ) if $opt_debug;
             }
-            $p{stop} = utc_offset "$yyyy$mm$dd$stop $implicit_tz", $base_tz;
+            # Now apply the determined timezone to the 'real' start time
+            $p{start} = utc_offset( "$yyyy$mm$dd$start $implicit_tz", $base_tz );
+            $p{stop} = utc_offset( "$yyyy$mm$dd$stop $implicit_tz", $base_tz );
             if (Date_Cmp($p{start}, $p{stop}) > 0) {
                 $p{stop} = utc_offset(
                                DateCalc(
@@ -873,6 +921,26 @@ foreach my $ch (@wanted_chs) {
             }
         }
 
+        if ($opt_debug) {
+            say ( "  $p{start} - Start time" );
+            say ( "  $p{stop} - Stop time" );
+        }
+
+        # Now we have determined the correct start/stop times for the programme
+        # add any required timeshift defined in channel_ids and preserve the
+        # correct timezone information
+        if( defined $channel_offset{$xmltv_id} ) {
+            my $timeshift = $channel_offset{$xmltv_id};
+            my $start_postts = DateCalc( ParseDateString( $p{start} ), $timeshift );
+            my $stop_postts = DateCalc( ParseDateString( $p{stop} ), $timeshift );
+            $p{start} = utc_offset( UnixDate( $start_postts, "%Y%m%d%H%M %z" ), $base_tz );
+            $p{stop} = utc_offset( UnixDate( $stop_postts, "%Y%m%d%H%M %z" ), $base_tz );
+            if ($opt_debug) {
+                say ( "  $p{start} - Start time after applying '$timeshift' timeshift" );
+                say ( "  $p{stop} - Stop time after applying '$timeshift' timeshift" );
+            }
+        }
+
         # Compare the stated and calculated durations of the programme
         my $rt_prog_length = ParseDateDelta( $duration_mins . " minutes" );
         my $real_prog_length = DateCalc( ParseDate( $p{start} ),
@@ -880,14 +948,17 @@ foreach my $ch (@wanted_chs) {
         if ($rt_prog_length ne $real_prog_length && $opt_debug) {
             say( "  Calculated/stated programme durations do not agree for '$title':" );
             say( "    Start time: '$p{start}'\t\tCalculated:  '$real_prog_length'" );
-            say( "    Stop time:  '$p{stop}'\t\tRadio Times: '$rt_prog_length'\n" );
+            say( "    Stop time:  '$p{stop}'\t\tRadio Times: '$rt_prog_length'" );
         }
 
         # Finally, write the programme's XML data
         $writer->write_programme(\%p);
+        $num_titles++;
+        say( "" ) if $opt_debug;
     
     }
-    say( "Finished writing <programme> elements for '$rt_name'\n" ) if $opt_debug;
+    say( "Finished writing $num_titles <programme> elements for '$rt_name'" ) if $opt_debug;
+    say( "Finished processing listings for '$rt_name' ($xmltv_id)\n" ) if $opt_debug;
     
     # Update the progres bar by one increment
     if (defined $listings_bar) {
@@ -895,7 +966,7 @@ foreach my $ch (@wanted_chs) {
     }
 }
 
-say( "Finished writing <tv> element" ) if $opt_debug;
+say( "Finished writing <tv> element\n" ) if $opt_debug;
 $writer->end;
 
 if (defined $listings_bar) {
