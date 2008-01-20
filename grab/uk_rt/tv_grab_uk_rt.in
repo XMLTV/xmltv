@@ -182,10 +182,15 @@ my $default_cachedir = get_default_cachedir();
 # Initialise the cache-directory
 init_cachedir( $default_cachedir );
 
+# Set cache options
+#
+# MaxAge set to 15 days (RT provides 14 days of listings)
+# NoUpdate set to 1hr (RT data only updated once per day)
+#
 HTTP::Cache::Transparent::init( {
     BasePath => $default_cachedir,
     MaxAge => 15*24,
-    NoUpdate => 30*60,
+    NoUpdate => 60*60,
     Verbose => $opt_debug,
     ApproveContent => \&check_content_length,
 } );
@@ -626,6 +631,8 @@ foreach my $ch (@wanted_chs) {
     die "No Radio Times ID for channel '$rt_name'" if not defined $rt_id;
     
     say( "\nProcessing listings for '$rt_name' ($xmltv_id)" ) if $opt_debug;
+    say( "Detected a channel offset of '$channel_offset{$xmltv_id}' for '$rt_name'" )
+      if( $opt_debug and defined $channel_offset{$xmltv_id} );
 
     # If the Radio Times name for the channel contains timezone information,
     # use it, otherwise set the timezone to default of UTC
@@ -786,20 +793,18 @@ foreach my $ch (@wanted_chs) {
             $explicit_tz = $1;
         }
         
-        # Remove extra non-title programme information from title. Leaving
-        # this information in the title results in PVR applications not
-        # being able to consistently match programme titles. This information
-        # is placed at the start of the 'real' title, and a colon is used to
-        # separate this information from the actual title.
+        # Title and sub-title processing. This procesing can be disabled by 
+        # specifying the run-time option '--disable-title-updates'.
         #
-        # For performance reasons we first check for the existence of a colon 
-        # in the programme's title and only run the detailed search and replace
-        # if we are successful.
-        #
-        # This procesing can be disable by specifying the run-time option 
-        # --disable-title-updates
+        # If the programme's title is found to contain a colon, we run a series
+        # of search and replacement routines to clean up the title and sub-title
+        # information. Leaving non-title information in the title or having
+        # inconsistent title/sub-title formats will result in PVR applications 
+        # being unable to consistently match programme titles.
         #
         if ( not $opt_no_title_updates and $title =~ /:/ ) {
+            # Remove any non-title information found in the title. This information
+            # is placed at the start of the 'real' title
             my @non_title_info = ( "4 Music",
                                    "BBC Four on BBC Two",
                                    "BBC Switch",
@@ -808,6 +813,7 @@ foreach my $ch (@wanted_chs) {
                                    "CBeebies",
                                    "CITV",
                                    "Comedy Season",
+                                   "Screen Two",
                                    "Sign Zone",
                                    "Sword & Sorcery Season",
                                    "T4",
@@ -822,10 +828,15 @@ foreach my $ch (@wanted_chs) {
                 }
             }
             
+            # Some programme titles contain both the title and sub-title,
+            # separated by a colon ($title:$episode). Here we reassign the 
+            # sub-title to the $episode element, leaving only the programme's 
+            # title in the $title element
+            #
             my @mixed_title_subtitle = ( "3 Minute Wonder",
                                          "4Play",
                                          "Biography",
-                                         "Colombo",
+                                         "Columbo",
                                          "Comedy Showcase",
                                          "Crime Scene USA",
                                          "Deadly Dozen",
@@ -866,18 +877,83 @@ foreach my $ch (@wanted_chs) {
                                          "Wish You Were Here - Now and Then",
                                          "Wonderland",
                                        );
+                                       
             foreach my $mixed_title_subtitle (@mixed_title_subtitle) {
-                if ( not defined $episode and $title =~ /^($mixed_title_subtitle)\s*:\s*(.*)/ ) {
-                    say( "  Moved '" . $2 . "' to sub-title, new title is '" . $1 . "'" ) if $opt_debug;
-                    $title = $1;
-                    $episode = $2;
+                if ( $title =~ /^($mixed_title_subtitle)\s*:\s*(.*)/ ) {
+                    if( not defined $episode ) {
+                        say( "  Moved '" . $2 . "' to sub-title, new title is '" . $1 . "'" ) if $opt_debug;
+                        $title = $1;
+                        $episode = $2;
+                        last;
+                    }
+                    elsif( $episode eq $2 ) {
+                        say( "  Identical sub-title '" . $episode . "' also seen in title, new title is '" . $1 . "'" ) 
+                          if $opt_debug;
+                        $title = $1;
+                        last;
+                    }
+                    else {
+                        say( "  Cannot move sub-title seen in title '" . $2 . "' as episode '" . $episode . "' also given" ) 
+                          if $opt_debug;
+                        last;
+                    }
+                }
+            }
+            
+            # Some programme titles contain both the sub-title and title,
+            # separated by a colon ($episode:$title). Here we reassign the 
+            # sub-title to the $episode element, leaving only the programme's 
+            # title in the $title element.
+            #
+            my @mixed_subtitle_title = ( "Storyville",
+                                        );
+
+            foreach my $mixed_subtitle_title (@mixed_subtitle_title) {
+                if ( $title =~ /^(.*)\s*:\s*($mixed_subtitle_title)/ ) {
+                    if( not defined $episode ) {
+                        say( "  Moved '" . $1 . "' to sub-title, new title is '" . $2 . "'" ) if $opt_debug;
+                        $title = $2;
+                        $episode = $1;
+                        last;
+                    }
+                    elsif( $episode eq $1 ) {
+                        say( "  Identical sub-title '" . $episode . "' also seen in title, new title is '" . $2 . "'" ) 
+                          if $opt_debug;
+                        $title = $1;
+                        last;
+                    }
+                    else {
+                        say( "  Cannot move sub-title seen in title '" . $1 . "' as episode '" . $episode . "' also given" ) 
+                          if $opt_debug;
+                        last;
+                    }
+                }
+            }
+        }
+
+        # Listings for some channels may include programme details which have
+        # reversed title and sub-title information ($title = episode and 
+        # $episode = title). In order to create more consistent data, we check 
+        # for flagged programme titles and reverse the given title and 
+        # sub-title
+        if ( not $opt_no_title_updates and defined $episode ) {
+            my @reversed_title_subtitle = ( "Timewatch",
+                                          );
+
+            foreach my $reversed_title_subtitle (@reversed_title_subtitle) {
+                if( $reversed_title_subtitle eq $episode) {
+                    say( "  Seen reversed title-subtitle for '$title:$episode' - reversing" ) if $opt_debug;
+                    $episode = $title;
+                    $title = $reversed_title_subtitle;
+                    say( "  New title is '$title' and new sub-title is '$episode'" ) if $opt_debug;
                     last;
                 }
             }
-            # Ensure the adjusted sub-title is written out
-            $sub_title = $episode if defined $episode;
         }
-        
+
+        # Ensure the adjusted sub-title is written out
+        $sub_title = $episode if defined $episode;
+
         # Add the programme title to the list of all programme titles
         $prog_titles{$title} = $title;
 
@@ -1063,8 +1139,6 @@ foreach my $ch (@wanted_chs) {
         #
         if( defined $channel_offset{$xmltv_id} ) {
             my $timeshift = $channel_offset{$xmltv_id};
-            say( "  Detected a channel offset of '$timeshift' for '$rt_name'" )
-              if $opt_debug;
             my $start_postts = DateCalc( ParseDateString( $p{start} ), $timeshift );
             my $stop_postts = DateCalc( ParseDateString( $p{stop} ), $timeshift );
             $p{start} = utc_offset( UnixDate( $start_postts, "%Y%m%d%H%M %z" ), $base_tz );
@@ -1077,7 +1151,9 @@ foreach my $ch (@wanted_chs) {
 
         # Now check to see whether the channel broadcasting the programme is a
         # part-time channel, and if so, see whether this programme's timeslot 
-        # times fall within the broadcast window
+        # times fall within the broadcast window. If a channel broadcasts
+        # through the night, we also need to test against the next day's
+        # broadcast times.
         #
         if( defined $broadcast_hours{$xmltv_id} ) {
             $broadcast_hours{$xmltv_id} =~ /(\d{4})-(\d{4})/;
@@ -1085,7 +1161,9 @@ foreach my $ch (@wanted_chs) {
             $chan_start = utc_offset( "$yyyy$mm$dd$chan_start", $base_tz );
             $chan_stop  = utc_offset( "$yyyy$mm$dd$chan_stop", $base_tz );
             # Correct the stop time if it is earlier than the start time
+            my $chan_stop_next_day = 0;
             if (Date_Cmp( $chan_start, $chan_stop ) > 0) {
+                $chan_stop_next_day = 1;
                 $chan_stop =  utc_offset( 
                                   UnixDate( 
                                       DateCalc( 
@@ -1097,22 +1175,35 @@ foreach my $ch (@wanted_chs) {
                               );
             }
 
-            # Skip the current programme if its timeslot lies outside the
+            # Include the current programme if its timeslot lies inside the
             # channel's broadcast window
             if( Date_Cmp( $p{start}, $chan_start ) >= 0
               && Date_Cmp( $p{stop}, $chan_stop ) <= 0 ) {
                 if ($opt_debug) {
                     say ( "  $chan_start - Start time of channel" );
                     say ( "  $chan_stop - Stop time of channel" );
+                    say( "  '$title' shown whilst channel is on-air, adding" );
                 }
-                say( "  '$title' shown whilst channel is on-air, adding" ) if $opt_debug;
-            } else {
+            }
+            # If the channel starts and stops broadcasting on the same 
+            # calendar day and the programme's timeslot is outside the 
+            # broadcast window, skip it
+            elsif ( ( Date_Cmp( $p{start}, $chan_start ) < 0 
+                              || Date_Cmp( $p{stop}, $chan_stop ) > 0 ) 
+                        && $chan_stop_next_day == 0 ) {
+                if ($opt_debug) {
+                    say ( "  $chan_start - Start time of channel" );
+                    say ( "  $chan_stop - Stop time of channel" );
+                    say( "  '$title' shown whilst channel is off-air, skipping" );
+                }
+            }
+            else {
                 # If the channel broadcasts through the night, and the channel
                 # start time is later than the stop time, it is possible for a
                 # program shown at or after midnight to result in the generation
                 # of incorrect channel start/stop times (shifted +1day forward).
-                # We therefore generate another pair of start/stop times to
-                # match against
+                # We therefore generate another pair of channel start/stop 
+                # times for the previous day to match against
                 #
                 $chan_start = utc_offset(
                                   UnixDate(
