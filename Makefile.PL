@@ -540,11 +540,15 @@ my @opt_components
 		    'HTML::TreeBuilder' => 0 },
      },
 
-     { name => 'tv_grab_no',
-       blurb => 'Grabber for Norway',
-       exes => [ 'grab/no/tv_grab_no' ],
-       prereqs => { 'HTML::Entities' => 1.27 },
-     },
+#
+# depreciate tv_grab_no as it is no longer supported (per author, cwattengard@gmail.com)
+# has been replaced by tv_grab_no_gfeed
+# 
+#     { name => 'tv_grab_no',
+#       blurb => 'Grabber for Norway',
+#       exes => [ 'grab/no/tv_grab_no' ],
+#       prereqs => { 'HTML::Entities' => 1.27 },
+#     },
 
      { name => 'tv_grab_pt',
        blurb => 'Grabber for Portugal',
