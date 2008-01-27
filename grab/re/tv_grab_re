@@ -65,11 +65,12 @@ END
 use warnings;
 use strict;
 use XMLTV::Version '$Id$ ';
-use XMLTV::Capabilities qw/baseline manualconfig cache/;
+use XMLTV::Capabilities qw/baseline manualconfig/;
 use XMLTV::Description 'Reunion Island';
 use Getopt::Long;
 use HTML::TreeBuilder;
 use HTML::Entities; # parse entities
+use HTTP::Cookies;
 use IO::File;
 use URI;
 use Date::Manip;
@@ -90,8 +91,8 @@ my %BROADCASTERS = (
 	'CANALSAT' => "Canal Satellite Reunion",
 	'PARABOLE' => "Parabole Reunion"
 );
-my $CANALSAT_BASE_URL = "http://srv1.media-overseas.com/";
-my $CANALSAT_ICON_URL = "http://www.canalsatellite-reunion.com/imagesgeneriques/logos/logoschaines";
+my $CANALSAT_BASE_URL = "http://fw-web.canalreunion.net/";
+my $CANALSAT_ICON_URL = "http://fw-web.canalreunion.net/uploads/tx_hhmod4bdd";
 my $PARABOLE_BASE_URL = "http://www.parabolereunion.com/";
 my $PARABOLE_ICON_URL = "http://www.parabolereunion.com/images/tmp";
 
@@ -192,26 +193,43 @@ sub new_xmltv_writer() {
 	return new XMLTV::Writer(%writer_args);
 }
 
+sub init_user_agent() {
+	# Change HTTP Headers to make canalsat-reunion.com happy
+	$XMLTV::Get_nice::ua->default_headers->push_header('Keep-Alive'=>'300');
+	$XMLTV::Get_nice::ua->default_headers->push_header('Connection'=>'keep-alive');
+	$XMLTV::Get_nice::ua->default_headers->push_header('Referer'=>'http://srv1.media-overseas.com/FMPro?-db=reunion.fp5&-lay=M1&-format=recherchereunion.htm&-view');
+
+	# init cookies
+	my $cookies = HTTP::Cookies->new(
+		file => "$ENV{'HOME'}/.xmltv/tv_grab_re.cookies",
+		autosave => 1,
+	);
+	$XMLTV::Get_nice::ua->cookie_jar($cookies);
+
+	get_nice("http://fw-web.canalreunion.net/552.0.html?&amp;no_cache=1&programme[fuseauChoix]=2&programme[validation_choifuseaux]=Envoyer");
+}
+
 sub get_channels_list($) {
 	my $arg = shift;
 	my @channels;
 
 	if ($arg eq 'CANALSAT') {
-		my $url = "http://srv1.media-overseas.com/FMPro?-db=reunion.fp5&-lay=M1&-format=recherchereunion.htm&-view";
+		#my $url = "http://srv1.media-overseas.com/FMPro?-db=reunion.fp5&-lay=M1&-format=recherchereunion.htm&-view";
+		my $url = "http://fw-web.canalreunion.net/552.0.html?&no_cache=1&fuseauChoix=2&validation_choixfuseau=Envoyer";
 		my $html = get_nice_tree $url;
 	
-		my $chaines = $html->look_down('_tag', 'select', 'name', 'idchaine');
+		my $chaines = $html->look_down('_tag', 'select', 'name', 'programme[chaine]');
 		foreach my $chaine ($chaines->look_down('_tag', 'option')) {
 			my %channel;
 
 			my $id = $chaine->attr_get_i('value');
-			next if ($id eq "0...999");
+			next if ($id eq "");
 			my $title = $chaine->as_text();
-	
+
 			$channel{'type'} = "CANALSAT";
 			$channel{'id'} = $id;
 			$channel{'name'} = $title;
-			$channel{'icon'} = "$CANALSAT_ICON_URL/${id}_grand.gif";
+			$channel{'icon'} = "$CANALSAT_ICON_URL/${id}_grand_01.gif";
 
 			push @channels,\%channel;
 		}
@@ -252,40 +270,37 @@ sub get_channels_list($) {
 sub get_canalsat_programmes_list_slow($%) {
 	my $url = shift(@_);
 	my $p = shift(@_);
+	my @directors;
+	my @actors;
 
 	# get request and parse
 	my $html = get_nice_tree $url;
+	$html->objectify_text();
 
-	# look for the résumé
-	my $table = $html->look_down('_tag', 'table', 'width', '480', 'vspace', '0', 'cellspacing', '0', 'cellpadding', '0', 'border', '0', 'align', 'center');
-	$table->objectify_text();
-    #$table->dump();dprint("\n\n");
-
-    my @text = $table->look_down('_tag', '~text');
-
-	foreach (@text) {
-		my $t = $_->attr_get_i('text');
-
-		next if ($t =~ /^ /);
-
-		next if (length $t < 7);
-
-		$p->{'desc'} = [ [ $t, "fr" ] ];
-	}
-
-	# look for director/actors
-	$table = $html->look_down('_tag', 'table', 'width', '621', 'height', '318', 'cellspacing', '4', 'cellpadding', '0', 'border', '0', 'bgcolor', '#CCCCCC', 'align', 'center');
-    $table->objectify_text();
-    my $td = $table->look_down('_tag', 'td', 'width', '475', 'height', '107');
-    my $i = $td->look_down('_tag', 'i');
-    #$i->dump();dprint("\n\n");
-    @text = $i->look_down('_tag', '~text');
+	# look for director
+	my $div = $html->look_down('_tag' => 'div', 'id' => 'fiche_zoom_fiche_technique');
+	#""$div->dump();	
 	
-    my (@directors, @actors);
-	foreach (@text) {
-		my $t = $_->attr_get_i('text');
+	# look for actors
+	my $table = $div->look_down('_tag' => 'table',
+		'width' => '733', 
+		'cellspacing' => '0',
+		'cellpadding' => '0',
+		'border' => '0'
+	);
+   #$table->dump();
+	my $ptag = $table->look_down('_tag', 'p');
+	my @texts = $ptag->look_down('_tag', '~text');
+	foreach my $text (@texts) {
+		my $tt = $text->attr_get_i('text');
 
-		if ($t =~ /^.*\(.*\) r.alis. en \d{4} de (.*) Avec (.*)/) {
+		# année
+		if ($tt =~ /(\d\d\d\d) - /) {
+			$p->{'date'} = $1;
+		}
+		
+		# acteurs
+		if ($tt =~ / de (.*)  Avec (.*) /) {
 			push @directors, $1;
 
 			my @a = split(',', $2);
@@ -293,6 +308,19 @@ sub get_canalsat_programmes_list_slow($%) {
 				if ($_ =~ /(.*) \(.*\)/) {
 					push @actors, $1;
 				}
+			}
+		}	
+
+		# présentateur
+		if ($tt =~ / de Pr.sent. par (.*)/) {
+			if ($1 =~ /,/) {
+				my @a = split(',', $1);
+				foreach (@a) {
+					push @actors, $_;
+				}
+			}
+			else {
+				push @actors, $1;
 			}
 		}
 	}
@@ -319,119 +347,105 @@ sub get_canalsat_programmes_list($$$) {
 
 		# the start tag of programs for this day
 		my $start = DateCalc($today, "+ $n days");
+		my $stop;
 		my $url_day = UnixDate($start, "%d%%2F%m%%2F%Y");
 
 		# build the url
-		my $url = "http://srv1.media-overseas.com/FMPro?-DB=reunion.fp5&-Lay=M1&-format=rechercheresultatsreunion.htm&-error=rechercheerreurreunion.htm&-SortField=presseheuretri&-SortORder=Ascending&-max=99&";
-		$url .= "-op=eq&jourdate=".$url_day."&";
-		$url .= "-op=cn&periodejour=a...z&";
-		$url .= "-op=cn&idchaine=".$idchaine."&";
-	
-		# simulate a click on the submit button
-		my $random = int(rand(42)) + 1;
-		$url .= "-Find.x=".$random."&";
-		$random = int(rand(41)) + 1;
-		$url .= "-Find.y=".$random;
-
+		my $url = "http://fw-web.canalreunion.net/552.0.html?&no_cache=1&";
+		$url .= "programme[jour]=".$url_day."&";
+		$url .= "programme[horaires]=6.&"; # whole day
+		$url .= "programme[chaine]=".$idchaine."&";
+		$url .= "programme[genre]=&";
+		$url .= "Submit=OK&";
+		$url .= "programme[pdf]=";
+		
 		# get request and parse
 		my $html = get_nice_tree $url;
+		$html->objectify_text();
+		#$html->dump();
 
-		# look for the table of programmes
-		my $table = $html->look_down('_tag', 'table', 'width', '815', 'cellspacing', '2', 'cellpadding', '0', 'border', '0', 'align', 'center');
-		
-		return @progs if not defined $table;
+		# look for every DIV elements that contain programm
+		my @rows = $html->look_down('_tag' => 'div', 'class' => qr/contenu_prog_listing /);
 
-		$table->objectify_text();
-
-		# look for the list of rows of the table
-		my @rows = $table->look_down('_tag', 'table', 'width', '797', 'height', '53', 'cellspacing', '1', 'cellpadding', '0', 'border', '0', 'align', 'center');
+		# the previous prog processed
+		my $previous_prog;
 
 		# scan each row
 		foreach my $r (@rows) {
 			# the current prog being processed
 			my %prog;
-			my ($tt, $stop);
+			my ($tag, $tt, $stop);
 			#$r->dump();
-
+			
 			$prog{'channel'} = $idchaine.".canalsat-reunion.com";
 
-			# look for every column
-			my @td = $r->look_down('_tag', 'td');
+			# here is the start time
+			$tag = $r->look_down('_tag', '~text');
+			$tt = $tag->attr_get_i('text');
+			if ($tt =~ /(\d+):(\d\d)/ ) {
+				$start = Date_SetTime($start, $1, $2, 0);
+				
+				my $str = UnixDate($start, "%Y%m%d%H%M%S");
+				$prog{'start'} = $str." +0400";
+			}
+			
+			if (defined $previous_prog->{'title'}) {
+				# fix stop time in the previous program
+				$previous_prog->{'stop'} = $prog{'start'};
+				my $prev_start = ParseDate($previous_prog->{'start'});
 
-			# scan each cellule of the row
-			foreach my $cell (@td) {
-				my @b = $cell->look_down('_tag', '~text');
-				foreach my $tag (@b) {
-					$tt = $tag->attr_get_i('text');
-					#$tag->dump();
-	
-					# here is the start hour
-					if ( $tt =~ /(\d\d):(\d\d)/ ) {
-						$start = Date_SetTime($start, $1, $2, 0);
-						my $start_str = UnixDate($start, "%Y%m%d%H%M%S");
-						$prog{'start'} = $start_str." +0400";
-					}
-	
-					# here is the title with the duration in minutes
-					if ( $tt =~ /(.*)\s\((\d+)\'\).*/ ) {
-						# sometimes title doesn't exist for the first programme
-						next if ($1 eq "");
+				# change the start date for program beginning before midnight
+				# and ending the day after (after midnight)
+				if (Date_Cmp($start,$prev_start) < 0) {
+					$start = DateCalc($start, "+1 day");
 
-						# "Fin des programmes" is not a real tv show
-						next if ($1 eq "Fin des programmes");
-
-						my $title = $1;
-
-						$prog{'title'} = [ [ $title ] ];
-	
-						$stop = DateCalc($start, "+$2 min");
-						my $stop_str = UnixDate($stop, "%Y%m%d%H%M%S");
-						$prog{'stop'} = $stop_str." +0400";
-
-						# Change the start date because last programme begins
-						# this day (at 23:00 PM) and ends the day after 
-						# (at 01:00 AM)
-						my $y = UnixDate($stop, "%Y");
-						my $m = UnixDate($stop, "%m");
-						my $d = UnixDate($stop, "%d");
-
-						$start = Date_SetDateField($stop, "y", $y);
-						$start = Date_SetDateField($start, "m", $m);
-						$start = Date_SetDateField($start, "d", $d);
-
-						# length tag not necessary if start and stop 
-						# are presents
-						#$prog{'length'} = $2 * 60;
-	
-						# sometime there is also the category
-						my $i = $cell->look_down('_tag', 'span', 'class', 'rouge');
-						my $ii = $i->look_down('_tag', '~text');
-						my $category = $ii->attr_get_i('text');
-						utf8::encode($category) if (utf8::is_utf8($category));
-						$category =~ s/^\s+//;
-						$category =~ s/\s+$//;
-						$prog{'category'} = [ [ $category, "fr" ] ] if not $category eq "";
-					}
-	
-					# Year of the prog (if present)
-					if ( $tt =~ / - (\d\d\d\d)/ ) {
-						$prog{'date'} = $1;
-					}
+					my $str = UnixDate($start, "%Y%m%d%H%M%S");
+					$prog{'start'} = $str." +0400";
+					$previous_prog->{'stop'} = $prog{'start'};						
 				}
+			}
 
-				# get director/actors if --slow was asked
-				if ($opt_slow) {
-					@b = $cell->look_down('_tag', 'a', 'class', 'rouge bold');
-					foreach (@b) {
-						my $href = "http://srv1.media-overseas.com/".$_->attr_get_i('href');
-						get_canalsat_programmes_list_slow($href, \%prog);
-					}
-				}
+			# here is the title
+			$tag = $r->look_down('_tag' => 'a');
+			$tt = $tag->attr_get_i('onmouseover');
+			if ($tt =~ /<span class=blanc bold majuscule>(.*)<\/span>/ ) {
+				# "Fin des programmes" is not a real tv show
+				next if ($1 eq "Fin des programmes");
+
+				my $title = $1;
+				$prog{'title'} = [ [ $title ] ];
+			}
+
+			# here the description
+			if ($tt =~ /contenu_de_tooltip_listing_programme>([^<]*)</) {
+				my $str = $1;
+				$str =~ s/\\'/'/g;
+				$prog{'desc'} = [ [ $str, "fr" ] ] if not $str eq "";
+			}
+		
+			# here is the category
+			$tt = $r->attr_get_i('class');
+			$prog{'category'} = [ [ "Musique", "fr" ] ] if ($tt =~ /musique$/);
+			$prog{'category'} = [ [ "Cinéma", "fr" ] ] if ($tt =~ /cinema$/);
+			$prog{'category'} = [ [ "Sport", "fr" ] ] if ($tt =~ /sport$/);
+			$prog{'category'} = [ [ "Divertissement", "fr" ] ] if ($tt =~ /divertissement$/);
+			$prog{'category'} = [ [ "Jeunesse", "fr" ] ] if ($tt =~ /jeunesse$/);
+			$prog{'category'} = [ [ "Découverte", "fr" ] ] if ($tt =~ /decouverte$/);
+			$prog{'category'} = [ [ "Infos / Magazine", "fr" ] ] if ($tt =~ /infos_magazine_emission$/);
+			$prog{'category'} = [ [ "Série", "fr" ] ] if ($tt =~ /serie_feuilleton$/);
+
+			# get director/actors if --slow was asked
+			if ($opt_slow) {
+				$tag = $r->look_down('_tag', 'a');
+				my $href = $CANALSAT_BASE_URL.$tag->attr_get_i('href');
+				get_canalsat_programmes_list_slow($href, \%prog);
 			}
 	
 			# add the current prog to the list if it is valid
+			# and keep a hand on it
 			if (defined $prog{'title'}) {
 				push @progs,\%prog;
+				$previous_prog = \%prog;
 			}
 		}
 
@@ -615,6 +629,8 @@ if ($mode eq 'configure') {
 	my @questions = map { "Would you like to download data for '$BROADCASTERS{$_}' ?" } @id;
 	my @responses = ask_many_boolean(1, @questions);
 
+	init_user_agent();
+
 	# retrieve the channels list for each broadcasters
 	foreach (0..$#id) {
 		if ($responses[$_]) {
@@ -667,6 +683,8 @@ if ($mode eq 'list-channels') {
 	my @questions = map { "Select '$BROADCASTERS{$_}' ?" } @id;
 	my @responses = ask_many_boolean(1, @questions);
 
+	init_user_agent();
+
 	# retrieve the channels list for each broadcasters
 	foreach (0..$#id) {
 		if ($responses[$_]) {
@@ -704,11 +722,6 @@ die if $mode ne 'grab';
 
 # Now let's do it
 Date_Init("TZ=UTC");
-
-# Change HTTP Headers to make canalsat-reunion.com happy
-$XMLTV::Get_nice::ua->default_headers->push_header('Keep-Alive'=>'300');
-$XMLTV::Get_nice::ua->default_headers->push_header('Connection'=>'keep-alive');
-$XMLTV::Get_nice::ua->default_headers->push_header('Referer'=>'http://srv1.media-overseas.com/FMPro?-db=reunion.fp5&-lay=M1&-format=recherchereunion.htm&-view');
 
 # read tv_grab_re conf file...
 @config_lines = XMLTV::Config_file::read_lines($config_file);
@@ -771,7 +784,8 @@ foreach (@channels) {
 	my @progs;
 
 	if ($_->{'type'} eq 'CANALSAT') {
-	    @progs = get_canalsat_programmes_list($_->{'id'}, $opt_offset, $opt_days);
+		init_user_agent();
+		@progs = get_canalsat_programmes_list($_->{'id'}, $opt_offset, $opt_days);
 	}
 
 	if ($_->{'type'} eq 'PARABOLE') {
