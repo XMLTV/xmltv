@@ -365,22 +365,29 @@ sub get_canalsat_programmes_list($$$) {
 		#$html->dump();
 
 		# look for every DIV elements that contain programm
-		my @rows = $html->look_down('_tag' => 'div', 'class' => qr/contenu_prog_listing /);
-
-		# the previous prog processed
-		my $previous_prog;
+		my @divs = $html->look_down('_tag' => 'div', 'class' => qr/contenu_prog_listing /);
 
 		# scan each row
-		foreach my $r (@rows) {
+		foreach my $div (@divs) {
 			# the current prog being processed
 			my %prog;
 			my ($tag, $tt, $stop);
-			#$r->dump();
+			#$div->dump();
 			
 			$prog{'channel'} = $idchaine.".canalsat-reunion.com";
 
+			$tt = $div->attr_get_i('style');
+			if ($tt =~ /margin-top:(\d+)px/) {
+				my $break = int($1 / 2);
+
+				# if the time between 2 programs is greater than 30min
+				# so we are in the day after (this is needed when grabbing
+				# several days in one time : same program seen twice)
+				next if ($break > 30)
+			}
+
 			# here is the start time
-			$tag = $r->look_down('_tag', '~text');
+			$tag = $div->look_down('_tag', '~text');
 			$tt = $tag->attr_get_i('text');
 			if ($tt =~ /(\d+):(\d\d)/ ) {
 				$start = Date_SetTime($start, $1, $2, 0);
@@ -389,34 +396,28 @@ sub get_canalsat_programmes_list($$$) {
 				$prog{'start'} = $str." +0400";
 			}
 			
-			if (defined $previous_prog->{'title'}) {
-				# fix stop time in the previous program
-				$previous_prog->{'stop'} = $prog{'start'};
-				my $prev_start = ParseDate($previous_prog->{'start'});
+			# compute the duration from height attribute of the div
+			$tt = $div->attr_get_i('style');
+			if ($tt =~ /height:(\d+)px/) {
+				my $duration = int($1 / 2);
+				$prog{'length'} = $duration * 60;
 
-				# change the start date for program beginning before midnight
-				# and ending the day after (after midnight)
-				if (Date_Cmp($start,$prev_start) < 0) {
-					$start = DateCalc($start, "+1 day");
-
-					my $str = UnixDate($start, "%Y%m%d%H%M%S");
-					$prog{'start'} = $str." +0400";
-					$previous_prog->{'stop'} = $prog{'start'};						
-				}
+				$start = DateCalc($start, "+$duration min");
 			}
 
 			# here is the title
-			$tag = $r->look_down('_tag' => 'a');
+			$tag = $div->look_down('_tag' => 'a');
 			$tt = $tag->attr_get_i('onmouseover');
 			if ($tt =~ /<span class=blanc bold majuscule>(.*)<\/span>/ ) {
 				# "Fin des programmes" is not a real tv show
-				next if ($1 eq "Fin des programmes");
+				#next if ($1 eq "Fin des programmes");
 
 				my $title = $1;
+				$title =~ s/\\'/'/g;
 				$prog{'title'} = [ [ $title ] ];
 			}
 
-			# here the description
+			# here is the description
 			if ($tt =~ /contenu_de_tooltip_listing_programme>([^<]*)</) {
 				my $str = $1;
 				$str =~ s/\\'/'/g;
@@ -424,7 +425,7 @@ sub get_canalsat_programmes_list($$$) {
 			}
 		
 			# here is the category
-			$tt = $r->attr_get_i('class');
+			$tt = $div->attr_get_i('class');
 			$prog{'category'} = [ [ "Musique", "fr" ] ] if ($tt =~ /musique$/);
 			$prog{'category'} = [ [ "Cinéma", "fr" ] ] if ($tt =~ /cinema$/);
 			$prog{'category'} = [ [ "Sport", "fr" ] ] if ($tt =~ /sport$/);
@@ -436,7 +437,7 @@ sub get_canalsat_programmes_list($$$) {
 
 			# get director/actors if --slow was asked
 			if ($opt_slow) {
-				$tag = $r->look_down('_tag', 'a');
+				$tag = $div->look_down('_tag', 'a');
 				my $href = $CANALSAT_BASE_URL.$tag->attr_get_i('href');
 				get_canalsat_programmes_list_slow($href, \%prog);
 			}
@@ -445,7 +446,6 @@ sub get_canalsat_programmes_list($$$) {
 			# and keep a hand on it
 			if (defined $prog{'title'}) {
 				push @progs,\%prog;
-				$previous_prog = \%prog;
 			}
 		}
 
