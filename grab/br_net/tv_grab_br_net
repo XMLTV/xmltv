@@ -78,23 +78,7 @@ For some channels it seems NET has no data available whatsoever. When grabbing d
 
 The NET website is sometimes inconsistent and buggy. And while the grabber might work perfect for some cities, it might not even be configurable for others. This is due to the bundles/selections they offer for the particular cities. It looks like for some cities the site works completely different :-(
 
-Here a way to determine if your city is one of those that are different and not supported:
-
-=over
-
-=item 1) Direct your browser to I<http://nettv.globo.com/NETServ/br/home/>
-
-=item 2) Select São Paulo or Rio de Janeiro (they're known to be working)
-
-=item 3) After accepting the cookie enter this URL:
-
-I<http://nettv.globo.com/NETServ/br/home/indexnet.jsp?id=35>
-
-=item 4) Check if your city is still in the select-list on top of the page. If not - sorry, you're not lucky today :-(
-
-=back
-
-As of now there is no solution or workaround for this problem. Let me know if you find a workaround or want to implement a different grabber for the so far unsupported cities.
+NET currently seems to have a problem with the encoding of their data. While their site is coded in ISO-8859-1 their data looks like it has been corrupted by a conversion from UTF-8 (characters replaced with questionmarks). Since this happens at their site there is no way we can work around that, sorry :-(
 
 =head1 SEE ALSO
 
@@ -138,8 +122,9 @@ my constant $base = "http://$domain";
 my constant $pname_sel = 'selecaoid';
 my constant $pname_ch = 'canalid';
 my constant $pname_city = 'cidade_id';
-my constant $retry_max = 2;
-my constant $retry_sleep = 5;
+my constant $pname_form = 'Cidade_form';
+my constant $retry_max = 3;
+my constant $retry_sleep = 10;
 my constant $lang = 'pt_BR';
 my constant $maxrating = 5; # maximum star-rating
 
@@ -644,19 +629,18 @@ sub init {
     }else{
 	$mech = &initmech();
     }
-    
-    my $url = '/NETServ/br/home/home.jsp';
-    &fetch($mech, $base . $url);
 
-    # submit city and get cookie
-    $mech->submit_form(form_number => 1, fields => {$pname_city => $c});
+    &fetch($mech, "$base/NETServ/br/home/html/1.jsp");
+
+    # submit city and get cookie(s)
+    $mech->submit_form( form_name => $pname_form, fields => { $pname_city => $c } );
 
     # retry on error
     my $retry = 1;
     while (! $mech->success() && $retry < $retry_max) {
 	sleep $retry_sleep;
 	$retry++;
-	$mech->submit_form(form_number => 1, fields => {$pname_city => $c});
+	$mech->submit_form( form_name => $pname_form, fields => { $pname_city => $c } );
     }
     &net_error("Failed to submit city for retrieving cookie" ) unless $mech->success();
 
@@ -677,33 +661,23 @@ sub initmech {
 
 
 # fetch list of available cities
-# The list from the homepage can not be used because some cities
-# don't use the format this grabber was built for.
-# Thus we first use a city that works and fetch the list from
-# a page that comes up later.
 sub citylist {
-    my $url = '/NETServ/br/home/home.jsp';
-
-    my $mech = &init(undef, 1); # 1 aka São Paulo works
-
+    my $url = '/NETServ/br/home/html/1.jsp';
+    my $mech = &init(undef, 1); # 1 - aka São Paulo
     update $bar if $bar;
 
-    # the selectlist on this page is different!
-    $url = '/NETServ/br/prog/melhor_mes.jsp';
-
     my $html = &fetch($mech, $base . $url);
-
     update $bar if $bar;
 
     my %cities;
-    if ($html =~ /<(select)\s+name=(\"|\')?\Q$pname_city\E\2\s+[^>]*>(.*?)<\/\1>/is) {
-	my $options = $3;
-
-	while ($options =~ s/<(option)[^>]*value\s*=(\"|\')?(\d+)\2[^>]*>([^<]*?)<\/\1>//is) {
-	    next if $3 == 0;
-	    $cities{$3} = $4;
-	    update $bar if $bar;
-	}
+    if ($html =~ /this\.states\s*\=\s*\[(.*?)\]\;\s*this\.idstates\s*=\s*\[(.*?)\]/is) {
+	my $names = $1;
+	my $values = $2;
+	my @n = map /\"([^\"]+)\"/, split(/\,/, $names);
+	my @v = map /\"([^\"]+)\"/, split(/\,/, $values);
+	for (0 .. $#n) {
+	    $cities{$v[$_]} = $n[$_];
+        }
     }
     return ($mech, \%cities);
 }
@@ -748,7 +722,7 @@ sub parsebundles {
     my ($html, $url, $bundles) = @_;
 
     # extract name and URL-parameters of the bundles
-    while ($html =~ s/<A\s+HREF\s*=\s*(\"|\')?\Q$url\E\?([\w\&=]+)\1\s*[^>]*>([^<]+)<\/A>//si) {
+    while ($html =~ s/<A\s+HREF\s*=\s*(\"|\')?\Q$url\E\?([\w\&\?=]+)\1\s*[^>]*>([^<]+)<\/A>//si) {
 	my $name = $3;
 	my $params = $2;
 	# only take the value of parameter $pname_sel
