@@ -53,7 +53,7 @@ B<--offset N> Start grabbing at today + N days.
 
 B<--quiet> Suppress all progress messages normally written to standard error.
 
-B<--debug> Provide extra debugging messages to standard error.
+B<--debug> Provide detailed debugging messages to standard error.
 
 B<--no-title-updates> Disables processing of programme titles to remove
 non-title information and split titles into title/subtitle.
@@ -176,6 +176,12 @@ my $rt_channels_uri = 'http://xmltv.radiotimes.com/xmltv/channels.dat';
 # Retrieve tv_grab_uk_rt channel_ids mapping via XMLTV::Supplement
 my $xmltv_channel_ids = GetSupplement( 'tv_grab_uk_rt', 'channel_ids' );
 
+# Retrieve tv_grab_uk_rt prog_titles_to_process via XMLTV::Supplement
+my $prog_titles_to_process = undef;
+unless ( $opt_no_title_updates ) {
+    $prog_titles_to_process = GetSupplement( 'tv_grab_uk_rt', 'prog_titles_to_process' );
+}
+
 # Get default location to store cached listings data
 my $default_cachedir = get_default_cachedir();
 
@@ -268,10 +274,12 @@ my (%rt_to_xmltv, %xmltv_to_rt);
 # Hashes for the optional fields
 my (%extra_dn, %icon_urls, %channel_offset, %broadcast_hours);
 
-my ($num_ukrt_channels, $num_ts_channels);
+my ($num_good_channels, $num_bad_channels, $num_ts_channels, $num_pt_channels);
+
+say( "\nExtended channel information:\n") if $opt_debug;
 foreach my $line (@lines) {
     # Comments are allowed if they are at the start of tte line
-    next if $line =~ '^#';
+    next if $line =~ '^#' or $line =~ '^$';
     my @fields = split( /\|/, $line );
     # We need at least 2 fields (xmltv_id,rt_id) to run the grabber
     # No check on maximum number of fields to support future updates
@@ -294,7 +302,8 @@ foreach my $line (@lines) {
 
     # Check for required XMLTV ID and RT ID fields, skip if missing
     if( $xmltv_id !~ /\w+\.\w+.*/ || $rt_id !~ /^\d+$/ ) {
-        say( "Invalid XMLTV ID or RT ID seen in channel_ids" ) if not $opt_quiet;
+        say( "Invalid XMLTV ID or RT ID seen in channel_ids" )
+          if not $opt_quiet;
         next;
     }
     
@@ -316,7 +325,8 @@ foreach my $line (@lines) {
     if( defined $extra_dn ) {
         if( $extra_dn !~ /\w+/ ) {
             $extra_dn = undef;
-            say( "No channel name associated with '$xmltv_id'" ) if $opt_debug;
+            say( "No channel name associated with '$xmltv_id'" )
+              if $opt_debug;
         }
     }
     
@@ -324,7 +334,8 @@ foreach my $line (@lines) {
     if( defined $icon_url ) {
         if( $icon_url !~ /^http/ ) {
             $icon_url = undef;
-            say( "No channel icon associated with '$xmltv_id'" ) if $opt_debug;
+            say( "No channel icon associated with '$xmltv_id'" )
+              if $opt_debug;
         }
     }
     
@@ -351,24 +362,110 @@ foreach my $line (@lines) {
     push @{$rt_to_xmltv{$rt_id}}, $xmltv_id;
     $xmltv_to_rt{$xmltv_id} = $rt_id;
 
-    $extra_dn{$xmltv_id} = $extra_dn if defined $extra_dn;
+    if (defined $extra_dn) {
+        $extra_dn{$xmltv_id} = $extra_dn;
+        # check for flagged bad channels
+        if ( $extra_dn =~ /\(Do\ Not\ Use\)/ ) {
+            $num_bad_channels++;
+        }
+        else {
+            $num_good_channels++;
+        }
+    }
     $icon_urls{$xmltv_id} = $icon_url if defined $icon_url;
-    $channel_offset{$xmltv_id} = $channel_offset if defined $channel_offset;
-    $broadcast_hours{$xmltv_id} = $broadcast_hours if defined $broadcast_hours;
     
-    $num_ukrt_channels++ if $extra_dn !~ /\(Do\ Not\ Use\)/;
-    $num_ts_channels++ if $xmltv_id =~ /^tsod/;
+    if (defined $channel_offset) {
+        $channel_offset{$xmltv_id} = $channel_offset;
+        $num_ts_channels++;
+    }
+    if (defined $broadcast_hours) {
+        $broadcast_hours{$xmltv_id} = $broadcast_hours;
+        $num_pt_channels++;
+    }
 }
 
-say( "\nThe XMLTV tv_grab_uk_rt software has support for $num_ukrt_channels channels, of which
-$num_ts_channels +1/+2 channels use timeshifted original data. These channels may
+# Read in the prog_titles_to_process file
+#
+my $have_title_data = 0;
+my (@non_title_info, @mixed_title_subtitle, 
+    @mixed_subtitle_title, @reversed_title_subtitle) = ();
+
+unless( $opt_no_title_updates ) {
+    if( defined $prog_titles_to_process) {
+        my @prog_titles_to_process = split( /[\n\r]+/, $prog_titles_to_process );
+
+        say( "\nTitle processing information:\n" ) if $opt_debug;
+        foreach my $line (@prog_titles_to_process) {
+            # Comments are allowed if they are at the start of the line
+            next if $line =~ /^#/;
+            my @fields = split( /\|/, $line );
+            # Each entry requires 2 fields
+            if ( @fields != 2 ) {
+                say( "Wrong number of fields seen in prog_titles_to_process file, skipping entry '" . $line . "'" )
+                  if $opt_debug;
+                next;
+            }
+            # The prog_titles_to_process fields are:
+            # 1) procesing code
+            # 2) title/non-title text to process
+            #
+            my ($code, $process_text) = @fields;
+            if ($code !~ /\d+/ or not defined $process_text ) {
+                say( "Invalid title processing entry: " . $line . "'" )
+                  if $opt_debug;
+                next;
+            }
+            # processing codes are documented in prog_titles_to_process file
+            if ( $code eq '1' and $process_text ne '' )  {
+                push @non_title_info, $process_text;
+                say( "Will remove '" . $process_text . "' from title if found" )
+                  if $opt_debug;
+                $have_title_data = 1;
+            }
+            elsif ( $code eq '2' and $process_text ne '' ) {
+                push @mixed_title_subtitle, $process_text;
+                say( "Will check for subtitle after title for '" . $process_text . "'" )
+                  if $opt_debug;
+                $have_title_data = 1;
+                next;
+            }
+            elsif ( $code eq '3' and $process_text ne '' ) {
+                push @mixed_subtitle_title, $process_text;
+                say( "Will check for subtitle before title for '" . $process_text . "'" )
+                  if $opt_debug;
+                $have_title_data = 1;
+                next;
+            }
+            elsif ( $code eq '4' and $process_text ne '' ) {
+                push @reversed_title_subtitle, $process_text;
+                say( "Will check for reversed title/subtitle for '" . $process_text . "'" )
+                  if $opt_debug;
+                next;
+            }
+            else {
+                say ( "Unknown code seen in prog_titles_to_process file, skipping entry '" . $line . "'" )
+                  if $opt_debug;
+                next;
+            }
+        }
+    }
+    else {
+        say( "Title processing enabled, but no processing information. Disabling title processing." )
+          if not $opt_quiet;
+    }
+}
+
+say( "\nThe XMLTV tv_grab_uk_rt software has support for $num_good_channels channels, of which
+$num_ts_channels +1/+2 channels use timeshifted coporiginal data. These channels may
 also have listings data available separately from Radio Times. The
 advantage of using timeshifted original data in lieu of the Radio Times
 +1/+2 files is the guarantee of the same titles/descriptions for all
-channels sharing the programme information.\n" ) if not $opt_quiet;
+channels sharing the programme information. The software also supports
+$num_pt_channels part-time channels by extracting programme information for these 
+channels for the periods they are on-air.\n" ) if not $opt_quiet;
 
-# Read in the Radio Times channels.dat file and pProcess the list of 
-# available channels. Check for presence of duplicate ID or names.
+# Read in the Radio Times channels.dat file and process the list of 
+# available channels. Check for presence of duplicate IDs or names.
 #
 my (%channels, %seen_rt_id, %seen_name);
 say( "Retrieving list of available channels from Radio Times" ) if $opt_debug;
@@ -377,8 +474,9 @@ say( "Converting list of available channels from UTF-8 to ISO-8859-1\n" ) if $op
 my $rt_channels_dat = $uref->fromUTF8( "iso-8859-1" , $rt_channels_dat_utf8 );
 my @rt_channels = split /\n/, $rt_channels_dat;
 my $num_rt_channels = scalar @rt_channels;
-say( "Radio Times reports available listings for $num_rt_channels channels.
-Some of these listings may be empty, so we check for this during processing.\n")
+
+say( "The Radio Times reports available listings for $num_rt_channels channels. We have
+flagged $num_bad_channels of these channels as unusable as they currently contain no listings.\n")
   if not $opt_quiet;
 
 my $chans_bar = new XMLTV::ProgressBar({name   => 'Retrieving channels',
@@ -466,7 +564,8 @@ if (defined $chans_bar) {
     say( "\n" ) if not $opt_quiet;
 }
 
-say( "\nRadio Times has $num_good_rt_channels usable listing files available\n" ) 
+say( "\nRadio Times has $num_good_rt_channels usable listing files available which we
+will use to generate listings for regular and timeshifted channels.\n" ) 
   if not $opt_quiet;
 
 if (not $opt_quiet) {
@@ -622,6 +721,10 @@ $need_final_update = 0;
 # 'manufactured' titles which may include temporary 'season' information
 my %prog_titles;
 
+# Create hash to store unhandled UTF-8 characters seen in listings data
+# after we have converted the listings data from UTF-8 to Latin-1.
+my %unhandled_utf8_chars;
+
 # Process all of the channels we want listings for
 foreach my $ch (@wanted_chs) {
     my $c = $channels{$ch};
@@ -700,14 +803,19 @@ foreach my $ch (@wanted_chs) {
             s/\xC2\xA3/\xA3/g; # <C2><A3> -> Pound sign
             s/\xC3\xAA/\xEA/g; # <C3><AA> -> ordinal indicator
             
-            say( "  Checking for any remaining UTF-8 characters in '$rt_name' listings data" )
+            say( "  Checking for any unhandled UTF-8 characters in '$rt_name' listings data" )
               if $opt_debug;
             
             if ( @utf8_chars = $page =~ /([\xC2-\xDF][\x80-\xBF])/g ) {
                 foreach my $utf8_char (@utf8_chars) {
-                    say( "  Possible UTF-8 character still seen in '$rt_name' listings data: '$utf8_char'" )
+                    $unhandled_utf8_chars{$utf8_char} = $rt_name;
+                    say( " Unhandled UTF-8 character '$utf8_char' seen in '$rt_name' listings data" )
                       if $opt_debug;
                 }
+            }
+            else {
+                say( "  No unhandled UTF-8 characters detected in '$rt_name' listings data" )
+                  if $opt_debug;
             }
         }
 
@@ -774,7 +882,7 @@ foreach my $ch (@wanted_chs) {
             else { die "bad true/false value $_" }
         }
 
-        say( "  Processing <programme> title '$title'" ) if $opt_debug;
+        say( "  Processing programme title '$title'" ) if $opt_debug;
 
         if (not defined $title) {
             say( "  Missing title in '$_', skipping entry\n" ) if $opt_debug;
@@ -794,7 +902,7 @@ foreach my $ch (@wanted_chs) {
         }
         
         # Title and sub-title processing. This procesing can be disabled by 
-        # specifying the run-time option '--disable-title-updates'.
+        # specifying the run-time option '--no-title-updates'.
         #
         # If the programme's title is found to contain a colon, we run a series
         # of search and replacement routines to clean up the title and sub-title
@@ -802,164 +910,77 @@ foreach my $ch (@wanted_chs) {
         # inconsistent title/sub-title formats will result in PVR applications 
         # being unable to consistently match programme titles.
         #
-        if ( not $opt_no_title_updates and $title =~ /:/ ) {
+        # We process titles if the user has not explicitly disabled processing
+        # and we have some available data to process against
+        #
+        if ( $have_title_data and $title =~ /:/ ) {
             # Remove any non-title information found in the title. This information
             # is placed at the start of the 'real' title
-            my @non_title_info = ( "4 Music",
-                                   "Action Heroes Season",
-                                   "Basketball",
-                                   "BBC Four on BBC Two",
-                                   "BBC Switch",
-                                   "Bond Season",
-                                   "CBBC",
-                                   "CBeebies",
-                                   "CITV",
-                                   "Comedy Season",
-                                   "Rock Star Week",
-                                   "Screen Two",
-                                   "Sign Zone",
-                                   "Sword & Sorcery Season",
-                                   "T4",
-                                   "T4 on the Beach",
-                                   "Western Season",
-                                  );
-
-            foreach my $non_title_info (@non_title_info) {
-                if ( $title =~ s/^$non_title_info\s*:\s*// ) {
-                    say( "  Removed '$non_title_info' from title" )
-                      if $opt_debug;
-                    last;
+            #
+            if ( @non_title_info ) {
+                foreach my $non_title_info (@non_title_info) {
+                    if ( $title =~ s/^($non_title_info)\s*:\s*// ) {
+                        say( "  Removed '" . $non_title_info . "' from title '" . $title . "'")
+                          if $opt_debug;
+                        last;
+                    }
                 }
             }
-            
             # Some programme titles contain both the title and sub-title,
             # separated by a colon ($title:$episode). Here we reassign the 
             # sub-title to the $episode element, leaving only the programme's 
             # title in the $title element
             #
-            my @mixed_title_subtitle = ( "3 Minute Wonder",
-                                         "4Play",
-                                         "Aircrash Unsolved",
-                                         "Best of British",
-                                         "Biography",
-                                         "Classic Albums",
-                                         "Coast",
-                                         "Columbo",
-                                         "Comedy Live Presents",
-                                         "Comedy Showcase",
-                                         "Cribs",
-                                         "Crime Scene USA",
-                                         "Criminal Underworld Histories",
-                                         "Cutting Edge",
-                                         "Deadly Dozen",
-                                         "Dispatches",
-                                         "Drive Thru",
-                                         "Exposed",
-                                         "Extraordinary Humans",
-                                         "Extraordinary People",
-                                         "Extreme",
-                                         "First Cut",
-                                         "Great Historical Britons",
-                                         "Greatest Hits",
-                                         "Horizon",
-                                         "Inspector Wexford",
-                                         "Kalahari",
-                                         "Kids by the Dozen",
-                                         "Killer Tanks",
-                                         "Lawless Britain",
-                                         "Legends",
-                                         "MTV 2 Years",
-                                         "MTV Live",
-                                         "MTV Unplugged",
-                                         "My Unique Family",
-                                         "Nightwatch with Steve Scott",
-                                         "Murder, She Wrote",
-                                         "Number 1s",
-                                         "Offset",
-                                         "Our World",
-                                         "Panorama",
-                                         "Primary Geography",
-                                         "Primary History",
-                                         "Real Crime",
-                                         "Rogue Raiders",
-                                         "Rides",
-                                         "Ruth Rendell's Inspector Wexford",
-                                         "Serengeti",
-                                         "Sexiest",
-                                         "Shades of Love",
-                                         "Sherlock Holmes",
-                                         "Storytellers",
-                                         "Storyville",
-                                         "Surviving Disaster",
-                                         "The Afternoon Play",
-                                         "The Colour of War",
-                                         "The Rewind Chart with Scott Mills",
-                                         "The Ruth Rendell Mysteries",
-                                         "The South Bank Show",
-                                         "The Twenties in Colour",
-                                         "The Third Reich in Colour",
-                                         "The World Stands Up",
-                                         "Timewatch",
-                                         "Top 5",
-                                         "Top Five",
-                                         "Top of the Pops",
-                                         "Travel Spies",
-                                         "VH1 Live",
-                                         "VH1 Loves",
-                                         "Videography",
-                                         "Wish You Were Here - Now and Then",
-                                         "Wish You Were Here - Now And Then",
-                                         "Wonderland",
-                                       );
-                                       
-            foreach my $mixed_title_subtitle (@mixed_title_subtitle) {
-                if ( $title =~ /^($mixed_title_subtitle)\s*:\s*(.*)/ ) {
-                    if( not defined $episode ) {
-                        say( "  Moved '" . $2 . "' to sub-title, new title is '" . $1 . "'" ) if $opt_debug;
-                        $title = $1;
-                        $episode = $2;
-                        last;
-                    }
-                    elsif( $episode eq $2 ) {
-                        say( "  Identical sub-title '" . $episode . "' also seen in title, new title is '" . $1 . "'" ) 
-                          if $opt_debug;
-                        $title = $1;
-                        last;
-                    }
-                    else {
-                        say( "  Cannot move sub-title seen in title '" . $2 . "' as episode '" . $episode . "' also given" ) 
-                          if $opt_debug;
-                        last;
+            if ( @mixed_title_subtitle ) {
+                foreach my $mixed_title_subtitle (@mixed_title_subtitle) {
+                    if ( $title =~ /^($mixed_title_subtitle)\s*:\s*(.*)/ ) {
+                        if( not defined $episode ) {
+                            say( "  Moved '" . $2 . "' to sub-title, new title is '" . $1 . "'" )
+                              if $opt_debug;
+                            $title = $1;
+                            $episode = $2;
+                            last;
+                        }
+                        elsif ( $episode eq $2 ) {
+                            say( "  Sub-title '" . $episode . "' seen in title already exists, new title is '" . $1 . "'" ) 
+                              if $opt_debug;
+                            $title = $1;
+                            last;
+                        }
+                        else {
+                            say( "  Cannot move sub-title '" . $2 . "' seen in title as episode '" . $episode . "' also given" )
+                              if $opt_debug;
+                            last;
+                        }
                     }
                 }
             }
-            
             # Some programme titles contain both the sub-title and title,
-            # separated by a colon ($episode:$title). Here we reassign the 
-            # sub-title to the $episode element, leaving only the programme's 
+            # separated by a colon ($episode:$title). Here we reassign the
+            # sub-title to the $episode element, leaving only the programme's
             # title in the $title element.
             #
-            my @mixed_subtitle_title = ( "Storyville",
-                                        );
-
-            foreach my $mixed_subtitle_title (@mixed_subtitle_title) {
-                if ( $title =~ /^(.*)\s*:\s*($mixed_subtitle_title)/ ) {
-                    if( not defined $episode ) {
-                        say( "  Moved '" . $1 . "' to sub-title, new title is '" . $2 . "'" ) if $opt_debug;
-                        $title = $2;
-                        $episode = $1;
-                        last;
-                    }
-                    elsif( $episode eq $1 ) {
-                        say( "  Identical sub-title '" . $episode . "' also seen in title, new title is '" . $2 . "'" ) 
-                          if $opt_debug;
-                        $title = $1;
-                        last;
-                    }
-                    else {
-                        say( "  Cannot move sub-title seen in title '" . $1 . "' as episode '" . $episode . "' also given" ) 
-                          if $opt_debug;
-                        last;
+            if ( @mixed_subtitle_title ) {
+                foreach my $mixed_subtitle_title (@mixed_subtitle_title) {
+                    if ( $title =~ /^(.*)\s*:\s*($mixed_subtitle_title)/ ) {
+                        if ( not defined $episode ) {
+                            say( "  Moved '" . $1 . "' to sub-title, new title is '" . $2 . "'" )
+                              if $opt_debug;
+                            $title = $2;
+                            $episode = $1;
+                            last;
+                        }
+                        elsif ( $episode eq $1 ) {
+                            say( "  Identical sub-title '" . $episode . "' also seen in title, new title is '" . $2 . "'" ) 
+                              if $opt_debug;
+                            $title = $2;
+                            last;
+                        }
+                        else {
+                            say( "  Cannot move sub-title '" . $1 . "' seen in title as episode '" . $episode . "' also given" )
+                              if $opt_debug;
+                            last;
+                        }
                     }
                 }
             }
@@ -970,16 +991,15 @@ foreach my $ch (@wanted_chs) {
         # $episode = title). In order to create more consistent data, we check 
         # for flagged programme titles and reverse the given title and 
         # sub-title
-        if ( not $opt_no_title_updates and defined $episode ) {
-            my @reversed_title_subtitle = ( "Timewatch",
-                                          );
-
+        if ( @reversed_title_subtitle and defined $episode ) {
             foreach my $reversed_title_subtitle (@reversed_title_subtitle) {
-                if( $reversed_title_subtitle eq $episode) {
-                    say( "  Seen reversed title-subtitle for '$title:$episode' - reversing" ) if $opt_debug;
+                if ( $reversed_title_subtitle eq $episode ) {
+                    say( "  Seen reversed title-subtitle for '" . $title . ":" . $episode . "' - reversing" )
+                      if $opt_debug;
                     $episode = $title;
                     $title = $reversed_title_subtitle;
-                    say( "  New title is '$title' and new sub-title is '$episode'" ) if $opt_debug;
+                    say( "  New title is '" . $title . "' and new sub-title is '" . $episode . "'" )
+                      if $opt_debug;
                     last;
                 }
             }
@@ -1228,7 +1248,7 @@ foreach my $ch (@wanted_chs) {
                 if ($opt_debug) {
                     say ( "  $chan_start - Start time of channel" );
                     say ( "  $chan_stop - Stop time of channel" );
-                    say( "  '$title' shown whilst channel is off-air, skipping" );
+                    say( "  '$title' shown whilst channel is off-air, skipping\n" );
                     next;
                 }
             }
@@ -1313,11 +1333,20 @@ if (defined $listings_bar) {
 }
 
 if ( not $opt_no_title_updates and $opt_debug and %prog_titles ) {
-    say( "Outputting list of titles containing possible non-title information" );
+    say( "\nOutputting list of titles containing possible non-title information" );
     foreach (sort keys %prog_titles) {
         say( "  $_" ) if ( /:/ );
     }
-    say( "End of title list\n" );
 }
 
-say( "Finished!\n" ) if not $opt_quiet;
+if ( $opt_debug and %unhandled_utf8_chars ) {
+    say ( "\nOutputting list of unhandled UTF-8 characters seen in listings" );
+    foreach (sort keys %unhandled_utf8_chars) {
+        say( "  Seen '" . $_ . "' in listings for channel '" . $unhandled_utf8_chars{$_} . "'" );
+    }
+}
+else {
+    say( "\nNo unhandled UTF-8 characters were detected in the listings" ) if $opt_debug;
+}
+
+say( "\nFinished!\n" ) if not $opt_quiet;
