@@ -350,7 +350,6 @@ my @opt_components
        deps => [ 'grab/uk_rt/tv_grab_uk_rt' => [ 'grab/uk_rt/tv_grab_uk_rt.in' ] ],
        grab_need_share => [ 'uk_rt' ],
        prereqs => { 'HTTP::Cache::Transparent' => 1.0, 
-                    'Unicode::UTF8simple' => 1.06,
                     'LWP::Simple' => 0 } ,
      },
 
