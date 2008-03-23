@@ -148,6 +148,7 @@ use XMLTV;
 use XMLTV::Options qw/ParseOptions/;
 use XMLTV::Configure::Writer;
 use XMLTV::Supplement qw/GetSupplement/;
+use HTTP::Request::Common;
 
 # deal with umlauts
 use HTML::Entities;
@@ -158,7 +159,6 @@ use XMLTV::Memoize; XMLTV::Memoize::check_argv('getstore');
 $ua->agent("xmltv/$XMLTV::VERSION");
 
 our $tmp= tempdir( CLEANUP => 1 ) . '/';
-#our $tmp = "/tmp/foobarbaz/";
 
 # set up XML::Twig
 our $epg= new XML::Twig( twig_handlers => { data => \&printepg } );
@@ -168,6 +168,11 @@ our $genre = new XML::Twig( twig_handlers => { data => \&makegenrehash } );
 
 # build a hash: epgdata.com channel id -> xmltv channel id
 my $chanids = GetSupplement( '@@name', 'channel_ids' );
+
+our $channelgroup;
+
+# names of files downloaded from epgdata.com
+our @filenames;
 
 our %chanid;
 my @lines = split( /[\n\r]+/, $chanids );
@@ -188,7 +193,7 @@ my( $opt, $conf ) = ParseOptions( {
     description => "@@desc",
 } );
 
-our $pin = $conf->{pin}->[0];
+my $pin = $conf->{pin}->[0];
 die 'Sorry, your PIN is not defined. Run @@name --configure to fix this.' unless defined($pin);
 
 our $tz = $conf->{tz}->[0];
@@ -250,7 +255,7 @@ $w_args{encoding} = 'ISO-8859-1';
 our $writer = new XMLTV::Writer(%w_args);
 
 
-downloadepg();
+downloadepg($opt->{days},$opt->{offset},$pin);
 prepareinclude($conf);
 # it looks like we can also extract the language from the file 
 # name of the epg data
@@ -259,8 +264,9 @@ processxml();
 
 
 sub downloadepg {
-    my $days = $opt->{days};
-    my $offset = $opt->{offset};
+    my $days = shift;
+    my $offset = shift;
+    my $pin = shift;
     my $i='0'; 	
     # we've got to start counting at 0
     # if we did "$i <= $days", we'd end up with one zip file too much
@@ -268,17 +274,20 @@ sub downloadepg {
     	my $dataoffset = $i +$offset;
 	my $baseurl="http://www.epgdata.com";
 	my $url=$baseurl . '/index.php?action=sendPackage&iOEM=&pin=' . $pin . '&dayOffset=' . $dataoffset . '&dataType=xml';
-	getstore($url, $tmp . "epgzip" . $dataoffset);
-        # This doesn't seem to work correctly. 
-        # It doesn't fail even if the PIN is wrong.
-        #unless (getstore($url, $tmp . "epgzip" . $dataoffset) == 200) {
-	#die "Couldn't download epg file\n";
-	#}
+        # get file name from content-disposition header
+        # yes, this is yet another ugly hack
+        my $response = ($ua->request(GET $url));
+        my $filename = $response->{"_headers"}{"content-disposition"};
+        $channelgroup = $response->{"_headers"}{"x-epgdata-channelgroup"};
+        $filename =~  s/^.*=//;
+        push @filenames, $tmp . $filename;
+        open(F,">$tmp" . $filename);
+        print F $response->content;
+        close(F);
+
 	$i++;
     }
-    # FIXME: we can easily create a list of files earlier in this function
-    my @zipfiles=(glob($tmp . 'epgzip*'));
-    unzip(@zipfiles);
+    unzip(@filenames);
 }
 
 # for simplicity's sake, always call with $conf as argument at least
@@ -289,11 +298,9 @@ sub prepareinclude {
     my $includeurl=$baseurl . "/index.php?action=sendInclude&iOEM=&pin=" . $pin
         . "&dataType=xml";
     getstore($includeurl, $tmp . "includezip");
-# This doesn't seem to work correctly. 
-# It doesn't fail even if the PIN is wrong.
-#    unless (getstore($includeurl, $tmp . "includezip") == 200) {
-#        die "Couldn't download include file\n";
-#     }
+    # make sure we know $channelgroup
+    downloadepg('1','0',$pin);
+
     my @zipfiles=( $tmp . "includezip");
     unzip(@zipfiles)
 }
@@ -317,7 +324,7 @@ sub unzip {
 sub processxml {
     $writer->start({ 'generator-info-name' => '@@name' });
     $genre->parsefile($tmp . 'genre.xml');
-    $channels->parsefile($tmp . 'channel_' . findchannelcode($xmlfiles[0], $tmp) .  '.xml');
+    $channels->parsefile($tmp . 'channel_' . $channelgroup . '.xml');
     foreach my $xmlfile (@xmlfiles) {
 	$epg->parsefile($xmlfile);
     }
@@ -508,8 +515,7 @@ sub list_channels {
     my ( $conf, $opt ) = @_;
     prepareinclude($conf, $opt);
     # borrowed from http://www.xmltwig.com/xmltwig/ex_fm1
-    # FIXME: must not hardcode package code!
-    $channels->parsefile($tmp . 'channel_y.xml');
+    $channels->parsefile($tmp . 'channel_' . $channelgroup . '.xml');
     my $channel_list= $channels->root;
     my @channels= $channel_list->children;
 
