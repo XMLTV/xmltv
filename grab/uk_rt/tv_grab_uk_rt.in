@@ -234,7 +234,7 @@ my (%extra_dn, %icon_urls, %channel_offset, %broadcast_hours);
 my ($num_good_channels, $num_bad_channels, 
     $num_ts_channels,   $num_pt_channels);
 
-t("\nExtended channel information:");
+t("\nExtended channel information:\n");
 
 XMLTV_CHANID_ENTRY:
 foreach my $line (@lines) {
@@ -244,8 +244,10 @@ foreach my $line (@lines) {
     # We need at least 2 fields (xmltv_id,rt_id) to run the grabber
     # No check on maximum number of fields to support future updates
     # to channel_ids now we are using XMLTV::Supplement
-    die "Error: Wrong number of fields in XMLTV channel_ids file.\n\n"
-        . "Please update XMLTV to the current version." if (@fields < 2);
+    if (scalar @fields < 2) {
+        t("Wrong number of fields in XMLTV channel_ids entry '$line'.");
+        next XMLTV_CHANID_ENTRY;
+    }
 
     # The channel_ids fields are:
     # 1) XMLTV ID
@@ -262,9 +264,7 @@ foreach my $line (@lines) {
 
     # Check for required XMLTV ID and RT ID fields, skip if missing
     if ($xmltv_id !~ /\w+\.\w+.*/ || $rt_id !~ /^\d+$/) {
-        if (!$opt_quiet) {
-            say("Invalid XMLTV ID or RT ID seen in channel_ids");
-        }
+        t("Invalid XMLTV ID or RT ID seen in channel_ids");
         next XMLTV_CHANID_ENTRY;
     }
     
@@ -422,7 +422,6 @@ if ($opt_title_updates) {
     }
 }
 
-#FIXME
 if (!$opt_quiet) {
     say("\nThe XMLTV tv_grab_uk_rt software has support for $num_good_channels\n"
        . "channels, of which $num_ts_channels +1/+2 channels use timeshifted\n"
@@ -470,12 +469,16 @@ my $num_good_rt_channels;
 RT_CHANDAT_ENTRY:
 foreach my $rt_channel (@rt_channels) {
     chomp $rt_channel;
-    die "Bad channel entry seen in RT channels.dat: $rt_channel"
-        if ($rt_channel !~ /^(\d+)\|(.+)/);
+    if ($rt_channel !~ /^(\d+)\|(.+)/) {
+        t("Bad channel entry seen in RT channels.dat: $rt_channel, skipping");
+        next RT_CHANDAT_ENTRY;
+    }
 
     my ($rt_id, $rt_name) = ($1, $2);
-    die "Duplicate channnel ID '$rt_id' seen in RT channels.dat, aborting"
-        if ($seen_rt_id{$rt_id}++);
+    if ($seen_rt_id{$rt_id}++) {
+        t("Duplicate channnel ID '$rt_id' seen in RT channels.dat, skipping");
+        next RT_CHANDAT_ENTRY;
+    }
 
     if ($seen_name{$rt_name}++) {
         if (!$opt_quiet) {
@@ -673,15 +676,16 @@ CONFIG_ENTRY:
 foreach my $config_entry (XMLTV::Config_file::read_lines $config_file) {
     ++$n;
     next CONFIG_ENTRY if (!defined $config_entry);
-    die "$config_file: $n: bad line $config_entry\n"
-        if ($config_entry !~ /^\s*channel\s+(\S+)\s*$/);
+    next CONFIG_ENTRY if ($config_entry =~ '^#' || $config_entry =~ '^$');
+    if ($config_entry !~ /^\s*channel\s+(\S+)\s*$/) {
+        t("$config_file: $n: bad line '$config_entry'\n");
+        next CONFIG_ENTRY;
+    }
     my $id = $1;
     t("  Read channel '$id'");
     if (!exists $channels{$id}) {
-        if (!$opt_quiet) {
-            say("  XMLTV channel '$id' mentioned in $config_file but is " 
-               . "not available on RT site\n");
-        }
+        t("  XMLTV channel '$id' mentioned in $config_file but is " 
+          . "not available on RT site\n");
         next CONFIG_ENTRY;
     }
     push @wanted_chs, $id;
@@ -773,7 +777,10 @@ foreach my $ch (@wanted_chs) {
     my $xmltv_id = $c->{id};
     my $rt_id = $c->{rt_id};
     my $rt_name = $c->{'display-name'}->[0]->[0];
-    die "No Radio Times ID for channel '$rt_name'" if (!defined $rt_id);
+    if (!defined $rt_id) {
+        t("No Radio Times ID for channel '$rt_name', skipping");
+        next WANTED_CH;
+    }
     
     t("\nProcessing listings for '$rt_name' ($xmltv_id)");
     if (defined $channel_offset{$xmltv_id}) {
@@ -929,20 +936,30 @@ foreach my $ch (@wanted_chs) {
             $start,       $stop,            $duration_mins,
         ) = @fields;
 
+        if (!defined $title) {
+            t("  Missing title in '$prog', skipping");
+            next PROGRAMME;
+        }
+        t("  Processing programme title '$title'");
+
+        if (!defined $date) {
+            t("  Missing date in '$prog', skipping");
+            next PROGRAMME;
+        }
+
         foreach my $field ($premiere,    $film,            $repeat, 
                            $subtitles,   $widescreen,      $new_series,
                            $deaf_signed, $black_and_white, $choice, ) {
-            die "true/false value not defined" if (!defined $field);
+            if (!defined $field) {
+                t("  A required true/false value was undefined for '$title', skipping");
+                next PROGRAMME;
+            }
             if ($field eq 'true') { $field = 1; }
             elsif ($field eq 'false') { $field = 0; }
-            else { die "bad true/false value $field"; }
-        }
-
-        t("  Processing programme title '$title'");
-
-        if (!defined $title) {
-            t("  Missing title in '$prog', skipping entry\n");
-            next PROGRAMME;
+            else {
+                t("  A bad true/false value '$field' was seen for '$title', skipping");
+                next PROGRAMME;
+            }
         }
 
         if (defined $sub_title && defined $episode) {
@@ -1235,8 +1252,10 @@ foreach my $ch (@wanted_chs) {
         my ($yyyy, $mm, $dd);
         my $implicit_tz;
         
-        die "Missing date in $date" if (!defined $date);
-        die "Bad date $date" if ($date !~ m{(\d\d)/(\d\d)/(\d{4})$});
+        if ($date !~ m{(\d\d)/(\d\d)/(\d{4})$}) {
+            t("  A bad date '$date' was seen for '$title', skipping");
+            next PROGRAMME;
+        }
         ($dd, $mm, $yyyy) = ($1, $2, $3);
 
         # First we handle an explicit timezone (GMT/BST) found in the 
@@ -1288,7 +1307,10 @@ foreach my $ch (@wanted_chs) {
             # Parse the start time with utc_offset() to determine the correct
             # UTC offset to use for this programme's start/stop times
             $p{start} = utc_offset( "$yyyy$mm$dd$start", $base_tz );
-            die "Bad UTC offset for programme $title" if ($p{start} !~ /([+-]\d{4})$/);
+            if ($p{start} !~ /([+-]\d{4})$/) {
+                t("  Bad UTC offset '$1' detected for '$title', skipping");
+                next PROGRAMME;
+            }
             $implicit_tz = $1;
             t("  Implicit timezone calculated to be '$implicit_tz'");
             # Now apply the determined timezone to the 'real' start time
