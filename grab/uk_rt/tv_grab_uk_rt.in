@@ -1177,6 +1177,7 @@ foreach my $ch (@wanted_chs) {
 
         my %p = (channel => $ch, title => [ [ $title ] ]);
 
+        # Extract any episode numbers from sub-title information
         if (defined $sub_title 
             && ($sub_title =~ /^(\d+)\/(\d+)$/ 
                 || $sub_title =~ /^(\d+)\/(\d+)\s+-\s+/)) {
@@ -1191,15 +1192,17 @@ foreach my $ch (@wanted_chs) {
                 $sub_title = undef;
             }
         }
-        for ($sub_title) { $p{'sub-title'} = [ [ $_ ] ] if defined }
-        for ($desc) {
-            if (defined) {
-                s/\s+/ /g;
-                # s!</?[A-Za-z]+>!!g;
-                $p{desc} = [ [ $_, 'en' ] ];
-            }
+        # Write out remaining sub-title if present
+        if (defined $sub_title) {
+            $p{'sub-title'} = [ [ $sub_title ] ];
         }
-        for ($director) { $p{credits}{director} = [ $_ ] if defined }
+        if (defined $desc) {
+            $desc =~ s/\s+/ /g;
+            $p{desc} = [ [ $desc, 'en' ] ];
+        }
+        if (defined $director) {
+            $p{credits}{director} = [ $director ];
+        }
 
         # The Radio Times includes cast information in 2 formats:
         #
@@ -1324,12 +1327,10 @@ foreach my $ch (@wanted_chs) {
         #
         my ($yyyy, $mm, $dd);
         my $implicit_tz;
-        for ($date) {
-#FIXME
-            die "Missing date in $_" if !defined;
-            die "Bad date $_" if !m#(\d\d)/(\d\d)/(\d{4})$#;
-            ($dd, $mm, $yyyy) = ($1, $2, $3);
-        }
+        
+        die "Missing date in $date" if (!defined $date);
+        die "Bad date $date" if ($date !~ m{(\d\d)/(\d\d)/(\d{4})$});
+        ($dd, $mm, $yyyy) = ($1, $2, $3);
 
         # First we handle an explicit timezone (GMT/BST) found in the 
         # programme's title.
@@ -1338,19 +1339,43 @@ foreach my $ch (@wanted_chs) {
                 say("  Explicit timezone '$explicit_tz' detected in title");
             }
             $p{start} = utc_offset("$yyyy$mm$dd$start $explicit_tz", $base_tz);
-            $p{stop}  = utc_offset("$yyyy$mm$dd$stop $explicit_tz", $base_tz);
+            # As of 2008-03-25 it appears the Radio Times have altered the
+            # flagging of programmes shown around the BST transition.
+            #
+            # For the GMT->BST transition, GMT-flagged programmes now have a
+            # start time given in GMT, but a stop time given in BST.
+            #
+            # We therefore add the given duration of the programme to the given
+            # start time to determine the correct stop time. This should allow
+            # the grabber to correctly handle both the old and new 
+            # implementations of BST programme flagging.
+            $p{stop}  = utc_offset(
+                            UnixDate(
+                                DateCalc(
+                                    ParseDate("$yyyy$mm$dd$start $explicit_tz"),
+                                    ParseDateDelta($duration_mins . "minutes")
+                                ),
+                                "%Y%m%d%H%M %z"
+                            ),
+                            $base_tz
+                        );
+            
+            
+            # Disabled 2008-03-28
+            #$p{stop}  = utc_offset("$yyyy$mm$dd$stop $explicit_tz", $base_tz);
+            #
             # Correct the stop time if it is earlier than the start time,
             # ensuring we keep the same timezone as the start time.
-            if (Date_Cmp($p{start}, $p{stop}) > 0) {
-                $p{stop} = utc_offset(
-                               DateCalc(
-                                   Date_ConvTZ(
-                                       ParseDate("$yyyy$mm$dd$stop $explicit_tz"), 
-                                       Date_TimeZone,
-                                       $explicit_tz ),
-                                   ParseDateDelta("+ 1 day") ),
-                               $base_tz);
-            }
+            #if (Date_Cmp($p{start}, $p{stop}) > 0) {
+            #    $p{stop} = utc_offset(
+            #                   DateCalc(
+            #                       Date_ConvTZ(
+            #                           ParseDate("$yyyy$mm$dd$stop $explicit_tz"), 
+            #                           Date_TimeZone,
+            #                           $explicit_tz ),
+            #                       ParseDateDelta("+ 1 day") ),
+            #                   $base_tz);
+            #}
         }
         # Otherwise, we determine the timezone of the programme's start time
         # and apply the same TZ to the stop time.
@@ -1358,12 +1383,10 @@ foreach my $ch (@wanted_chs) {
             # Parse the start time with utc_offset() to determine the correct
             # UTC offset to use for this programme's start/stop times
             $p{start} = utc_offset( "$yyyy$mm$dd$start", $base_tz );
-            for ($p{start}) {
-                m#([+-]\d{4})$# or die "Bad UTC offset for programme $title";
-                $implicit_tz = $1;
-                if ($opt_debug) {
-                    say("  Implicit timezone calculated to be '$implicit_tz'");
-                }
+            die "Bad UTC offset for programme $title" if ($p{start} !~ /([+-]\d{4})$/);
+            $implicit_tz = $1;
+            if ($opt_debug) {
+                say("  Implicit timezone calculated to be '$implicit_tz'");
             }
             # Now apply the determined timezone to the 'real' start time
             $p{start} = utc_offset("$yyyy$mm$dd$start $implicit_tz", $base_tz);
