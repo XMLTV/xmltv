@@ -1220,92 +1220,51 @@ foreach my $ch (@wanted_chs) {
         # Broadcast date, start/stop times, and timezone adjustments.
         #
         # The RT data includes the date at start of broadcast, the start time,
-        # and the stop time of the programme, which may span a date, so we
-        # adjust the stop time to account for this.
+        # and the stop time of the programme.
         #
-        # The Radio Times sometime explicitly flags a programme's start/stop
+        # The Radio Times sometimes explicitly flags a programme's start/stop
         # times as being in a specific timezone (GMT or BST). We parse this
         # information out when processing the programme's title and apply it
-        # to the start/stop times of any such programmes ($explicit_tz).
+        # to the start time of any such programmes ($explicit_tz). Flagged
+        # programmes are usually seen in the date in March and October, when
+        # British Summer Times begins and ends.
         #
         # For the majority of programmes where the timezone is not flagged 
         # explicity, we determine the TZ/offset of the programme's start time
-        # via XMLTV::DST::utc_offset() and apply it to the stop time. This is 
-        # required because the RT timing data for a programme that spans a DST 
-        # changeover uses the same TZ/UTC offset for both times if not flagged.
+        # via XMLTV::DST::utc_offset().
+        #
+        # For all programmes we then calculate the programme's stop time 
+        # using the programme's TZ-corrected start time and stated length.
+        # This allows us to handle occasions when programmes having mixed 
+        # GMT/BST timings are not flagged.
         #
         # During the GMT->BST transition, any unflagged programme starting before 
-        # 0100 +0000 has both start/stop times given in GMT (+0000) in the RT 
-        # data. utc_offset will only provide the correct stop time if we 
-        # force the TZ/offset of the stop time to GMT for a programme finishing
-        # after 0100 +0000 as it will otherwise interpret the date as BST.
+        # 0100 +0000 generally has both start/stop times given in GMT (+0000) 
+        # in the RT  data (although this is not always the case).
         #
-        # DateCalc will always use TZ=+0000 when processing/displaying
-        # dates ( Date_Init('TZ=+0000') ) so we must also allow for this when
-        # adjusting dates and using this output with utc_offset.
-        #
-        # The transition from BST->GMT has a similar issue where we must
-        # explicitly force a stop time to BST (+0100) for any programmes 
-        # starting before the changeover and finishing at or after 0200 +0100 
-        # (0100 +0000).
+        # utc_offset() will only provide the correct stop time if we ensure 
+        # dates have the correct UTC offset applied. DateCalc will always use
+        # TZ=+0000 when processing/displaying dates ( Date_Init('TZ=+0000') ) 
+        # so we must also allow for this when adjusting dates and using this 
+        # output with utc_offset (we employ UnixDate() to help).
         #
         my ($yyyy, $mm, $dd);
-        my $implicit_tz;
+        my ($implicit_tz, $tz);
         
+        # Check for valid date format
         if ($date !~ m{(\d\d)/(\d\d)/(\d{4})$}) {
             t("  A bad date '$date' was seen for '$title', skipping");
             next PROGRAMME;
         }
         ($dd, $mm, $yyyy) = ($1, $2, $3);
+        t("  Start time given as '$yyyy/$mm/$dd $start', duration $duration_mins mins");
 
-        # First we handle an explicit timezone (GMT/BST) found in the 
-        # programme's title.
+        # Use BST information found in title, otherwise calculate it ourselves
         if (defined $explicit_tz) {
             t("  Explicit timezone '$explicit_tz' detected in title");
-            $p{start} = utc_offset("$yyyy$mm$dd$start $explicit_tz", $base_tz);
-            # As of 2008-03-25 it appears the Radio Times have altered the
-            # flagging of programmes shown around the BST transition.
-            #
-            # For the GMT->BST transition, GMT-flagged programmes now have a
-            # start time given in GMT, but a stop time given in BST.
-            #
-            # We therefore add the given duration of the programme to the given
-            # start time to determine the correct stop time. This should allow
-            # the grabber to correctly handle both the old and new 
-            # implementations of BST programme flagging.
-            $p{stop}  = utc_offset(
-                            UnixDate(
-                                DateCalc(
-                                    ParseDate("$yyyy$mm$dd$start $explicit_tz"),
-                                    ParseDateDelta($duration_mins . "minutes")
-                                ),
-                                "%Y%m%d%H%M %z"
-                            ),
-                            $base_tz
-                        );
-            
-            
-            # Disabled 2008-03-28
-            #$p{stop}  = utc_offset("$yyyy$mm$dd$stop $explicit_tz", $base_tz);
-            #
-            # Correct the stop time if it is earlier than the start time,
-            # ensuring we keep the same timezone as the start time.
-            #if (Date_Cmp($p{start}, $p{stop}) > 0) {
-            #    $p{stop} = utc_offset(
-            #                   DateCalc(
-            #                       Date_ConvTZ(
-            #                           ParseDate("$yyyy$mm$dd$stop $explicit_tz"), 
-            #                           Date_TimeZone,
-            #                           $explicit_tz ),
-            #                       ParseDateDelta("+ 1 day") ),
-            #                   $base_tz);
-            #}
+            $tz = $explicit_tz;
         }
-        # Otherwise, we determine the timezone of the programme's start time
-        # and apply the same TZ to the stop time.
         else {
-            # Parse the start time with utc_offset() to determine the correct
-            # UTC offset to use for this programme's start/stop times
             $p{start} = utc_offset( "$yyyy$mm$dd$start", $base_tz );
             if ($p{start} !~ /([+-]\d{4})$/) {
                 t("  Bad UTC offset '$1' detected for '$title', skipping");
@@ -1313,22 +1272,23 @@ foreach my $ch (@wanted_chs) {
             }
             $implicit_tz = $1;
             t("  Implicit timezone calculated to be '$implicit_tz'");
-            # Now apply the determined timezone to the 'real' start time
-            $p{start} = utc_offset("$yyyy$mm$dd$start $implicit_tz", $base_tz);
-            $p{stop}  = utc_offset("$yyyy$mm$dd$stop $implicit_tz", $base_tz);
-            # Correct the stop time if it is earlier than the start time,
-            # ensuring we keep the same timezone as the start time.
-            if (Date_Cmp($p{start}, $p{stop}) > 0) {
-                $p{stop} = utc_offset(
-                               DateCalc(
-                                   Date_ConvTZ(
-                                       ParseDate("$yyyy$mm$dd$stop $implicit_tz"),
-                                       Date_TimeZone,
-                                       $implicit_tz ),
-                                   ParseDateDelta("+ 1 day") ),
-                               $base_tz );
-            }
+            $tz = $implicit_tz;
         }
+
+        # Calculate start time with correct UTC offset
+        $p{start} = utc_offset("$yyyy$mm$dd$start $tz", $base_tz);
+
+        # Calculate stop time by adding length of programme to start time
+        my $datecalc_stop
+            = DateCalc(ParseDate("$yyyy$mm$dd$start $tz"),
+                       ParseDateDelta($duration_mins . "minutes")
+                       );
+        #t("  Stop time calculated as '$datecalc_stop' via DateCalc()");
+        my $unixdate_stop
+            = UnixDate($datecalc_stop, "%Y%m%d%H%M %z");
+        #t("  Stop time formatted as  '$unixdate_stop' via UnixDate()");
+
+        $p{stop}  = utc_offset($unixdate_stop, $base_tz);
 
         t("  $p{start} - Start time");
         t("  $p{stop} - Stop time");
@@ -1339,10 +1299,10 @@ foreach my $ch (@wanted_chs) {
         #
         if (defined $channel_offset{$xmltv_id}) {
             my $timeshift = $channel_offset{$xmltv_id};
-            my $start_postts = DateCalc( ParseDateString( $p{start} ), $timeshift );
-            my $stop_postts = DateCalc( ParseDateString( $p{stop} ), $timeshift );
-            $p{start} = utc_offset( UnixDate( $start_postts, "%Y%m%d%H%M %z" ), $base_tz );
-            $p{stop} = utc_offset( UnixDate( $stop_postts, "%Y%m%d%H%M %z" ), $base_tz );
+            my $start_ts = DateCalc( ParseDateString( $p{start} ), $timeshift );
+            my $stop_ts = DateCalc( ParseDateString( $p{stop} ), $timeshift );
+            $p{start} = utc_offset( UnixDate( $start_ts, "%Y%m%d%H%M %z" ), $base_tz );
+            $p{stop} = utc_offset( UnixDate( $stop_ts, "%Y%m%d%H%M %z" ), $base_tz );
             t("  $p{start} - Start time after applying '$timeshift' timeshift");
             t("  $p{stop} - Stop time after applying '$timeshift' timeshift");
         }
@@ -1435,7 +1395,9 @@ foreach my $ch (@wanted_chs) {
             }
         }
 
-        # Compare the stated and calculated durations of the programme
+        # Compare the stated and calculated durations of the programme. Since
+        # we use the given programme length to determine the stop time, any
+        # problems here need investigating
         my $rt_prog_length = ParseDateDelta( $duration_mins . " minutes" );
         my $real_prog_length = DateCalc( ParseDate( $p{start} ),
                                          ParseDate( $p{stop} ) );
