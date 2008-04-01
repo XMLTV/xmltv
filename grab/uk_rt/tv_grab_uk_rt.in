@@ -69,7 +69,7 @@ GetOptions( 'help'             => \ my $opt_help,
             'list-channels'    => \ my $opt_list_channels,
 ) or usage(0);
 
-die "Error: You cannot specify --quiet with --debug"
+die "Error: You cannot specify --quiet with --debug, exiting"
     if ($opt_quiet && $opt_debug);
 
 if ($opt_help) {
@@ -118,8 +118,8 @@ my $rt_channels_uri = '@@rt_url';
 
 # Retrieve @@name channel_ids mapping via XMLTV::Supplement
 my $xmltv_channel_ids = GetSupplement('@@name', 'channel_ids');
-die "Error: XMLTV channel_ids data is missing, cannot continue" 
-    if ($xmltv_channel_ids eq '' || !defined $xmltv_channel_ids);
+die "Error: XMLTV channel_ids data is missing, exiting" 
+    if (!defined $xmltv_channel_ids || $xmltv_channel_ids eq '');
 
 # Retrieve @@name prog_titles_to_process via XMLTV::Supplement
 my $prog_titles_to_process = undef;
@@ -166,7 +166,7 @@ sub init_cachedir {
             t("Created cache-directory '$path'");
         }
         else {
-            die "Error: Failed to create cache-directory $path: $@";
+            die "Error: Failed to create cache-directory $path: $@, exiting";
         }
     }
 }
@@ -263,32 +263,50 @@ foreach my $line (@lines) {
         $icon_url, $channel_offset, $broadcast_hours) = @fields;
 
     # Check for required XMLTV ID and RT ID fields, skip if missing
-    if ($xmltv_id !~ /\w+\.\w+.*/ || $rt_id !~ /^\d+$/) {
-        t("Invalid XMLTV ID or RT ID seen in channel_ids");
+    if (!defined $xmltv_id) {
+        t("Undefined XMLTV ID seen in channel_ids, skipping");
+        next XMLTV_CHANID_ENTRY;
+    }
+    elsif ($xmltv_id !~ /\w+\.\w+.*/) {
+        t("Invalid XMLTV ID seen in channel_ids, skipping");
+        next XMLTV_CHANID_ENTRY;
+    }
+    elsif (!defined $rt_id) {
+        t("Undefined RT ID seen in channel_ids, skipping");
+        next XMLTV_CHANID_ENTRY;
+    }
+    elsif ($rt_id !~ /^\d+$/) {
+        t("Invalid RT ID seen in channel_ids, skipping");
         next XMLTV_CHANID_ENTRY;
     }
     
-    # Check for duplicate RT IDs having same associated XMLTV ID
-    if (!$opt_quiet) {
-        foreach my $id (@{$rt_to_xmltv{$rt_id}}) {
-            if (defined $id && $id eq $xmltv_id) {
-                say("Radio Times ID '$rt_id' already seen in XMLTV " 
-                    . "channel_ids file");
-            }
+    # Check for duplicate RT IDs having same associated XMLTV ID. As part of
+    # timeshifted/part-time channel support, we associate the same RT ID
+    # with different XMLTV IDs
+    foreach my $id (@{$rt_to_xmltv{$rt_id}}) {
+        if (defined $id && $id eq $xmltv_id) {
+            t("Radio Times ID '$rt_id' already seen in XMLTV " 
+              . "channel_ids file, skipping");
+            next XMLTV_CHANID_ENTRY;
         }
     }
 
     # Check for duplicated XMLTV IDs
-    if (!$opt_quiet) {
-        say("XMLTV ID '$xmltv_id' already seen in XMLTV channel_ids file")
-            if (defined $xmltv_to_rt{$xmltv_id});
+    if (defined $xmltv_to_rt{$xmltv_id}) {
+        t("XMLTV ID '$xmltv_id' already seen in XMLTV channel_ids file, skipping");
+        next XMLTV_CHANID_ENTRY;
     }
 
-    # Check for channel name
+    # Check forchannel name and flagged channels
     if (defined $extra_dn) {
         if ($extra_dn !~ /\w+/) {
             $extra_dn = undef;
             t("No channel name associated with '$xmltv_id'");
+        }
+        $extra_dn{$xmltv_id} = $extra_dn;
+        # check for flagged bad channels
+        if ($extra_dn =~ /\(Do\ Not\ Use\)/) {
+            $num_bad_channels++;
         }
     }
     
@@ -328,25 +346,15 @@ foreach my $line (@lines) {
         }
     }
 
-    #FIXME sort out order of procesing this file
-
     # Handle multiple XMLTV IDs associated with a single RT ID. Required
     # after introduction of timeshifted and part-time channel support.
     push @{$rt_to_xmltv{$rt_id}}, $xmltv_id;
     $xmltv_to_rt{$xmltv_id} = $rt_id;
 
-    # Check for extra channel description and channels flagged as bad
-    if (defined $extra_dn) {
-        $extra_dn{$xmltv_id} = $extra_dn;
-        # check for flagged bad channels
-        if ($extra_dn =~ /\(Do\ Not\ Use\)/) {
-            $num_bad_channels++;
-        }
-    }
     # We have a usable channel definition at this point
     $num_good_channels++;
 }
-die "Error: No usable XMLTV channel definitions seen in channel_ids"
+die "Error: No usable XMLTV channel definitions seen in channel_ids, exiting"
     if ($num_good_channels < 1);
 
 # Read in the prog_titles_to_process file
@@ -376,7 +384,7 @@ if ($opt_title_updates) {
             # 2) title/non-title text to process
             #
             my ($code, $process_text) = @fields;
-            if ($code !~ /\d+/ || !defined $process_text ) {
+            if (!defined $code || $code !~ /\d+/ || !defined $process_text ) {
                 t("Invalid title processing entry: " . $line . "'");
                 next PROG_TITLE_ENTRY;
             }
@@ -416,8 +424,7 @@ if ($opt_title_updates) {
     }
     else {
         if (!$opt_quiet) {
-            say("No title processing information found. " 
-                . "Disabling title processing.");
+            say("Disabling title processing, no information found.");
         }
     }
 }
@@ -442,9 +449,9 @@ my (%channels, %seen_rt_id, %seen_name);
 t("Retrieving list of available channels from Radio Times");
 my $rt_channels_dat = get $rt_channels_uri;
 
-die "Error: Radio Times channels.dat data is missing, cannot continue\n\n"
+die "Error: Radio Times channels.dat data is missing, exiting\n\n"
     . "Please check http://xmltv.radiotimes.com/xmltv/channels.dat"
-    if ($rt_channels_dat eq '' || !defined $rt_channels_dat);
+    if (!defined $rt_channels_dat || $rt_channels_dat eq '');
     
 t("Converting list of available channels from UTF-8 to ISO-8859-1\n");
 Encode::from_to( $rt_channels_dat, "utf-8", "iso-8859-1" );
@@ -481,9 +488,8 @@ foreach my $rt_channel (@rt_channels) {
     }
 
     if ($seen_name{$rt_name}++) {
-        if (!$opt_quiet) {
-            say("Another channel named '$rt_name' seen in RT channels.dat");
-        }
+        t("Another channel name '$rt_name' seen in RT channels.dat, skipping");
+        next RT_CHANDAT_ENTRY;
     }
     
     # Check whether there is at least one XMLTV ID associated with the RT ID
@@ -504,7 +510,7 @@ foreach my $rt_channel (@rt_channels) {
     else {
         # Handle new channels available on RT site unknown to channel_ids file
         if (!$opt_quiet) {
-            say("Channel '$rt_name' ($rt_id) unknown in XMLTV channel_ids file");
+            say("Channel '$rt_name' ($rt_id) unknown to XMLTV, configuring");
         }
         t("Will use XMLTV ID 'C$rt_id.radiotimes.com' during configuration\n");
         push @{$rt_to_xmltv{$rt_id}}, "C$rt_id.radiotimes.com";
@@ -552,7 +558,7 @@ foreach my $rt_channel (@rt_channels) {
         $chans_bar->update();
     }
 }
-die "Error: No usable Radio Times channel definitions seen in channels.dat"
+die "Error: No usable Radio Times channel definitions available, exiting"
     if ($num_good_rt_channels < 1);
 
 if (defined $chans_bar) {
@@ -589,12 +595,12 @@ my %g_args = ();
 if (defined $opt_output) {
     t("Opening XML output file '$opt_output'\n");
     my $fh = new IO::File ">$opt_output";
-    die "Cannot write to $opt_output" if (!$fh);
+    die "Error: Cannot write to '$opt_output', exiting" if (!$fh);
     %g_args = (OUTPUT => $fh);
 }
 
 if ($opt_list_channels) {
-    die "--list-channels can't be given with --configure, exiting.\n"
+    die "Error: --list-channels can't be given with --configure, exiting.\n"
         if ($opt_configure);
     my $writer = new XMLTV::Writer(%g_args, encoding => 'ISO-8859-1');
     $writer->start(\%tv_credits);
@@ -633,7 +639,8 @@ sub configure() {
     XMLTV::Config_file::check_no_overwrite($config_file);
 
     # FIXME need to make directory
-    open(CONF, ">$config_file") or die "Cannot write to $config_file: $!";
+    open(CONF, ">$config_file") 
+        or die "Error: Cannot write to $config_file: $!, exiting";
 
     my %chan_id_to_name;
     my $chan_name;
@@ -678,20 +685,23 @@ foreach my $config_entry (XMLTV::Config_file::read_lines $config_file) {
     next CONFIG_ENTRY if (!defined $config_entry);
     next CONFIG_ENTRY if ($config_entry =~ '^#' || $config_entry =~ '^$');
     if ($config_entry !~ /^\s*channel\s+(\S+)\s*$/) {
-        t("$config_file: $n: bad line '$config_entry'\n");
+        if (!$opt_quiet) {
+            say("$config_file: $n: bad line '$config_entry', skipping");
+        }
         next CONFIG_ENTRY;
     }
     my $id = $1;
     t("  Read channel '$id'");
     if (!exists $channels{$id}) {
-        t("  XMLTV channel '$id' mentioned in $config_file but is " 
-          . "not available on RT site\n");
+        if (!$opt_quiet) {
+            say("  '$id' mentioned in config file but not available from RT");
+        }
         next CONFIG_ENTRY;
     }
     push @wanted_chs, $id;
 }
 my $num_req_chans = scalar @wanted_chs;
-die "Error: No configured channels seen in configuration file"
+die "Error: No configured channels seen in configuration file, exiting"
     if ($num_req_chans < 1);
 t("Finished reading $num_req_chans configured channels");
 
@@ -745,7 +755,7 @@ foreach my $chan (@wanted_chs) {
 t("Finished writing <channel> elements\n");
 
 if (!$opt_quiet) {
-    say("Downloading listings for $num_req_chans configured channels\n");
+    say("\nDownloading listings for $num_req_chans configured channels\n");
 }
 
 my $listings_bar;
@@ -753,6 +763,7 @@ if (!$opt_quiet && !$opt_debug) {
     $listings_bar = new XMLTV::ProgressBar({name  => 'Retrieving listings',
                                             count => $num_req_chans,
                                             ETA   => 'linear', });
+    say("\n");
 }
 
 my %warned_wrong_num_fields; # give that warning once per channel file
@@ -781,8 +792,22 @@ foreach my $ch (@wanted_chs) {
         t("No Radio Times ID for channel '$rt_name', skipping");
         next WANTED_CH;
     }
-    
-    t("\nProcessing listings for '$rt_name' ($xmltv_id)");
+
+    # Read in the listings data for the channel
+    my $uri = "http://xmltv.radiotimes.com/xmltv/$rt_id.dat";
+    local $SIG{__DIE__} = sub { die "$uri: $_[0]" };
+    local $SIG{__WARN__} = sub { warn "$uri: $_[0]" };
+    t("\nRetrieving listings file for '$rt_name' ($uri)");
+    my $page = get $uri;
+    if (!defined $page || $page eq '') {
+        if (!$opt_quiet) {
+            say("Empty listings data available for '$rt_name' ($xmltv_id), skipping");
+        }
+        next WANTED_CH;
+    }
+    if (!$opt_quiet) {
+        say("Processing listings for '$rt_name' ($xmltv_id)");
+    }
     if (defined $channel_offset{$xmltv_id}) {
         t("Detected a channel offset of '$channel_offset{$xmltv_id}' " 
           . " for '$rt_name'");
@@ -793,21 +818,14 @@ foreach my $ch (@wanted_chs) {
     my $base_tz;
     if ($rt_name =~ /\((UTC|GMT|CET)\)\s*$/) {
         $base_tz = $1;
-        t("Using timezome '$base_tz' seen in channel's name");
+        t("Using timezome '$base_tz' seen in channel's name '$rt_name'");
     }
     else {
         $base_tz = 'UTC';
         t("Using default timezome 'UTC'");
     }
 
-    # Read in the listings data for the channel and convert from
-    # UTF-8 to ISO 8859-1
-    my $uri = "http://xmltv.radiotimes.com/xmltv/$rt_id.dat";
-    local $SIG{__DIE__} = sub { die "$uri: $_[0]" };
-    local $SIG{__WARN__} = sub { warn "$uri: $_[0]" };
-    t("\nRetrieving listings file for '$rt_name' ($uri)");
-    my $page = get $uri;
-    t("Converting listings file for '$rt_name' from UTF-8 to ISO-8859-1");
+    t("Converting listings for '$rt_name' from UTF-8 to ISO-8859-1");
     Encode::from_to($page, "utf-8", "iso-8859-1");
 
     # Tidy up any remaining bad characters in the Radio Times data. The
@@ -829,7 +847,7 @@ foreach my $ch (@wanted_chs) {
     for ($page) {
         # Remove any occurences of null characters
         if (s/\x00//g) {
-            t("  Removed null characters from '$rt_name' listings data");
+            t("  Removed NULL characters from '$rt_name' listings data");
         }
 
         # 2008-01-04
@@ -954,8 +972,12 @@ foreach my $ch (@wanted_chs) {
                 t("  A required true/false value was undefined for '$title', skipping");
                 next PROGRAMME;
             }
-            if ($field eq 'true') { $field = 1; }
-            elsif ($field eq 'false') { $field = 0; }
+            elsif ($field eq 'true') {
+                $field = 1;
+            }
+            elsif ($field eq 'false') {
+                $field = 0;
+            }
             else {
                 t("  A bad true/false value '$field' was seen for '$title', skipping");
                 next PROGRAMME;
