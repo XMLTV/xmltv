@@ -38,8 +38,11 @@ package XMLTV::IMDB;
 # .6 = what was here for the longest time
 # .7 = fixed file size est calculations
 #    = moviedb.info now includes _file_size_uncompressed values for each downloaded file
+# .8 = updated file size est calculations
+#    = moviedb.dat directors and actors list no longer include repeated names (which mostly
+#      occured in episodic tv programs (reported by Alexy Khrabrov)
 #
-our $VERSION = '0.7';
+our $VERSION = '0.8';
 
 sub new
 {
@@ -1995,7 +1998,7 @@ sub invokeStage($$)
     elsif ( $stage == 2 ) {
 	$self->status("parsing Directors list for stage $stage..");
 
-	my $countEstimate=$self->dbinfoCalcEstimate("directors", 204);
+	my $countEstimate=$self->dbinfoCalcEstimate("directors", 225);
 
 	my $num=$self->readCastOrDirectors("Directors", $countEstimate, "$self->{imdbListFiles}->{directors}");
 	if ( $num < 0 ) {
@@ -2113,7 +2116,7 @@ sub invokeStage($$)
     elsif ( $stage == 4 ) {
 	$self->status("parsing Actresses list for stage $stage..");
 
-	my $countEstimate=$self->dbinfoCalcEstimate("actresses", 349);
+	my $countEstimate=$self->dbinfoCalcEstimate("actresses", 382);
 	my $num=$self->readCastOrDirectors("Actresses", $countEstimate, "$self->{imdbListFiles}->{actresses}");
 	if ( $num < 0 ) {
 	    if ( $num == -2 ) {
@@ -2693,9 +2696,13 @@ sub invokeStage($$)
 		    $details.="<>";
 		}
 		else {
-		    # sort directors by last name
+		    # sort directors by last name, removing duplicates
+		    my $last='';
 		    for my $name (sort {$a cmp $b} split('\|', $directors)) {
-			$details.="$name|";
+			if ( $name ne $last ) {
+			    $details.="$name|";
+			    $last=$name;
+			}
 		    }
 		    $details=~s/\|$//o;
 		}
@@ -2707,8 +2714,9 @@ sub invokeStage($$)
 		else {
 		    $details.=$tab;
 
-		    # sort actors by billing
+		    # sort actors by billing, removing repeated entries
 		    # be warned, two actors may have the same billing level
+		    my $last='';
 		    for my $c (sort {$a cmp $b} split('\|', $actors)) {
 			my ($billing, $name)=split(':', $c);
 			# remove Host/Narrators from end
@@ -2716,7 +2724,10 @@ sub invokeStage($$)
 			$name=~s/\s\([IVX]+\)\[/\[/o;
 			$name=~s/\s\([IVX]+\)$//o;
 			
-			$details.="$name|";
+			if ( $name ne $last ) {
+			    $details.="$name|";
+			    $last=$name;
+			}
 			#print "      $c: split gives'$billing' and '$name'\n";
 		    }
 		    $details=~s/\|$//o;
