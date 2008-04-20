@@ -569,12 +569,6 @@ my @opt_components
      { name => 'tv_grab_eu_epgdata',
        blurb => 'Grabber for some European countries (epgdata.com)',
        exes => [ 'grab/eu_epgdata/tv_grab_eu_epgdata' ],
-       pl_files => { 'grab/eu_epgdata/tv_grab_eu_epgdata.PL' => 'grab/eu_epgdata/tv_grab_eu_epgdata' },
-       share_files => { 'grab/eu_epgdata/channel_ids' => 'tv_grab_eu_epgdata/channel_ids' },
-       to_clean => [ 'grab/eu_epgdata/tv_grab_eu_epgdata' ],
-       deps => [ 'grab/eu_epgdata/tv_grab_eu_epgdata' => 
-		 [ 'grab/eu_epgdata/tv_grab_eu_epgdata.in' ] ],
-       grab_need_share => [ 'eu_epgdata' ],
        prereqs => { 'XML::Twig' => 0, 'Archive::Zip' => 0, 'HTML::Entities' => 0, 'LWP::Simple' => 0, 'File::Temp' => 0 },
      },
 
