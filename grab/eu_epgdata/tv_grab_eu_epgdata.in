@@ -135,6 +135,7 @@ I'm sure this list is not complete. Let me know if you encounter additional prob
 
 
 use strict;
+use warnings;
 use LWP::Simple qw($ua getstore);
 use Archive::Zip;
 use File::Temp qw/ tempdir /;
@@ -148,6 +149,9 @@ use HTTP::Request::Common;
 
 # deal with umlauts
 use HTML::Entities;
+
+# to parse expiry dates
+use Date::Format;
 
 use XMLTV::Memoize; XMLTV::Memoize::check_argv('getstore');
 
@@ -166,6 +170,7 @@ our $genre = new XML::Twig( twig_handlers => { data => \&makegenrehash } );
 my $chanids = GetSupplement( '@@name', 'channel_ids' );
 
 our $channelgroup;
+our $expiry_date;
 
 our %chanid;
 my @lines = split( /[\n\r]+/, $chanids );
@@ -190,7 +195,7 @@ my $pin = $conf->{pin}->[0];
 die 'Sorry, your PIN is not defined. Run @@name --configure to fix this.' unless defined($pin);
 
 our $tz = $conf->{tz}->[0];
-if not defined($tz) {
+if (not defined($tz)) {
     $tz = '+0100' unless defined($tz);
     warn "Time zone is not set. Run @@name --configure to fix this" unless $opt->{quiet}
 }
@@ -247,11 +252,10 @@ $w_args{encoding} = 'ISO-8859-1';
 our $writer = new XMLTV::Writer(%w_args);
 
 
-downloadepg($opt->{days},$opt->{offset},$pin);
+our @xmlfiles = downloadepg($opt->{days},$opt->{offset},$pin);
 prepareinclude($conf);
 # it looks like we can also extract the language from the file 
 # name of the epg data
-our @xmlfiles;
 processxml(@xmlfiles);
 
 
@@ -270,6 +274,7 @@ sub downloadepg {
         # get file name from content-disposition header
         my $response = $ua->request(GET $url);
         my $filename = $response->{"_headers"}{"content-disposition"};
+        $expiry_date = $response->{"_headers"}{"x-epgdata-timeout"};
         $channelgroup = $response->{"_headers"}{"x-epgdata-channelgroup"};
         $filename =~  s/^.*=//;
         if ($response->{"_headers"}{"x-epgdata-packageavailable"} == 1) {
@@ -281,11 +286,11 @@ sub downloadepg {
         }
         else {
             warn "No more zip files available for download\n" unless $opt->{quiet};
-            return
+            return unzip(@filenames);
         }
 	$i++;
     }
-    @xmlfiles = unzip(@filenames);
+    return unzip(@filenames);
 }
 
 # for simplicity's sake, always call with $conf as argument at least
@@ -299,7 +304,7 @@ sub prepareinclude {
     getstore($includeurl, $tmp . "includezip");
     # make sure we know $channelgroup
     downloadepg('1','0',$pin);
-
+    warn "Your PIN will expire around ",  time2str("%C", $expiry_date),"\n" unless $opt->{quiet};
     my @zipfiles=( $tmp . "includezip");
     unzip(@zipfiles)
 }
