@@ -101,6 +101,9 @@ sub ask_choice( $$$@ )
                         my $res=ask(undef, $str);
                         return undef if not defined $res;
                         return $default if $res eq '';
+                        # Single character shortcut for yes/no questions
+                        return 'yes' if $res =~ /^y$/i;
+                        return 'no' if $res =~ /^n$/i;
 
                         # Check for exact match, then for substring matching.
                         foreach (@options) {
