@@ -110,8 +110,9 @@ my %cap_defaults = (
 		    },
 		    );
 
+=head1 USAGE
 
-=item ParseOptions
+=item B<ParseOptions>
 
 ParseOptions shall be called by a grabber to parse the command-line
 options supplied by the user. It takes a single hashref as a parameter.
@@ -158,7 +159,7 @@ ParseOptions handles the following options automatically without returning:
 
 =item --preferredmethod 
 
-Handled automaticall if the preferredmethod capability has been set and
+Handled automatically if the preferredmethod capability has been set and
 the preferredmethod option has been specified in the call to ParseOptions.
  
 =back
@@ -186,15 +187,24 @@ If the --output option is specified, STDOUT will be redirected to
 the specified file.
 
 The grabber must check the following options on its own:
---days
---offset
---quiet
---debug
+
+=over
+
+=item --days
+
+=item --offset
+
+=item --quiet
+
+=item --debug
+
+=back
 
 and any other options that are grabber specific. This can be done by reading
 $opt->{days} etc.
 
-Changing the behaviour of ParseOptions
+=item B<Changing the behaviour of ParseOptions>
+
 
 The behaviour of ParseOptions can be influenced by passing named arguments
 in the hashref. The following arguments are supported:
@@ -210,8 +220,8 @@ when printing the synopsis.
 
 Required. The description for the grabber. This is returned in response to
 the --description option and shall say which region the grabber returns data
-for (e.g. "Sweden" or "Sweden (tv.swedb.se)" if there are several grabbers
-for a country).
+for. Examples: "Sweden", or "Sweden (tv.swedb.se)" if there are several grabbers
+for a region or country).
 
 =item version
 
@@ -220,11 +230,11 @@ Required. This shall be a cvs Id field.
 =item capabilities
 
 Required. The capabilities that the grabber shall support. Only capabilities
-that XMLTV::Options know how to handle can be specified. Example:
+that XMLTV::Options knows how to handle can be specified. Example:
 
   capabilities => [qw/baseline manualconfig apiconfig/],
 
-Note that XMLTV::Options guarantee that the grabber supports the manualconfig
+Note that XMLTV::Options guarantees that the grabber supports the manualconfig
 and apiconfig capabilities. The capabilities share and cache can be
 specified if the grabber supports them. XMLTV::Options will then automatically
 accept the command-line parameters --share and --cache respectively.
@@ -238,10 +248,10 @@ The xml-string shall follow the xmltv-configuration.dtd.
 
 =item listchannels_sub
 
-Required. listchannels_sub shall be a coderef that takes a configuration
+Required. A coderef that takes a configuration
 hash as returned by XMLTV::Configure::LoadConfig as the first parameter
 and an option hash as returned by
-ParseOptions as the second parameter and returns an xml-string
+ParseOptions as the second parameter, and returns an xml-string
 containing a list of all the channels that the grabber can deliver
 data for using the supplied configuration. Note that the listsub
 shall not use any channel-configuration from the hashref.
@@ -257,8 +267,8 @@ version of the grabber.
 
 =item preferredmethod
 
-A value to return when the grabber is called with the --preferredmethod
-parameter. Example:
+Optional. A value to return when the grabber is called with the 
+--preferredmethod parameter. Example:
 
   my( $opt, $conf ) = ParseOptions( {
     grabber_name => 'tv_grab_test',
