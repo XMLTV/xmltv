@@ -17,9 +17,10 @@ my $seen = 0;
 while (<$in_fh>) {
 #    s/^my \$SHARE_DIR =.*/my \$SHARE_DIR='$share_dir'; \# by $0/ && $seen++;
     s/\@\@name/tv_grab_uk_rt/;
+    s/\@\@desc/\@\@country (Radio Times)/;
     s/\@\@nspc/             /;
     s/\@\@country/United Kingdown\/Republic of Ireland/;
-    s%\@\@rt_url%http://xmltv.radiotimes.com/xmltv/channels.dat%;
+    s%\@\@rt_root_dir%http://xmltv.radiotimes.com/xmltv%;
 print $out_fh $_;
 }
 #if ($seen == 0) {
