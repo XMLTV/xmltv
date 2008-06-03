@@ -4,6 +4,7 @@ use warnings;
 use strict;
 use XMLTV::Get_nice;
 use XMLTV::ProgressBar;
+# FIXME
 use XMLTV::Memoize; XMLTV::Memoize::check_argv 'get_nice';
 use XMLTV::DST;
 use XMLTV::Supplement qw/GetSupplement SetSupplementRoot/;
@@ -24,42 +25,6 @@ use Date::Manip; Date_Init('TZ=+0000'); # UTC required for XMLTV::DST
 
 # Grabber name
 my $grabber_name='@@name';
-# Reciprocal XMLTV/RT ID hashes for the required channel_ids fields, allowing
-# RT ID -> XMLTV ID and XMLTV ID -> RT ID lookups
-my (%rt_to_xmltv, %xmltv_to_rt);
-# Hashes for the optional channel_ids fields, keyed by XMLTV ID
-my (%extra_dn, %icon_urls, %channel_offset, %broadcast_hours);
-# Variables for channel statistics
-my ($num_good_channels, $num_bad_channels, $num_ts_channels, $num_pt_channels);
-
-# Variables for programme title manipulation
-my $prog_titles_to_process = undef;
-my $have_title_data = 0;
-my (@non_title_info,       @mixed_title_subtitle, 
-    @mixed_subtitle_title, @reversed_title_subtitle) = ();
-
-# Variables for Radio Times available channels
-my (%channels, %seen_rt_id, %seen_name);
-my $num_good_rt_channels;
-
-# Variable to hold list of channels to download listings for
-my @wanted_chs;
-my $num_req_chans;
-my $need_final_update = 0;
-
-# Create global hash to store the programme title for all programmes on all
-# channels, as we will process this last after grabbing to determine any
-# 'manufactured' titles which may include temporary 'season' information
-my %prog_titles;
-my $no_title_updates;
-
-# Create hash to store unhandled UTF-8 characters seen in listings data
-# after we have converted the listings data from UTF-8 to Latin-1.
-my %unhandled_utf8_chars;
-
-# Track problems during listings retrieval. Currently we exit(1) only if
-# listings data is missing for requested channels
-my $warnings;
 
 # Required to be displayed by Radio Times
 my $rt_copyright 
@@ -69,7 +34,7 @@ my $rt_copyright
       . "     |    and the use of this data is restricted to   |     \n"
       . "     | personal use only. <http://www.radiotimes.com> |     \n"
       . "     +------------------------------------------------+     \n"
-      ;
+      . "\n";
 
 # Location of Radio Times channel index file
 my $rt_root_dir = '@@rt_root_dir';
@@ -85,16 +50,26 @@ my %tv_attributes = (
     'generator-info-url'  => 'http://www.xmltv.org',
 );
 
-# Variables for XMLTV::Writer
-my $writer;
-my $str_writer;
-
+# FIXME
 # This script is intended for grabbing
 $XMLTV::Get_nice::Delay = 0;
 
 # Get default location to store cached listings data
 my $default_cachedir = get_default_cachedir();
 
+# Reciprocal XMLTV/RT ID hashes for the required channel_ids fields, allowing
+# RT ID -> XMLTV ID and XMLTV ID -> RT ID lookups
+my (%rt_to_xmltv, %xmltv_to_rt);
+# Hashes for the optional channel_ids fields, keyed by XMLTV ID
+my (%extra_dn, %icon_urls, %channel_offset, %broadcast_hours);
+
+# Variables for grabber-specific options
+my $no_title_updates;
+
+# Do the progress bars need a final update?
+my $need_final_update;
+
+# Read all command line options 
 my ( $opt, $conf ) = ParseOptions( {
     grabber_name => "$grabber_name",
     version => '$Id$',
@@ -104,7 +79,7 @@ my ( $opt, $conf ) = ParseOptions( {
     listchannels_sub => \&list_channels,
     load_old_config_sub => \&load_old_config,
     preferredmethod => 'allatonce',
-    extra_options => [  "no-title-updates" => \$no_title_updates, ],
+    extra_options => [ "no-title-updates" => \$no_title_updates, ],
     defaults => { days => 15, offset => 0, quiet => 0, debug => 0, no_title_updates => 0, },
 } );
 
@@ -147,23 +122,38 @@ HTTP::Cache::Transparent::init( {
     }
 );
 
-# Preload and check channel data and programme metadata
-load_xmltv_channels();
-load_rt_channels();
-check_configured_channels();
+# Variables for programme title manipulation
+my $have_title_data = 0;
+my (@non_title_info,       @mixed_title_subtitle, 
+    @mixed_subtitle_title, @reversed_title_subtitle) = ();
 
-# Title updates are default. Disable if grabber run with --no-title-updates.
-if (!$opt->{no_title_updates}) {
-    load_prog_titles_to_process();
-}
+# Create global hash to store the programme title for all programmes on all
+# channels, as we will process this last after grabbing to determine any
+# 'manufactured' titles which may include temporary 'season' information
+my %prog_titles;
 
-# write out XMLTV data - header, channels, listings, footer
+# Create hash to store unhandled UTF-8 characters seen in listings data
+# after we have converted the listings data from UTF-8 to Latin-1.
+my %unhandled_utf8_chars;
+
+# Track problems during listings retrieval. Currently we exit(1) only if
+# listings data is missing for any requested channels
+my $warnings = 0;
+
+# Retrieve list of all channels currently available
+my $available_channels = load_available_channels();
+# Now ensure configured channels are still available to download
+my $wanted_chs = check_configured_channels($available_channels);
+
+# Configure output and write XMLTV data - header, channels, listings, and footer
+my $writer;
 setup_xmltv_writer();
 write_xmltv_header();
-download_listings_data();
+write_channel_list($available_channels, $wanted_chs);
+write_listings_data($available_channels, $wanted_chs);
 write_xmltv_footer();
 
-# print out optional debug info for titles and bad utf-8 chars
+# Print out optional debug info for titles and bad utf-8 chars
 if ($opt->{debug}) {
     if (!$opt->{no_title_updates}) {
         print_titles_with_colons();
@@ -171,10 +161,11 @@ if ($opt->{debug}) {
     print_unhandled_utf8_chars();
 }
 
-# give a useful exit status if problems were encountered
+# Give a useful exit status if data for some channels was not downloaded
 if ($warnings) {
     if (!$opt->{quiet}) {
-        say("Finished, but listings for some channels are missing. Check log.\n");
+        say("Finished, but listings for some channels are missing. " .
+            "Check error log.\n");
     }
     exit(1);
 }
@@ -267,88 +258,17 @@ sub check_content_length {
     }
 }
 
-# Determine options for, and create XMLTV::Writer object
-sub setup_xmltv_writer {
-    # output options
-    my %g_args = ();
-    if (defined $opt->{output}) {
-        t("Opening XML output file '$opt->{output}'\n");
-        my $fh = new IO::File ">$opt->{output}";
-        die "Error: Cannot write to '$opt->{output}', exiting" if (!$fh);
-        %g_args = (OUTPUT => $fh);
-    }
-
-    # Determine how many days of listings are required and range-check, applying
-    # default values if impossible. If --days or --offset is specified we must
-    # ensure that values for days, offset and cutoff are passed to XMLTV::Writer
-    my %d_args = ();
-    if (defined $opt->{days} || defined $opt->{offset}) {
-        if (defined $opt->{days}) {
-            if ($opt->{days} < 1 || $opt->{days} > 15) {
-                if (!$opt->{quiet}) {
-                    say("Specified --days option is not possible (1-15). "
-                      . "Retrieving all available listings.");
-                }
-                $opt->{days} = 15
-            }
-        }
-        else {
-            $opt->{days} = 15;
-        }
-
-        if (defined $opt->{offset}) {
-            if ($opt->{offset} < 0 || $opt->{offset} > 14) {
-                if (!$opt->{quiet}) {
-                    say("Specified --offset option is not possible (0-14). "
-                      . "Retrieving all available listings.");
-                }
-                $opt->{offset} = 0;
-            }
-        }
-        else {
-            $opt->{offset} = 0;
-        }
-        $d_args{days} = $opt->{days};
-        $d_args{offset} = $opt->{offset};
-        # We currently don't provide a --cutoff option
-        $d_args{cutoff} = "000000";
-    }
-
-    t("\nStarted writing XMLTV output using " . $xml_encoding . " encoding");
-    $writer = new XMLTV::Writer(%g_args, %d_args, encoding => $xml_encoding);
-}
-
-sub write_xmltv_header {
-    t("Writing XMLTV header");
-    $writer->start(\%tv_attributes);
-}
-
-sub write_channel_list {
-    t("Started writing <channel> elements");
-    foreach my $chan (@wanted_chs) {
-        my %h = %{$channels{$chan}};
-        delete $h{rt_id};
-        $writer->write_channel(\%h);
-    }
-    t("Finished writing <channel> elements\n");
-}
-
-sub write_xmltv_footer {
-    t("Writing XMLTV footer\n");
-    $writer->end;
-}
-
 sub config_stage {
-    my( $stage, $conf ) = @_;
+    my ( $stage, $conf ) = @_;
 
     die "Unknown stage $stage" if $stage ne "start";
 
     my $result;
-    my $writer = new XMLTV::Configure::Writer( OUTPUT => \$result,
+    my $str_writer = new XMLTV::Configure::Writer( OUTPUT => \$result,
                                                encoding => 'iso-8859-1' );
-    $writer->start( { grabber => "$grabber_name" } );
+    $str_writer->start( { grabber => "$grabber_name" } );
 
-    $writer->write_string( {
+    $str_writer->write_string( {
         id => 'cachedir',
         title => [ [ 'Directory to store the cache in', 'en' ] ],
         description => [
@@ -358,16 +278,15 @@ sub config_stage {
         default => $default_cachedir,
     } );
 
-    $writer->end( 'select-channels' );
+    $str_writer->end( 'select-channels' );
 
     return $result;
 }
 
 sub list_channels {
-    my( $conf, $opt ) = @_;
+    my ( $conf, $opt ) = @_;
 
-    load_xmltv_channels();
-    load_rt_channels();
+    my $channels = load_available_channels();
 
     my $result="";
     my $fh = new IO::Scalar \$result;
@@ -389,8 +308,8 @@ sub list_channels {
     # timeshifted data, and the timeshifted data we create internally from a
     #regular +0 channel
     my $chan_name;
-    foreach my $chan_id (keys %channels) {
-        $chan_name = $channels{$chan_id}->{'display-name'}->[0]->[0];
+    foreach my $chan_id (keys % {$channels}) {
+        $chan_name = ${$channels}{$chan_id}->{'display-name'}->[0]->[0];
         if ($chan_name !~ /\(RT\)$/) {
             $chan_id_to_name{$chan_id} = $chan_name;
         }
@@ -402,8 +321,8 @@ sub list_channels {
                         keys %chan_id_to_name;
 
     foreach my $channel (@chan_ids) {
-        delete $channels{$channel}{rt_id};
-        $str_writer->write_channel($channels{$channel});
+        delete ${$channels}{$channel}{rt_id};
+        $str_writer->write_channel(${$channels}{$channel});
     }
     
     $str_writer->end;
@@ -414,9 +333,8 @@ sub list_channels {
     return $result;
 }
 
-# Load a configuration file in the old format.
 sub load_old_config {
-    my( $config_file ) = @_;
+    my ( $config_file ) = @_;
 
     my @config_entries = XMLTV::Config_file::read_lines( $config_file );
 
@@ -454,16 +372,29 @@ sub load_old_config {
     return $conf;
 }
 
-# Read in the XMLTV channel_ids file
+# Determine all currently available channels by reading the current Radio
+# Times list of channels, and adding additional information from the
+# grabber's channel_ids file. The content of both of these files is
+# required in order to proceed with listings retrieval.
 #
-# Tables to convert between Radio Times and XMLTV ids of channels.
-# We access these is through the hashes %rt_to_xmltv and %xmltv_to_rt,
-# not directly.  Those will deal sensibly with a new RT channel that 
-# isn't yet mentioned in the channel_ids file.
-#
-sub load_xmltv_channels {
-    # Retrieve grabber's channel_ids mapping via XMLTV::Supplement
+sub load_available_channels {
+    # First we read in the XMLTV channel_ids file to provide additional
+    # information (icon, display name) about available channels, and also
+    # provide the information necessary for timeshifted and part-time channel
+    # support.
+    #
+    # We use the hashes %rt_to_xmltv and %xmltv_to_rt to lookup the Radio 
+    # Times and XMLTV channel IDs. These will deal sensibly with a new RT
+    # channel that isn't yet mentioned in the channel_ids file.
+    
+    # Provide statistics for the number of usable, unusable, timeshifted
+    # and part-time channels listed in channel_ids.
+    my ($num_good_channels, $num_bad_channels, 
+        $num_ts_channels, $num_pt_channels);
+
+    # Retrieve grabber's channel_ids file via XMLTV::Supplement
     my $xmltv_channel_ids = GetSupplement("$grabber_name", 'channel_ids');
+
     die "Error: XMLTV channel_ids data is missing, exiting" 
         if (!defined $xmltv_channel_ids || $xmltv_channel_ids eq '');
 
@@ -494,8 +425,9 @@ sub load_xmltv_channels {
         # 5) Timeshift offset
         # 6) Broadcast hours
         #
-        # The RT channels.dat provides a channel name - here we provide
-        # an alternative or updated name if the channel name has changed
+        # The RT channels.dat provides a channel name, but it may be out of
+        # date - here we provide an alternative or updated name if the 
+        # channel name has changed
         my ($xmltv_id, $rt_id,          $extra_dn, 
             $icon_url, $channel_offset, $broadcast_hours) = @fields;
 
@@ -596,13 +528,17 @@ sub load_xmltv_channels {
             $num_good_channels++;
         }
     }
+    t("\n");
+    # channel_ids processing finished
+
     die "Error: No usable XMLTV channel definitions seen in channel_ids, exiting"
         if ($num_good_channels < 1);
-}
 
-# Read in the Radio Times channels.dat file (UTF-8) and process the list of 
-# av ailable channels. Check for presence of duplicate IDs or names.
-sub load_rt_channels {
+
+    # Read in the Radio Times channels.dat file, which is supplied in UTF-8
+    # format and is converted to ISO-8859-1. We process the list of available
+    # channels and check for presence of duplicate IDs or names.
+    #
     t("Retrieving list of available channels from Radio Times");
     my $rt_channels_dat = get $rt_channels_uri;
 
@@ -612,6 +548,7 @@ sub load_rt_channels {
         
     t("Converting list of available channels from UTF-8 to ISO-8859-1\n");
     Encode::from_to( $rt_channels_dat, "utf-8", "iso-8859-1" );
+
     my @rt_channels = split /\n/, $rt_channels_dat;
     my $num_rt_channels = scalar @rt_channels;
 
@@ -621,6 +558,7 @@ sub load_rt_channels {
            . "currently contain no listings.\n");
     }
 
+    $need_final_update = 0;
     my $chans_bar;
     if (!$opt->{quiet} && !$opt->{debug}) {
         $chans_bar = new XMLTV::ProgressBar({name   => 'Retrieving channels',
@@ -628,11 +566,16 @@ sub load_rt_channels {
                                              ETA    => 'linear', });
     }
 
+    # Hash to store details for <channel> elements
+    my %channels;
+    my (%seen_rt_id, %seen_name);
+    my $num_good_rt_channels;
+
     RT_CHANDAT_ENTRY:
     foreach my $rt_channel (@rt_channels) {
         chomp $rt_channel;
         if ($rt_channel !~ /^(\d+)\|(.+)/) {
-            t("Bad channel entry seen in RT channels.dat: $rt_channel, skipping");
+            t("Bad entry '$rt_channel' seen in RT channels.dat, skipping");
             next RT_CHANDAT_ENTRY;
         }
 
@@ -673,7 +616,7 @@ sub load_rt_channels {
 
         foreach my $id (@{$rt_to_xmltv{$rt_id}}) {
             # Use a name for the channel if defined in our channel_ids file,
-            # otherwise use the name supplied by the Radio Times
+            # otherwise use the name supplied by the Radio Times.
             my @names = ();
             if (defined $extra_dn{$id}) {
                 @names = ([ $extra_dn{$id} ]);
@@ -682,13 +625,15 @@ sub load_rt_channels {
                 @names = ([ $rt_name ]);
             }
 
+            # Add a URL for a channel icon if available.
             my @icon;
             my $icon_url = $icon_urls{$id};
             if ($icon_url) {
                 @icon = { 'src' => $icon_url };
             }
 
-            # Add the channel to the channels hash
+            # Add the channel's details to the %channels hash, adding icon
+            # details if available.
             if (@icon) {
                 $channels{$id} = {
                     id             => $id,
@@ -705,7 +650,7 @@ sub load_rt_channels {
                 };
             }
         }
-        # We have a usable channel at this point
+        # We have a usable channel definition at this point
         $num_good_rt_channels++;
 
         # Update the progres bar by one increment
@@ -713,6 +658,7 @@ sub load_rt_channels {
             $chans_bar->update();
         }
     }
+
     die "Error: No usable Radio Times channel definitions available, exiting"
         if ($num_good_rt_channels < 1);
 
@@ -727,6 +673,7 @@ sub load_rt_channels {
         }
     }
 
+    # Output statistics on the number of channels currently available
     if (!$opt->{quiet}) {
         say("\nThe Radio Times has usable data available for $num_good_rt_channels channels which we\n"
             . "can use to generate TV listings for regular and some timeshifted\n"
@@ -735,6 +682,8 @@ sub load_rt_channels {
             . "In total, the software currently supports $num_good_channels channels.\n");
     }
 
+    # Report any channels listed in channel_ids not seen on the Radio Times
+    # site
     if (!$opt->{quiet}) {
         XMLTV_ID:
         foreach my $xmltv_id (keys %xmltv_to_rt) {
@@ -746,33 +695,111 @@ sub load_rt_channels {
             }
         }
     }
+
+    return \%channels;
 }
 
-# Check that the list of requested channels are available from the
-# Radio Times
+# Check that the requested channels are available from the Radio Times
 #
 sub check_configured_channels {
+    my ( $available_channels ) = @_;
+    
+    # List of channel IDs that we can download listings for after checking
+    # $opt->{channel} against the current RT/XMLTV channel list.
+    my @wanted_chs;
+
     t("Reading config file channel entries");
 
     WANTED_CHAN:
     foreach my $chan_id (@{$conf->{channel}}) {
         t("  Read channel '$chan_id'");
-        if (!exists $channels{$chan_id}) {
+        if (!exists ${$available_channels}{$chan_id}) {
             if (!$opt->{quiet}) {
-                say("  '$chan_id' mentioned in config file but not available from RT");
+                say("  Configured channel '$chan_id' is unavailable");
             }
             next WANTED_CHAN;
         }
         push @wanted_chs, $chan_id;
     }
-    $num_req_chans = scalar @wanted_chs;
-    die "Error: No configured channels seen in configuration file, exiting"
+    my $num_req_chans = scalar @wanted_chs;
+    die "Error: No configured channels are available, exiting"
         if ($num_req_chans < 1);
     t("Finished reading $num_req_chans configured channels");
+
+    return \@wanted_chs;
+}
+
+# Determine options for, and create XMLTV::Writer object
+sub setup_xmltv_writer {
+    # output options
+    my %g_args = ();
+    if (defined $opt->{output}) {
+        t("\nOpening XML output file '$opt->{output}'\n");
+        my $fh = new IO::File ">$opt->{output}";
+        die "Error: Cannot write to '$opt->{output}', exiting" if (!$fh);
+        %g_args = (OUTPUT => $fh);
+    }
+
+    # Determine how many days of listings are required and range-check, applying
+    # default values if impossible. If --days or --offset is specified we must
+    # ensure that values for days, offset and cutoff are passed to XMLTV::Writer
+    my %d_args = ();
+    if (defined $opt->{days} || defined $opt->{offset}) {
+        if (defined $opt->{days}) {
+            if ($opt->{days} < 1 || $opt->{days} > 15) {
+                if (!$opt->{quiet}) {
+                    say("Specified --days option is not possible (1-15). "
+                      . "Retrieving all available listings.");
+                }
+                $opt->{days} = 15
+            }
+        }
+        else {
+            $opt->{days} = 15;
+        }
+
+        if (defined $opt->{offset}) {
+            if ($opt->{offset} < 0 || $opt->{offset} > 14) {
+                if (!$opt->{quiet}) {
+                    say("Specified --offset option is not possible (0-14). "
+                      . "Retrieving all available listings.");
+                }
+                $opt->{offset} = 0;
+            }
+        }
+        else {
+            $opt->{offset} = 0;
+        }
+        $d_args{days} = $opt->{days};
+        $d_args{offset} = $opt->{offset};
+        # We currently don't provide a --cutoff option
+        $d_args{cutoff} = "000000";
+    }
+
+    t("Started writing XMLTV output using " . $xml_encoding . " encoding");
+    $writer = new XMLTV::Writer(%g_args, %d_args, encoding => $xml_encoding);
+}
+
+sub write_xmltv_header {
+    t("Writing XMLTV header");
+    $writer->start(\%tv_attributes);
+}
+
+sub write_channel_list {
+    my ( $available_channels, $wanted_chs ) = @_;
+    
+    t("Started writing <channel> elements");
+    foreach my $chan_id (@{$wanted_chs}) {
+        my %h = %{ ${$available_channels}{$chan_id} };
+        delete $h{rt_id};
+        $writer->write_channel(\%h);
+    }
+    t("Finished writing <channel> elements");
 }
 
 # Read in the prog_titles_to_process file
 sub load_prog_titles_to_process {
+    my $prog_titles_to_process = undef;
     # Retrieve prog_titles_to_process via XMLTV::Supplement
     $prog_titles_to_process 
             = GetSupplement("$grabber_name", 'prog_titles_to_process');
@@ -853,10 +880,14 @@ sub load_prog_titles_to_process {
 }
 
 # Download listings data for configured channels that are available
-sub download_listings_data {
+sub write_listings_data {
+    my ( $available_channels, $wanted_chs ) = @_;
+    
+    my $num_req_chans = scalar @{$wanted_chs};
+
     if (!$opt->{quiet}) {
         display_copyright();
-    };
+    }
 
     if (!$opt->{quiet}) {
         say("Will download listings for $num_req_chans configured channels\n");
@@ -869,6 +900,11 @@ sub download_listings_data {
                                                 ETA   => 'linear', });
     }
 
+    # Title updates are default. Disable if grabber run with --no-title-updates.
+    if (!$opt->{no_title_updates}) {
+        load_prog_titles_to_process();
+    }
+
     # Hash to hold warnings of incorrect number of fields. The warning
     # is given once per listings file if noticed more than once
     my %warned_wrong_num_fields;
@@ -878,8 +914,8 @@ sub download_listings_data {
 
     # Process all of the channels we want listings for
     WANTED_CH:
-    foreach my $ch (@wanted_chs) {
-        my $c = $channels{$ch};
+    foreach my $ch (@{$wanted_chs}) {
+        my $c = ${$available_channels}{$ch};
         my $xmltv_id = $c->{id};
         my $rt_id = $c->{rt_id};
         my $rt_name = $c->{'display-name'}->[0]->[0];
@@ -1136,7 +1172,7 @@ sub download_listings_data {
                     foreach my $non_title_info (@non_title_info) {
                         if ($title =~ s/^($non_title_info)\s*:\s*//) {
                             t("  Removed '" . $non_title_info 
-                              . "' from title '" . $title . "'");
+                              . "' from title. New title '" . $title . "'");
                             last NON_TITLE_TEXT;
                         }
                     }
@@ -1590,6 +1626,11 @@ sub download_listings_data {
             say("\n");
         }
     }
+}
+
+sub write_xmltv_footer {
+    t("Writing XMLTV footer\n");
+    $writer->end;
 }
 
 sub print_titles_with_colons {
