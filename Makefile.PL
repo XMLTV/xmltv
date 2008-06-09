@@ -343,11 +343,17 @@ my @opt_components
      { name => 'tv_grab_uk_rt',
        blurb => 'Grabber for UK and Ireland (Radio Times)',
        exes => [ 'grab/uk_rt/tv_grab_uk_rt' ],
-       pl_files => { 'grab/uk_rt/tv_grab_uk_rt.PL' => 'grab/uk_rt/tv_grab_uk_rt' },
-       share_files => { 'grab/uk_rt/channel_ids' => 'tv_grab_uk_rt/channel_ids',
-                        'grab/uk_rt/prog_titles_to_process' => 'tv_grab_uk_rt/prog_titles_to_process' },
+       pl_files => { 'grab/uk_rt/tv_grab_uk_rt.PL' 
+                        => 'grab/uk_rt/tv_grab_uk_rt' },
+       share_files => { 'grab/uk_rt/channel_ids' 
+                           => 'tv_grab_uk_rt/channel_ids',
+                        'grab/uk_rt/prog_titles_to_process' 
+                           => 'tv_grab_uk_rt/prog_titles_to_process',
+                        'grab/uk_rt/regional_channels_by_postcode' 
+                           => 'tv_grab_uk_rt/regional_channels_by_postcode' },
        to_clean => [ 'grab/uk_rt/tv_grab_uk_rt' ],
-       deps => [ 'grab/uk_rt/tv_grab_uk_rt' => [ 'grab/uk_rt/tv_grab_uk_rt.in' ] ],
+       deps => [ 'grab/uk_rt/tv_grab_uk_rt' 
+                    => [ 'grab/uk_rt/tv_grab_uk_rt.in' ] ],
        grab_need_share => [ 'uk_rt' ],
        prereqs => { 'HTTP::Cache::Transparent' => 1.0, 
                     'LWP::Simple' => 0 } ,
