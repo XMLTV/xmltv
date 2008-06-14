@@ -260,41 +260,45 @@ sub config_stage {
     my $writer = new XMLTV::Configure::Writer( OUTPUT => \$result,
                                                encoding => 'iso-8859-1' );
 
+    $writer->start( { grabber => "$grabber_name" } );
+    
     if ($stage eq 'start') {
-        $writer->start( { grabber => "$grabber_name" } );
 
         $writer->write_string( {
             id => 'cachedir',
             title => [ [ 'Enter the directory to store the listings cache in', 'en' ] ],
             description => [
-                [ "\n$grabber_name uses a cache with files that it has already " .
+                [ "$grabber_name uses a cache with files that it has already " .
                 'downloaded. Please specify where the cache shall be stored.',
                 'en' ] ],
             default => $default_cachedir,
         } );
+        $writer->end('select-postcode');
+    }
+    elsif ($stage eq 'select-postcode') {
 
         $writer->write_string( {
             id => 'postcode',
             title => [ [ 'Enter the first part of your postcode', 'en' ] ],
             description => [
-                [ "\n$grabber_name can use the first part of your postcode in " .
-                'order to determine which regional BBC/ITV channels to ' .
-                'display during configuration.',
+                [ "$grabber_name can use the first part of your postcode in " .
+                'order to determine which regional channels to display ' .
+                'during configuration. Enter "none" to disable.',
                 'en' ] ],
-            default => 'N1',
+            default => 'none',
         } );
+        $writer->end('select-platform');
+    }
+    elsif ($stage eq 'select-platform') {
 
         $writer->start_selectone( {
             id => 'platform',
-            title => [ [ 'Choose which TV platform do you use', 'en' ] ],
+            title => [ [ 'Select which TV platform you use', 'en' ] ],
             description => [
-                [ "\n$grabber_name can automatically configure which channels " .
-                'to download listings for based on which platform you use.',
+                [ "When choosing which channels to download listings for, $grabber_name " .
+                'can show only those channels available on your TV platform. ' .
+                '** Currently disabled **',
                 'en' ] ],
-        } );
-        $writer->write_option( {
-            value => 'analogue',
-            text => [ [ 'Analogue', 'en' ] ],
         } );
         $writer->write_option( {
             value => 'freeview',
@@ -306,11 +310,15 @@ sub config_stage {
         } );
         $writer->write_option( {
             value => 'sky',
-            text => [ [ 'Sky (Satellite)', 'en' ] ],
+            text => [ [ 'Sky Digital (Satellite)', 'en' ] ],
         } );
         $writer->write_option( {
             value => 'virginmedia',
             text => [ [ 'VirginMedia (Cable)', 'en' ] ],
+        } );
+        $writer->write_option( {
+            value => 'analogue',
+            text => [ [ 'Analogue', 'en' ] ],
         } );
         $writer->write_option( {
             value => 'none',
@@ -320,18 +328,39 @@ sub config_stage {
 
         # The select-channels stage must be the last stage called
         $writer->end( 'select-channels' );
-
-        return $result;
     }
     else {
         die "Unknown stage $stage";
     }
+    
+    return $result;
 }
 
 sub list_channels {
     my ( $conf, $opt ) = @_;
 
     my $channels = load_available_channels();
+    my $postcode = $conf->{postcode}->[0];
+
+    # During configuration or listing available channels, we can only include
+    # regional channels which are available in the configured postcode area.
+    #
+    # If we find a configured postcode, we retrieve details on which channels
+    # are available, and remove those which are not available from the list of
+    # available channels
+    if (defined $postcode && lc $postcode ne 'none') {
+        # Retrieve hash of matched/unmatched channels 
+        my $reg_chans = process_regional_channels($postcode);
+
+        if (scalar @{ $reg_chans->{'matched'} } >= 1) {
+            # If we have 3 regional channels matched against the postcode,
+            # we should have channels for BBC1, BBC2 and ITV1. We therefore
+            # remove the ummatched regional channels from the %channels hash
+            foreach my $unmatched_chan (@{ $reg_chans->{'unmatched'} } ) {
+                delete $channels->{$unmatched_chan};
+            }
+        }
+    }
 
     my $result="";
     my $fh = new IO::Scalar \$result;
@@ -354,7 +383,7 @@ sub list_channels {
     #regular +0 channel
     my $chan_name;
     foreach my $chan_id (keys % {$channels}) {
-        $chan_name = ${$channels}{$chan_id}->{'display-name'}->[0]->[0];
+        $chan_name = $channels->{$chan_id}->{'display-name'}->[0]->[0];
         if ($chan_name !~ /\(RT\)$/) {
             $chan_id_to_name{$chan_id} = $chan_name;
         }
@@ -366,12 +395,11 @@ sub list_channels {
                         keys %chan_id_to_name;
 
     foreach my $channel (@chan_ids) {
-        delete ${$channels}{$channel}{rt_id};
-        $writer->write_channel(${$channels}{$channel});
+        delete $channels->{$channel}{'rt_id'};
+        $writer->write_channel( $channels->{$channel} );
     }
     
     $writer->end;
-
     select( $oldfh );
     $fh->close();
 
@@ -776,6 +804,75 @@ sub check_configured_channels {
     t("Finished reading $num_req_chans configured channels");
 
     return \@wanted_chs;
+}
+
+# Retrieve and process mappings on channel ID to postcodes for BBC/ITV
+# channels.
+#
+# Takes a postcode as an argument and returns i) a list of matching XMLTV IDs
+# and ii) a list of the remaining regional XMLTV IDs that were not matched
+#
+sub process_regional_channels {
+    my $conf_postcode = shift;
+
+    my $xmltvids_postcodes = GetSupplement("$grabber_name", 'regional_channels_by_postcode');
+
+    die "Error: XMLTV regional_channels_by_postcode data is missing, exiting" 
+        if (!defined $xmltvids_postcodes || $xmltvids_postcodes eq '');
+
+    my @lines = split /[\n\r]+/, $xmltvids_postcodes;
+
+    # Hash to hold matched and unmatched XMLTV IDs
+    my %reg_chans;
+
+    XMLTV_POSTCODE_ENTRY:
+    foreach my $line (@lines) {
+        # Skip blank lines. Comments are allowed if they are at the start 
+        # of the line.
+        next XMLTV_POSTCODE_ENTRY if ($line =~ '^#' || $line =~ '^$');
+        my @fields = split /\|/, $line;
+        # We need 2 fields (xmltv_id,postcodes).
+        if (scalar @fields != 2) {
+            t("Wrong number of fields in XMLTV regional_channels_by_postcode entry:\n"
+                    . "\t" . '$line');
+            next XMLTV_POSTCODE_ENTRY;
+        }
+        my ( $xmltv_id, $postcodes ) = @fields;
+
+        # Check for required XMLTV ID and postcode fields, skip if missing
+        if (!defined $xmltv_id  || $xmltv_id eq '') {
+            t("Undefined XMLTV ID seen in regional_channels_by_postcode, skipping");
+            next XMLTV_POSTCODE_ENTRY;
+        }
+        if ($xmltv_id !~ /\w+\.\w+.*/) {
+            t("Invalid XMLTV ID seen in regional_channels_by_postcode, skipping");
+            next XMLTV_POSTCODE_ENTRY;
+        }
+        if (!defined $postcodes || $postcodes eq '') {
+            t("Undefined postcode entry seen in regional_channels_by_postcode, skipping");
+            next XMLTV_POSTCODE_ENTRY;
+        }
+        if (defined $xmltv_to_rt{$xmltv_id}) {
+            t("Channel '$xmltv_id' has region-specific information available");
+        }
+        else {
+            t("Channel '$xmltv_id' is not available, skipping ");
+            next XMLTV_POSTCODE_ENTRY;
+        }
+
+        my @postcodes = split /,/, $postcodes;
+        foreach my $postcode (@postcodes) {
+            if (uc $postcode eq uc $conf_postcode) {
+                push @{$reg_chans{matched}}, $xmltv_id;
+                # match made, process next channel
+                next XMLTV_POSTCODE_ENTRY;
+            }
+        }
+        # No match made, so add to unmatched list
+        push @{ $reg_chans{unmatched} }, $xmltv_id;
+    }
+
+    return \%reg_chans;
 }
 
 # Determine options for, and create XMLTV::Writer object
@@ -1796,6 +1893,14 @@ where to store the cache directory for retrieved listings.
 B<--list-channels> Outputs a list of every channel available to the grabber
 in XMLTV format.
 
+=head1 REGIONAL CHANNELS
+
+During configuration, the software asks for postcode information. The first
+half of a user's postcode is used to determine which regional channels
+are available in their locality, and only these matching regional channels
+are included in the list of available channels. A user can enter 'none'
+during configuration to disable regional channel filtering.
+
 =head1 ERROR HANDLING
 
 @@name will only terminate early if it is impossible to continue with grabbing
@@ -1836,7 +1941,8 @@ L<xmltv(5)>, L<http://www.xmltv.org/wiki/>, L<http://www.radiotimes.com/>
 The current maintainer is Nick Morrott (knowledgejunkie at gmail dot com). 
 The original author was Ed Avis (ed at membled dot com). Parts of this code
 were copied from tv_grab_se_swedb by Mattias Holmlund, and from the XMLTV
-wiki L<http://www.xmltv.org/wiki/>.
+wiki L<http://www.xmltv.org/wiki/>. Regional postcode information was kindly
+made available from L<http://www.ukfree.tv>.
 
 =head1 BUGS
 
