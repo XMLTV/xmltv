@@ -350,7 +350,9 @@ my @opt_components
                         'grab/uk_rt/prog_titles_to_process' 
                            => 'tv_grab_uk_rt/prog_titles_to_process',
                         'grab/uk_rt/regional_channels_by_postcode' 
-                           => 'tv_grab_uk_rt/regional_channels_by_postcode' },
+                           => 'tv_grab_uk_rt/regional_channels_by_postcode',
+                        'grab/uk_rt/channels_platforms'
+                           => 'tv_grab_uk_rt/channels_platforms' },
        to_clean => [ 'grab/uk_rt/tv_grab_uk_rt' ],
        deps => [ 'grab/uk_rt/tv_grab_uk_rt' 
                     => [ 'grab/uk_rt/tv_grab_uk_rt.in' ] ],
