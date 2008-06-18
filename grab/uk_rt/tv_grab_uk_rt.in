@@ -293,39 +293,41 @@ sub config_stage {
         $writer->end('select-platform');
     }
     elsif ($stage eq 'select-platform') {
-# FIXME
         $writer->start_selectone( {
             id => 'platform',
             title => [ [ 'Select which TV platform you use', 'en' ] ],
             description => [
                 [ "When choosing which channels to download listings for, $grabber_name " .
-                'can show only those channels available on your TV platform. ' .
-                '** Currently disabled **',
+                'can show only those channels available on your TV platform.',
                 'en' ] ],
         } );
         $writer->write_option( {
+            value => 'none',
+            text => [ [ 'None of these, I\'ll choose my channels', 'en' ] ],
+        } );
+        $writer->write_option( {
             value => 'freeview',
-            text => [ [ 'Freeview (DVB-T)', 'en' ] ],
+            text => [ [ 'Freeview', 'en' ] ],
         } );
         $writer->write_option( {
             value => 'freesat',
-            text => [ [ 'FreeSat (DVB-S)', 'en' ] ],
+            text => [ [ 'FreeSat', 'en' ] ],
         } );
         $writer->write_option( {
-            value => 'sky',
-            text => [ [ 'Sky Digital (Satellite)', 'en' ] ],
+            value => 'freesatfromsky',
+            text => [ [ 'FreeSat from Sky', 'en' ] ],
         } );
         $writer->write_option( {
-            value => 'virginmedia',
-            text => [ [ 'VirginMedia (Cable)', 'en' ] ],
+            value => 'skydigital',
+            text => [ [ 'Sky Digital', 'en' ] ],
+        } );
+        $writer->write_option( {
+            value => 'virgintv',
+            text => [ [ 'VirginMedia TV', 'en' ] ],
         } );
         $writer->write_option( {
             value => 'analogue',
             text => [ [ 'Analogue', 'en' ] ],
-        } );
-        $writer->write_option( {
-            value => 'none',
-            text => [ [ 'None of the above, I\'ll choose my channels', 'en' ] ],
         } );
         $writer->end_selectone();
 
@@ -343,7 +345,38 @@ sub list_channels {
     my ( $conf, $opt ) = @_;
 
     my $channels = load_available_channels();
+    my $platform = $conf->{platform}->[0];
     my $postcode = $conf->{postcode}->[0];
+
+    # During configuration or listing available channels, we can also filter
+    # those channels which are available on the user's TV platform.
+    #
+    # If we find a usable platform identifier, we retrieve details on which 
+    # channels are available on that platform, and remove those which are not 
+    # available from the list of available channels
+    if (defined $platform && lc $platform ne 'none') {
+        # Retrieve hash of matched/unmatched channels 
+        my $platform_chans = get_channels_by_platform($platform);
+
+        # Have we matched any channels?
+        if (defined $platform_chans->{'matched'} 
+                && scalar @{ $platform_chans->{'matched'} } >= 1) {
+            # Flag the matched channels as being available
+            foreach my $matched_chan (@{ $platform_chans->{'matched'} } ) {
+                $channels->{$matched_chan}{'available'} = 1;
+            }
+            # Remove channels not flagged as available from %channels hash
+            foreach my $chan (keys %{$channels}) {
+                if (defined $channels->{$chan}{'available'} 
+                                && $channels->{$chan}{'available'} == 1) {
+                    delete $channels->{$chan}{'available'};
+                }
+                else {
+                    delete $channels->{$chan};
+                }
+            }
+        }
+    }
 
     # During configuration or listing available channels, we can only include
     # regional channels which are available in the configured postcode area.
@@ -353,7 +386,7 @@ sub list_channels {
     # available channels
     if (defined $postcode && lc $postcode ne 'none') {
         # Retrieve hash of matched/unmatched channels 
-        my $reg_chans = process_regional_channels($postcode);
+        my $reg_chans = get_channels_by_postcode($postcode);
 
         # Have we matched any channels?
         if (defined $reg_chans->{'matched'} 
@@ -809,13 +842,13 @@ sub check_configured_channels {
     return \@wanted_chs;
 }
 
-# Retrieve and process mappings on channel ID to postcodes for BBC/ITV
+# Retrieve and process mappings on channel ID to postcodes for regional 
 # channels.
 #
 # Takes a postcode as an argument and returns i) a list of matching XMLTV IDs
 # and ii) a list of the remaining regional XMLTV IDs that were not matched
 #
-sub process_regional_channels {
+sub get_channels_by_postcode {
     my $conf_postcode = shift;
 
     my $xmltvids_postcodes = GetSupplement("$grabber_name", 'regional_channels_by_postcode');
@@ -876,6 +909,74 @@ sub process_regional_channels {
     }
 
     return \%reg_chans;
+}
+
+# Retrieve and process mappings on channel ID to TV platforms.
+#
+# Takes a platform ID as an argument and returns i) a list of matching XMLTV IDs
+# and ii) a list of the remaining regional XMLTV IDs that were not matched
+#
+sub get_channels_by_platform {
+    my $conf_platform = shift;
+
+    my $xmltvids_platforms = GetSupplement("$grabber_name", 'channels_platforms');
+
+    die "Error: XMLTV channels_platforms data is missing, exiting" 
+        if (!defined $xmltvids_platforms || $xmltvids_platforms eq '');
+
+    my @lines = split /[\n\r]+/, $xmltvids_platforms;
+
+    # Hash to hold matched and unmatched XMLTV IDs
+    my %platform_chans;
+
+    XMLTV_PLATFORM_ENTRY:
+    foreach my $line (@lines) {
+        # Skip blank lines. Comments are allowed if they are at the start 
+        # of the line.
+        next XMLTV_PLATFORM_ENTRY if ($line =~ '^#' || $line =~ '^$');
+        my @fields = split /\|/, $line;
+        # We need 2 fields (xmltv_id,platform(s)).
+        if (scalar @fields != 2) {
+            t("Wrong number of fields in XMLTV channels_platforms entry:\n"
+                    . "\t" . '$line');
+            next XMLTV_PLATFORM_ENTRY;
+        }
+        my ( $xmltv_id, $platforms ) = @fields;
+
+        # Check for required XMLTV ID and platform fields, skip if missing
+        if (!defined $xmltv_id  || $xmltv_id eq '') {
+            t("Undefined XMLTV ID seen in channels_platforms, skipping");
+            next XMLTV_PLATFORM_ENTRY;
+        }
+        if ($xmltv_id !~ /\w+\.\w+.*/) {
+            t("Invalid XMLTV ID seen in channels_platforms, skipping");
+            next XMLTV_PLATFORM_ENTRY;
+        }
+        if (!defined $platforms || $platforms eq '') {
+            t("Undefined platform entry seen in channels_platforms, skipping");
+            next XMLTV_PLATFORM_ENTRY;
+        }
+        if (defined $xmltv_to_rt{$xmltv_id}) {
+            t("Channel '$xmltv_id' has platform information available");
+        }
+        else {
+            t("Channel '$xmltv_id' is not available, skipping ");
+            next XMLTV_PLATFORM_ENTRY;
+        }
+
+        my @platforms = split /,/, $platforms;
+        foreach my $platform (@platforms) {
+            if (uc $platform eq uc $conf_platform) {
+                push @{$platform_chans{matched}}, $xmltv_id;
+                # match made, process next channel
+                next XMLTV_PLATFORM_ENTRY;
+            }
+        }
+        # No match made, so add to unmatched list
+        push @{ $platform_chans{unmatched} }, $xmltv_id;
+    }
+
+    return \%platform_chans;
 }
 
 # Determine options for, and create XMLTV::Writer object
