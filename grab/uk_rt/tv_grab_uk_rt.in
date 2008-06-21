@@ -38,8 +38,10 @@ my $rt_copyright
 my $rt_root_dir = '@@rt_root_dir';
 my $rt_channels_uri = "$rt_root_dir/channels.dat";
 
-# XMLTV output data settings/values
-my $xml_encoding = "ISO-8859-1";
+# Character encodings to use - can be overwritten by config
+my $source_encoding = "utf-8";
+my $xml_encoding = "iso-8859-1";
+
 my %tv_attributes = (
     'source-info-name'    => 'Radio Times XMLTV Service',
     'source-info-url'     => 'http://www.radiotimes.com',
@@ -98,6 +100,11 @@ if (not defined( $conf->{cachedir} )) {
                  $opt->{'config-file'} . "\n" .
                  "Please run the grabber with --configure.\n";
     exit 1;
+}
+
+# Update encoding if seen in new-style config file
+if (defined( $conf->{encoding} )) {
+    $xml_encoding = $conf->{encoding}->[0];
 }
 
 # Initialise the cache-directory
@@ -253,18 +260,38 @@ sub check_content_length {
     }
 }
 
-# FIXME we could add an option for output encoding
 sub config_stage {
     my ( $stage, $conf ) = @_;
 
     my $result;
     my $writer = new XMLTV::Configure::Writer( OUTPUT => \$result,
-                                               encoding => 'iso-8859-1' );
+                                               encoding => $xml_encoding );
 
     $writer->start( { grabber => "$grabber_name" } );
     
     if ($stage eq 'start') {
 
+        $writer->start_selectone( {
+            id => 'encoding',
+            title => [ [ 'Encoding', 'en' ] ],
+            description => [
+                [ "Select which character encoding to use for channel and " .
+                'listings data.',
+                'en' ] ],
+        } );
+        $writer->write_option( {
+            value => 'utf-8',
+            text => [ [ 'UTF-8 (Unicode)', 'en' ] ],
+        } );
+        $writer->write_option( {
+            value => 'iso-8859-1',
+            text => [ [ 'ISO 8859-1 (Latin-1)', 'en' ] ],
+        } );
+        $writer->end_selectone();
+
+        $writer->end('select-cachedir');
+    }
+    elsif ($stage eq 'select-cachedir') {
         $writer->write_string( {
             id => 'cachedir',
             title => [ [ 'Enter the directory to store the listings cache in', 'en' ] ],
@@ -659,8 +686,9 @@ sub load_available_channels {
         . "Please check $rt_channels_uri"
         if (!defined $rt_channels_dat || $rt_channels_dat eq '');
         
-    t("Converting list of available channels from UTF-8 to ISO-8859-1\n");
-    Encode::from_to( $rt_channels_dat, "utf-8", "iso-8859-1" );
+    t("Converting list of available channels from " . $source_encoding 
+                . " to " . $xml_encoding . "\n");
+    Encode::from_to( $rt_channels_dat, $source_encoding, $xml_encoding );
 
     my @rt_channels = split /\n/, $rt_channels_dat;
     my $num_rt_channels = scalar @rt_channels;
@@ -1209,8 +1237,9 @@ sub write_listings_data {
         }
 
         # Convert listings data from UTF-8 to ISO-8859-1
-        t("  Converting listings from UTF-8 to ISO-8859-1");
-        Encode::from_to($page, "utf-8", "iso-8859-1");
+        t("  Converting listings from " . $source_encoding  . " to " 
+                    . $xml_encoding . "\n");
+        Encode::from_to($page, $source_encoding, $xml_encoding );
 
         # Tidy up any remaining bad characters in the Radio Times data. The
         # data is provided in UTF-8 format which we convert to ISO 8859-1
@@ -1261,42 +1290,44 @@ sub write_listings_data {
 
             # Replace any mis-encoded UTF-8 characters left in the data
             my @utf8_chars;
-            if (@utf8_chars = $page =~ /([\xC2-\xDF][\x80-\xBF])/g) {
-                foreach my $utf8_char (@utf8_chars) {
-                    t("    UTF-8 character '$utf8_char' seen in ISO-8859-1 text");
-                }
-
-                t("    Manually replacing specific UTF-8 characters with "
-                  . "ISO-8859-1 replacements");
-
-                s/\xC2\xA3/\xA3/g; # <C2><A3> -> Pound sign
-                s/\xC2\xBD/\xBD/g; # <C2><BD> -> 1/2 sign
-
-                s/\xC3\xA0/\xE0/g; # <C3><A0> -> a-grave
-                s/\xC3\xA2/\xE2/g; # <C3><A0> -> a-circumflex
-                s/\xC3\xA7/\xE7/g; # <C3><A7> -> c-cedilla
-                s/\xC3\xA9/\xE9/g; # <C3><A9> -> e-acute
-                s/\xC3\xAA/\xEA/g; # <C3><AA> -> ordinal indicator
-                s/\xC3\xAB/\xEB/g; # <C3><AB> -> e-umlaut
-                s/\xC3\xAF/\xEF/g; # <C3><AF> -> i-umlaut
-                s/\xC3\xB3/\xF3/g; # <C3><B3> -> o-acute
-
-                s/\xAF\xA9/\x6F\x69/g; # <AF><A9> -> oi
-
-                s/\xEF\xBF\xBD/\xED/g; # <EF><BF><ED> -> i-acute
-                s/\xE2\x80\x99/\x27/g; # <E2><80><99> -> '
-                s/\xE2\x80\x9C/\x22/g; # <E2><80><9C> -> "
-                s/\xE2\x80\x9D/\x22/g; # <E2><80><9D> -> "
-
+            if (lc $xml_encoding ne lc $source_encoding) {
                 if (@utf8_chars = $page =~ /([\xC2-\xDF][\x80-\xBF])/g) {
                     foreach my $utf8_char (@utf8_chars) {
-                        $unhandled_utf8_chars{$utf8_char} = $rt_name;
-                        t("    UTF-8 character '$utf8_char' still seen "
-                          . "in ISO-8859-1 text");
+                        t("    UTF-8 character '$utf8_char' seen in non-UTF-8 text");
                     }
-                }
-                else {
-                    t("    No UTF-8 characters detected after manual replacement");
+
+                    t("    Manually replacing specific UTF-8 characters with "
+                      . "suitable replacements");
+
+                    s/\xC2\xA3/\xA3/g; # <C2><A3> -> Pound sign
+                    s/\xC2\xBD/\xBD/g; # <C2><BD> -> 1/2 sign
+
+                    s/\xC3\xA0/\xE0/g; # <C3><A0> -> a-grave
+                    s/\xC3\xA2/\xE2/g; # <C3><A0> -> a-circumflex
+                    s/\xC3\xA7/\xE7/g; # <C3><A7> -> c-cedilla
+                    s/\xC3\xA9/\xE9/g; # <C3><A9> -> e-acute
+                    s/\xC3\xAA/\xEA/g; # <C3><AA> -> ordinal indicator
+                    s/\xC3\xAB/\xEB/g; # <C3><AB> -> e-umlaut
+                    s/\xC3\xAF/\xEF/g; # <C3><AF> -> i-umlaut
+                    s/\xC3\xB3/\xF3/g; # <C3><B3> -> o-acute
+
+                    s/\xAF\xA9/\x6F\x69/g; # <AF><A9> -> oi
+
+                    s/\xEF\xBF\xBD/\xED/g; # <EF><BF><ED> -> i-acute
+                    s/\xE2\x80\x99/\x27/g; # <E2><80><99> -> '
+                    s/\xE2\x80\x9C/\x22/g; # <E2><80><9C> -> "
+                    s/\xE2\x80\x9D/\x22/g; # <E2><80><9D> -> "
+
+                    if (@utf8_chars = $page =~ /([\xC2-\xDF][\x80-\xBF])/g) {
+                        foreach my $utf8_char (@utf8_chars) {
+                            $unhandled_utf8_chars{$utf8_char} = $rt_name;
+                            t("    UTF-8 character '$utf8_char' still seen "
+                              . "in non-UTF-8 text");
+                        }
+                    }
+                    else {
+                        t("    No UTF-8 characters detected after manual replacement");
+                    }
                 }
             }
 
@@ -2010,6 +2041,12 @@ are included in the list of available channels. A user can enter 'none'
 during configuration to disable regional channel filtering. Users in the
 Republic of Ireland should use the pseudo-postcode 'EIRE' to enable filtering
 of regional channels.
+
+=head1 CHARACTER ENCODING
+
+During configuration, the software asks the user to choose the character
+encoding for the channel and listings data output. Current supported encodings
+are UTF-8 (Unicode) and ISO-8859-1 (Latin-1).
 
 =head1 ERROR HANDLING
 
