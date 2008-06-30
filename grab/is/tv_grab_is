@@ -22,7 +22,7 @@ tv_grab_is --version
 =head1 DESCRIPTION
 
 Output TV listings for several channels available in Iceland.  The
-data comes from www.sjonvarp.is. The grabber relies on parsing HTML so it
+data comes from www.skjarinn.is and stod2.is. The grabber relies on parsing HTML so it
 might stop working at any time.
 
 First run B<tv_grab_is --configure> to choose, which channels you want
@@ -63,7 +63,9 @@ B<--help> Print a help message and exit.
 L<xmltv(5)>.
 =head1 AUTHOR
 
-Yngvi Þór Sigurjónsson (yngvi@teymi.is). Heavily based on
+TÃ³mas Edwardsson (tommi@tommi.org), based on
+Yngvi ÃžÃ³r SigurjÃ³nsson (yngvi@teymi.is) version that fetched
+info from sjonvarp.is. Heavily based on
 tv_grab_dk by Jesper Skov (jskov@zoftcorp.dk). tv_grab_dk
 originally based on tv_grab_nl by Guido Diepen and Ed Avis
 (ed@membled.com) and tv_grab_fi by Matti Airas.
@@ -82,6 +84,7 @@ use HTML::TreeBuilder;
 use HTML::Entities; # parse entities
 use IO::File;
 use URI;
+use Encode qw(from_to);
 
 use Date::Manip;
 
@@ -129,6 +132,7 @@ my $TZ = '+0000';
 
 sub process_summary_page( $$$ );
 sub process_listings_page( $$$$$ );
+sub cache_channel( $$$$ );
 
 # Get options
 XMLTV::Memoize::check_argv('XMLTV::Get_nice::get_nice_aux');
@@ -173,7 +177,7 @@ if ($mode eq 'configure') {
     die 'no channels could be found' if (scalar(keys(%channels)) == 0);
     update $bar if not $opt_quiet;
     $bar->finish() if not $opt_quiet;
-my @chs = sort keys %channels;
+    my @chs = sort keys %channels;
     my @names = map { $channels{$_} } @chs;
     my @qs = map { "add channel $_?" } @names;
     my @want = ask_many_boolean(1, @qs);
@@ -213,17 +217,17 @@ if (defined $opt_output) {
     die "cannot write to $opt_output: $!" if not defined $fh;
     $w_args{OUTPUT} = $fh;
 }
-$w_args{encoding} = 'ISO-8859-1';
+$w_args{encoding} = 'UTF-8';
 my $writer = new XMLTV::Writer(%w_args);
 # TODO: standardize these things between grabbers.
 $writer->start
-  ({ 'source-info-url'     => 'http://www.sjonvarp.is/',
-     'source-data-url'     => 'http://www.sjonvarp.is/tv',
+  ({ 'source-info-url'     => 'http://www.skjarinn.is/',
+     'source-data-url'     => 'http://www.skjarinn.is/tv',
      'generator-info-name' => 'XMLTV',
      'generator-info-url'  => 'http://membled.com/work/apps/xmltv/',
    });
 
-if ($mode eq 'list-channels') {
+if ($opt_list_channels) {
     my $bar = new XMLTV::ProgressBar('getting list of channels', 1)
       if not $opt_quiet;
     my %channels = get_channels();
@@ -232,7 +236,7 @@ if ($mode eq 'list-channels') {
 
     foreach my $ch_did (sort(keys %channels)) {
         my $ch_name = $channels{$ch_did};
-        my $ch_xid = "$ch_did.sjonvarp.is";
+        my $ch_xid = "$ch_did";
        $writer->write_channel({ id => $ch_xid,
                                  'display-name' => [ [ $ch_name ] ],
                                  'icon' => [{'src' => get_icon($ch_did)}]
@@ -278,14 +282,18 @@ my @to_get;
 # the order in which we fetch the channels matters
 my $today = UnixDate($now, '%Y-%m-%d'); die if not defined $today;
 
+my %chan_cache;
 
 foreach $ch_did (@channels) {
     $ch_name = $channels{$ch_did};
-    my $ch_xid = "$ch_did.sjonvarp.is";
+    my $ch_xid = "$ch_did";
     $writer->write_channel({ id => $ch_xid,
 			     'display-name' => [ [ $ch_name ] ],
 				 'icon' => [{'src' => get_icon($ch_did)}]
 				 });
+    if ($ch_did =~ /^(.+?)\.stod2.is$/) {
+	cache_channel(\%chan_cache, $1, $opt_days, $opt_offset);
+    }
     for (my $i = $opt_offset;$i<($opt_offset + $opt_days);$i++) {
 	# Request day when constructing URL since it is represented as
 	# an integere offset from today. Still pass in the computed
@@ -322,6 +330,104 @@ $writer->end();
 #   Date::Manip object giving day for programmes in page (at least
 #     until they cross midnight)
 
+sub cache_channel( $$$$ ) {
+    my ($chan_cache, $ch_id, $days, $offset) = @_;
+
+    my $num_days = $days + $offset;
+
+    my $url = "http://old.stod2.is/oracledata/dagskratextaskra.asp?midill=$ch_id&dagar=$num_days";
+
+    my $data = get_nice($url);
+    from_to($data, 'iso-8859-15', 'utf-8');
+
+
+    $data =~ s/^.*?\r\n.*?\r\n\r\n\r\n\r\n//s;
+
+    my @inf = split(/\r\n\r\n/, $data);
+
+    my $status = 0;
+    my $mon = my $mday = my $year = 0;
+    my $date = '';
+    my $last_hour = 0;
+    foreach my $section (@inf) {
+	if ($status == 0) {
+		last if ($section =~ /<ENDIR Ã SKRÃ>/);
+		($mon, $mday, $year) = split(/[\/ ]/, $section);
+		print $section;
+		$date = UnixDate(ParseDate("$mon/$mday/$year"), '%Y-%m-%d');
+		$status = 1;
+	} else {
+		my $time = my $title = my $title_is = my $desc = my $episode = '';
+		$status = 0;
+		while ($section =~ s/^(\d\d:\d\d) (.+?)\r\n(\d+:\d+) /$3 /s) {
+			 #|| $section =~ s/^(\d\d:\d\d) (.+?)\r\n(.+?)\r\n(\d+:\d+) /$4 /s) {
+		    $title = '';
+		    $title_is = '';
+		    $desc = '';
+		    $time = $1;
+		    my $hour = (split(':', $time))[0];
+		    if ($hour < $last_hour) {
+			my @d = split("-", $date);
+			$date = UnixDate(ParseDate(DateCalc(ParseDate("$d[1]/$d[2]/$d[0]"), " + 1 day")), '%Y-%m-%d');
+		    }
+		    $last_hour = $hour;
+		    my $con = $2;
+		    my $continue = $3;
+		    if ($con =~ /^(.+?)\r\n(.+)$/s) {
+			$title = "$1";
+			$desc = $2;
+		    } else {
+			$title = $con;
+		    }
+		    #print "\n\nTITLE:$title\n\n";
+		    if ($continue) {
+			my @d = split(/\r\n/, $desc);
+			if ($d[1]) {
+			    if ($d[0] =~ /^\((.+)\)$/) {
+				    $title_is = $1;
+			    } else {
+				    $title .= " $d[0]";
+			    }
+			    $desc = $d[1];
+			} else {
+			    $desc = $d[0];
+			}
+			if ($title_is) {
+			   push @{$chan_cache->{$ch_id}->{$date}}, { time => $time, title => $title, title_is => $title_is, desc => $desc };
+			} else {
+			   push @{$chan_cache->{$ch_id}->{$date}}, { time => $time, title => $title, desc => $desc };
+			}
+                    } else {
+		    	push @{$chan_cache->{$ch_id}->{$date}}, { time => $time, title => $title };
+		    }
+		}
+		$section =~ /^(\d+:\d+) (.+?)(\r\n.*?|)$/s;
+		$title_is = '';
+		$title = '';
+		$desc = '';
+		$time = $1;
+		$title = $2;
+		my @d = split(/\r\n/, $3);
+		if ($d[1]) {
+		    if ($d[0] =~ /^\((.+)\)$/) {
+			$title_is = $1;
+		    } else {
+			$title .= " $d[0]";
+		    }
+		    $desc = $d[1];
+		} else {
+		    $desc = $d[0];
+		}
+		if ($title_is) {
+		    push @{$chan_cache->{$ch_id}->{$date}}, { time => $time, title => $title, title_is => $title_is, desc => $desc };
+		} else {
+		    push @{$chan_cache->{$ch_id}->{$date}}, { time => $time, title => $title, desc => $desc };
+		}
+	}
+    }
+}
+
+
 my ($warned_discarding_parts, $commented_episode_num);
 sub process_listings_page ( $$$$$ ){
 #    local $Log::TraceMessages::On = 1;
@@ -335,128 +441,241 @@ sub process_listings_page ( $$$$$ ){
     
     my ($y,$m,$d) = UnixDate($day_obj,"%Y","%m","%d");
     
-    # We make an HTML::TreeBuilder object, get the information
-    # from it and them delete it.
-    #
-    my $url = "http://www.sjonvarp.is/php/mToday.php?txt_Channel=$tv2chan&txt_DateYYYY=$y&txt_DateMM=$m&txt_DateDD=$d&senda=true";
-    my $t = get_nice_tree $url;
-    
-    #$t->dump();
-    my @tables = $t->look_down("cellpadding"=>"2");
-    while ( my $tab = shift (@tables)) {
-	#$tab->dump;
-	my @lines= $tab->look_down("_tag" => "tr");
-	while (my $line = shift (@lines)) {
-	    # Process the list of [ heading, data ] pairs.
-	    my ($start, $stop, # exactly one
-		$title, $sub_title, $genre, $date,               #
-		$episode_num, $actors, $writers, $commentators, #
-		$director, $previously_shown, $orig_title,      # at most one
-		$aspect, $colour, $stereo, $texted,
-		@presenter, @url # zero or more
-		);
+    if ($ch_xmltv_id =~ /^(.+?)\.skjarinn\.is$/) {
+	my $chid = $1;
+	# We make an HTML::TreeBuilder object, get the information
+	# from it and them delete it.
+	#
+	my $t = new HTML::TreeBuilder();
+	$t->parse(get_nice("http://www.skjarinn.is/skjarheimur/dagskra/?portlet_action=true&action_wid=928&rp_928_tvStationId=$chid&rp_928_WeekDaySelected=$d.$m"));
+	#$t->parse_file("mToday.php");
+	
+	#$t->dump();
+	my @rows = $t->look_down("_tag" => "table",
+	    "class" => "tvStationsProgram");
+	foreach my $row (@rows) {
+	    #$row->dump;
+	    my @lines= $row->look_down("_tag" => "tr");
+	    shift(@lines);
+
+	    #shift(@lines) if ($ch_xmltv_id eq 'RUV.skjarinn.is');
+
+	    while (my $line = shift (@lines)) {
+		last if ($line->look_down("_tag" => "label"));
+
+		# Process the list of [ heading, data ] pairs.
+		my ($start, $stop, # exactly one
+		    $title, $sub_title, $genre, $date,               #
+		    $episode_num, $actors, $writers, $commentators, #
+		    $director, $previously_shown, $orig_title,      # at most one
+		    $aspect, $colour, $stereo, $texted,
+		    @presenter, @url # zero or more
+		    );
 	    
-	    #$line->dump;
-	    my $time = $line->address(".2.0.0")->as_text;
-	    $title = $line->address(".3.0.0")->as_text;
-	    #my $orgname = $line->address(".4.0.0")->as_text;
-	    #my $time = $e->as_text;
-	    #print "$time $title\n";
-	    $line = shift @lines;
-	    #$line -> dump;
-	    my $desc = $line->address(".3.0")->as_text;
-	    #print "$desc\n";
+		my $time = $line->look_down("_tag" => "td",
+		    "class" => "time")->as_text;
+
+		$title = $line->look_down("_tag" => "td",
+		    "class" => "name")->as_text;
+		next if ((split(":", $time))[0] < 4 && length($laststart) < 12);
+		from_to($title, 'iso-8859-15', 'utf-8');
+		my $desc = $line->look_down("_tag" => "td",
+		    "class" => "description")->as_text;
+		from_to($desc, 'iso-8859-15', 'utf-8');
 	    
-	    $start = parse_local_date("$day $time",$TZ);
-	    # Try to detect if we have crossed midnigth
-	    if ( Date_Cmp($start , $laststart) < 0 ) {
-		$start = DateCalc($start,"+ 1 day");
-	    }
-	    $laststart = $start;
-		
-	    my ($start_base, $start_tz) = @{date_to_local($start, $TZ)};
+		$start = parse_local_date("$day $time",$TZ);
+		# Try to detect if we have crossed midnigth
+		#printf("START: %s LASTSTART: %s\n", $start, $laststart);
+		if ( Date_Cmp($start , $laststart) < 0 ) {
+		    $start = DateCalc($start,"+ 1 day");
+		}
+		$laststart = $start;
+
+		my ($start_base, $start_tz) = @{date_to_local($start, $TZ)};
 	    
-	    #print "$start\n";
-	    $episode_num="0.$1/$2.0" if ($title =~ s/\s*\((\d+):(\d+)\)//);
+		$episode_num="$1/$2" if ($title =~ s/\s*\((\d+):(\d+)\)//);
 	   
-	    $title =~ s/\s*\(e\)//; # remove rerun indication
-	    my @title_data = ([ $title, $LANG]);
-	    if($desc =~ s/Leikstjóri:\s*([^.]*)\.// ) {
-		$director = $1;
-	    }
-	    if($desc =~ s/\s*(Aðalhlutverk:|[mM]eðal leikenda eru|Aðalhlutverk leika|[íÍ] aðalhulverkum eru|[Ll]eikendur eru)\s*([^.]*)\.// ) {
-		my @a = split(/, | og /, $2);
-		s/[.]$// foreach @a;
-		push @$actors, @a;
-	    }
-	    my %prog
-		= (channel  => $ch_xmltv_id,
-		   title    => \@title_data,
-		   start    => UnixDate($start_base, '%q') . " $start_tz",
+		$title =~ s/\s*\(e\)//; # remove rerun indication
+		my @title_data = ([ $title, $LANG]);
+		if($desc =~ s/LeikstjÃ³ri(:|)\s*([^.]*)\.//i ) {
+		    $director = $2;
+		}
+		if($desc =~ s/\s*(AÃ°alhlutverk:|[mM]eÃ°al leikenda eru|AÃ°alhlutverk leika|[Ã­Ã] aÃ°alhulverkum eru|[Ll]eikendur eru)\s*([^.]*)\.//i ) {
+		    my @a = split(/, | og /, $2);
+		    s/[.]$// foreach @a;
+		    push @$actors, @a;
+		}
+		my %prog
+		    = (channel  => $ch_xmltv_id,
+		    title    => \@title_data,
+		    start    => UnixDate($start_base, '%q') . " $start_tz",
 		   );
-	    $prog{desc} = [ [ $desc ,$LANG ] ] if $desc; 
-	    $prog{'episode-num'} = [ [ $episode_num,'xmltv_ns' ] ] if $episode_num;
-	    my %c;
-	    $c{actor} = $actors if $actors;
-	    $c{writer} = $writers if $writers;
-	    $c{commentator} = $commentators if $commentators;
-	    $c{director} = [ $director ] if $director;
-	    $prog{credits} = \%c if %c;
+		if ($desc) {
+			$prog{desc} = [ [ $desc ,$LANG ] ];
+		} else {
+			$prog{desc} = [ [ $title ,$LANG ] ];
+		}
+		$prog{'episode-num'} = [ [ $episode_num,'xmltv_ns' ] ] if $episode_num;
+		my %c;
+		$c{actor} = $actors if $actors;
+		$c{writer} = $writers if $writers;
+		$c{commentator} = $commentators if $commentators;
+		$c{director} = [ $director ] if $director;
+		$prog{credits} = \%c if %c;
 
-	    $writer->write_programme(\%prog);
+		$writer->write_programme(\%prog);
+	    }
+
 	}
+    #$t->delete; undef $t;
+    } elsif ($ch_xmltv_id =~ /^(.+?)\.stod2\.is$/) {
+	
+	foreach my $r (@{$chan_cache{$1}->{$day_obj}}) {
+		my ($start, $stop, # exactly one
+		    $title, $sub_title, $genre, $date,               #
+		    $episode_num, $actors, $writers, $commentators, #
+		    $director, $previously_shown, $orig_title,      # at most one
+		    $aspect, $colour, $stereo, $texted,
+		    @presenter, @url # zero or more
+		    );
+		$title = $r->{title};
+		#print "TITLE: $title\n";
+		my $time = $r->{time};
+		my $desc = $r->{desc};
+		$start = parse_local_date("$day $time",$TZ);
+		# Try to detect if we have crossed midnigth
+		#printf("START: %s LASTSTART: %s\n", $start, $laststart);
+		if ( Date_Cmp($start , $laststart) < 0 ) {
+		    $start = DateCalc($start,"+ 1 day");
+		}
+		$laststart = $start;
 
+		my ($start_base, $start_tz) = @{date_to_local($start, $TZ)};
+	    
+		if ($title =~ s/\s*\((\d+):(\d+)\)//) {
+			$episode_num="$1/$2";
+		}
+	   
+		my @title_data = ();
+		$title =~ s/\s*\(e\)//; # remove rerun indication
+		if ($r->{title_is}) {
+			@title_data = ([ $title, 'en'], [ $r->{title_is}, 'is']);
+		} else {
+			@title_data = ([ $title, $LANG]);
+		}
+		if($desc && $desc =~ s/LeikstjÃ³ri(:|)\s*([^.]*)\.//i ) {
+		    $director = $2;
+		}
+		if($desc && $desc =~ s/\s*(AÃ°alhlutverk:|[mM]eÃ°al leikenda eru|AÃ°alhlutverk leika|[Ã­Ã] aÃ°alhulverkum eru|[Ll]eikendur eru)\s*([^.]*)\.//i ) {
+		    my @a = split(/, | og /, $2);
+		    s/[.]$// foreach @a;
+		    push @$actors, @a;
+		}
+		my %prog
+		    = (channel  => $ch_xmltv_id,
+		    title    => \@title_data,
+		    start    => UnixDate($start_base, '%q') . " $start_tz",
+		   );
+		if ($desc) {
+			$prog{desc} = [ [ $desc ,$LANG ] ];
+		} else {
+			$prog{desc} = [ [ $title ,$LANG ] ];
+		}
+		$prog{'episode-num'} = [ [ $episode_num,'xmltv_ns' ] ] if $episode_num;
+		my %c;
+		$c{actor} = $actors if $actors;
+		$c{writer} = $writers if $writers;
+		$c{commentator} = $commentators if $commentators;
+		$c{director} = [ $director ] if $director;
+		$prog{credits} = \%c if %c;
+
+		$writer->write_programme(\%prog);
+	}
     }
-    $t->delete; undef $t;
+}
+
+sub get_channels {
+    my %channels;
+
+    get_channels_visir(\%channels);
+    get_channels_skjarinn(\%channels);
+
+    return %channels;
 }
 
 # get channel listing
-sub get_channels {
-    my %channels;
-    my $url = 'http://www.sjonvarp.is/php/mListing.php';
+sub get_channels_skjarinn {
+    my $channels = shift;
+    my $url = 'http://www.skjarinn.is/skjarheimur/dagskra/';
 
-    my $t = get_nice_tree $url;
+    my $t = new HTML::TreeBuilder();
+    $t->parse(get_nice($url));
 
-    # The channels and their IDs are defined in javascript arrays
-    #$t->dump();
-    my @elements = $t->look_down("_tag" => "table");
+    # The channels and their IDs are set in an select
+    my @elements = $t->look_down("name" => "tvStationId");
     foreach my $i (@elements) {
-	#print "$i\n";
-	#$i->dump;
-        #my @children = $i->content_list();
 
-        #if (scalar(@children) != 1 || ref($children[0])) {
-        #    next;
-        #}
+        my @chan = $i->look_down("_tag"=>"option");
 
-        my @lines = $i->look_down("_tag"=>"a");
+        foreach my $a (@chan) {
+	    next if (!$a->attr('value'));
 
-        foreach my $a (@lines) {
-	    #$a->dump();
-	    my $href=$a->attr("href");
-	    $href =~ /\?c=(\w+)\&/;
-	    my $channel  = $1;
-
-	    my @imgs = $a->look_down("_tag"=>"img");
-	    foreach my $m (@imgs) {
-		#$m->dump();
-		my $mo=$m->attr("onmouseover");
-		#print "$mo\n";
-		$mo =~ /Skoða dagskránna á (.+) í dag/;
-		my $name = $1;
-		#print "$name\n";
-		$channels{$channel}=$name;
-	    }
+	    my $channel = $a->attr('value');
+	    my $name = $a->as_text;
+	    $name =~ s/^(\s*)//g;
+	    $name =~ s/(\s*)$//g;
+	    $channel .= ".skjarinn.is";
+	    from_to($channel, 'iso-8859-15', 'utf-8');
+	    from_to($name, 'iso-8859-15', 'utf-8');
+	    $channels->{$channel}=$name . " frÃ¡ SkjÃ¡num";
 	}
     }
     $t->delete(); undef $t;
-    return %channels;
+}
+
+# get channel listing
+sub get_channels_visir {
+    my $channels = shift;
+    my $url = 'http://stod2.visir.is/?PageID=148';
+
+    my $t = new HTML::TreeBuilder();
+    $t->parse(get_nice($url));
+
+    # The channels and their IDs are set in an select
+    $t->look_down("_tag" => "div", "id" => "colwrap");
+    my @a = $t->look_down("_tag" => "a");
+
+    foreach my $i (@a) {
+
+	last if (!$i->attr('href'));
+
+	next if ($i->attr('href') !~ /oracledata\/dagskratextaskra.asp/);
+ 	#print $i->attr('href') . "\n";
+	my $channel = $i->attr('href');
+	$channel =~ s/^.*midill=(.+?)(&|$).*$/$1/;
+	next if (exists $channels->{$channel});
+	$channel .= ".stod2.is";
+	my $name = $i->as_text;
+	#print "$id - $name\n";
+
+    	#from_to($channel, 'iso-8859-15', 'utf-8');
+	#from_to($name, 'iso-8859-15', 'utf-8');
+	$channels->{$channel}=$name . " frÃ¡ StÃ¶Ã° 2";
+    }
+    $t->delete(); undef $t;
 }
 
 # Icon URL for a given channel.
 sub get_icon {
 	my ($url) = @_;
-	$url= lc($url);
 
-	return "http://www.sjonvarp.is/php/images/logos/".$url.".gif";
+	if ($url =~ /^(.+?)\.stod2\.is$/) {
+		my $chan = $1;
+		$chan =~ s/^SYN2$/SYN/;
+		return "http://stod2.visir.is/images/stod2/stodvar_logo/new/$chan" . "_logo_sel.gif";
+	} elsif ($url =~ /^(.+?)\.skjarinn\.is$/) {
+		return "http://www.skjarinn.is/other_files/skjarinn/img/$1.gif";
+	} else {
+		return "";
+	}
 }
