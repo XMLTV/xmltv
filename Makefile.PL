@@ -434,12 +434,14 @@ my @opt_components
        exes => [ 'grab/es/tv_grab_es' ],
        prereqs => { 'HTML::TreeBuilder' => 0 } },
 
-     { name => 'tv_grab_il',
-       blurb => 'Grabber for Israel',
-       exes => [ 'grab/il/tv_grab_il' ],
-       prereqs => { 'HTML::TreeBuilder' => 0, 
-                    'Text::Bidi' => 0 } },
-
+# 2008-07-12 rmeden - site "down for maintanence" for over a month.. goodbye
+#
+#     { name => 'tv_grab_il',
+#       blurb => 'Grabber for Israel',
+#       exes => [ 'grab/il/tv_grab_il' ],
+#       prereqs => { 'HTML::TreeBuilder' => 0, 
+#                    'Text::Bidi' => 0 } },
+#
 #
 # tv_grab_es_digital no longer functioning due to site changes
 #
@@ -465,10 +467,12 @@ my @opt_components
 #       prereqs => { 'HTML::TreeBuilder' => 0 },
 #     },
 
-     { name => 'tv_grab_nl_wolf',
-       blurb => 'Alternative grabber for the Netherlands',
-       exes => [ 'grab/nl_wolf/tv_grab_nl_wolf' ],
-       prereqs => { 'HTML::TreeBuilder' => 0 } },
+# 2008-07-12 - removed by rmeden, not getting programs for a while. 
+#
+#     { name => 'tv_grab_nl_wolf',
+#       blurb => 'Alternative grabber for the Netherlands',
+#       exes => [ 'grab/nl_wolf/tv_grab_nl_wolf' ],
+#       prereqs => { 'HTML::TreeBuilder' => 0 } },
 
      { name => 'tv_grab_huro',
        blurb => 'Grabber for Hungary and Romania',
