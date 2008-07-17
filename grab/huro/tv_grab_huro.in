@@ -291,11 +291,19 @@ sub get_all_text( $ ) {
 #------------------------------------------------------------------------------
 sub process_table( $$$$ ) {
 	my ($basedate, $ch_xmltv_id, $ch_port_id, $baseday) = @_;
+	
+	$basedate = UnixDate(DateCalc(parse_date($basedate),"- 1 day"), '%Q');
+	
+	my $days_to_request = $DAYSPERPAGE+1;
+	# We have to request at minimum of four days
+	$days_to_request = 4 if ($days_to_request<4);
+	
 	my $basedateday = UnixDate(parse_date($basedate), '%e');
 	my $urlfmt = "http://www." . domain() .
 		"/pls/tv/tv.channel?i_ch=$ch_port_id" .
-		"&i_days=%d&i_xday=$DAYSPERPAGE&i_where=1";
+		"&i_date=%d&i_xday=".$days_to_request."&i_where=1";
 	my $url = "$urlfmt";
+	my $currday = $baseday + $FETCHOFFSET - 1;
 	my ($tree, $body);
 
 
@@ -312,7 +320,7 @@ sub process_table( $$$$ ) {
 	# if this failes, we construct the previous (or next?) day's url 
 
 	foreach (1, 2) {
-		$url = sprintf($urlfmt, $baseday + $FETCHOFFSET);
+		$url = sprintf($urlfmt, $basedate);
 
 		t "fetching url: $url";
 		worker("base-downloading");
@@ -325,7 +333,7 @@ sub process_table( $$$$ ) {
 		$body = $tree->look_down("_tag"=>"body");
 
 		my @daysonpage = () ;
-		foreach ($body->look_down("_tag"=>"span", "class" => "ctxt")) {
+		foreach ($body->look_down("_tag"=>"p", "class" => "date_box")) {
 			$_ = $_->as_text();
 			if ((($COUNTRY eq 'hu') && (m/^\s*\S+\s+\(\s*\S+\s+(\d+)\.\s*\)\s*$/))
 				||
@@ -393,7 +401,7 @@ sub process_table( $$$$ ) {
 		# have childrens? if yes, skip this row
 		next if ($_->look_down("_tag"=>"table"));
 		
-		if ($_->as_text() =~ /[012]?[0-9]:[0-5][0-9]/) {
+		if ($_->as_text() =~ /[012]?[0-9]:[0-5][0-9]/ || ($_->attr("id") && $_->attr("id") =~ /^event_/)) {
 			t "+ most inner row containing programs found:";
 			t $_->as_text();
 			push @rows, $_;
@@ -409,6 +417,7 @@ sub process_table( $$$$ ) {
 	my $region = "upper";
 	my $startdate = $basedate;
 	my $lasttime = 0;
+	my $lasttimeHHMM = "";
 
 	# we need all the rows, because this is a program record:
 	foreach my $row (@rows) {
@@ -416,21 +425,27 @@ sub process_table( $$$$ ) {
 		# check whether if we are first in lower tables ... -> reset date
 		if (! ref($row) && $row eq "lower region") {
 			if ($region eq "upper") {
-				t "upper/lower delimiter found, setting date back to startdate";
+				t "upper/lower delimiter found, setting date back to startdate ($basedate)";
 				$startdate = $basedate;
 				$lasttime = 0;
+				$currday = $baseday + $FETCHOFFSET - 1;
 				$region = "lower";
 			}
 			next;
 		}
 
 		my (@urls, %program);
-
-		foreach my $col ($row->look_down("_tag"=>"td", "valign"=>"top")) {
+		
+		foreach my $col ($row->look_down("_tag"=>"td")) {
 			# the column can hold following type of data:
 			# begin time | title | long desc | url | category
-
-			$_ = $col->as_text();
+			
+			if ($col->attr("colspan") && (my $begin_time = $col->look_down("_tag"=>"p", "class"=>"begin_time" ))) 
+			{
+				$_ = $begin_time->as_text();
+			} else {
+				$_ = $col->as_text();
+			}
 			s/^\s+//;s/\s+$//;
 
 			# port.hu makes sometimes empty td elements
@@ -445,6 +460,7 @@ sub process_table( $$$$ ) {
 				my $time = $1 * 60 + $2;
 				if ($time < $lasttime) {
 					t "bumped to the the next day";
+					$currday++;
 					$startdate = UnixDate(DateCalc(parse_date($startdate), 
 													"+ 1 day"), '%Q');
 					die if not defined $startdate;
@@ -453,9 +469,14 @@ sub process_table( $$$$ ) {
 				# Fix the time format to be suitable for sorting
 				$program{time} = length($_) == 4 ? "0".$_ : $_ ;
 				$program{startdate} = $startdate ;
+				$lasttimeHHMM = $program{time};
 			}
 			else {
-				if (my @span = $col->look_down("_tag"=>"span")) {
+				my @span;
+				if (@span = $col->look_down("class"=>"btxt")) {
+					$program{title} = $span[0]->as_text();
+				}
+				elsif (@span = $col->look_down("class"=>"lbbtxt")) {
 					$program{title} = $span[0]->as_text();
 				}
 				else {
@@ -468,11 +489,26 @@ sub process_table( $$$$ ) {
 				s/[^\w]*putbox\(\"[0-9][0-9]\"\)[\s\n\r]*//g;
 				s/Megvásárolható (DVD[ ]?-n|VHS[ ]?-en)//g;
 				$program{desc} = $_ if length($_);
+				$program{day} = $currday;
 				foreach my $a ($col->look_down("_tag"=>"a")) {
 					push @urls,	$a->attr(q(href));
 				}
 			}
 		} # foreach $col
+
+		# New type of row: contains only the time of the event
+		# but not the actual program data. So in this case we try to
+		# jump to the next row
+		if (! $row->attr("id") || (not $row->attr("id") =~ /^event_/ )) {
+			t "found line without event, the time is: $lasttimeHHMM";
+		 	next;
+		}
+		
+		if (! $program{time} && $lasttimeHHMM) {
+			# Fix the time format to be suitable for sorting
+			$program{time} = $lasttimeHHMM;
+			$program{startdate} = $startdate ;
+		}
 
 		# add all parsed info, as program{time, title, desc, category, date}
 
@@ -480,8 +516,7 @@ sub process_table( $$$$ ) {
 
 		parse_short_desc(\%program);
 
-		push @programs, \%program if (defined $program{time}) &&
-										(defined $program{title});
+		push @programs, \%program if (defined $program{time}) && (defined $program{title});
 
 	} # foreach $row
 
@@ -511,6 +546,7 @@ sub process_table( $$$$ ) {
 
 	foreach my $program (@programs) {
 		my $prog;
+		
 		$prog->{channel}=$ch_xmltv_id;
 
 		$prog->{title}=[ [ $program->{title}, $lang ] ];
@@ -530,6 +566,20 @@ sub process_table( $$$$ ) {
 		$prog->{length} = $program->{length} 
 			if defined $program->{length};
 
+		# Setting stop date for the previous programm
+		# Last program in the grabbed list has no stop attribute, sorry.
+		# Port.hu uses a virtual program as the last programme
+		# anyway
+		if ((defined($prev)) && $prev->{start} ne $prog->{start}) {
+			$prev->{stop} = $prog->{start};
+		}
+		
+		# We skip those programs, that are out of the requested time frame
+		if ($program->{day} > $opt_days || $program->{day}<1) {
+			$prev = undef;
+			next;
+		}
+		
 		worker("slow-parsing");	
 		foreach my $infourl (@{$program->{infourl}}) {
 			# always read data from linked page (in --slow mode)
@@ -541,14 +591,6 @@ sub process_table( $$$$ ) {
 			}
 		}
 		worker("base-parsing");
-		
-		# Setting stop date for the previous programm
-		# Last program in the grabbed list has no stop attribute, sorry.
-		# Port.hu uses a virtual program as the last programme
-		# anyway
-		if ((defined($prev)) && $prev->{start} ne $prog->{start}) {
-			$prev->{stop} = $prog->{start};
-		}
 		
 		push @r, $prog;
 
@@ -1098,7 +1140,7 @@ sub grab_icon( $ ) {
 	return unless ($opt_icons || $opt_local_icons);
 
 	my $channelid = shift;
-	my $fetchurl	= "http://www." . domain() . "/tv/kep_ado/al_${channelid}.gif";
+	my $fetchurl	= "http://www." . domain() . "/tv/kep_ado/al_".int(${channelid}).".gif";
 	my ($file, $iconurl);
 
 	return $fetchurl if ($opt_icons && ! $opt_local_icons);
@@ -1168,11 +1210,11 @@ sub get_channel_urls( $ ) {
 		"/pls/tv/tv.channel?i_ch=%d&" .
 		"i_days=1&i_xday=%d&i_where=1";
 
-    # url to grab now (1 days)
-	my $churl = sprintf($churlfmt, $ch_did, 1);
+    # url to grab now (4 days - this is the minimum)
+	my $churl = sprintf($churlfmt, $ch_did, 4);
 
-    # url to add as the information source (3 days)
-	my $portchurl = sprintf($churlfmt, $ch_did, 3);
+    # url to add as the information source (4 days - this is the minimum)
+	my $portchurl = sprintf($churlfmt, $ch_did, 4);
 
 	t "fetching page for channel urls: $churl\n";
 	worker("base-downloading");
@@ -1198,24 +1240,14 @@ sub get_channel_urls( $ ) {
 	#		requested A elements, and if this is not found:
 	# -> try to find a HR element (only one is presented on the page), this
 	#		Nth left sibling is the searched TABLE.
-	if (($anchor) = $tree->look_down(
-						_tag => "img",
-						src => qr!/tv/kep_ado/al_0*.gif!)) {
-		($elem) = $anchor->look_up(_tag=>"table", border => "0");
-	}
-	else {
-		# if image not found, try to find the containin table based on <HR>
-		if (! (($anchor) = $tree->look_down(_tag => "hr"))) {
-			t "NO channel image NOR <hr> found";
-			return @result;
+	if (($anchor) = $tree->look_down( _tag => "b", sub { lc($_[0]->as_text()) =~ /web:/ } ) ) {
+		if ($anchor = ($anchor->look_up("_tag"=>"p")->look_down("_tag"=>"a"))) {
+			push @result, $anchor->attr(q(href));
+		} else {
+			t "channel url not found";
 		}
-		$elem = $anchor;
-		while (($elem = $elem->left()) &&
-				((ref $elem) && ($elem->tag() ne "table"))) {} ;
-	}
-	if ( ($elem) && (ref $elem) && ($elem->tag() eq "table")) {
-		push @result, $_->attr(q(href)) 
-			foreach ($elem->find_by_tag_name("_tag"=>"a"));
+	} else {
+		t "channel url not found";
 	}
 	# add PORT url, too, this should be the last (and open 3 days if clicked)
 	push @result, $portchurl if defined $portchurl;
@@ -1573,6 +1605,9 @@ if ($mode eq 'grab') {
 
 	$DAYSPERPAGE = int($opt_days / 5) + (($opt_days % 5) ? 1 : 0);
 	$DAYSPERPAGE = int($opt_days / $DAYSPERPAGE);
+	
+	# We have to request at minimum of four days
+	$DAYSPERPAGE = 4 if ($DAYSPERPAGE<4);
 
 	t "requesting $DAYSPERPAGE days per scraped webpage ..."; 
 
