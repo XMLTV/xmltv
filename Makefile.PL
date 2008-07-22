@@ -496,6 +496,11 @@ my @opt_components
        exes => [ 'grab/dk/tv_grab_dk' ],
        prereqs => { 'HTML::TreeBuilder' => 0 } },
 
+     { name => 'tv_grab_dk_dr',
+       blurb => 'Grabber for Denmark (dr.dk)',
+       exes => [ 'grab/dk_dr/tv_grab_dk_dr' ],
+       prereqs => { 'HTML::TreeBuilder' => 0 } },
+
      { name => 'tv_grab_jp',
        blurb => 'Grabber for Japan',
        exes => [ 'grab/jp/tv_grab_jp' ],
