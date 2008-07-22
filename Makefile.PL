@@ -491,10 +491,11 @@ my @opt_components
        grab_need_share => [ 'huro' ],
        prereqs => { 'HTML::TreeBuilder' => 0 } },
 
-     { name => 'tv_grab_dk',
-       blurb => 'Grabber for Denmark',
-       exes => [ 'grab/dk/tv_grab_dk' ],
-       prereqs => { 'HTML::TreeBuilder' => 0 } },
+# 2008-07-22 - removed by rmeden, website changes, won't be fixed
+#     { name => 'tv_grab_dk',
+#       blurb => 'Grabber for Denmark',
+#       exes => [ 'grab/dk/tv_grab_dk' ],
+#       prereqs => { 'HTML::TreeBuilder' => 0 } },
 
      { name => 'tv_grab_dk_dr',
        blurb => 'Grabber for Denmark (dr.dk)',
