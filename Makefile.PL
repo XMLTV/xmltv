@@ -587,6 +587,7 @@ my @opt_components
      { name => 'tv_grab_eu_epgdata',
        blurb => 'Grabber for some European countries (epgdata.com)',
        exes => [ 'grab/eu_epgdata/tv_grab_eu_epgdata' ],
+       share_files => { 'grab/eu_epgdata/channel_ids' => 'tv_grab_eu_epgdata/channel_ids' },
        prereqs => { 'XML::Twig' => 0, 'Archive::Zip' => 0, 'HTML::Entities' => 0, 'LWP::Simple' => 0, 'File::Temp' => 0 },
      },
 
