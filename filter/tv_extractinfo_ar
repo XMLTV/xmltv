@@ -1,0 +1,526 @@
+#!/usr/bin/perl -w
+=pod
+
+=head1 NAME
+
+tv_extractinfo_ar - read Spanish (Argentinean) language listings and extract info
+from programme descriptions.
+
+=head1 SYNOPSIS
+
+tv_extractinfo_ar [--help] [--output FILE] [FILE...]
+
+=head1 DESCRIPTION
+
+Read XMLTV data and attempt to extract information from
+Spanish-language programme descriptions, putting it into
+machine-readable form.  For example the human-readable text '(Repeticion)'
+in a programme description might be replaced by the XML element
+<previously-shown>.
+
+B<--output FILE> write to FILE rather than standard output
+
+This tool also attempts to split multipart programmes into their
+constituents, by looking for a description that seems to contain lots
+of times and titles.  But this depends on the description following
+one particular style and is useful only for some listings sources
+(Ananova).
+
+If some text is marked with the 'lang' attribute as being some
+language other than Spanish ('es'), it is ignored.
+
+=head1 SEE ALSO
+
+L<xmltv(5)>.
+
+=head1 AUTHOR
+
+Mariano Cosentino, Mok@marianok.com.ar
+
+=head1 BUGS
+
+Trying to parse human-readable text is always error-prone, more so
+with the simple regexp-based approach used here.  But because TV
+listing descriptions usually conform to one of a few set styles,
+tv_extractinfo_en does reasonably well.  It is fairly conservative,
+trying to avoid false positives (extracting 'information' which
+isnE<39>t really there) even though this means some false negatives
+(failing to extract information and leaving it in the human-readable
+text).
+
+However, the leftover bits of text after extracting information may
+not form a meaningful Spanish sentence, or the punctuation may be
+wrong.
+
+On the two listings sources currently supported by the XMLTV package,
+this program does a reasonably good job.  But it has not been tested
+with every source of anglophone TV listings.
+
+
+
+This Spanish Version is heavily customized for the XML results from 
+tv_grab_ar (developed by Christian A. Rodriguez and postriorily 
+updated by Mariano S. Cosentino).
+
+This file should probably be called tv_extractinfo_es, but I have not 
+tested it with any other spanish grabbers, so I don't want to be 
+presumptious.
+
+
+
+=cut
+use strict;
+
+sub MSC_Extract();
+
+
+use XMLTV;
+use XMLTV::Usage <<END
+$0: read Spanish-language listings and extract info from programme descriptions
+usage: $0 [--help] [--output FILE] [FILE...]
+END
+;
+use XML::LibXML;
+use XMLTV::Version '$Id$ ';
+use Getopt::Long;
+
+my ($opt_help, $opt_output);
+GetOptions('help' => \$opt_help, 'output=s' => \$opt_output) or usage(0);
+usage(1) if $opt_help;
+@ARGV = ('-') if not @ARGV;
+
+
+my $parser = XML::LibXML->new;
+
+my $archivo = @ARGV;
+
+my $doc    = $parser->parse_file("@ARGV")
+                or die "can't parse xmltv file: $@";
+
+my $root = $doc->documentElement();
+
+MSC_Extract();
+
+if (defined $opt_output) {
+    my $status = $doc->toFile("$opt_output");
+    die "cannot write to $opt_output\n" if not $status;
+} else {
+	print $doc->toString;
+}
+
+
+
+
+sub MSC_Extract() {
+my @nodeList = $doc->getElementsByTagName('programme');
+foreach my $programa (@nodeList) {
+    my @oldTitle = $programa->getChildrenByTagName('title');
+    my @oldDesc = $programa->getChildrenByTagName('desc');
+    my $oldDesc=$oldDesc[0]->textContent;
+    my $curProgname = $oldTitle[0]->textContent;
+#    my $parentNode=$programa->parent;
+	$curProgname =~ s/^\s+//;
+	$curProgname =~ s/\s+$//;
+    my $Progname = $curProgname;
+#	$curProgname =~ s/^Disney.s\s//i; 
+	$curProgname =~ s/^Disney.\s//i; 
+	$curProgname =~ s/^\s+//;
+	$curProgname =~ s/\s+$//;
+	if ($curProgname eq "") {
+		$curProgname=$Progname;
+	}
+	# else {
+#	 $Progname = $curProgname;
+#	}
+	my $progTitle="";
+	my $progsubtitle="";
+	my $episodio="";
+	my $Temporada="";
+	my $newNodo="";
+
+	my $newNodo_PS="";
+	my $newNodo_EN="";
+
+	my $bChanged=0;
+	
+#	print "$Progname\n";
+
+	if ($curProgname =~ /(.*)\(Repetici.n\)$/) {
+		$newNodo_PS = XML::LibXML::Element->new('previously-shown');
+		$curProgname =$1; # =~ s,$1,,;
+		$curProgname =~ s/\(\)//g;
+	} 
+	if ($curProgname =~ /(.*)\(Repetici.n\)(.*)/) {
+		$newNodo_PS = XML::LibXML::Element->new('previously-shown');
+		$curProgname =$1 . $3; # =~ s,$1,,;
+		$curProgname =~ s/\(\)//g;
+	} 
+
+
+
+	if ($curProgname =~ /(.*)?(.?\sEpisodio\s(\d+))(.*)?/) {
+		$episodio=$3; #$2;
+		$curProgname =$1 . $4; # =~ s,$1,,;
+		$curProgname =~ s/^\s+//;
+		$curProgname =~ s/\s+$//;
+		$curProgname =~ s/  //g;
+		$curProgname =~ s/\.\./\./g;
+	} else {
+		$episodio="";
+	}
+
+	if ($curProgname =~ /(.*)?(.?\sTemporada\s(\d+))(.*)?/) {
+		$Temporada=$3; #$2;
+		$curProgname = $1 . $4; # =~ s,'$1',,;
+		$curProgname =~ s/^\s+//;
+		$curProgname =~ s/\s+$//;
+		$curProgname =~ s/  //g;
+		$curProgname =~ s/\.\./\./g;
+	} else {
+		$Temporada="";
+	}
+	if ("$Temporada.$episodio" ne ".") { 
+		$newNodo_EN = XML::LibXML::Element->new('episode-num');
+	   	$newNodo_EN->addChild ( $doc->createTextNode( "$Temporada.$episodio." ) );
+		$newNodo_EN->addChild( $doc->createAttribute('system','xmltv_ns') );
+		$newNodo="";
+	}
+
+
+
+
+	if ($curProgname =~ /([^.]*)\. (.*)/) { 
+		$progTitle = $1;
+		$progsubtitle = $2;
+	} else { 
+		$progTitle = $curProgname;
+		$progsubtitle = "";
+	}
+
+	if ($progTitle ne "") {
+		$progTitle =~ s/^\s+//;
+		$progTitle =~ s/\s+$//;
+		$progTitle =~ s/  //g;
+		$progTitle =~ s/\.\./\./g;
+		$progTitle =~ s/\.+$//g;
+	}
+
+	if ($progsubtitle ne "") {
+		$progsubtitle =~ s/^\s+//;
+		$progsubtitle =~ s/\s+$//;
+		$progsubtitle =~ s/  //g;
+		$progsubtitle =~ s/\.\./\./g;
+		$progsubtitle =~ s/\.+$//g;
+	}
+
+#title+ 
+	if ($Progname ne $progTitle) {
+		if ($progTitle ne "") {
+			$newNodo = XML::LibXML::Element->new('title');
+		   	$newNodo->addChild ( $doc->createTextNode( $progTitle ) );
+			$newNodo->addChild( $doc->createAttribute('lang','es') );
+		   	$programa->replaceChild ( $newNodo, $oldTitle[0]);
+			$bChanged=1;
+			$newNodo="";
+		}
+
+	}
+	
+	my @TempList;
+	my $TempItem;
+
+#TÃ­tulo original:	Drive
+	if ($oldDesc =~ /Título original:\s(.*)(\n|\r)?/i) { 
+			$TempItem=$1;
+			my $TempOtherTitle="";
+			$TempItem=~ s/^\s//;
+			$TempItem=~ s/\s$//;
+			$bChanged=1;
+			if ($TempItem =~ /(.*)\s\(A.?K.?A.?\s(.*)\)/i) {
+				$TempItem=$1;
+				$TempOtherTitle=$2;
+				$TempItem=~ s/^\s//;
+				$TempItem=~ s/\s$//;
+				$TempOtherTitle=~ s/^\s//;
+				$TempOtherTitle=~ s/\s$//;	
+			}
+			$newNodo = XML::LibXML::Element->new('title');
+		   	$newNodo->addChild ( $doc->createTextNode( "$TempItem" ) );
+		   	$newNodo->addChild( $doc->createAttribute('lang','en') );
+		   	$programa->addChild ( $newNodo  );
+			$newNodo="";
+			if ($TempOtherTitle ne "") {
+				$newNodo = XML::LibXML::Element->new('title');
+			   	$newNodo->addChild ( $doc->createTextNode( "$TempOtherTitle" ) );
+			   	$newNodo->addChild( $doc->createAttribute('lang','en') );
+			   	$programa->addChild ( $newNodo  );
+				$newNodo="";
+			}
+	}
+
+#sub-title* 
+	if ($progsubtitle ne "") {
+		$bChanged=1;
+    	my $itemnodo = $programa->addNewChild('', 'sub-title');
+		$itemnodo->addChild( $doc->createTextNode($progsubtitle) );
+	}
+
+
+
+# desc* 
+	if ($bChanged) {
+		foreach my $tempNode_desc (@oldDesc) {
+			$programa->removeChild($tempNode_desc);
+		   	$programa->addChild ( $tempNode_desc  );
+		}
+	}
+	
+	
+	
+	
+	
+	
+	my $bCredits=0;
+	my $CreditsNodo = XML::LibXML::Element->new('credits');
+
+
+
+	#    <desc lang="es">Directores:	Ed Friedman, Mark Glamack
+	if ($oldDesc =~ /Director(es)?:\s(.*)(\n|\r)?/i) { 
+		@TempList=split(",",$2);
+		if (scalar(@TempList)<2) {
+			@TempList=$2;
+		}
+		foreach $TempItem (@TempList) {
+			$TempItem=~ s/^\s//;
+			$TempItem=~ s/\s$//;
+			$newNodo = XML::LibXML::Element->new('director');
+		   	$newNodo->addChild ( $doc->createTextNode( "$TempItem" ) );
+		   	$bCredits=1;
+		   	$CreditsNodo->addChild ( $newNodo  );
+			$newNodo="";
+		}	
+	}
+
+	#     <desc lang="es">Protagonista:	Kiefer Sutherland
+	#    <desc lang="es">Protagonistas:	Antonio Aguilar, Elda Peralta, Chela Pastor, AgustÃ­n Isunza
+	if ($oldDesc =~ /Protagonistas?:\s(.*)(\n|\r)?/i) { 
+		@TempList=split(",",$1);
+		if (scalar(@TempList)<2) {
+			@TempList=$1;
+		}
+		foreach $TempItem (@TempList) {
+	#			warn "\nP: $TempItem";
+			$TempItem=~ s/^\s//;
+			$TempItem=~ s/\s$//;
+			$newNodo = XML::LibXML::Element->new('actor');
+		   	$newNodo->addChild ( $doc->createTextNode( "$TempItem" ) );
+		   	$bCredits=1;
+		   	$CreditsNodo->addChild ( $newNodo  );
+		}	
+			$newNodo="";
+	}
+
+	#	Conductor:	Adriana Betancour
+	#	Conductores:	Adam Corrolla, Jimmy Kimmel
+	#	Conductor:	Fernando Merino
+	if ($oldDesc =~ /Conductor(es)?:\s(.*)(\n|\r)?/i) { 
+		@TempList=split(",",$2);
+		if (scalar(@TempList)<2) {
+			@TempList=$2;
+		}
+		foreach $TempItem (@TempList) {
+			$TempItem=~ s/^\s//;
+			$TempItem=~ s/\s$//;
+			$newNodo = XML::LibXML::Element->new('presenter');
+		   	$newNodo->addChild ( $doc->createTextNode( "$TempItem" ) );
+		   	$bCredits=1;
+		   	$CreditsNodo->addChild ( $newNodo  );
+			$newNodo="";
+		}	
+	}
+
+# credits? 
+	if ($bCredits ) {
+	   	$programa->addChild ( $CreditsNodo  );
+	}
+   	$CreditsNodo="";
+
+
+
+# date? 
+	#	AÃ±o:	1934
+	if ($oldDesc =~ /año:\s(.*)(\n|\r)?/i) { 
+		$TempItem= $1;
+		$TempItem=~ s/^\s//;
+		$TempItem=~ s/\s$//;
+		$newNodo = XML::LibXML::Element->new('date');
+	   	$newNodo->addChild ( $doc->createTextNode( "$TempItem"."0101" ) );
+	   	$programa->addChild ( $newNodo  );
+		$newNodo="";
+	}
+
+# category* 
+	#    <desc lang="es">GÃ©nero:	Agro</desc>
+	if ($oldDesc =~ /Género:\s(.*)(\n|\r)?/i) { 
+		@TempList=split(",",$1);
+		if (scalar(@TempList)<2) {
+			@TempList=$1;
+		}
+		foreach $TempItem (@TempList) {
+			$TempItem=~ s/^\s//;
+			$TempItem=~ s/\s$//;
+	#		warn "Género: $TempItem\n";
+			$newNodo = XML::LibXML::Element->new('category');
+		   	$newNodo->addChild ( $doc->createTextNode( "$TempItem" ) );
+		   	$programa->addChild ( $newNodo  );
+			$newNodo="";
+		}	
+	}
+
+
+
+# language? 
+
+# orig-language? 
+
+# length? 
+	# DuraciÃ³n:	102 minutos
+	if ($oldDesc =~ /Duración:\s(\d*)\s(.*)(\n|\r)?/i) { 
+			my $TempLength=$1;
+			my $tempunit=$2;
+			$tempunit=~ s/^\s//;
+			$tempunit=~ s/\s$//;
+			$tempunit=~ s/minutos?/minutes/;
+			$tempunit=~ s/horas?/hours/;
+			$tempunit=~ s/segundos?/seconds/;
+			
+			$newNodo = XML::LibXML::Element->new('length');
+		   	$newNodo->addChild ( $doc->createTextNode( "$TempLength" ) );
+			$newNodo->addChild( $doc->createAttribute('units',"$tempunit") );
+		   	$programa->addChild ( $newNodo  );
+			$newNodo="";
+	}
+
+
+
+# icon* 
+# url* 
+
+# country* 
+	#PaÃ­s:	Argentina
+	if ($oldDesc =~ /País(es)?:\s(.*)(\n|\r)?/i) { 
+		@TempList=split("-",$2);
+		if (scalar(@TempList)<2) {
+			@TempList=$2;
+		}
+		foreach $TempItem (@TempList) {
+			$TempItem=~ s/^\s//;
+			$TempItem=~ s/\s$//;
+			$newNodo = XML::LibXML::Element->new('country');
+		   	$newNodo->addChild ( $doc->createTextNode( "$TempItem" ) );
+		   	$newNodo->addChild( $doc->createAttribute('lang','es') );
+		   	$programa->addChild ( $newNodo  );
+			$newNodo="";
+		}	
+	}
+
+
+# episode-num* 
+	if ($newNodo_EN ne "") {
+	   	$programa->addChild ($newNodo_EN );
+	}
+
+
+
+#			my $TempLength="";
+#			my $tempunit="";
+
+
+# video? 
+
+# audio? 
+
+# previously-shown? 
+	if ($newNodo_PS ne "") {
+	   	$programa->addChild ($newNodo_PS );
+	}
+
+# premiere? 
+
+# last-chance? 
+
+# new? 
+
+# subtitles* 
+
+# rating* 
+	#	ClasificaciÃ³n:	Apta para todo pÃºblico</desc>
+	#	ClasificaciÃ³n:	SÃ³lo apta para mayores de 13 aÃ±os</desc>
+	#	ClasificaciÃ³n:	SÃ³lo apta para mayores de 16 aÃ±os</desc>
+	#	ClasificaciÃ³n:	SÃ³lo apta para mayores de 18 aÃ±os</desc>
+	if ($oldDesc =~ /Clasificación:\s(.*)(\n|\r)?/i) { 
+			$TempItem=$1;
+			$TempItem=~ s/^\s//;
+			$TempItem=~ s/\s$//;
+			$newNodo = XML::LibXML::Element->new('rating');
+		   	$newNodo->addChild( $doc->createAttribute('system',"Argentina") );
+				my $newSubNodo = XML::LibXML::Element->new('value');
+			   	$newSubNodo->addChild ( $doc->createTextNode( "$TempItem" ) );
+			   	$newNodo->addChild( $newSubNodo);
+		   	$programa->addChild ( $newNodo  );
+			$newNodo="";
+	}
+
+# star-rating*
+
+  }
+}
+
+		#/(.*)\. (.*)/) {
+		#		print "o: $curProgname\n";		
+		#		print "T:$1\n";
+		#		print "St:$2\n";
+
+#		$progName = $curProgname;
+
+##	    		my $itemnodo = $programa->addNewChild('', 'title');
+##			$itemnodo->addChild( $doc->createTextNode($progTitle) );
+##			$itemnodo->addChild( $doc->createAttribute('lang','es') );
+#	    		my $itemnodo = $programa->addNewChild('', 'title');
+#			$itemnodo->addChild( $doc->createTextNode($progTitle) );
+#			$itemnodo->addChild( $doc->createAttribute('lang','es') );
+
+#find($programa->nodePath . "/title");
+# 		print $oldNodo[0]->nodePath;
+
+#			print $programa->nodePath;
+##			$programa = $progTitle;
+#->textContent
+
+#	print "$progName [$progsubtitle - $Temporada.$episodio]\n";        # pretty print
+#sub addSubElm($$$) {
+#    my ($pet, $name, $body) = @_;
+#    my $subElm = $pet->addNewChild('', $name);
+#    $subElm->addChild( $doc->createTextNode($body) );
+#}
+#sub addField($$$$) {
+#    my ($type, $name, $dob, $price) = @_;
+#    # addNewChild is non-compliant; could use addSibling instead
+#    my $pet = $root->addNewChild('', $type);
+#    addSubElm ( $pet, 'name', $name );
+#    addSubElm ( $pet, 'dob',  $dob  );
+#    addSubElm ( $pet, 'price', $price );
+#}    
+
+
+#    my $newPrice = sprintf "%6.2f", $curPrice * 1.2;
+#    my $parent = $programa->parentNode;
+#    my $newNodo = XML::LibXML::Element->new('programme');
+#    $newNodo->addChild ( $doc->createTextNode( $newPrice ) );
+#    $parent->replaceChild ( $newPriceNode, $priceNode );
+#print $doc->toString(1);        # pretty print
+
+
+#mv /home/notroot/xmltv2tivo/20080430.slice.gz /home/notroot/TivoEmulator/tivo-service/static/listings/BA01235_13999-14006.slice.gz
+
