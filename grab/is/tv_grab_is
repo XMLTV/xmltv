@@ -22,7 +22,7 @@ tv_grab_is --version
 =head1 DESCRIPTION
 
 Output TV listings for several channels available in Iceland.  The
-data comes from www.skjarinn.is and stod2.is. The grabber relies on parsing HTML so it
+data comes from www.sjonvarp.is. The grabber relies on parsing HTML so it
 might stop working at any time.
 
 First run B<tv_grab_is --configure> to choose, which channels you want
@@ -63,16 +63,19 @@ B<--help> Print a help message and exit.
 L<xmltv(5)>.
 =head1 AUTHOR
 
-Tómas Edwardsson (tommi@tommi.org), based on
-Yngvi Þór Sigurjónsson (yngvi@teymi.is) version that fetched
-info from sjonvarp.is. Heavily based on
+Yngvi Þór Sigurjónsson (yngvi@teymi.is). Heavily based on
 tv_grab_dk by Jesper Skov (jskov@zoftcorp.dk). tv_grab_dk
 originally based on tv_grab_nl by Guido Diepen and Ed Avis
 (ed@membled.com) and tv_grab_fi by Matti Airas.
 
+Version 1.1, Eggert Thorlacius (eggert@thorlacius.com).  Started out by
+replacing a couple of channels with XML feeds, but ended up by removing the
+sjonvarp.is code completely.  Left in the "xxx.sjonvarp.is" XMLTV IDs for
+backwards compatibility.
+
+
 =head1 BUGS
 
-First release. Fails to recognize actors when actors names are abbrevated.
 
 =cut
 use strict;
@@ -84,9 +87,11 @@ use HTML::TreeBuilder;
 use HTML::Entities; # parse entities
 use IO::File;
 use URI;
-use Encode qw(from_to);
+use Switch;
 
 use Date::Manip;
+use XML::LibXSLT;
+use XML::DOM;
 
 use XMLTV;
 use XMLTV::Memoize;
@@ -110,18 +115,15 @@ END
 BEGIN {
     eval { require Log::TraceMessages };
     if ($@) {
-	*t = sub {};
-	*d = sub { '' };
+    *t = sub {};
+    *d = sub { '' };
     }
     else {
-	*t = \&Log::TraceMessages::t;
-	*d = \&Log::TraceMessages::d;
-	Log::TraceMessages::check_argv();
+    *t = \&Log::TraceMessages::t;
+    *d = \&Log::TraceMessages::d;
+    Log::TraceMessages::check_argv();
     }
 }
-
-# Whether zero-length programmes should be included in the output.
-my $WRITE_ZERO_LENGTH = 0;
 
 # default language
 my $LANG = 'is';
@@ -130,9 +132,12 @@ my $LANG = 'is';
 my $TZ = '+0000';
 
 
-sub process_summary_page( $$$ );
-sub process_listings_page( $$$$$ );
-sub cache_channel( $$$$ );
+sub process_xml_channel( $$$$$ );
+sub process_sjonvarp_is( $$$$$ );
+sub process_ruv_is( $$$$$ );
+sub process_skjarinn_is( $$$$$ );
+sub process_stod2_and_friends( $$$$$ );
+
 
 # Get options
 XMLTV::Memoize::check_argv('XMLTV::Get_nice::get_nice_aux');
@@ -217,17 +222,16 @@ if (defined $opt_output) {
     die "cannot write to $opt_output: $!" if not defined $fh;
     $w_args{OUTPUT} = $fh;
 }
-$w_args{encoding} = 'UTF-8';
+$w_args{encoding} = 'ISO-8859-1';
+$w_args{UNSAFE} = 1;    # Needed by process_xml_channel
 my $writer = new XMLTV::Writer(%w_args);
 # TODO: standardize these things between grabbers.
 $writer->start
-  ({ 'source-info-url'     => 'http://www.skjarinn.is/',
-     'source-data-url'     => 'http://www.skjarinn.is/tv',
-     'generator-info-name' => 'XMLTV',
+  ({ 'generator-info-name' => 'XMLTV',
      'generator-info-url'  => 'http://membled.com/work/apps/xmltv/',
    });
 
-if ($opt_list_channels) {
+if ($mode eq 'list-channels') {
     my $bar = new XMLTV::ProgressBar('getting list of channels', 1)
       if not $opt_quiet;
     my %channels = get_channels();
@@ -236,7 +240,7 @@ if ($opt_list_channels) {
 
     foreach my $ch_did (sort(keys %channels)) {
         my $ch_name = $channels{$ch_did};
-        my $ch_xid = "$ch_did";
+        my $ch_xid = "$ch_did.sjonvarp.is";
        $writer->write_channel({ id => $ch_xid,
                                  'display-name' => [ [ $ch_name ] ],
                                  'icon' => [{'src' => get_icon($ch_did)}]
@@ -258,14 +262,14 @@ foreach (@config_lines) {
     # config file only gives the XMLTV ids that are interesting.
     #
     if (/^channel:?\s+(\S+)\s+([^\#]+)/) {
-	$ch_did = $1;
-	$ch_name = $2;
-	$ch_name =~ s/\s*$//;
-	push @channels, $ch_did;
-	$channels{$ch_did} = $ch_name;
+    $ch_did = $1;
+    $ch_name = $2;
+    $ch_name =~ s/\s*$//;
+    push @channels, $ch_did;
+    $channels{$ch_did} = $ch_name;
     } 
     else {
-	warn "$config_file:$.: bad line\n";
+    warn "$config_file:$.: bad line\n";
     }
 }
 
@@ -277,30 +281,49 @@ die if not defined $now;
 
 Date_Init('TZ=UTC');
 
+# Mapping from cannel ID to ID in URL
+my %stod2AndFriends = (
+    "ST2" => "228",
+    "ST2SPORT" => "230",
+    "ST2SPORT2" => "231",
+    "ST2SPORT3" => "235",
+    "ST2SPORT4" => "236",
+    "ST2SPORT5" => "237",
+    "ST2SPORT6" => "238",
+    "ST2EXTRA" => "232",
+    "ST2BIO" => "233",
+);
+
+# Declare array of { date, num_days, channel_id, channel_xid, function } 
+# and populate it with all pages we need to get.  For sites that only
+# support getting a single day at a time, we create $opt_days entries
+# per channel, but for the others, we create a single entry
 my @to_get;
 
-# the order in which we fetch the channels matters
-my $today = UnixDate($now, '%Y-%m-%d'); die if not defined $today;
+my $startday = UnixDate(DateCalc(UnixDate($now, '%Y-%m-%d'), "+ $opt_offset days"), '%Y-%m-%d'); die if not defined $startday;
 
-my %chan_cache;
 
 foreach $ch_did (@channels) {
     $ch_name = $channels{$ch_did};
-    my $ch_xid = "$ch_did";
+    my $ch_xid = "$ch_did.sjonvarp.is";
     $writer->write_channel({ id => $ch_xid,
-			     'display-name' => [ [ $ch_name ] ],
-				 'icon' => [{'src' => get_icon($ch_did)}]
-				 });
-    if ($ch_did =~ /^(.+?)\.stod2.is$/) {
-	cache_channel(\%chan_cache, $1, $opt_days, $opt_offset);
-    }
-    for (my $i = $opt_offset;$i<($opt_offset + $opt_days);$i++) {
-	# Request day when constructing URL since it is represented as
-	# an integere offset from today. Still pass in the computed
-	# date - may need it sometime...
-	my $day = UnixDate(DateCalc($today, "+ $i days"), '%Y-%m-%d');
-	t "turned offset $i (from $today) into date $day";
-	push @to_get, [ $i, $day, $ch_xid, $ch_did ];
+                 'display-name' => [ [ $ch_name ] ],
+                 'icon' => [{'src' => get_icon($ch_did)}]
+                 });
+                 
+    switch($ch_did) {
+        case "RUV"  
+            { 
+                push @to_get, [ $startday, $opt_days, $ch_did, $ch_xid, \&process_ruv_is ];
+            }
+        case "S1"
+            {
+                push @to_get, [ $startday, $opt_days, $ch_did, $ch_xid, \&process_skjarinn_is ];
+            }
+        case (%stod2AndFriends)
+            {
+                push @to_get, [ $startday, $opt_days, $ch_did, $ch_xid, \&process_stod2_and_friends ];
+            }
     }
 }
 
@@ -311,9 +334,9 @@ my $bar = new XMLTV::ProgressBar('fetching data', scalar @to_get)
 my @to_get_detailed;
 my $num_detailed = 0;
 foreach (@to_get) {
-    my ($tv2date, $date, $ch_xmltv_id, $ch_tvgids_id) = @$_;
-    t "going to get $ch_xmltv_id for $date";
-    process_listings_page($writer, $ch_xmltv_id, $tv2date, $ch_tvgids_id , $date);
+    my ($date, $num_days, $ch_tvgids_id, $ch_xmltv_id, $func) = @$_;
+     &{$func}($writer, $date, $num_days, $ch_tvgids_id, $ch_xmltv_id);
+
     update $bar if not $opt_quiet;
 }
 $bar->finish() if not $opt_quiet;
@@ -323,359 +346,319 @@ $writer->end();
 ######################################################################
 # subroutine definitions
 
-# arguments:
-#   XMLTV::Writer object to write to
-#   XMLTV id of channel
-#   URL to fetch
-#   Date::Manip object giving day for programmes in page (at least
-#     until they cross midnight)
+# Attepmts to parse director from a string. If successful, director
+# is removed from original string and returned
+ 
+sub get_director($) {
+    my $director ="";
+    if($_[0] =~ s/Leikstjóri:\s*([^.]*)\.// ) {
+        $director = $2;
+    }
+    return $director;
+}
 
-sub cache_channel( $$$$ ) {
-    my ($chan_cache, $ch_id, $days, $offset) = @_;
+# Attepmts to parse actors from a string. If successful, actor list
+# is removed from original string and returned as an array
+sub get_actors($) {
+    my $actors;
+    if($_[0] =~ s/\s*(Aðalhlutverk:|[mM]eðal leikenda eru|Aðalhlutverk leika|[Íí] aðalhutverkum eru|[Ll]eikendur eru)\s*([^.]*)\.// ) {
+        my @a = split(/, | og /, $2);
+        s/[.]$// foreach @a;
+        push @$actors, @a;
+    }
+    return $actors;
+}
 
-    my $num_days = $days + $offset;
 
-    my $url = "http://old.stod2.is/oracledata/dagskratextaskra.asp?midill=$ch_id&dagar=$num_days";
+# Takes XML and XSL transform that converts it to a list of <programme>
+# elements, and writes the elements to the XMLTV writer (after massaging them
+# a bit)
+sub process_xml_channel( $$$$$ ) {
+    my ($writer, $infromdate, $num_days, $xsl_transform, $xml, $from) = @_;
 
-    my $data = get_nice($url);
-    from_to($data, 'iso-8859-15', 'utf-8');
+    my $fromdate = ParseDate($infromdate);
+    my $enddate = ParseDate(UnixDate(DateCalc($fromdate, "+ " . ($num_days) . " days"), '%Y-%m-%d'));
 
+    # Step one: Use XSLT to munge XML to XMLTV format...
+    my $parser = XML::LibXML->new(); die unless defined $parser;
+    my $xslt = XML::LibXSLT->new(); die unless defined $xslt;
+    my $stylesheet = $xslt->parse_stylesheet($parser->parse_string($xsl_transform));
+    my $results = $stylesheet->transform($parser->parse_string($xml));
 
-    $data =~ s/^.*?\r\n.*?\r\n\r\n\r\n\r\n//s;
-
-    my @inf = split(/\r\n\r\n/, $data);
-
-    my $status = 0;
-    my $mon = my $mday = my $year = 0;
-    my $date = '';
-    my $last_hour = 0;
-    foreach my $section (@inf) {
-	if ($status == 0) {
-		last if ($section =~ /<ENDIR Á SKRÁ>/);
-		($mon, $mday, $year) = split(/[\/ ]/, $section);
-		print $section;
-		$date = UnixDate(ParseDate("$mon/$mday/$year"), '%Y-%m-%d');
-		$status = 1;
-	} else {
-		my $time = my $title = my $title_is = my $desc = my $episode = '';
-		$status = 0;
-		while ($section =~ s/^(\d\d:\d\d) (.+?)\r\n(\d+:\d+) /$3 /s) {
-			 #|| $section =~ s/^(\d\d:\d\d) (.+?)\r\n(.+?)\r\n(\d+:\d+) /$4 /s) {
-		    $title = '';
-		    $title_is = '';
-		    $desc = '';
-		    $time = $1;
-		    my $hour = (split(':', $time))[0];
-		    if ($hour < $last_hour) {
-			my @d = split("-", $date);
-			$date = UnixDate(ParseDate(DateCalc(ParseDate("$d[1]/$d[2]/$d[0]"), " + 1 day")), '%Y-%m-%d');
-		    }
-		    $last_hour = $hour;
-		    my $con = $2;
-		    my $continue = $3;
-		    if ($con =~ /^(.+?)\r\n(.+)$/s) {
-			$title = "$1";
-			$desc = $2;
-		    } else {
-			$title = $con;
-		    }
-		    #print "\n\nTITLE:$title\n\n";
-		    if ($continue) {
-			my @d = split(/\r\n/, $desc);
-			if ($d[1]) {
-			    if ($d[0] =~ /^\((.+)\)$/) {
-				    $title_is = $1;
-			    } else {
-				    $title .= " $d[0]";
-			    }
-			    $desc = $d[1];
-			} else {
-			    $desc = $d[0];
-			}
-			if ($title_is) {
-			   push @{$chan_cache->{$ch_id}->{$date}}, { time => $time, title => $title, title_is => $title_is, desc => $desc };
-			} else {
-			   push @{$chan_cache->{$ch_id}->{$date}}, { time => $time, title => $title, desc => $desc };
-			}
+    # Step 2: Loop through all programmes and all their children.
+    # Do some processing on the children and then dump the programme 
+    # into the writer.
+    my @programmeElem = $results->getDocumentElement->getElementsByTagName('programme');
+    foreach my $programme (@programmeElem) {
+        my $myDate = ParseDate($programme->getAttribute('start'));
+        if ((Date_Cmp($myDate, $fromdate) >= 0) && (Date_Cmp($myDate, $enddate) <= 0)) {
+            $myDate = UnixDate($myDate,'%q');   # Convert date to "20081231235900 +0000"
+            $myDate .= " +0000";
+            $programme->setAttribute('start', $myDate);
+            
+            foreach my $node ($programme->childNodes) {
+                if ($node->nodeName eq 'title' && $node->hasChildNodes()) {
+                    my $titleStr = $node->firstChild->data;
+                    $titleStr =~ s/ - N.TT$//;  # Strip garbage that no one cares about
+                    $titleStr =~ s/ - Loka..ttur$//;
+                    my $episode_num="$1:$2" if ($titleStr =~ s/\s*\((\d+):(\d+)\)//);
+                    if ($episode_num) {
+                        my $episodeNode = XML::LibXML::Element->new('episode-num');
+                        $episodeNode->appendTextNode($episode_num);
+                        $programme->appendChild($episodeNode);
+                    }
+                    $node->firstChild->setData($titleStr);
+                } elsif ($node->nodeName eq 'sub-title' && ( !$node->hasChildNodes()  || ($node->firstChild->data =~ /^[\n ]*$/))) {
+                        $programme->removeChild($node);
+                } elsif ($node->nodeName eq 'desc') {
+                    if ($node->hasChildNodes() && ($node->firstChild->data !~ /^[\n ]*$/)) {
+                        my $credits = $programme->find("credits")->get_node(0);
+                        # If this is the description, extract director and actors
+                        my $director = get_director($node->firstChild->data);
+                        if ($director ne "") {
+                            my $dirNode = XML::LibXML::Element->new('director');
+                            $dirNode->appendTextNode($director);
+                            $credits->appendChild($dirNode);
+                        }
+                        my $actors = get_actors($node->firstChild->data);
+                        foreach my $actor (@$actors) {
+                            my $actNode = XML::LibXML::Element->new('actor');
+                            $actNode->appendTextNode($actor);
+                            $credits->appendChild($actNode);
+                        }
                     } else {
-		    	push @{$chan_cache->{$ch_id}->{$date}}, { time => $time, title => $title };
-		    }
-		}
-		$section =~ /^(\d+:\d+) (.+?)(\r\n.*?|)$/s;
-		$title_is = '';
-		$title = '';
-		$desc = '';
-		$time = $1;
-		$title = $2;
-		my @d = split(/\r\n/, $3);
-		if ($d[1]) {
-		    if ($d[0] =~ /^\((.+)\)$/) {
-			$title_is = $1;
-		    } else {
-			$title .= " $d[0]";
-		    }
-		    $desc = $d[1];
-		} else {
-		    $desc = $d[0];
-		}
-		if ($title_is) {
-		    push @{$chan_cache->{$ch_id}->{$date}}, { time => $time, title => $title, title_is => $title_is, desc => $desc };
-		} else {
-		    push @{$chan_cache->{$ch_id}->{$date}}, { time => $time, title => $title, desc => $desc };
-		}
-	}
+                        $programme->removeChild($node);
+                    }
+                }
+            }
+            
+            $writer->raw($programme->toString);
+        }
+        
     }
 }
 
+sub process_ruv_is ( $$$$$ ){
 
-my ($warned_discarding_parts, $commented_episode_num);
-sub process_listings_page ( $$$$$ ){
-#    local $Log::TraceMessages::On = 1;
-    my ($writer, $ch_xmltv_id, $tv2date, $tv2chan, $day_obj) = @_;
-    my $next_day = 0;
-    my $day = UnixDate($day_obj, '%Q');
-    my $laststart=$day_obj;
-    #my $dayOffset = 0;
-
-    t "getting channel $ch_xmltv_id, date $day";
+    my ($writer, $fromdate, $num_days, $tv2chan, $ch_xmltv_id) = @_;
     
-    my ($y,$m,$d) = UnixDate($day_obj,"%Y","%m","%d");
+    my $xsl_transform = <<"EOF";
+        <xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" version="1.0" xmlns:data="urn:some.urn" exclude-result-prefixes="data">
+        <xsl:output method="xml" version="1.0" encoding="iso-8859-1" indent="yes" />
+        
+        
+        <data:category>
+          <entry key="1">children</entry>
+          <entry key="2">series</entry>
+          <entry key="3">news</entry>
+          <entry key="4">educational</entry>
+          <entry key="5">sports</entry>
+          <entry key="6">misc</entry>
+          <entry key="7">movie</entry>
+          <entry key="8">culture</entry>
+          <entry key="9">music</entry>
+        </data:category>
+        
+        <xsl:template match="/">
+            <!-- XML needs a toplevel node, so we wrap the programmes in a channel_wrapper element.  The code will then remove it -->
+            <channel_wrapper>
+            <xsl:apply-templates/>
+            </channel_wrapper>
+        </xsl:template>
+        
+        <xsl:template match="event">
+            <programme channel="RUV.sjonvarp.is" start="">
+                <xsl:attribute name="start">
+                    <xsl:value-of select='translate(\@start-time,"- :","")'/>
+                </xsl:attribute>
+                <title>
+                    <xsl:apply-templates select="title"/>
+                </title>
+                <sub-title>
+                    <xsl:apply-templates select="original-title"/>
+                </sub-title>
+        
+                <desc>
+                    <xsl:apply-templates select="description"/>
+                </desc>
+                <credits/>
+                <xsl:apply-templates select="category"/>
+                <xsl:apply-templates select="episode"/>
+                <xsl:apply-templates select="rerun"/>
+            </programme>
+        </xsl:template>
+        
+        <xsl:template match="category">
+            <category>
+                <xsl:variable name="category_value" select="\@value"/>
+                <xsl:value-of select="document('')/*/data:category/entry[\@key = \$category_value]"/>
+             </category>
+        </xsl:template>
+        
+        <!-- Two matches for <episode> One to cut out "1 of 1", and one to change to "x:y" format -->
+        <xsl:template match="episode[\@number = 1 and \@number-of-episodes = 1]">
+        </xsl:template>
+        <xsl:template match="episode">
+            <episode-num system="onscreen"><xsl:value-of select="\@number"/>:<xsl:value-of select="\@number-of-episodes"/>
+            </episode-num>
+        </xsl:template>
+        
+        <!-- Two matches for <rerun>.  One turns 'yes' into <previously-shown>, the other cuts out the 'no's -->
+        <xsl:template match="rerun[. = 'yes']">
+            <previously-shown/>
+        </xsl:template>
+        <xsl:template match="rerun">
+        </xsl:template>
+        
+        </xsl:stylesheet>
+EOF
+
+    # Get the XML.  Note that due to some edge cases, we must get data for the day before
+    # and after the ones we're looking for and let process_xml_cannel remove most of the 
+    # data.  If we don't, tv_validate_grabber will fail
+    my $dayBefore = UnixDate(DateCalc($fromdate, "- 1 days"), '%Y-%m-%d');
+    my $dayAfter = UnixDate(DateCalc($fromdate, "+ " . ($num_days + 1) . " days"), '%Y-%m-%d');
+    my $url = "http://dagskra.ruv.is/files/xml.aspx?channel=1&date-from=$dayBefore&date-to=$dayAfter";
     
-    if ($ch_xmltv_id =~ /^(.+?)\.skjarinn\.is$/) {
-	my $chid = $1;
-	# We make an HTML::TreeBuilder object, get the information
-	# from it and them delete it.
-	#
-	my $t = new HTML::TreeBuilder();
-	$t->parse(get_nice("http://www.skjarinn.is/skjarheimur/dagskra/?portlet_action=true&action_wid=928&rp_928_tvStationId=$chid&rp_928_WeekDaySelected=$d.$m"));
-	#$t->parse_file("mToday.php");
-	
-	#$t->dump();
-	my @rows = $t->look_down("_tag" => "table",
-	    "class" => "tvStationsProgram");
-	foreach my $row (@rows) {
-	    #$row->dump;
-	    my @lines= $row->look_down("_tag" => "tr");
-	    shift(@lines);
-
-	    #shift(@lines) if ($ch_xmltv_id eq 'RUV.skjarinn.is');
-
-	    while (my $line = shift (@lines)) {
-		last if ($line->look_down("_tag" => "label"));
-
-		# Process the list of [ heading, data ] pairs.
-		my ($start, $stop, # exactly one
-		    $title, $sub_title, $genre, $date,               #
-		    $episode_num, $actors, $writers, $commentators, #
-		    $director, $previously_shown, $orig_title,      # at most one
-		    $aspect, $colour, $stereo, $texted,
-		    @presenter, @url # zero or more
-		    );
-	    
-		my $time = $line->look_down("_tag" => "td",
-		    "class" => "time")->as_text;
-
-		$title = $line->look_down("_tag" => "td",
-		    "class" => "name")->as_text;
-		next if ((split(":", $time))[0] < 4 && length($laststart) < 12);
-		from_to($title, 'iso-8859-15', 'utf-8');
-		my $desc = $line->look_down("_tag" => "td",
-		    "class" => "description")->as_text;
-		from_to($desc, 'iso-8859-15', 'utf-8');
-	    
-		$start = parse_local_date("$day $time",$TZ);
-		# Try to detect if we have crossed midnigth
-		#printf("START: %s LASTSTART: %s\n", $start, $laststart);
-		if ( Date_Cmp($start , $laststart) < 0 ) {
-		    $start = DateCalc($start,"+ 1 day");
-		}
-		$laststart = $start;
-
-		my ($start_base, $start_tz) = @{date_to_local($start, $TZ)};
-	    
-		$episode_num="$1/$2" if ($title =~ s/\s*\((\d+):(\d+)\)//);
-	   
-		$title =~ s/\s*\(e\)//; # remove rerun indication
-		my @title_data = ([ $title, $LANG]);
-		if($desc =~ s/Leikstjóri(:|)\s*([^.]*)\.//i ) {
-		    $director = $2;
-		}
-		if($desc =~ s/\s*(Aðalhlutverk:|[mM]eðal leikenda eru|Aðalhlutverk leika|[íÍ] aðalhulverkum eru|[Ll]eikendur eru)\s*([^.]*)\.//i ) {
-		    my @a = split(/, | og /, $2);
-		    s/[.]$// foreach @a;
-		    push @$actors, @a;
-		}
-		my %prog
-		    = (channel  => $ch_xmltv_id,
-		    title    => \@title_data,
-		    start    => UnixDate($start_base, '%q') . " $start_tz",
-		   );
-		if ($desc) {
-			$prog{desc} = [ [ $desc ,$LANG ] ];
-		} else {
-			$prog{desc} = [ [ $title ,$LANG ] ];
-		}
-		$prog{'episode-num'} = [ [ $episode_num,'xmltv_ns' ] ] if $episode_num;
-		my %c;
-		$c{actor} = $actors if $actors;
-		$c{writer} = $writers if $writers;
-		$c{commentator} = $commentators if $commentators;
-		$c{director} = [ $director ] if $director;
-		$prog{credits} = \%c if %c;
-
-		$writer->write_programme(\%prog);
-	    }
-
-	}
-    #$t->delete; undef $t;
-    } elsif ($ch_xmltv_id =~ /^(.+?)\.stod2\.is$/) {
-	
-	foreach my $r (@{$chan_cache{$1}->{$day_obj}}) {
-		my ($start, $stop, # exactly one
-		    $title, $sub_title, $genre, $date,               #
-		    $episode_num, $actors, $writers, $commentators, #
-		    $director, $previously_shown, $orig_title,      # at most one
-		    $aspect, $colour, $stereo, $texted,
-		    @presenter, @url # zero or more
-		    );
-		$title = $r->{title};
-		#print "TITLE: $title\n";
-		my $time = $r->{time};
-		my $desc = $r->{desc};
-		$start = parse_local_date("$day $time",$TZ);
-		# Try to detect if we have crossed midnigth
-		#printf("START: %s LASTSTART: %s\n", $start, $laststart);
-		if ( Date_Cmp($start , $laststart) < 0 ) {
-		    $start = DateCalc($start,"+ 1 day");
-		}
-		$laststart = $start;
-
-		my ($start_base, $start_tz) = @{date_to_local($start, $TZ)};
-	    
-		if ($title =~ s/\s*\((\d+):(\d+)\)//) {
-			$episode_num="$1/$2";
-		}
-	   
-		my @title_data = ();
-		$title =~ s/\s*\(e\)//; # remove rerun indication
-		if ($r->{title_is}) {
-			@title_data = ([ $title, 'en'], [ $r->{title_is}, 'is']);
-		} else {
-			@title_data = ([ $title, $LANG]);
-		}
-		if($desc && $desc =~ s/Leikstjóri(:|)\s*([^.]*)\.//i ) {
-		    $director = $2;
-		}
-		if($desc && $desc =~ s/\s*(Aðalhlutverk:|[mM]eðal leikenda eru|Aðalhlutverk leika|[íÍ] aðalhulverkum eru|[Ll]eikendur eru)\s*([^.]*)\.//i ) {
-		    my @a = split(/, | og /, $2);
-		    s/[.]$// foreach @a;
-		    push @$actors, @a;
-		}
-		my %prog
-		    = (channel  => $ch_xmltv_id,
-		    title    => \@title_data,
-		    start    => UnixDate($start_base, '%q') . " $start_tz",
-		   );
-		if ($desc) {
-			$prog{desc} = [ [ $desc ,$LANG ] ];
-		} else {
-			$prog{desc} = [ [ $title ,$LANG ] ];
-		}
-		$prog{'episode-num'} = [ [ $episode_num,'xmltv_ns' ] ] if $episode_num;
-		my %c;
-		$c{actor} = $actors if $actors;
-		$c{writer} = $writers if $writers;
-		$c{commentator} = $commentators if $commentators;
-		$c{director} = [ $director ] if $director;
-		$prog{credits} = \%c if %c;
-
-		$writer->write_programme(\%prog);
-	}
-    }
+    my  $xml = get_nice( $url ); die( "Failed to fetch $url" ) unless defined( $xml );
+    
+    process_xml_channel($writer, $fromdate, $num_days, $xsl_transform, $xml);
 }
 
+sub process_skjarinn_is ( $$$$$ ){
+
+    my ($writer, $fromdate, $num_days, $tv2chan, $ch_xmltv_id) = @_;
+    
+    # NOTE: For Skjar 1, we ignore $fromdate and $num_days and always load the next five days.
+    
+    my $xsl_transform = <<"EOF";
+        <xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" version="1.0">
+        <xsl:output method="xml" version="1.0" encoding="iso-8859-1" indent="yes"/>
+
+        <xsl:template match="/">
+            <!-- XML needs a toplevel node, so we wrap the programmes in a channel_wrapper element.  The code will then remove it -->
+            <channel_wrapper>
+            <xsl:apply-templates/>
+            </channel_wrapper>
+        </xsl:template>
+        
+        <xsl:template match="event">
+            <programme channel="S1.sjonvarp.is" start="">
+                <xsl:attribute name="start">
+                    <xsl:value-of select='substring(\@start-time,1,4)'/>
+                    <xsl:value-of select='substring(\@start-time,6,2)'/>
+                    <xsl:value-of select='substring(\@start-time,9,2)'/>
+                    <xsl:value-of select='substring(\@start-time,12,2)'/>
+                    <xsl:value-of select='substring(\@start-time,15,2)'/>
+                </xsl:attribute>
+                <title>
+                    <xsl:apply-templates select="short-event-descriptor/event-name"/>
+                </title>
+                <desc>
+                    <xsl:apply-templates select="extended-event-descriptor/extended-description"/>
+                </desc>
+                <credits/>
+            </programme>
+        </xsl:template>
+        
+        </xsl:stylesheet>
+EOF
+    my $url = "http://vefur.skjarinn.is/WebData/xml/Dagskra/S1-XmlSchedule.xml";
+
+    my  $xml = get_nice( $url ); die( "Failed to fetch $url" ) unless defined( $xml );
+    
+    process_xml_channel($writer, $fromdate, $num_days, $xsl_transform, $xml);
+}
+
+sub process_stod2_and_friends ( $$$$$ ){
+
+    my ($writer, $fromdate, $num_days, $tv2chan, $ch_xmltv_id) = @_;
+    
+    # NOTE: For Stod 2 et al, we ignore $fromdate and $num_days and always load the next week.
+    
+    my $xsl_transform = <<"EOF";
+        <xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" version="1.0">
+        <xsl:output method="xml" version="1.0" encoding="iso-8859-1" indent="yes"/>
+
+        <xsl:template match="/">
+            <!-- XML needs a toplevel node, so we wrap the programmes in a channel_wrapper element.  The code will then remove it -->
+            <channel_wrapper>
+            <xsl:apply-templates/>
+            </channel_wrapper>
+        </xsl:template>
+        
+        <xsl:template match="event">
+            <programme channel="$tv2chan.sjonvarp.is" start="">
+                <xsl:attribute name="start">
+                    <xsl:value-of select='substring(\@starttime,1,4)'/>
+                    <xsl:value-of select='substring(\@starttime,6,2)'/>
+                    <xsl:value-of select='substring(\@starttime,9,2)'/>
+                    <xsl:value-of select='substring(\@starttime,12,2)'/>
+                    <xsl:value-of select='substring(\@starttime,15,2)'/>
+                </xsl:attribute>
+                <title>
+                    <xsl:apply-templates select="title"/>
+                </title>
+                <sub-title>
+                    <xsl:apply-templates select="org_title"/>
+                </sub-title>
+                <desc>
+                    <xsl:apply-templates select="description"/>
+                </desc>
+                <credits/>
+                <xsl:apply-templates select="episode"/>
+            </programme>
+        </xsl:template>
+
+        <xsl:template match="series">
+            <episode-num system="onscreen"><xsl:value-of select="\@episode"/>:<xsl:value-of select="\@series"/>
+            </episode-num>
+        </xsl:template>
+        
+        </xsl:stylesheet>
+EOF
+    
+    my $url = "http://www.stod2.is/?pageid=" . $stod2AndFriends{$tv2chan};
+
+    my  $xml = get_nice( $url ); die( "Failed to fetch $url" ) unless defined( $xml );
+    
+    process_xml_channel($writer, $fromdate, $num_days, $xsl_transform, $xml);
+}
+
+# get channel listing
 sub get_channels {
-    my %channels;
-
-    get_channels_visir(\%channels);
-    get_channels_skjarinn(\%channels);
-
-    return %channels;
-}
-
-# get channel listing
-sub get_channels_skjarinn {
-    my $channels = shift;
-    my $url = 'http://www.skjarinn.is/skjarheimur/dagskra/';
-
-    my $t = new HTML::TreeBuilder();
-    $t->parse(get_nice($url));
-
-    # The channels and their IDs are set in an select
-    my @elements = $t->look_down("name" => "tvStationId");
-    foreach my $i (@elements) {
-
-        my @chan = $i->look_down("_tag"=>"option");
-
-        foreach my $a (@chan) {
-	    next if (!$a->attr('value'));
-
-	    my $channel = $a->attr('value');
-	    my $name = $a->as_text;
-	    $name =~ s/^(\s*)//g;
-	    $name =~ s/(\s*)$//g;
-	    $channel .= ".skjarinn.is";
-	    from_to($channel, 'iso-8859-15', 'utf-8');
-	    from_to($name, 'iso-8859-15', 'utf-8');
-	    $channels->{$channel}=$name . " frá Skjánum";
-	}
-    }
-    $t->delete(); undef $t;
-}
-
-# get channel listing
-sub get_channels_visir {
-    my $channels = shift;
-    my $url = 'http://stod2.visir.is/?PageID=148';
-
-    my $t = new HTML::TreeBuilder();
-    $t->parse(get_nice($url));
-
-    # The channels and their IDs are set in an select
-    $t->look_down("_tag" => "div", "id" => "colwrap");
-    my @a = $t->look_down("_tag" => "a");
-
-    foreach my $i (@a) {
-
-	last if (!$i->attr('href'));
-
-	next if ($i->attr('href') !~ /oracledata\/dagskratextaskra.asp/);
- 	#print $i->attr('href') . "\n";
-	my $channel = $i->attr('href');
-	$channel =~ s/^.*midill=(.+?)(&|$).*$/$1/;
-	next if (exists $channels->{$channel});
-	$channel .= ".stod2.is";
-	my $name = $i->as_text;
-	#print "$id - $name\n";
-
-    	#from_to($channel, 'iso-8859-15', 'utf-8');
-	#from_to($name, 'iso-8859-15', 'utf-8');
-	$channels->{$channel}=$name . " frá Stöð 2";
-    }
-    $t->delete(); undef $t;
+    return  (
+    "RUV" => "Ríkissjónvarpið",
+    "S1" => "Skjár 1",
+    "ST2" => "Stöð2",
+    "ST2SPORT" => "Stöð 2 Sport",
+    "ST2SPORT2" => "Stöð 2 Sport 2",
+#   "ST2SPORT3" => "Stöð 2 Sport 3",
+#   "ST2SPORT4" => "Stöð 2 Sport 4",
+#   "ST2SPORT5" => "Stöð 2 Sport 5",
+#   "ST2SPORT6" => "Stöð 2 Sport 6",
+    "ST2EXTRA" => "Stöð 2 Extra",
+    "ST2BIO" => "Stöð 2 bíó",
+    );
 }
 
 # Icon URL for a given channel.
 sub get_icon {
-	my ($url) = @_;
+    my ($ch_did) = @_;
 
-	if ($url =~ /^(.+?)\.stod2\.is$/) {
-		my $chan = $1;
-		$chan =~ s/^SYN2$/SYN/;
-		return "http://stod2.visir.is/images/stod2/stodvar_logo/new/$chan" . "_logo_sel.gif";
-	} elsif ($url =~ /^(.+?)\.skjarinn\.is$/) {
-		return "http://www.skjarinn.is/other_files/skjarinn/img/$1.gif";
-	} else {
-		return "";
-	}
+    my %logos = (
+        "RUV" => "ruv",
+        "S1" => "s1",
+        "ST2" => "stod2",
+        "ST2SPORT" => "2sport",
+        "ST2SPORT2" => "2sport2",
+#       "ST2SPORT3" => "2sport3",
+#       "ST2SPORT4" => "2sport4",
+#       "ST2SPORT5" => "2sport5",
+#       "ST2SPORT6" => "2sport6",
+        "ST2EXTRA" => "2extra",
+        "ST2BIO" => "2bio",
+    );
+
+    return "http://www.sjonvarp.is/images/logos/".$logos{$ch_did}.".gif";
 }
