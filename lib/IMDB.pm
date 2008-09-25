@@ -245,11 +245,17 @@ sub basicVerificationOfIndexes($)
 	return("basic verification of indexes failed\n".
 	       "movie details didn't show Bruce Campbell as the main actor in movie \"$title, $year\" (id=$id)\n");
     }
-    if ( $res->{genres}[0] ne "Action" ||
-	 $res->{genres}[1] ne "Adventure" ||
-	 $res->{genres}[2] ne "Comedy" ||
-	 $res->{genres}[3] ne "Fantasy" ||
-	 $res->{genres}[4] ne "Horror" ) {
+    my $matches=0;
+    for (@{$res->{genres}}) {
+	if ( $_ eq "Action" ||
+	     $_ eq "Comedy" ||
+	     $_ eq "Fantasy" ||
+	     $_ eq "Horror" ||
+	     $_ eq "Romance" ) {
+	    $matches++;
+	}
+    }
+    if ( $matches == 0 ) {
 	$self->closeMovieIndex();
 	return("basic verification of indexes failed\n".
 	       "movie details didn't show genres correctly for movie \"$title, $year\" (id=$id)\n");
@@ -1956,7 +1962,7 @@ sub invokeStage($$)
 	    }
 	    return(1);
 	}
-	elsif ( abs($num - $countEstimate) > $countEstimate*.05 ) {
+	elsif ( abs($num - $countEstimate) > $countEstimate*.10 ) {
 	    my $better=$self->dbinfoCalcBytesPerEntry("movies", $num);
 	    $self->status("ARG estimate of $countEstimate for movies needs updating, found $num ($better bytes/entry)");
 	}
@@ -2007,7 +2013,7 @@ sub invokeStage($$)
 	    }
 	    return(1);
 	}
-	elsif ( abs($num - $countEstimate) > $countEstimate*.05 ) {
+	elsif ( abs($num - $countEstimate) > $countEstimate*.10 ) {
 	    my $better=$self->dbinfoCalcBytesPerEntry("directors", $num);
 	    $self->status("ARG estimate of $countEstimate for directors needs updating, found $num ($better bytes/entry)");
 	}
@@ -2065,7 +2071,7 @@ sub invokeStage($$)
 	$self->status("parsing Actors list for stage $stage..");
 
 	#print "re-reading movies into memory for reverse lookup..\n";
-	my $countEstimate=$self->dbinfoCalcEstimate("actors", 378);
+	my $countEstimate=$self->dbinfoCalcEstimate("actors", 415);
 
 	my $num=$self->readCastOrDirectors("Actors", $countEstimate, "$self->{imdbListFiles}->{actors}");
 	if ( $num < 0 ) {
@@ -2074,7 +2080,7 @@ sub invokeStage($$)
 	    }
 	    return(1);
 	}
-	elsif ( abs($num - $countEstimate) > $countEstimate*.05 ) {
+	elsif ( abs($num - $countEstimate) > $countEstimate*.10 ) {
 	    my $better=$self->dbinfoCalcBytesPerEntry("actors", $num);
 	    $self->status("ARG estimate of $countEstimate for actors needs updating, found $num ($better bytes/entry)");
 	}
@@ -2124,7 +2130,7 @@ sub invokeStage($$)
 	    }
 	    return(1);
 	}
-	elsif ( abs($num - $countEstimate) > $countEstimate*.05 ) {
+	elsif ( abs($num - $countEstimate) > $countEstimate*.10 ) {
 	    my $better=$self->dbinfoCalcBytesPerEntry("actresses", $num);
 	    $self->status("ARG estimate of $countEstimate for actresses needs updating, found $num ($better bytes/entry)");
 	}
@@ -2174,7 +2180,7 @@ sub invokeStage($$)
 	    }
 	    return(1);
 	}
-	elsif ( abs($num - $countEstimate) > $countEstimate*.05 ) {
+	elsif ( abs($num - $countEstimate) > $countEstimate*.10 ) {
 	    my $better=$self->dbinfoCalcBytesPerEntry("genres", $num);
 	    $self->status("ARG estimate of $countEstimate for genres needs updating, found $num ($better bytes/entry)");
 	}
@@ -2224,7 +2230,7 @@ sub invokeStage($$)
 	    }
 	    return(1);
 	}
-	elsif ( abs($num - $countEstimate) > $countEstimate*.05 ) {
+	elsif ( abs($num - $countEstimate) > $countEstimate*.10 ) {
 	    my $better=$self->dbinfoCalcBytesPerEntry("ratings", $num);
 	    $self->status("ARG estimate of $countEstimate for ratings needs updating, found $num ($better bytes/entry)");
 	}
