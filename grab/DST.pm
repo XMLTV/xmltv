@@ -314,6 +314,13 @@ sub dst_dates_na( $$ ) {
     die "usage: dst_dates(year, winter_tz), got args: @_" if @_ != 2;
     my ($year, $winter_tz) = @_;
     die "don't know about DST before 1988" if $year < 1988;
+    return dst_dates_na_old($year, $winter_tz) if $year < 2007;
+    return dst_dates_na_new($year, $winter_tz);
+}
+
+# Old North American daylight saving time, used before 2007.
+sub dst_dates_na_old( $$ ) {
+    my ($year, $winter_tz) = @_;
     $winter_tz =~ /^\s*-\s*(\d\d)(?:00)?\s*$/
       or die "bad North American winter time zone $winter_tz";
     my $hours = $1;
@@ -346,6 +353,49 @@ sub dst_dates_na( $$ ) {
     return [ $start_dst, $end_dst ];
 }
 
+# New US daylight saving time from 2007, also followed by most
+# Canadian provinces.
+#
+sub dst_dates_na_new( $$ ) {
+    my ($year, $winter_tz) = @_;
+    $winter_tz =~ /^\s*-\s*(\d\d)(?:00)?\s*$/
+      or die "bad North American winter time zone $winter_tz";
+    my $hours = $1;
+
+    my ($start_dst, $end_dst);
+    my $seen_Sunday_in_March = 0;
+    foreach (1 .. 31) {
+	if (not defined $start_dst) {
+	    my $date = "$year-03-$_";
+	    my $day = UnixDate(parse_date($date), '%A');
+	    if ($day =~ /Sunday/) {
+		if ($seen_Sunday_in_March) {
+		    # Second Sunday in March.  DST starts at 02:00
+		    # local standard time.
+		    #
+		    $start_dst = Date_ConvTZ(parse_date("$date 02:00"),
+					     "-$winter_tz", 'UTC');
+		}
+		else {
+		    $seen_Sunday_in_March = 1;
+		}
+	    }
+	}
+
+	next if defined $end_dst;
+	my $date = "$year-11-$_";
+	my $day = UnixDate(parse_date($date), '%A');
+	next unless $day =~ /Sunday/;
+	# A Sunday in November (and the first one we see).  DST ends
+	# at 01:00 local standard time.
+	#
+	$end_dst = Date_ConvTZ(parse_date("$date 01:00"),
+			       "-$winter_tz", 'UTC');
+    }
+    die if not defined $start_dst or not defined $end_dst;
+
+    return [ $start_dst, $end_dst ];
+}
 
 
 1;
