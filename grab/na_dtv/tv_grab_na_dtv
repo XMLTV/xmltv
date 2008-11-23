@@ -120,10 +120,9 @@ my $SITEBASE = "http://www.directv.com";
 #
 my $START_URL = "$SITEBASE/DTVAPP/epg/theGuide.jsp";
 
-# Each program ID will be appended to this URL to get its details.  This URL
-# may go away as it does not seem to be a normal part of the site any more.
+# Each program ID will be appended to this URL to get its details.
 #
-my $DETAILS_URL = "$SITEBASE/DTVAPP/epg/d?id=";
+my $DETAILS_URL = "$SITEBASE/DTVAPP/listing/component/programDetailAjax.jsp?scheduleId=";
 
 my $XML_PRELUDE =
   '<?xml version="1.0" encoding="ISO-8859-1"?>' . "\n" .
@@ -145,7 +144,8 @@ my %zones = (
 # Global stuff shared by the parent and child processes.
 my $zonechar = 'h';
 my $timeoff = $zones{h};
-my $daysinyear = 365;
+my $year = 2000;      # prepare_queue fixes this
+my $daysinyear = 365; # and maybe this
 my $browser;
 my $fhq;
 my $proc_number;
@@ -159,6 +159,7 @@ my $proc_number;
 # may be zero.  It always writes channel XML to stdout.
 #
 my $total_programs = &prepare_queue();
+
 if ($total_programs) {
 
   # Reopen the queue file so the child processes will share its handle.
@@ -359,12 +360,13 @@ sub prepare_queue {
   $zonechar = $conf->{zone}->[0];
 
   my @htime = gmtime($timeoff * 3600 + time);
-  my $year = $htime[5] + 1900;
+  $year = $htime[5] + 1900;
   $daysinyear = (0 == $year % 4 && 0 != $year % 100 || 0 == $year % 400) ? 366 : 365;
 
   # This hash will contain accumulated channel and program information.
-  # Key is channel number, value is (a reference to) a 3-element array:
-  # channel name, and array of program IDs, and a continuation flag.
+  # Key is channel number, value is (a reference to) a 5-element array:
+  # channel name, array of "programID/timestamp" pairs, a continuation
+  # flag, the last "cell program ID", the last "cell end time".
   #
   my %ch = ();
 
@@ -377,8 +379,8 @@ sub prepare_queue {
   if ($opt->{days} > 0) {
     # This scrapes all of the listing pages for the designated time period.
     # The only things we save here are channel number and name, and the
-    # numeric IDs that directv uses internally to identify programs.
-    # Each page fetch gets us a 2-hour window for all channels.
+    # program ID/timestamp pairs.  Each page fetch gets us a 2-hour window
+    # for all channels.
     for (my $day = 0; $day < $opt->{days}; ++$day) {
       print STDERR "Getting IDs for day $day " if ($VERBOSE);
       for (my $hour = 0; $hour < 24; $hour += 2) {
@@ -388,19 +390,11 @@ sub prepare_queue {
       }
       print STDERR "\n" if ($VERBOSE);
     }
-    # Handle the case where one or more programs started near the end of the
-    # date range, but we do not yet have the IDs because they started too
-    # close to midnight to fit in their display area.  For this we fetch the
-    # first page of the following day.
-    my $otchannels = '';
-    foreach my $channel_number (keys %ch) {
-      $otchannels .= " $channel_number" if ($ch{$channel_number}[2]);
-    }
-    if ($otchannels) {
-      print STDERR "Fetching extra page for channel$otchannels.\n" if ($VERBOSE);
-      &update_list_url(\$list_url, \$url_day, \$url_hour);
-      &scrape_list($browser, $list_url, $conf->{channel}, \%ch, 1);
-    }
+
+    # Scrape one more time slot with the continuation flag set.
+    print STDERR "Getting one more ...\n" if ($VERBOSE);
+    &update_list_url(\$list_url, \$url_day, \$url_hour);
+    &scrape_list($browser, $list_url, $conf->{channel}, \%ch, 1);
   }
   else {
     # days=0 is a special case requiring only one page fetch.
@@ -417,8 +411,8 @@ sub prepare_queue {
     $total_programs += scalar @{$ch{$channel_number}[1]};
   }
 
-  # Write all of the program IDs with their channel IDs to a temporary file.
-  # This file will later be read by child processes.
+  # Write all of the program IDs with their channel IDs and start times
+  # to a temporary file. This file will later be read by child processes.
   if ($opt->{days} > 0) {
     open $fhq, "> $queue_filename";
     binmode $fhq;
@@ -426,9 +420,10 @@ sub prepare_queue {
       my $channel_name = $ch{$channel_number}[0];
       my $channel_id = &rfc2838($channel_number, $channel_name);
       my $program_count = scalar @{$ch{$channel_number}[1]};
-      foreach my $program_id (@{$ch{$channel_number}[1]}) {
+      foreach my $tmp (@{$ch{$channel_number}[1]}) {
+        my ($program_id, $startmins) = split /\//, $tmp;
         # Fixed-length records make life easier.  See comments in child_logic.
-        printf $fhq "%-25s %-13s\n", $channel_id, $program_id;
+        printf $fhq "%-25s %-13s %9u\n", $channel_id, $program_id, $startmins;
       }
     }
     close $fhq;
@@ -458,24 +453,29 @@ sub rfc2838 {
 sub scrape_list {
   my ($browser, $list_url, $channels, $ch, $overtime) = @_;
 
+  # This computes a timestamp in minutes since the beginning of
+  # the current year (Hawaii time).
+  $list_url =~ /\?d=(\d+)&h=(\d+)/;
+  my $start_timestamp = 60 * (($1 - 1) * 24 + $2);
+
   $browser->get($list_url);
   my $parser = HTML::TokeParser->new(\$browser->content());
   my $previous_channel = '';
 
   # Loop by channel within this time slot.
-  while(my $tag = $parser->get_tag("td")) {
+  while(my $tag = $parser->get_tag("span")) {
     next if (!$tag->[1]{class});
-    next if ($tag->[1]{class} ne 'chnm');
-    my $channel_number = $parser->get_trimmed_text("/td");
-    $tag = $parser->get_tag("td");
-    next if ($tag->[1]{class} ne 'ch');
-    my $channel_name = $parser->get_trimmed_text("/td");
+    next if ($tag->[1]{class} ne 'listing-channel-logo');
+    my $channel_name = $parser->get_trimmed_text("/span");
+    $tag = $parser->get_tag("span");
+    next if ($tag->[1]{class} ne 'listing-channel-bug');
+    my $channel_number = $parser->get_trimmed_text("/span");
 
     # Skip channel numbers that are not all digits.  Seems that some HD
-    # channels are now coming through with numbers like "229-1".
+    # channels are coming through with numbers like "229-1".
     next unless ($channel_number =~ /^\d+$/);
 
-    # Check for duplicate rows.  Should not happen, but does.
+    # Check for duplicate rows.  Mostly from HD versions of channels.
     next if ($channel_number eq $previous_channel);
     $previous_channel = $channel_number;
 
@@ -485,50 +485,54 @@ sub scrape_list {
     if ($channels) { next unless grep /^$channel_id$/, @$channels; }
 
     # Create a new hash entry for this channel, but only if it does not
-    # already exist.  Its value is a reference to a 3-element array: the
-    # channel name, an array of program IDs, and a continuation flag.
+    # already exist.  Its value is a reference to a 5-element array:
+    # channel name, array of "programID/timestamp" pairs, a continuation
+    # flag, the last "cell program ID", the last "cell end time".
     if (!$ch->{$channel_number}) {
-      $ch->{$channel_number} = [$channel_name, [], 0];
+      $ch->{$channel_number} = [$channel_name, [], 0, '', $start_timestamp];
     }
 
-    # Append to the array of program IDs for this channel.
-    while($tag = $parser->get_tag("td", "/table")) {
-      last unless ($tag->[0] eq "td");
-      last unless ($tag = $parser->get_tag("div", "/td"));
-      # The $overtime flag indicates that we are only picking up programs
-      # that started at the end of the previous day, and only for those
-      # channels where $ch->{$channel_number}[2] is set.  This is sometimes
-      # necessary because a program that starts around 23:55 at the end of
-      # a day will not have its program ID in that time slot.
-      if ($overtime) {
-        next unless ($ch->{$channel_number}[2]);
-      }
-      if ($tag->[0] ne "div") {
-        # We have encountered an empty <td></td> pair, and so this may lead
-        # to the above-mentioned overtime situation.  Set the flag indicating
-        # that the last cell encountered was empty.
-        $ch->{$channel_number}[2] = 1;
-        next;
-      }
-      my $had_empty_slot = $ch->{$channel_number}[2];
+    # Append to the array of program IDs and times for this channel.
+    while($tag = $parser->get_tag("li", "/tr")) {
+      last unless ($tag->[0] eq "li");
+
+      # Computing cell size in minutes from its width in pixels.
+      die "Missing style for li!" unless ($tag->[1]{style});
+      die "Missing width for li!" unless ($tag->[1]{style} =~ /width:\s*([\d.]+)px/);
+      my $duration = int($1 * 0.2201834 + .5);
+
+      my $tmp_start = $ch->{$channel_number}[2];
       $ch->{$channel_number}[2] = 0;
-      next unless ($tag->[1]{class} =~ /pgl(.*)$/);
-      # $continued tells us if the program started prior to this time slot.
-      # This is indicated by <div class="pgl ml">.
-      my $continued = $1 =~ / ml/;
-      last unless ($tag = $parser->get_tag("a", "/table"));
-      last unless ($tag->[0] eq "a");
-      next unless ($tag->[1]{onclick});
-      if ($tag->[1]{onclick} =~ /,(\d+)/) {
-        # We must skip this program if it duplicates the previous one, or if
-        # it is the first one but started on the previous day.
-        my $idcount = scalar @{$ch->{$channel_number}[1]};
-        if (($idcount == 0 && (!$continued || $had_empty_slot)) ||
-          ($idcount > 0 && $ch->{$channel_number}[1][$idcount-1] != $1))
+      my $programid = "";
+      if ($tag->[1]{id} && $tag->[1]{id} =~ /(\d+)/) {
+        $programid = $1;
+        if ($ch->{$channel_number}[3] ne "" and $programid ne $ch->{$channel_number}[3])
         {
-          push @{$ch->{$channel_number}[1]}, $1;
+          $tmp_start = $ch->{$channel_number}[4] if ($tmp_start == 0);
+          push @{$ch->{$channel_number}[1]}, "$programid/$tmp_start";
         }
+        $ch->{$channel_number}[3] = $programid;
       }
+      elsif ($ch->{$channel_number}[3] eq "") {
+        # If this program ID is missing and it is the first cell for
+        # the channel, then set it to a non-empty dummy value so that the
+        # next cell will create a new program entry.
+        $ch->{$channel_number}[3] = "0";
+      }
+      elsif (($ch->{$channel_number}[4] % 120) > 105) {
+        # A program ID near the end of the time slot is missing.  In this
+        # case it starts a new program whose ID we do not yet know, and
+        # we save its start time for the next iteration.
+        $ch->{$channel_number}[2] = $ch->{$channel_number}[4];
+      }
+      # Otherwise if the program ID is missing, we assume it extends the
+      # previous one (i.e. we do not change it here).
+
+      # Keep track of the corresponding time as cells are processed.
+      $ch->{$channel_number}[4] += $duration;
+
+      # Look at the first cell only if this is the overtime slot.
+      last if ($overtime);
     } # end while
   } # end while
 }
@@ -666,10 +670,10 @@ sub child_logic {
   # pointer sharing will work properly.  We expect the sysreads to be atomic.
   while (1) {
     my $line = '';
-    my $readlen = sysread $fhq, $line, 40;
+    my $readlen = sysread $fhq, $line, 50;
     last unless ($readlen);
-    if ($line =~ /^(\d\d\d\d\.\S+)\s+(\S+)\s*$/) {
-      print $fh &scrape_program($browser, $2, $1);
+    if ($line =~ /^(\d\d\d\d\.\S+)\s+(\S+)\s+(\d+)\s*$/) {
+      print $fh &scrape_program($browser, $2, $1, $3);
     }
     else {
       # Errors here might mean that seek pointer sharing is broken.
@@ -685,33 +689,22 @@ sub child_logic {
 # the "program details" popup, so a page fetch is required for each program.
 #
 sub scrape_program {
-  my ($browser, $program_id, $channel_id) = @_;
+  my ($browser, $program_id, $channel_id, $startmins) = @_;
+
+  # Compute air time from $startmins and current year.
+  my $timeair = $startmins * 60 + timegm(0, 0, 0, 1, 0, $year - 1900);
+  my @stt = gmtime($timeair + 3600 * ($zones{$zonechar} - $zones{h}));
+  # We will also make use of this as a key string.
+  my $starttime = sprintf('%04u%02u%02u%02u%02u%02u',
+    $stt[5] + 1900, $stt[4] + 1, $stt[3], $stt[2], $stt[1], $stt[0]);
+  # Then produce a readable actual local date and time.
+  my $xml_start = 'start="' . &localTimeString(@stt) . '"';
 
   $browser->get($DETAILS_URL . $program_id);
   my $parser = HTML::TokeParser->new(\$browser->content());
 
-  my $tag = $parser->get_tag("h1");
-  return if (!$tag);
-  my $xml_title = &xmltr($parser->get_trimmed_text("/h1"));
-  $xml_title =~ s/\s*:\s*Program Details$//;
-  $xml_title = "    <title lang=\"en\">$xml_title</title>\n";
-
-  my $xml_star_rating = '';
-  $parser->get_tag("h2");
-  $tag = $parser->get_tag("img", "p");
-  if ($tag->[0] eq "img") {
-    if ($tag->[1]{src} =~ /icon_stars_/) {
-      $xml_star_rating = "    <star-rating><value>" .
-      $tag->[1]{alt} . '/4' . "</value></star-rating>\n";
-    }
-    $parser->get_tag("p");
-  }
-
-  my $xml_desc = &xmltr($parser->get_trimmed_text("/p"));
-  $xml_desc = "    <desc lang=\"en\">$xml_desc</desc>\n" if ($xml_desc);
-
-  my $starttime    = '';
-  my $xml_start    = ''; # attribue of <programme>
+  my $xml_title    = '(Unknown)';
+  my $xml_desc     = '';
   my $xml_stop     = ''; # attribue of <programme>
   my $xml_length   = '';
   my $xml_category = '';
@@ -719,94 +712,91 @@ sub scrape_program {
   my $xml_rating   = '';
   my $xml_date     = '';
   my $xml_director = ''; # within <credits>
-  my @stt          = (); # Time of program start
+  my $xml_star_rating = '';
+  my $tag;
 
-  while($tag = $parser->get_tag("dt")) {
-    my $attname = $parser->get_trimmed_text("/dt");
-    $attname =~ s/:$//;
-    $parser->get_tag("dd");
-    my $attval = $parser->get_trimmed_text("/dd");
+  while($tag = $parser->get_tag("span", "div", "dt")) {
+    if ($tag->[0] eq "span") {
+      next unless ($tag->[1]{class});
+      if ($tag->[1]{class} eq 'detTitle') {
+        $xml_title = "    <title lang=\"en\">" .
+          &xmltr($parser->get_trimmed_text("/span")) . "</title>\n";
+      }
+      elsif ($tag->[1]{class} eq 'detRating') {
+        $xml_rating = "    <rating system=\"MPAA\"><value>" .
+          &xmltr($parser->get_trimmed_text("/span")) . "</value></rating>\n";
+      }
+      elsif ($tag->[1]{class} eq 'detStar') {
+        $tag = $parser->get_tag("img", "/span");
+        if ($tag->[0] eq "img") {
+          if ($tag->[1]{src} =~ /icon_stars_(\d+)/) {
+            $xml_star_rating = "    <star-rating><value>" .
+              $1 . '/4' . "</value></star-rating>\n";
+          }
+        }
+      }
+    } # end span
+    elsif ($tag->[0] eq "div") {
+      next unless ($tag->[1]{class});
+      if ($tag->[1]{class} eq 'detSummary') {
+        $xml_desc = &xmltr($parser->get_trimmed_text("/div"));
+        $xml_desc = "    <desc lang=\"en\">$xml_desc</desc>\n" if ($xml_desc);
+      }
+    } # end div
+    elsif ($tag->[0] eq "dt") {
+      my $attname = $parser->get_trimmed_text("/dt");
+      $attname =~ s/:$//;
+      $parser->get_tag("dd");
+      my $attval = $parser->get_trimmed_text("/dd");
 
-    if ($attname eq 'Channel') {
-      # Ignored.
-    }
-    elsif ($attname eq 'Air Time') {
-      # Example attval: "Thursday, August 23 9:00 AM PDT"
-      my @tmp = strptime($attval); # Courtesy of Date::Parse
-      if (@tmp) {
-        # directv omits the year, so figure it out.
-        unless ($tmp[5]) {
-          my @now = gmtime;
-          $tmp[5] = $now[5];
-          ++$tmp[5] if ($tmp[4] < 3 && $now[4] > 8);
+      if ($attname eq 'Duration') {
+        if ($attval =~ /^(\d+).+minutes/i) {
+          if (@stt) {
+            # Compute stop time as start time + duration.
+            my @tmp = gmtime($1 * 60 + timegm(@stt[0..5]));
+            $xml_stop = 'stop="' . &localTimeString(@tmp) . '"';
+          }
+          else {
+            print STDERR "Cannot process Duration without Air Time.\n";
+          }
+          # $xml_length = "    <length units=\"minutes\">$1</length>\n";
+        } else {
+          print STDERR "Unable to parse Duration \"$attval\".\n";
         }
-        @stt = gmtime(timegm(@tmp[0..5]) + $zones{$zonechar} * 3600 - $tmp[6]);
-        $starttime = sprintf('%04u%02u%02u%02u%02u%02u',
-          $stt[5] + 1900, $stt[4] + 1, $stt[3], $stt[2], $stt[1], $stt[0]);
-        $xml_start = 'start="' . &localTimeString(@stt) . '"';
       }
-      else {
-        print STDERR "Unable to parse Air Time \"$attval\".\n";
-        $xml_start = 'start=""';
-      }
-    }
-    elsif ($attname eq 'Duration') {
-      if ($attval =~ /^(\d+).+minutes/i) {
-        if (@stt) {
-          # Compute stop time as start time + duration.
-          my @tmp = gmtime($1 * 60 + timegm(@stt[0..5]));
-          $xml_stop = 'stop="' . &localTimeString(@tmp) . '"';
+      elsif ($attname eq 'Categories') {
+        while ($attval =~ s/^([^,]+)[, ]*(.*)$/$2/) {
+          # A bit of translation for Myth compatibility:
+          my $tmp = $1;
+          $tmp = 'Special' if ($tmp eq 'Specials');
+          $xml_category .= "    <category lang=\"en\">" . &xmltr($tmp) . "</category>\n";
         }
-        else {
-          print STDERR "Cannot process Duration without Air Time.\n";
+      }
+      elsif ($attname eq 'Actors') {
+        while ($attval =~ s/^([^,]+)[, ]*(.*)$/$2/) {
+          $xml_actor .= "      <actor>" . &xmltr($1) . "</actor>\n";
         }
-        # $xml_length = "    <length units=\"minutes\">$1</length>\n";
-      } else {
-        print STDERR "Unable to parse Duration \"$attval\".\n";
       }
-    }
-    elsif ($attname eq 'Categories') {
-      while ($attval =~ s/^([^,]+)[, ]*(.*)$/$2/) {
-        # A bit of translation for Myth compatibility:
-        my $tmp = $1;
-        $tmp = 'Special' if ($tmp eq 'Specials');
-        $xml_category .= "    <category lang=\"en\">" . &xmltr($tmp) . "</category>\n";
+      elsif ($attname eq 'Other Credits') {
+        # Ignored.
       }
-    }
-    elsif ($attname eq 'Actors') {
-      while ($attval =~ s/^([^,]+)[, ]*(.*)$/$2/) {
-        $xml_actor .= "      <actor>" . &xmltr($1) . "</actor>\n";
+      elsif ($attname eq 'Release Year') {
+        $xml_date = "    <date>$attval</date>\n";
       }
-    }
-    elsif ($attname eq 'Other Credits') {
-      # Ignored.
-    }
-    elsif ($attname eq 'MPAA Rating') {
-      $xml_rating = "    <rating system=\"MPAA\"><value>" . &xmltr($attval). "</value></rating>\n";
-    }
-    elsif ($attname eq 'Release Year') {
-      $xml_date = "    <date>$attval</date>\n";
-    }
-    elsif ($attname eq 'Director') {
-      while ($attval =~ s/^([^,]+)[, ]*(.*)$/$2/) {
-        $xml_director .= "      <director>" . &xmltr($1) . "</director>\n";
+      elsif ($attname eq 'Director') {
+        while ($attval =~ s/^([^,]+)[, ]*(.*)$/$2/) {
+          $xml_director .= "      <director>" . &xmltr($1) . "</director>\n";
+        }
       }
-    }
-    elsif ($attname =~ /^Future airings/) {
-      # Ignored.
-    }
-    else {
-      print STDERR "Unrecognized program attribute \"$attname\" with value \"$attval\" ignored.\n";
-    }
-  }
+    } # end dt
+  } # end while
 
   my $xml_credits = '';
   if ($xml_actor || $xml_director) {
     $xml_credits = "    <credits>\n$xml_director$xml_actor    </credits>\n";
   }
 
-  print STDERR "$channel_id: Air time missing!\n" if (!$xml_start);
-  print STDERR "$channel_id: Title missing!\n"    if (!$xml_title);
+  print STDERR "$channel_id: Title missing!\n" if (!$xml_title);
 
   my $xml = "  <programme $xml_start $xml_stop channel=\"$channel_id\">\n";
   $xml .= $xml_title       if ($xml_title);
