@@ -226,6 +226,7 @@ if ($total_programs) {
   }
 
   # Merge the files and print their XML program data.
+  my $lastkey = "";
   while (1) {
     my $plow = 0;
     # Get the next program, ordering chronologically within channel.
@@ -233,7 +234,15 @@ if ($total_programs) {
       $plow = $procno if ($cdata[$procno][1] lt $cdata[$plow][1]);
     }
     last if ($cdata[$plow][1] eq 'ZZZZ');
-    print $cdata[$plow][2];
+    if ($lastkey eq $cdata[$plow][1]) {
+      # There seems to be some race condition in my test setup's OS that
+      # allows two child processes to grab the same qfile entry.
+      # This is an attempt to work around it. -- Rod
+      print STDERR "Skipping duplicate: $lastkey" if ($VERBOSE);
+    } else {
+      print $cdata[$plow][2];
+      $lastkey = $cdata[$plow][1];
+    }
     &read_program(\@cdata, $plow);
   }
 
@@ -366,7 +375,7 @@ sub prepare_queue {
   # This hash will contain accumulated channel and program information.
   # Key is channel number, value is (a reference to) a 5-element array:
   # channel name, array of "programID/timestamp" pairs, a continuation
-  # flag, the last "cell program ID", the last "cell end time".
+  # variable, the last "cell program ID".
   #
   my %ch = ();
 
@@ -487,9 +496,9 @@ sub scrape_list {
     # Create a new hash entry for this channel, but only if it does not
     # already exist.  Its value is a reference to a 5-element array:
     # channel name, array of "programID/timestamp" pairs, a continuation
-    # flag, the last "cell program ID", the last "cell end time".
+    # variable, the last "cell program ID".
     if (!$ch->{$channel_number}) {
-      $ch->{$channel_number} = [$channel_name, [], 0, '', $start_timestamp];
+      $ch->{$channel_number} = [$channel_name, [], 0, ''];
     }
 
     # Append to the array of program IDs and times for this channel.
@@ -497,6 +506,7 @@ sub scrape_list {
     # width, which is then needed to compute each cell's duration.
     # Curiously, this total width can vary a bit from row to row.
 
+    my $lastendtime = $start_timestamp;
     my $totwidth = 0;
     my @cells = ();
     while($tag = $parser->get_tag("li", "/tr")) {
@@ -521,7 +531,7 @@ sub scrape_list {
       if ($programid ne "") {
         if ($ch->{$channel_number}[3] ne "" and $programid ne $ch->{$channel_number}[3])
         {
-          $tmp_start = $ch->{$channel_number}[4] if ($tmp_start == 0);
+          $tmp_start = $lastendtime if ($tmp_start == 0);
           push @{$ch->{$channel_number}[1]}, "$programid/$tmp_start";
         }
         $ch->{$channel_number}[3] = $programid;
@@ -532,21 +542,21 @@ sub scrape_list {
         # next cell will create a new program entry.
         $ch->{$channel_number}[3] = "0";
       }
-      elsif (($ch->{$channel_number}[4] % 120) > 105) {
+      elsif (($lastendtime % 120) > 105) {
         # A program ID near the end of the time slot is missing.  In this
         # case it starts a new program whose ID we do not yet know, and
         # we save its start time for the next iteration.
-        $ch->{$channel_number}[2] = $ch->{$channel_number}[4];
+        $ch->{$channel_number}[2] = $lastendtime;
       }
       # Otherwise if the program ID is missing, we assume it extends the
       # previous one (i.e. we do not change it here).
 
       # Keep track of the corresponding time as cells are processed.
-      $ch->{$channel_number}[4] += $duration;
+      $lastendtime += $duration;
 
       # Look at the first cell only if this is the overtime slot.
       last if ($overtime);
-    } # end while
+    } # end foreach
   } # end while
 }
 
