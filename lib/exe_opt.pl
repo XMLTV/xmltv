@@ -23,6 +23,7 @@ print '-nologo
 -add="Tk::ProgressBar"
 -bind=libxml2.dll[file=\perl\bin\libxml2.dll,extract]
 -trim="Apache::Const;Apache::RequestIO;DIME::Payload;MIME::Entity;Apache::RequestRec;DIME::Message;I18N::Langinfo"
+-trim="Apache2::RequestUtil;APR::Table;Apache2::Const;Apache2::RequestRec;Apache2::RequestIO"
 -info CompanyName="XMLTV Project http://www.xmltv.org"
 -info FileDescription="EXE bundle of XMLTV tools to manage TV Listings"
 -info InternalName=xmltv.exe
