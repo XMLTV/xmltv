@@ -189,6 +189,8 @@ my %dstvfilehashes = (
 
 our %dstvtimehashes = ();
 
+my $viewstate = '';
+my $eventvalidation = '';
 
 my $ua = initialise_ua();
 
@@ -390,9 +392,7 @@ sub dstv_channel_uri( $ ) {
 	die "cannot look up '$ch' in map" if not defined $mapped;
 	die if not defined $use_days;
 	my $days_param = $allowed_days{$use_days};
-#	return "http://www.dstv.com/DStv_Guide/print.aspx?Channel=$mapped&time=$days_param&submit=true&Channels";
-	#return "http://www.dstv.com/DStv_Guide/default.aspx?Channel=$mapped&time=$days_param&submit=true&Channels";
-	return "http://www.dstv.com/dstv_guide/default.aspx?Channel=$mapped&Days=$days_param&ex=true";
+    return "http://guide.dstv.com/listing/default.aspx?drpChannels=$mapped&drpDays=$days_param";
 }
 
 # Returns the option ID on the DSTV site for a given channel name
@@ -583,7 +583,7 @@ sub process_dstv_html {
         	$offset_counter++;
 	        next if (($offset_counter <= $opt_offset) || ($offset_counter > $opt_days+1));
 		my $date = $td->as_text();
-		$date =~ s/^[^\w]+//g;
+		$date =~ s/^[^0-9]+//g;
 
 
 		my $tr = $td->parent();
@@ -592,28 +592,35 @@ sub process_dstv_html {
 		
 			my $result = $tr;
 
+            my @alternating = $result->look_down(
+                sub {
+                    lc($_[0]->attr('_tag')) eq 'td' and lc($_[0]->attr('class')) eq 'srch_rslt_alternating'
+                    or lc($_[0]->attr('_tag')) eq 'td' and lc($_[0]->attr('class')) eq 'srch_rslt'
+                }
+            );
+
 			my $temp;
-			$temp = $result->look_down(_tag => "td", class => 	'srch_rslt1');
-			last if !defined $temp;
+            last if !defined $alternating[0];
+            $temp = $alternating[0];
 			my $time = $temp->look_down(_tag => 'b');
 			die 'no <b> thing (for time) found' if not defined $time;
 			$time = $time->as_text;
 			$time =~ /^(\d)(\d):(\d)(\d)$/ or die "bad time '$time'";
 			
-			my $title = $result->look_down(_tag => "td", class => 'srch_rslt2')->look_down(_tag => "b")->as_text;
+            $temp = $alternating[1]->look_down(_tag => "a", name => qr/Bookmark/)->look_down(_tag => "b");
+            my $title = $temp->as_text;
 
 			my ($rating, $duration);
-			$temp = $result->look_down(_tag => "td", class => 'srch_rslt2')->as_HTML;
-			if (defined $temp) {
-				$rating = $1 if $temp =~ /Rating: ?(.+?)\s+/;
-				$duration = $1 if $temp =~ /Duration: ?([0-9:]+)/;
+			my $tempstring = $temp->right->as_text();
+            
+			if (defined $tempstring) {
+				$rating = $1 if $tempstring =~ /Rating: ?(.+?)\s+/;
+				$duration = $1 if $tempstring =~ /Duration: ?([0-9:]+)/;
 			}
 
 			t "$title: $rating: $duration\n";
 
-			$temp = $result->look_down(_tag => "td", class => 	'srch_rslt4');
-			my $desc = ($temp->content_list())[0];
-			$desc =~ s/(^\s+|\s+$)//g;
+			my $desc = $alternating[2]->as_text();
 			t "---\n$desc\n---\n";
 
 			my $start = gen_start_time($date, $time, $now);
@@ -810,7 +817,7 @@ sub get_channels {
 	
 	my @urls = (
 #		'Google' , 'http://www.google.com/search?q=cache%3Awww.dstv.com%2Fmain.aspx%3FID%3D136',
-		'DSTV'   , 'http://www.dstv.com/main.aspx?ID=136', 
+		'DSTV'   , 'http://dstv.com/main.aspx?ID=136', 
 	);
 	
 	my $local_data;
@@ -929,7 +936,7 @@ sub mode_configure {
 sub get_dstv_channel_mappings {
 	t "refreshing dstv channel mappings";
 	
-	my $url = "http://www.dstv.com/main.aspx?ID=136";
+	my $url = "http://guide.dstv.com/listing/default.aspx";
 	my $data = get_url("GET", $url);
 	
 	if ($data =~ /^:error:/) {
@@ -938,35 +945,40 @@ sub get_dstv_channel_mappings {
 		return;
 	}
 
-	my $chantree = HTML::TreeBuilder->new();
+	if ($data =~ /id=\"__VIEWSTATE\" value=\"(.*)\"/) {
+        $viewstate = $1;
+    	t "got viewstate: $viewstate";
+    } else {
+		print STDERR  "VIEWSTATE not found\n" if not $opt_quiet;
+		return;
+    }
+
+	if ($data =~ /id=\"__EVENTVALIDATION\" value=\"(.*)\"/) {
+        $eventvalidation = $1;
+    	t "got eventvalidation: $eventvalidation";
+    } else {
+		print STDERR  "EVENTVALIDATION not found\n"	if not $opt_quiet;
+		return;
+    }
+
+    my $chantree = HTML::TreeBuilder->new();
 	$chantree->utf8_mode(1);
 	$chantree->parse($data) or die "cannot parse content of channels page\n";
 	$chantree->eof;
 
-	my @list = $chantree->look_down(
-		_tag   => 'img',
-		class => 'artcl_img',
-		height => '70',
-	);
-	foreach my $entry (@list) {
-		my $table = $entry->parent()->parent()->parent();
-		
-		my $temp   = $table->look_down(_tag => 'a', class => 'img_btn') or next;
-		my $name   = $temp->look_down(_tag => 'b')->as_text();
-		my $chanid = $temp->parent->look_down(_tag => 'i')->as_text();
-		$chanid =~ s/(^\s*|\s*$)//g;
-		
-		# Skip radio channels;
-		next if $chanid =~ /^\s*Channel:\s*/;
+    my $channame;
+    my $chanid;
+    my $chanselect = $chantree->look_down(_tag => 'select', name => 'drpChannels');
+    my @chan_list = $chanselect->look_down(_tag => "option");
+    foreach my $chanentry (@chan_list) {
+        $chanid = $chanentry->attr('value');
+        $channame = $chanentry->as_text;
+        $dstvchannelmap{$channame} = $chanid;
+        t "Found channel $channame; internal reference $chanid";
+    }
 
-		my $tempid = $temp->parent->parent->parent->look_down(_tag => 'select', name => 'search');
-		$tempid = $tempid->attr('onchange');
-		$tempid =~ /GoToSchedule\((\d+),/;
-
-		$dstvchannelmap{$name} = $1;
-        t "Found channel $name; chanid $chanid; internal reference $dstvchannelmap{$name}";
-	}
 	$chantree->delete;
+
 	t "Refresh successful";
 	die "no channels could be found" if not keys %dstvchannelmap;
 }
@@ -1080,16 +1092,41 @@ sub get_dstv_time_mappings() {
 # Download listings for a channel name - refresh mappings if necessary
 sub get_dstv() {
 	my $channame = shift;
-	my $url = dstv_channel_uri $channame;
+    my $url = "http://guide.dstv.com/listing/default.aspx";
 	
-	t "Getting Listings for '$channame' from $url";
+	my $mapped = dstv_channel_map($channame);
+	die "cannot look up '$channame' in map" if not defined $mapped;
+	die if not defined $use_days;
+	my $days_param = $allowed_days{$use_days};
 
-	my $result = get_url("GET", $url, 'http://www.dstv.com/DStv_Guide/default.aspx');
+	my %info = (
+        '__VIEWSTATE' => $viewstate,
+		'drpChannels' => $mapped,
+		'drpDays' => $days_param, 
+		'txtKeyword' => '', 
+		'btnSubmit.x' => '15', 
+		'btnSubmit.y' => '12', 
+		'__EVENTVALIDATION' => $eventvalidation, 
+	);
+	t "getting channel: $channame (ID = $mapped)";
+
+ 	my $result = get_url("POST", $url, $url, undef, \%info);
+
 	if ($result =~ /^:error:/) {
 		# Always attempt a refresh of channel mappings once
 		get_dstv_channel_mappings();
-		$url = dstv_channel_uri $channame;
-		$result = get_url("GET", $url, 'http://www.dstv.com/DStv_Guide/default.aspx');
+    	$mapped = dstv_channel_map($channame);
+    	die "cannot look up '$channame' in map" if not defined $mapped;
+	    %info = (
+            '__VIEWSTATE' => $viewstate,
+    		'drpChannels' => $mapped,
+    		'drpDays' => $days_param, 
+    		'txtKeyword' => '', 
+    		'btnSubmit.x' => '15', 
+    		'btnSubmit.y' => '12', 
+    		'__EVENTVALIDATION' => $eventvalidation, 
+    	);
+     	$result = get_url("POST", $url, $url, undef, \%info);
 	}
 	
 	return $result;
@@ -1267,7 +1304,7 @@ sub get_url($$$$$) {
 			 ($res->headers()->header('Content-Encoding') eq 'gzip')) {
 				$res->content(Compress::Zlib::memGunzip($res->content));
 			}
-			if (($res->content =~ /did not return any results/) || ($res->content =~ /No Results Found/)) {
+			if (! $res->content =~ /class="srch_rslt_head1"/) {
 				t "No listing data found";
 				$data = ":error:no data:" . $res->content;
 			} else {
