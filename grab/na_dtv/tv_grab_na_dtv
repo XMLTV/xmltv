@@ -85,6 +85,14 @@ DirecTV might want a county ID to show local channels for some zip codes.
 We do not support that.  If you encounter this problem, try entering a nearby
 zip code where your local channels appear by default.
 
+The XML generated for channel information is kludged for compatibility with
+MythTV and is not very pretty.
+
+Like any screen-scraping grabber, this one will break regularly as the web site
+changes, and you should try to fetch a new one from the project's repository.
+At some point the breakage might not be fixable or it may be that nobody wants
+to fix it.  Sane people should use Schedules Direct instead.
+
 =cut
 
 use strict;
@@ -111,18 +119,18 @@ $TMP_FILEBASE .= '/na_dtv_';
 
 my $queue_filename = "$TMP_FILEBASE" . "q";
 
-my $SITEBASE = "http://www.directv.com";
+my $SITEBASE = "http://www.directv.com/DTVAPP";
 
 # This URL contains a form including time zone and zip code, but we'll use
 # GET parameters instead of submitting it.  It includes a list of programs
 # for each 2-hour period.  These lists will be fetched and scanned to get
 # the program IDs.
 #
-my $START_URL = "$SITEBASE/DTVAPP/epg/theGuide.jsp";
+my $START_URL = "$SITEBASE/epg/theGuide.jsp";
 
 # Each program ID will be appended to this URL to get its details.
 #
-my $DETAILS_URL = "$SITEBASE/DTVAPP/listing/component/programDetailAjax.jsp?scheduleId=";
+my $DETAILS_URL = "$SITEBASE/listing/component/programDetailAjax.jsp?scheduleId=";
 
 my $XML_PRELUDE =
   '<?xml version="1.0" encoding="ISO-8859-1"?>' . "\n" .
@@ -144,8 +152,7 @@ my %zones = (
 # Global stuff shared by the parent and child processes.
 my $zonechar = 'h';
 my $timeoff = $zones{h};
-my $year = 2000;      # prepare_queue fixes this
-my $daysinyear = 365; # and maybe this
+my $year = 2000; # prepare_queue fixes this
 my $browser;
 my $fhq;
 my $proc_number;
@@ -370,10 +377,9 @@ sub prepare_queue {
 
   my @htime = gmtime($timeoff * 3600 + time);
   $year = $htime[5] + 1900;
-  $daysinyear = (0 == $year % 4 && 0 != $year % 100 || 0 == $year % 400) ? 366 : 365;
 
   # This hash will contain accumulated channel and program information.
-  # Key is channel number, value is (a reference to) a 5-element array:
+  # Key is channel number, value is (a reference to) a 4-element array:
   # channel name, array of "programID/timestamp" pairs, a continuation
   # variable, the last "cell program ID".
   #
@@ -474,14 +480,14 @@ sub scrape_list {
   # Loop by channel within this time slot.
   while(my $tag = $parser->get_tag("span")) {
     next if (!$tag->[1]{class});
-    next if ($tag->[1]{class} ne 'listing-channel-logo');
+    next unless ($tag->[1]{class} eq 'ep-lcl' or $tag->[1]{class} eq 'listing-channel-logo');
     my $channel_name = $parser->get_trimmed_text("/span");
     $tag = $parser->get_tag("span");
-    next if ($tag->[1]{class} ne 'listing-channel-bug');
+    next unless ($tag->[1]{class} eq 'ep-lcb' or $tag->[1]{class} eq 'listing-channel-bug');
     my $channel_number = $parser->get_trimmed_text("/span");
 
     # Skip channel numbers that are not all digits.  Seems that some HD
-    # channels are coming through with numbers like "229-1".
+    # channels were coming through with numbers like "229-1".
     next unless ($channel_number =~ /^\d+$/);
 
     # Check for duplicate rows.  Mostly from HD versions of channels.
@@ -494,7 +500,7 @@ sub scrape_list {
     if ($channels) { next unless grep /^$channel_id$/, @$channels; }
 
     # Create a new hash entry for this channel, but only if it does not
-    # already exist.  Its value is a reference to a 5-element array:
+    # already exist.  Its value is a reference to a 4-element array:
     # channel name, array of "programID/timestamp" pairs, a continuation
     # variable, the last "cell program ID".
     if (!$ch->{$channel_number}) {
@@ -506,12 +512,12 @@ sub scrape_list {
     # width, which is then needed to compute each cell's duration.
     # Curiously, this total width can vary a bit from row to row.
 
-    my $lastendtime = $start_timestamp;
+    # Pass 1: Scrape listings for this time slot and channel, save their
+    # widths and program IDs, and total the widths.
     my $totwidth = 0;
     my @cells = ();
     while($tag = $parser->get_tag("li", "/tr")) {
       last unless ($tag->[0] eq "li");
-      # Computing cell size in minutes from its width in pixels.
       die "Missing style for li!" unless ($tag->[1]{style});
       die "Missing width for li!" unless ($tag->[1]{style} =~ /width:\s*([\d.]+)px/);
       my $width = $1;
@@ -522,9 +528,14 @@ sub scrape_list {
       }
       push @cells, [$width, $programid];
     }
+
+    # Pass 2: Process the above into the %ch array.
+    my $lastendtime = $start_timestamp;
     foreach my $tmp (@cells) {
       my ($width, $programid) = @$tmp;
+      # Computing cell size in minutes from its width in pixels.
       my $duration = int($width * 120 / $totwidth + .5);
+      # Grab and clear a previously saved start time, if present.
       my $tmp_start = $ch->{$channel_number}[2];
       $ch->{$channel_number}[2] = 0;
 
@@ -629,8 +640,7 @@ sub list_channels {
   $zonechar = $conf->{zone}->[0];
 
   my @htime = gmtime($timeoff * 3600 + time);
-  my $year = $htime[5] + 1900;
-  $daysinyear = (0 == $year % 4 && 0 != $year % 100 || 0 == $year % 400) ? 366 : 365;
+  $year = $htime[5] + 1900;
 
   my $browser = WWW::Mechanize->new();
 
@@ -709,7 +719,7 @@ sub child_logic {
 }
 
 # This generates XML for the designated program ID.  It retrieves and scrapes
-# the "program details" popup, so a page fetch is required for each program.
+# the "program details" AJAX thingy, so a page fetch is required for each.
 #
 sub scrape_program {
   my ($browser, $program_id, $channel_id, $startmins) = @_;
