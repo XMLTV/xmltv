@@ -141,10 +141,6 @@ my %replacement_titles;   # old title is the key, replacement title the value
 # 'manufactured' titles which may include temporary 'season' information
 my %prog_titles;
 
-# Create hash to store unhandled UTF-8 characters seen in listings data
-# after we have converted the listings data from UTF-8 to Latin-1.
-my %unhandled_utf8_chars;
-
 # Track problems during listings retrieval. Currently we exit(1) only if
 # listings data is missing for any requested channels
 my $warnings = 0;
@@ -172,7 +168,6 @@ if ($opt->{debug}) {
         print_titles_with_colons();
         print_titles_with_hyphens();
     }
-    print_unhandled_utf8_chars();
 }
 
 # Give a useful exit status if data for some channels was not downloaded
@@ -1251,8 +1246,10 @@ sub write_listings_data {
         my $uri = "$rt_root_dir/$rt_id.dat";
         local $SIG{__DIE__} = sub { die "$uri: $_[0]" };
         local $SIG{__WARN__} = sub { warn "$uri: $_[0]" };
+
         t("\nRetrieving listings for '$rt_name'");
         my $page = get $uri;
+
         if (!defined $page || $page eq '') {
             if (!$opt->{quiet}) {
                 say("No listings data available for '$rt_name' ($xmltv_id), skipping");
@@ -1281,20 +1278,12 @@ sub write_listings_data {
             t("  Base timezone for utc_offset set to 'UTC' (default)\n");
         }
 
-        # Convert listings data from UTF-8 to ISO-8859-1
-        t("  Converting listings from " . $source_encoding  . " to " 
-                    . $xml_encoding . "\n");
-        Encode::from_to($page, $source_encoding, $xml_encoding );
-
-        # Decode any HTML entities seen in the Unicode plain text
-        decode_entities($page);
-        
-        # Tidy up any remaining bad characters in the Radio Times data. The
-        # data is provided in UTF-8 format which we convert to ISO 8859-1
-        # (Latin-1) format, but the text may still contain bad/null characters 
-        # which should be corrected if possible before processing.
+        # Tidy up any bad characters in the Radio Times source data. Although the
+        # data is provided in UTF-8 format the text may contain mis-encoded UTF-8
+        # or the NULL character which should be corrected as far as possible 
+        # before processing.
         #
-        # 2008-04-30
+        # 2009-01-12
         #
         # The ISO-8859-1 charset contains 256 codepoints (0x00-0xFF). When encoded
         # into UTF-8, either 1 or 2 bytes are required to encode these characters
@@ -1310,9 +1299,21 @@ sub write_listings_data {
         #  0xC0-0xFF      [C3][80]-[C3][BF]     64         2        Printing
         #
         # The badly-encoded UTF-8 characters seen in the raw Radio Times data often
-        # use 4 bytes to represent a single ISO-8859-1 char (where 1/2 bytes are
-        # required). When decoded from UTF-8 to 8859-1, the subsequent 2 bytes
-        # often represent the UTF-8 encoding of the intended character.
+        # use 4/6 bytes to represent a single ISO-8859-1 char (where 1/2 UTF-8 bytes
+        # would normally be required).
+        #
+        # A mis-encoded UTF-8 character that uses 4 bytes (but should use only 2
+        # if properly encoded) typically uses the first 2 bytes to contain the UTF-8
+        # representation of the first byte of the proper UTF-8 representation of the
+        # character, and the second 2 bytes to contain the UTF-8 representation of the second
+        # byte. E.g:
+        #
+        # The data contains a mis-encoded UTF-8 encoding of the A-grave character using 
+        # 4 bytes. The correct UTF-8 encoding of this character is [C3][80]. The data 
+        # actually contains the 4 bytes [C3][83][C2][80]. [C3][80] is the UTF-8 encoding 
+        # of [C3], and [C2][80] is the UTF-8 encoding of [80]. We replace this 4-byte
+        # mis-encoding with [C3][80] which is valid UTF-8 and can be successfully
+        # encoded into other character encodings.
         #
         # UTF-8 characters encoded into 2 bytes lie in the range [C2-DF][80-BF].
         #
@@ -1333,80 +1334,136 @@ sub write_listings_data {
                 t("    Removed CR+SP characters from '$rt_name' listings data");
             }
 
-            # Replace any mis-encoded UTF-8 characters left in the data
-            my @utf8_chars;
-            if (lc $xml_encoding eq 'iso-8859-1') {
-                if (@utf8_chars = $page =~ /([\xC2-\xDF][\x80-\xBF])/g) {
-                    foreach my $utf8_char (@utf8_chars) {
-                        t("    UTF-8 character '$utf8_char' seen in non-UTF-8 text");
-                    }
+            # Replace any mis-encoded UTF-8 characters in the data
+            t("    Looking for potentially mis-encoded UTF-8 characters...");
 
-                    t("    Manually replacing specific UTF-8 characters with "
-                      . "suitable replacements");
-                    
-                    s/\xC2\xA3/\xA3/g; # <C2><A3> -> Pound sign
-                    s/\xC2\xBD/\xBD/g; # <C2><BD> -> 1/2 sign
-
-                    s/\xC3\xA0/\xE0/g; # <C3><A0> -> a-grave
-                    s/\xC3\xA1/\xE1/g; # <C3><A1> -> a-acute
-                    s/\xC3\xA2/\xE2/g; # <C3><A2> -> a-circumflex
-                    s/\xC3\xA3/\xE3/g; # <C3><A3> -> a-tilde
-                    s/\xC3\xA4/\xE4/g; # <C3><A4> -> a-umlaut
-                    s/\xC3\xA5/\xE5/g; # <C3><A5> -> a-ring
-                    s/\xC3\xA6/\xE6/g; # <C3><A6> -> ae
-                    s/\xC3\xA7/\xE7/g; # <C3><A7> -> c-cedilla
-                    s/\xC3\xA8/\xE8/g; # <C3><A8> -> e-grave
-                    s/\xC3\xA9/\xE9/g; # <C3><A9> -> e-acute
-                    s/\xC3\xAA/\xEA/g; # <C3><AA> -> e-circumflex
-                    s/\xC3\xAB/\xEB/g; # <C3><AB> -> e-umlaut
-                    s/\xC3\xAC/\xEC/g; # <C3><AC> -> i-grave
-                    s/\xC3\xAD/\xED/g; # <C3><AD> -> i-acute
-                    s/\xC3\xAE/\xEE/g; # <C3><AE> -> i-circumflex
-                    s/\xC3\xAF/\xEF/g; # <C3><AF> -> i-umlaut
-
-                    s/\xC3\xB0/\xF0/g; # <C3><B0> -> eth
-                    s/\xC3\xB1/\xF1/g; # <C3><B1> -> n-tilde
-                    s/\xC3\xB2/\xF2/g; # <C3><B2> -> o-grave
-                    s/\xC3\xB3/\xF3/g; # <C3><B3> -> o-acute
-                    s/\xC3\xB4/\xF4/g; # <C3><B4> -> o-circumflex
-                    s/\xC3\xB5/\xF5/g; # <C3><B5> -> o-tilde
-                    s/\xC3\xB6/\xF6/g; # <C3><B6> -> o-umlaut
-                    s/\xC3\xB8/\xF8/g; # <C3><B8> -> o-stroke
-                    s/\xC3\xB9/\xF9/g; # <C3><B9> -> u-grave
-                    s/\xC3\xBA/\xFA/g; # <C3><BA> -> u-acute
-                    s/\xC3\xBB/\xFB/g; # <C3><BB> -> u-circumflex
-                    s/\xC3\xBC/\xFC/g; # <C3><BC> -> u-umlaut
-                    s/\xC3\xBD/\xFD/g; # <C3><BD> -> y-acute
-                    s/\xC3\xBE/\xFE/g; # <C3><BE> -> thorn
-                    s/\xC3\xBF/\xFF/g; # <C3><BF> -> y-umlaut
-
-                    s/\xAF\xA9/\x6F\x69/g; # <AF><A9> -> oi
-
-                    s/\xEF\xBF\xBD/\xED/g; # <EF><BF><ED> -> i-acute
-                    s/\xE2\x80\x99/\x27/g; # <E2><80><99> -> '
-                    s/\xE2\x80\x9C/\x22/g; # <E2><80><9C> -> "
-                    s/\xE2\x80\x9D/\x22/g; # <E2><80><9D> -> "
-
-                    if (@utf8_chars = $page =~ /([\xC2-\xDF][\x80-\xBF])/g) {
-                        foreach my $utf8_char (@utf8_chars) {
-                            $unhandled_utf8_chars{$utf8_char} = $rt_name;
-                            t("    UTF-8 character '$utf8_char' still seen "
-                              . "in non-UTF-8 text");
-                        }
-                    }
-                    else {
-                        t("    No UTF-8 characters detected after manual replacement");
-                    }
-                }
+            if ( /[\xC3][\x82][\xC2][\xA0-\xAF]/g ) {
+                t("      Replacing mis-encoded UTF-8 chars in range [C2][A0]-[C2][AF]");
+                s/\xC3\x82\xC2\xA3/\xC2\xA3/g; # <C2><A3> -> Pound sign
+                s/\xC3\x82\xC2\xA9/\xC2\xA9/g; # <C2><A9> -> Copyright sign
+                s/\xC3\x82\xC2\xAE/\xC2\xAE/g; # <C2><AE> -> Registered sign
             }
 
-            # Remove any remaining non-printing ISO 8859-1 control 
-            # characters but keep \t \n and \r
+            if ( /[\xC3][\x82][\xC2][\xB0-\xBF]/g ) {
+                t("      Replacing mis-encoded UTF-8 chars in range [C2][B0]-[C2][BF]");
+                s/\xC3\x82\xC2\xB0/\xC2\xB0/g; # <C2><B0> -> Degree symbol
+                s/\xC3\x82\xC2\xB2/\xC2\xB2/g; # <C2><B2> -> squared symbol
+                s/\xC3\x82\xC2\xB3/\xC2\xB3/g; # <C2><B3> -> cubed symbol
+                s/\xC3\x82\xC2\xBC/\xC2\xBC/g; # <C2><BC> -> 1/4 sign
+                s/\xC3\x82\xC2\xBD/\xC2\xBD/g; # <C2><BD> -> 1/2 sign
+                s/\xC3\x82\xC2\xBE/\xC2\xBE/g; # <C2><BE> -> 3/4 sign
+            }
+
+            if ( /[\xC3][\x83][\xC2][\x80-\x8F]/g ) {
+                t("      Replacing mis-encoded UTF-8 chars in range [C3][80]-[C3][8F]");
+                s/\xC3\x83\xC2\x80/\xC3\x80/g; # <C3><80> -> uppercase a-grave
+                s/\xC3\x83\xC2\x81/\xC3\x81/g; # <C3><81> -> uppercase a-acute
+                s/\xC3\x83\xC2\x82/\xC3\x82/g; # <C3><82> -> uppercase a-circumflex
+                s/\xC3\x83\xC2\x83/\xC3\x83/g; # <C3><83> -> uppercase a-tilde
+                s/\xC3\x83\xC2\x84/\xC3\x84/g; # <C3><84> -> uppercase a-umlaut
+                s/\xC3\x83\xC2\x85/\xC3\x85/g; # <C3><85> -> uppercase a-ring
+                s/\xC3\x83\xC2\x86/\xC3\x86/g; # <C3><86> -> uppercase ae
+                s/\xC3\x83\xC2\x87/\xC3\x87/g; # <C3><87> -> uppercase c-cedilla
+                s/\xC3\x83\xC2\x88/\xC3\x88/g; # <C3><88> -> uppercase e-grave
+                s/\xC3\x83\xC2\x89/\xC3\x89/g; # <C3><89> -> uppercase e-acute
+                s/\xC3\x83\xC2\x8A/\xC3\x8A/g; # <C3><8A> -> uppercase e-circumflex
+                s/\xC3\x83\xC2\x8B/\xC3\x8B/g; # <C3><8B> -> uppercase e-umlaut
+                s/\xC3\x83\xC2\x8C/\xC3\x8C/g; # <C3><8C> -> uppercase i-grave
+                s/\xC3\x83\xC2\x8D/\xC3\x8D/g; # <C3><8D> -> uppercase i-acute
+                s/\xC3\x83\xC2\x8E/\xC3\x8E/g; # <C3><8E> -> uppercase i-circumflex
+                s/\xC3\x83\xC2\x8F/\xC3\x8F/g; # <C3><8F> -> uppercase i-umlaut
+            }
+
+            if ( /[\xC3][\x83][\xC2][\x90-\x9F]/g ) {
+                t("      Replacing mis-encoded UTF-8 chars in range [C3][90]-[C3][9F]");
+                s/\xC3\x83\xC2\x90/\xC3\x90/g; # <C3><90> -> uppercase eth
+                s/\xC3\x83\xC2\x91/\xC3\x91/g; # <C3><91> -> uppercase n-tilde
+                s/\xC3\x83\xC2\x92/\xC3\x92/g; # <C3><92> -> uppercase o-grave
+                s/\xC3\x83\xC2\x93/\xC3\x93/g; # <C3><93> -> uppercase o-acute
+                s/\xC3\x83\xC2\x94/\xC3\x94/g; # <C3><94> -> uppercase o-circumflex
+                s/\xC3\x83\xC2\x95/\xC3\x95/g; # <C3><95> -> uppercase o-tilde
+                s/\xC3\x83\xC2\x96/\xC3\x96/g; # <C3><96> -> uppercase o-umlaut
+                s/\xC3\x83\xC2\x97/\xC3\x97/g; # <C3><97> -> multiplication sign
+                s/\xC3\x83\xC2\x98/\xC3\x98/g; # <C3><98> -> uppercase o-stroke
+                s/\xC3\x83\xC2\x99/\xC3\x99/g; # <C3><99> -> uppercase u-grave
+                s/\xC3\x83\xC2\x9A/\xC3\x9A/g; # <C3><9A> -> uppercase u-acute
+                s/\xC3\x83\xC2\x9B/\xC3\x9B/g; # <C3><9B> -> uppercase u-circumflex
+                s/\xC3\x83\xC2\x9C/\xC3\x9C/g; # <C3><9C> -> uppercase u-umlaut
+                s/\xC3\x83\xC2\x9D/\xC3\x9D/g; # <C3><9D> -> uppercase y-acute
+                s/\xC3\x83\xC2\x9E/\xC3\x9E/g; # <C3><9E> -> uppercase thorn
+                s/\xC3\x83\xC2\x9F/\xC3\x9F/g; # <C3><9F> -> Eszett
+            }
+
+            if ( /[\xC3][\x83][\xC2][\xA0-\xAF]/g ) {
+                t("      Replacing mis-encoded UTF-8 chars in range [C3][A0]-[C3][AF]");
+                s/\xC3\x83\xC2\xA0/\xC3\xA0/g; # <C3><A0> -> lowercase a-grave
+                s/\xC3\x83\xC2\xA1/\xC3\xA1/g; # <C3><A1> -> lowercase a-acute
+                s/\xC3\x83\xC2\xA2/\xC3\xA2/g; # <C3><A2> -> lowercase a-circumflex
+                s/\xC3\x83\xC2\xA3/\xC3\xA3/g; # <C3><A3> -> lowercase a-tilde
+                s/\xC3\x83\xC2\xA4/\xC3\xA4/g; # <C3><A4> -> lowercase a-umlaut
+                s/\xC3\x83\xC2\xA5/\xC3\xA5/g; # <C3><A5> -> lowercase a-ring
+                s/\xC3\x83\xC2\xA6/\xC3\xA6/g; # <C3><A6> -> lowercase ae
+                s/\xC3\x83\xC2\xA7/\xC3\xA7/g; # <C3><A7> -> lowercase c-cedilla
+                s/\xC3\x83\xC2\xA8/\xC3\xA8/g; # <C3><A8> -> lowercase e-grave
+                s/\xC3\x83\xC2\xA9/\xC3\xA9/g; # <C3><A9> -> lowercase e-acute
+                s/\xC3\x83\xC2\xAA/\xC3\xAA/g; # <C3><AA> -> lowercase e-circumflex
+                s/\xC3\x83\xC2\xAB/\xC3\xAB/g; # <C3><AB> -> lowercase e-umlaut
+                s/\xC3\x83\xC2\xAC/\xC3\xAC/g; # <C3><AC> -> lowercase i-grave
+                s/\xC3\x83\xC2\xAD/\xC3\xAD/g; # <C3><AD> -> lowercase i-acute
+                s/\xC3\x83\xC2\xAE/\xC3\xAE/g; # <C3><AE> -> lowercase i-circumflex
+                s/\xC3\x83\xC2\xAF/\xC3\xAF/g; # <C3><AF> -> lowercase i-umlaut
+            }
+
+            if ( /[\xC3][\x83][\xC2][\xB0-\xBF]/g ) {
+                t("      Replacing mis-encoded UTF-8 chars in range [C3][B0]-[C3][BF]");
+                s/\xC3\x83\xC2\xB0/\xC3\xB0/g; # <C3><B0> -> lowercase eth
+                s/\xC3\x83\xC2\xB1/\xC3\xB1/g; # <C3><B1> -> lowercase n-tilde
+                s/\xC3\x83\xC2\xB2/\xC3\xB2/g; # <C3><B2> -> lowercase o-grave
+                s/\xC3\x83\xC2\xB3/\xC3\xB3/g; # <C3><B3> -> lowercase o-acute
+                s/\xC3\x83\xC2\xB4/\xC3\xB4/g; # <C3><B4> -> lowercase o-circumflex
+                s/\xC3\x83\xC2\xB5/\xC3\xB5/g; # <C3><B5> -> lowercase o-tilde
+                s/\xC3\x83\xC2\xB6/\xC3\xB6/g; # <C3><B6> -> lowercase o-umlaut
+                s/\xC3\x83\xC2\xB7/\xC3\xB7/g; # <C3><B7> -> division sign
+                s/\xC3\x83\xC2\xB8/\xC3\xB8/g; # <C3><B8> -> lowercase o-stroke
+                s/\xC3\x83\xC2\xB9/\xC3\xB9/g; # <C3><B9> -> lowercase u-grave
+                s/\xC3\x83\xC2\xBA/\xC3\xBA/g; # <C3><BA> -> lowercase u-acute
+                s/\xC3\x83\xC2\xBB/\xC3\xBB/g; # <C3><BB> -> lowercase u-circumflex
+                s/\xC3\x83\xC2\xBC/\xC3\xBC/g; # <C3><BC> -> lowercase u-umlaut
+                s/\xC3\x83\xC2\xBD/\xC3\xBD/g; # <C3><BD> -> lowercase y-acute
+                s/\xC3\x83\xC2\xBE/\xC3\xBE/g; # <C3><BE> -> lowercase thorn
+                s/\xC3\x83\xC2\xBF/\xC3\xBF/g; # <C3><BF> -> lowercase y-umlaut
+            }
+
+            if ( /[\xC3][\xA0-\xAF][\xC2][\x80-\xBF]/g ) {
+                t("      Replacing mis-encoded UTF-8 chars using 6 bytes");
+                s/\xC3\xA2\xC2\x80\xC2\x99/\x27/g; # <27> -> '
+                s/\xC3\xA2\xC2\x80\xC2\x9C/\x22/g; # <22> -> "
+                s/\xC3\xA2\xC2\x80\xC2\x9D/\x22/g; # <22> -> "
+                s/\xC3\xA2\xC2\x80\xC2\x94/\x2D/g; # <2D> -> -
+            }
+
+
+            if (/[\xC2][\x80-\x9F]/) {
+                t("\n  ** Data for '$rt_name' may still contain mis-encoded UTF-8 **\n");
+            }
+
+            # Remove any remaining non-printing control characters (keep \t \n and \r)
             if (s/[\x00-\x08\x0B-\x0C\x0E-\x1F\x7F-\x9F]//g) {
                 t("  Removing non-printing characters from $rt_name listings data");
             }
         }
 
+        # Decode any HTML entities seen in the UTF-8 text to their Unicode equivalent
+        decode_entities($page);
+
+        # Convert listings data from UTF-8 to configured encoding scheme if required
+        if ($xml_encoding ne $source_encoding) {
+            t("  Converting listings from " . $source_encoding  . " to " 
+                        . $xml_encoding . "\n");
+            Encode::from_to($page, $source_encoding, $xml_encoding );
+        }
+        
+        # Start to process individual programme entries found in listings
         t("  Started writing <programme> elements for channel '$rt_name'\n");
         my $num_titles;
 
@@ -2154,21 +2211,6 @@ sub print_titles_with_hyphens {
             }
         }
         say("End of list of titles containing hyphens");
-    }
-}
-
-sub print_unhandled_utf8_chars {
-    if (%unhandled_utf8_chars) {
-        say("\nSummary of UTF-8 characters seen in processed listings");
-        foreach my $utf8_char (sort keys %unhandled_utf8_chars) {
-            my $dec_utf8_char = $utf8_char;
-            Encode::from_to($dec_utf8_char, $source_encoding, $xml_encoding);
-            say("  '$utf8_char' seen in '$unhandled_utf8_chars{$utf8_char}' listings."
-              . " Decodes to '$dec_utf8_char'");
-        }
-    }
-    else {
-        say("\nNo UTF-8 characters detected in the processed listings");
     }
 }
 
