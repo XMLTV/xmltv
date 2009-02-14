@@ -19,7 +19,7 @@ while (<$in_fh>) {
     s/\@\@name/tv_grab_uk_rt/;
     s/\@\@desc/\@\@country (Radio Times)/;
     s/\@\@nspc/             /;
-    s/\@\@country/United Kingdown\/Republic of Ireland/;
+    s/\@\@country/United Kingdom\/Republic of Ireland/;
     s%\@\@rt_root_dir%http://xmltv.radiotimes.com/xmltv%;
 print $out_fh $_;
 }
