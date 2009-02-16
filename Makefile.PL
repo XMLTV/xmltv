@@ -484,12 +484,12 @@ my @opt_components
        exes => [ 'grab/huro/tv_grab_huro' ],
        pl_files => { 'grab/huro/tv_grab_huro.PL'
 		     => 'grab/huro/tv_grab_huro' },
-       share_files => { 'grab/huro/jobmap'
-			=> 'tv_grab_huro/jobmap',
-			'grab/huro/catmap.hu'
-			=> 'tv_grab_huro/catmap.hu',
-			'grab/huro/catmap.ro'
-			=> 'tv_grab_huro/catmap.ro' },
+       share_files => { 'grab/huro/jobmap' => 'tv_grab_huro/jobmap',
+			         'grab/huro/catmap.hu' => 'tv_grab_huro/catmap.hu',
+			         'grab/huro/catmap.ro' => 'tv_grab_huro/catmap.ro',
+			         'grab/huro/catmap.sk' => 'tv_grab_huro/catmap.sk',
+			         'grab/huro/catmap.cz' => 'tv_grab_huro/catmap.cz',
+                     },
        to_clean => [ 'grab/huro/tv_grab_huro' ],
        deps => [ 'grab/huro/tv_grab_huro'
 		 => [ 'grab/huro/tv_grab_huro.in' ] ],
