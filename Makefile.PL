@@ -286,12 +286,13 @@ my @opt_components
 #                    'HTML::Entities' => 1.27 , }
 #     },
 
-     { name => 'tv_grab_br_net',
-       blurb => 'Grabber for Brazil NET Cable',
-       exes => [ 'grab/br_net/tv_grab_br_net' ],
-       prereqs => { 'WWW::Mechanize' => 1.16 ,
-		    'HTTP::Cookies' => 1.39 , }
-     },
+# disabled because it broke due to site changes 2009-03-08
+#     { name => 'tv_grab_br_net',
+#       blurb => 'Grabber for Brazil NET Cable',
+#       exes => [ 'grab/br_net/tv_grab_br_net' ],
+#       prereqs => { 'WWW::Mechanize' => 1.16 ,
+#		    'HTTP::Cookies' => 1.39 , }
+#     },
 
 # disabled since blocked by www.fernsehen.ch guys
 #     { name     => 'tv_grab_ch',
@@ -434,10 +435,11 @@ my @opt_components
        exes => [ 'grab/fi/tv_grab_fi' ],
        prereqs => { 'HTML::TreeBuilder' => 0 } },
 
-     { name => 'tv_grab_es',
-       blurb => 'Grabber for Spain - Analogic Terrestrial/Cable',
-       exes => [ 'grab/es/tv_grab_es' ],
-       prereqs => { 'HTML::TreeBuilder' => 0 } },
+# 2009-03-08 removed due to breakage after source site changes
+#     { name => 'tv_grab_es',
+#       blurb => 'Grabber for Spain - Analogic Terrestrial/Cable',
+#       exes => [ 'grab/es/tv_grab_es' ],
+#       prereqs => { 'HTML::TreeBuilder' => 0 } },
 
 # 2008-07-12 rmeden - site "down for maintanence" for over a month.. goodbye
 #
