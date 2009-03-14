@@ -588,11 +588,14 @@ my @opt_components
 		  }
      },
 
-     { name => 'tv_grab_za',
-       blurb => 'Grabber for South Africa',
-       exes => [ 'grab/za/tv_grab_za' ],
-       prereqs => { 'HTML::TreeBuilder' => 0,
-                    'HTML::Entities' => 1.27 } },
+     #
+     # remove broken grabber, hopefully temporarily
+     #
+     #{ name => 'tv_grab_za',
+     #  blurb => 'Grabber for South Africa',
+     #  exes => [ 'grab/za/tv_grab_za' ],
+     #  prereqs => { 'HTML::TreeBuilder' => 0,
+     #               'HTML::Entities' => 1.27 } },
 
      { name => 'tv_grab_eu_epgdata',
        blurb => 'Grabber for some European countries (epgdata.com)',
