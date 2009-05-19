@@ -55,11 +55,18 @@ Currently configured backends are (in default order):
 
 =item B<mtvit>    - grabs data from www.mtv.it
 
-=item B<wfactory> - grabs data from www.wfactory.net
-
 =item B<boingtv>  - grabs data from www.boingtv.it
 
 =item B<sitcom1>  - grabs data from www.sitcom1.it
+
+=item B<raisat>   - grabs data from www.risat.it
+
+=item B<raiit>    - grabs data from www.rai.it
+
+=item B<iris>     - grabs data from www.iris.it
+
+=item B<mediasetpremium>  - grabs data from www.mediasetpremium.it
+
 
 =back
 
@@ -198,11 +205,17 @@ Le fonti configurate al momento sono: (in ordine di utilizzo):
 
 =item B<mtvit>    - prende i dati da www.mtv.it
 
-=item B<wfactory> - prende i dati da www.wfactory.net
-
 =item B<boingtv>  - prende i dati da www.boingtv.it
 
 =item B<sitcom1>  - prende i dati da www.sitcom1.it
+
+=item B<raisat>   - prende i dati da www.risat.it
+
+=item B<raiit>    - prende i dati da www.rai.it
+
+=item B<iris>     - prende i dati da www.iris.it
+
+=item B<mediasetpremium>  - prende i dati da www.mediasetpremium.it
 
 =back
 
