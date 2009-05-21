@@ -1,0 +1,1540 @@
+#!/usr/bin/perl
+######################################################################
+# Changelog:
+# 19/04/2009 first release
+######################################################################
+# initializations
+use warnings;
+use strict;
+
+=pod
+
+=head1 NAME
+
+tv_grab_it_dvb - Grab TV listings for Italy from the DVB-S stream
+
+=head1 SYNOPSIS
+
+tv_grab_it_dvb --help
+
+tv_grab_it_dvb [--adapter N] [--config-file FILE] --configure
+
+tv_grab_it_dvb [--config-file FILE] [--output FILE] [--days N] 
+               [--offset N] [--quiet] [--verbose] [--adapter N]
+               [--no-cache-summaries]
+       
+
+=head1 DESCRIPTION
+
+ Output TV listings for several channels as provided by the DVB-S stream from Skyitalia.
+ This grabber is based on the work of Lukkinosat for everything concerning the decoding of data.
+ The tuning part is mostly a port to perl of the relevant parts in szap.
+ This is an early release and should be considered beta quality.
+
+First run B<tv_grab_it_dvb --configure> to choose which channels you want
+to download. Then running B<tv_grab_it> with no arguments will output
+listings in XML format to standard output.
+
+B<--configure> Prompt for which channels, and writes the configuration file.
+
+B<--adapter> Use this adapter for tuning and grabbing. Default is 0.
+
+B<--config-file FILE> Set the name of the configuration file, the
+default is B<~/.xmltv/tv_grab_it_dvb.conf>.  This is the file written
+by B<--configure> and read when grabbing.
+
+B<--gui OPTION> Use this option to enable a graphical interface to be used.
+OPTION may be 'Tk', or left blank for the best available choice.
+Additional allowed values of OPTION are 'Term' for normal terminal output
+(default) and 'TermNoProgressBar' to disable the use of XMLTV::ProgressBar.
+
+B<--output FILE> write to FILE rather than standard output.
+
+B<--days N> Grab N days. Since we cannot decide how much data we get we
+simply throw away everyting above this number of days.
+
+B<--offset N> Start N days in the future.  The default is to start
+from today.
+
+B<--quiet> Suppress the progress messages normally written to standard
+error.
+
+B<--no-cache-summaries> Disables caching of summaries in the file summaries.cache
+It is advised to leave this option on as the summaries part of the data stream can be very
+different between grabs, and you might get blank descriptions.
+
+B<--verbose> Prints out verbose information useful for debugging.
+Repeat (up to 4x) for more verbosiness
+
+B<--version> Show the version of the grabber.
+
+B<--help> Print a help message and exit.
+
+=head1 CAVEATS
+
+This grabber relies on the linux dvb api, and therefore does not run under windows.
+
+=head1 EXAMPLES
+
+=over 
+
+=item tv_grab_it_dvb --adapter 2 --configure
+
+configures tv_grab_it_dvb using adapter number 2
+
+=item tv_grab_it_dvb --adapter 2 --quiet
+
+grabs the full data without displaying anything (useful in cron scripts)
+
+=back
+
+=head1 SEE ALSO
+
+L<xmltv(5)>.
+
+=head1 AUTHOR
+
+Davide Chiarini, davide.chiarini@gmail.com
+
+you can find some more help at http://lnx.htpcpoint.it/forum/
+
+=cut
+
+
+use File::Slurp;
+use Linux::DVB;
+use Time::HiRes;
+use IO::Select;
+
+
+use XMLTV::Version '';
+#use XMLTV::Capabilities qw/baseline manualconfig cache/;
+use XMLTV::Description 'SkyEPG Italy';
+use XMLTV::Supplement qw/GetSupplement/;
+use HTML::Entities;
+use HTML::Parser;
+use URI::Escape;
+use Getopt::Long;
+use Date::Manip;
+use XMLTV;
+use XMLTV::Memoize;
+use XMLTV::Ask;
+use XMLTV::Config_file;
+use XMLTV::ProgressBar;
+use XMLTV::DST;
+use XMLTV::Get_nice;
+use XMLTV::Mode;
+
+use XMLTV::Usage <<END
+$0: grab and parse sky italia epg from satellite dvb stream to XMLTV format
+To configure: $0 --configure [--adapter N] [--config-file FILE]
+To grab listings: $0 [--config-file FILE] [--output FILE] [--days N]
+        [--offset N] [--quiet] [--verbose] [--adapter N] 
+		[--no-cache-summaries]
+To list available channels: $0 [--output FILE] [--quiet] [--adapter] --list-channels
+Repeat --verbose to increase verboseness.
+To show version: $0 --version
+END
+  ;
+
+# Use Log::TraceMessages if installed.
+BEGIN {
+    eval { require Log::TraceMessages };
+    if ($@) {
+    *t = sub {};
+    *d = sub { '' };
+    }
+    else {
+    *t = \&Log::TraceMessages::t;
+    *d = \&Log::TraceMessages::d;
+    Log::TraceMessages::check_argv();
+    }
+}
+
+my $DEBUG = 0;
+#if $DEBUG is 1 we dump all of the hashes when ctrl-c
+$SIG{INT} = \&closeup;
+
+# default values and global variables
+my $LANG="it";
+my $date_today = UnixDate("today", '%Y-%m-%d');
+
+#this is the transponder we tune to
+#polarity is: Vertical=1 Horizontal=0
+my ($freq, $fec_inner, $inversion, $symbol_rate, $polarity) = (11880000, FEC_3_4, INVERSION_AUTO, 27500000, 1);
+#other possible transponders
+#tp1($freq, $fec_inner, $inversion, $symbol_rate, $polarity) = (11219000, FEC_3_4, INVERSION_AUTO, 27500000, 0);
+#tp 8 ($freq, $fec_inner, $inversion, $symbol_rate, $polarity) = (11355000, FEC_3_4, INVERSION_AUTO, 27500000, 1);
+#tp 52 ($freq, $fec_inner, $inversion, $symbol_rate, $polarity) = (11785000, FEC_3_4, INVERSION_AUTO, 27500000, 0);
+#tp 56 ($freq, $fec_inner, $inversion, $symbol_rate, $polarity) = (11843000, FEC_3_4, INVERSION_AUTO, 27500000, 1);
+#tp 57 ($freq, $fec_inner, $inversion, $symbol_rate, $polarity) = (11862000, FEC_3_4, INVERSION_AUTO, 27500000, 0);
+#-->tp 58 ($freq, $fec_inner, $inversion, $symbol_rate, $polarity) = (11881000, FEC_3_4, INVERSION_AUTO, 27500000, 1);
+#tp 59 ($freq, $fec_inner, $inversion, $symbol_rate, $polarity) = (11900000, FEC_3_4, INVERSION_AUTO, 27500000, 0);
+#tp 62 ($freq, $fec_inner, $inversion, $symbol_rate, $polarity) = (11958000, FEC_3_4, INVERSION_AUTO, 27500000, 1);
+#tp 63 ($freq, $fec_inner, $inversion, $symbol_rate, $polarity) = (11977000, FEC_3_4, INVERSION_AUTO, 27500000, 0);
+#tp 64 ($freq, $fec_inner, $inversion, $symbol_rate, $polarity) = (11996000, FEC_3_4, INVERSION_AUTO, 27500000, 1);
+#tp 66 ($freq, $fec_inner, $inversion, $symbol_rate, $polarity) = (12034000, FEC_3_4, INVERSION_AUTO, 27500000, 1);
+#tp 67 ($freq, $fec_inner, $inversion, $symbol_rate, $polarity) = (12054000, FEC_3_4, INVERSION_AUTO, 27500000, 0);
+#tp 68 ($freq, $fec_inner, $inversion, $symbol_rate, $polarity) = (12073000, FEC_3_4, INVERSION_AUTO, 27500000, 1);
+
+
+my $MAX_ACTIVE_FILTERS = 6;
+my $TIMEOUT_FILTER = 5000; # ms
+my $read_buf_size = 2*4096; 
+my $starttime = time;
+#we close the grabber after this many seconds, even if filters are still open (or stuck...)
+my $maxtime = 3600;
+
+
+my $endBAT = 0;
+#don't know why I get different results through consecutive grabs. to avoid this I grab the BAT table this many times:
+my $maxBAT = 5; 
+my $endSDT = 0;
+my $id_SDT = 100000;
+my $nchannelsSDT = 0;
+my $channelsBAT = 0;
+my $sigint_stop = 0;
+
+my $fe; #dvb frontend
+
+
+#the filters in loadepg have a mask, but if I use it I don't get any data... am I missing something?
+# ([0x11, 0x4a ],	[ 0x11, 0x42 ],	[ 0x11, 0x46 ],	[ 0x30, 0xa0, 0xfc ],	[ 0x31, 0xa0, 0xfc ],	[ 0x32, 0xa0, 0xfc ],	[ 0x33, 0xa0, 0xfc ],
+#  [ 0x34, 0xa0, 0xfc ],	[ 0x35, 0xa0, 0xfc ],	[ 0x36, 0xa0, 0xfc ],	[ 0x37, 0xa0, 0xfc ],	[ 0x40, 0xa8, 0xfc ],	[ 0x41, 0xa8, 0xfc ],	
+#  [ 0x42, 0xa8, 0xfc ],	[ 0x43, 0xa8, 0xfc ],	[ 0x44, 0xa8, 0xfc ],	[ 0x45, 0xa8, 0xfc ],	[ 0x46, 0xa8, 0xfc ],	[ 0x47, 0xa8, 0xfc ]);
+
+my %filters =  ( 
+	0, { pid_mask =>	[ 0x11, 0x4a ]},
+	1, { pid_mask =>	[ 0x11, 0x42 ]},
+	2, { pid_mask =>	[ 0x11, 0x46 ]},
+	3, { pid_mask =>	[ 0x30, 0xa0 ]},
+	4, { pid_mask =>	[ 0x31, 0xa0 ]},
+	5, { pid_mask =>	[ 0x32, 0xa0 ]},
+	6, { pid_mask =>	[ 0x33, 0xa0 ]},
+	7, { pid_mask =>	[ 0x34, 0xa0 ]},
+	8, { pid_mask =>	[ 0x35, 0xa0 ]},
+	9, { pid_mask =>	[ 0x36, 0xa0 ]},
+	10, { pid_mask =>	[ 0x37, 0xa0 ]},
+	11, { pid_mask =>	[ 0x40, 0xa8 ]},
+	12, { pid_mask =>	[ 0x41, 0xa8 ]},
+	13, { pid_mask =>	[ 0x42, 0xa8 ]},
+	14, { pid_mask =>	[ 0x43, 0xa8 ]},
+	15, { pid_mask =>	[ 0x44, 0xa8 ]},
+	16, { pid_mask =>	[ 0x45, 0xa8 ]},
+	17, { pid_mask =>	[ 0x46, 0xa8 ]},
+	18, { pid_mask =>	[ 0x47, 0xa8 ]},
+);
+
+
+my %channels;      #to store site-id-> xmltv_id 
+my %channels_info; #we store all of the channel data we have in here
+my %display_names; #used in configuration
+my %site_ids;
+my %bouquets;
+my %titles;
+my %seen_descs;
+
+######################################################################
+# Get options, including undocumented --cache option.
+
+my ($opt_days,
+    $opt_offset,
+    $opt_help,
+    $opt_output,
+    $opt_verbose,
+    $opt_configure,
+    $opt_config_file,
+    $opt_gui,
+    $opt_quiet,
+    $opt_list_channels,
+    $opt_adapter,
+	$opt_no_cache_summaries,
+    $opt_share,
+   );
+
+$opt_offset = 0;   # default
+$opt_quiet  = 0;   # default
+$opt_adapter = 0;  # default
+$opt_verbose = 0;  # default
+$opt_days = 99;    # default
+
+GetOptions('days=i'       => \$opt_days,
+       'offset=i'         => \$opt_offset,
+       'help'             => \$opt_help,
+       'configure'        => \$opt_configure,
+       'config-file=s'    => \$opt_config_file,
+       'gui:s'            => \$opt_gui,
+       'output=s'         => \$opt_output,
+       'quiet'            => \$opt_quiet,
+       'verbose+'         => \$opt_verbose,
+       'list-channels'    => \$opt_list_channels,
+       'adapter=i'	      => \$opt_adapter,
+       'share=s'          => \$opt_share,
+       'no-cache-summaries'  => \$opt_no_cache_summaries,
+	  ) 
+  or usage(0);
+die "number of days (--days) must not be negative. You gave: $opt_days\n" if (defined $opt_days && $opt_days < 0);
+die "offset days (--offset) must not be negative. You gave: $opt_offset\n" if ($opt_offset < 0);
+usage(1) if $opt_help;
+
+$opt_verbose = 0 if ($opt_quiet);
+
+my $SHARE_DIR = undef;
+$SHARE_DIR = $opt_share if defined $opt_share;
+my $OUR_SHARE_DIR = (defined $SHARE_DIR) ? "$SHARE_DIR/tv_grab_it_dvb" : '.';
+
+#this is the huffman dictionary
+my $code = load_code_table("$OUR_SHARE_DIR/sky_it.dict");
+#this is the category db
+my $themes = load_themes("$OUR_SHARE_DIR/sky_it.themes");
+
+#we cache descriptions
+unless ($opt_no_cache_summaries) {
+	if (-f 'summaries.cache') {
+		rename 'summaries.cache', 'oldsummaries.cache' or die $!;
+	}
+	open CACHE, ">summaries.cache" or die $! ;
+}
+
+
+#since we cannot decide what data we receive we will just throw away what we don't want
+$opt_days = $opt_days;
+my $mode = XMLTV::Mode::mode('grab',
+			     $opt_list_channels => 'list-channels',
+			     $opt_configure => 'configure');
+
+XMLTV::Ask::init($opt_gui);
+
+# reads the file channel_ids, which contains the tables to convert 
+# between backends' ids and XMLTV ids of channels.
+# there are two fields: xmltv_id and site_id.
+#my $str = GetSupplement( "tv_grab_it_dvb", "channel_ids" );
+my $str = read_file( "$OUR_SHARE_DIR/channel_ids") ;
+my $CHANNEL_NAMES_FILE = "channel_ids";
+
+my %seen;
+my $line_num = 0;
+
+foreach (split( /\n/, $str )) {
+    ++ $line_num;
+    tr/\r//d;
+
+    s/#.*//;
+    next if m/^\s*$/;
+
+    my $where = "$CHANNEL_NAMES_FILE:$line_num";
+	my @fields = split /;/;
+	die "$where: wrong number of fields" if @fields != 2;#3;
+	my ($xmltv_id, $site_id) = @fields;
+	warn "$where: $site_id already seen\n" if $seen{$site_id}++;
+	warn "$where: XMLTV_id $xmltv_id already seen\n" if $seen{$xmltv_id}++;
+	$channels{$site_id}=$xmltv_id;
+}
+
+# File that stores which channels to download.
+my $config_file;
+$config_file= XMLTV::Config_file::filename($opt_config_file, 'tv_grab_it_dvb', $opt_quiet) unless ($mode eq 'list-channels');
+XMLTV::Config_file::check_no_overwrite($config_file) if $mode eq 'configure';
+
+# Arguments for XMLTV::Writer.
+my %w_args;
+if (defined $opt_output) {
+    die	"cannot give --output with --configure"	if $mode eq 'configure';
+    my $fh = new IO::File(">$opt_output");
+    die "cannot write to $opt_output: $!" if not defined $fh;
+    $w_args{OUTPUT} = $fh;
+}
+$w_args{encoding} = 'ISO-8859-1';
+
+
+$line_num = 0;
+my $foundchannels;
+
+#########################################################
+# tune dvb
+tune($freq, $fec_inner, $inversion, $symbol_rate, $polarity) || die ("error tuning adapter $opt_adapter\n");
+my $bar = new XMLTV::ProgressBar('getting list of channels', 3) unless ($opt_quiet);
+# find list of available channels
+# to do this we poll the first three filters
+pollfilters(4000, [0, 1, 2]);
+
+foreach (keys %channels_info) {
+	next unless (defined $channels_info{$_}{name} and defined $channels_info{$_}{sky_number});
+	my $xmltv_id = xmltv_chanid($channels_info{$_}{name});
+
+	$channels{$channels_info{$_}{name}}=$xmltv_id;
+	$site_ids{$xmltv_id} = $_;
+
+}
+$bar->finish() if (not $opt_quiet);
+$foundchannels=scalar(keys(%channels));
+die ("no channels could be found\n") unless ($foundchannels);
+warn ("VERBOSE: $foundchannels channels found.\n") if ($opt_verbose);
+
+
+
+######################################################################
+# write configuration
+if ($mode eq 'configure') {
+	open(CONF, ">$config_file") or die "cannot write to $config_file: $!";
+
+    # Ask about each channel.
+    my @names = sort keys %channels;
+    my @qs = map { "add channel $_?" } @names;
+    my @want = ask_many_boolean(1, @qs);
+
+	foreach (@names) {
+        die if $_ =~ tr/\r\n//;
+        my $w = shift @want;
+        warn("cannot read input, stopping channel questions"), last
+          if not defined $w;
+        # No need to print to user - XMLTV::Ask is verbose enough.
+
+        # Print a config line, but comment it out if channel not wanted.
+        print CONF '#' if not $w;
+        print CONF "channel ".$channels{$_}." # $_\n";
+    }
+
+    close CONF or warn "cannot close $config_file: $!";
+    say("Finished configuration.");
+
+    exit();
+}
+
+# Not configuring, must be writing some XML.
+my $w = new XMLTV::Writer(%w_args);
+
+$w->start({ 'source-info-url'     => 'http://www.skylife.it',
+            'source-data-url'     => 'http://www.skylife.it',
+			'generator-info-name' => 'XMLTV',
+			'generator-info-url'  => 'http://www.xmltv.org',
+		 });
+
+
+
+%display_names = reverse %channels;
+if ($mode eq 'list-channels') {
+	# Write all known channels then finish.
+    foreach my $xmltv_id (sort keys %display_names) {
+		my @chaninfo;
+		my $id = $site_ids{$xmltv_id};
+		#@chaninfo = ('display-name' => [ [ $display_names{$xmltv_id}], [ $channels_info{$id}{sky_number}], [$id]]);
+		@chaninfo = ('display-name' => [ [ $display_names{$xmltv_id}], [ $channels_info{$id}{sky_number}]]);
+		#test for icons
+		my $iconurl = 'http://guidatv.sky.it/app/guidatv/images/epgimages/channels/grid/'.$channels_info{$id}{sky_number}.'_grid.gif';
+		push @chaninfo , (icon => [{src => $iconurl}]);
+
+		$w->write_channel({
+			id => $xmltv_id,
+			@chaninfo
+			});
+	}
+    $w->end;
+
+    exit;
+}
+
+
+######################################################################
+# read configuration
+my @channels;
+$line_num = 0;
+foreach (XMLTV::Config_file::read_lines($config_file)) {
+    ++ $line_num;
+    next if not defined;
+    if (/^channel:?\s*(.*\S+)\s*$/) {
+          push @channels, $1;
+    }
+    else {
+        warn "$config_file:$line_num: bad line\n";
+    }
+}
+
+
+
+
+
+######################################################################
+# grabbing listings
+
+foreach my $xmltv_id (@channels) {
+	my @chaninfo;
+	my $id = $site_ids{$xmltv_id};
+	next unless ($id);#fixme
+	@chaninfo = ('display-name' => [ [ $display_names{$xmltv_id}], [ $channels_info{$id}{sky_number}]]);
+	#@chaninfo = ('display-name' => [ [ $display_names{$xmltv_id}], [ $channels_info{$id}{sky_number}], [$id]]);
+	#test for icons
+	my $iconurl = 'http://guidatv.sky.it/app/guidatv/images/epgimages/channels/grid/'.$channels_info{$id}{sky_number}.'_grid.gif';
+	push @chaninfo , (icon => [{src => $iconurl}]);
+
+	$w->write_channel({
+		id => $xmltv_id,
+		@chaninfo
+		});
+}
+
+#make a list of channels and days to grab, actually a list of stuff not to throw away
+my %to_get;
+my %not_found; #l'id e' scomparso rispetto al channel_ids
+foreach my $day ($opt_offset .. ($opt_days + $opt_offset - 1)) {
+   #date calc
+   my $data = UnixDate(&DateCalc("today","+ ".$day." days"), '%Y%m%d');
+   die ('date calculation failed') if not defined $data;
+   foreach my $channel (@channels) {       
+	if (not defined $site_ids{$channel}) {
+		warn "channel $channel  non esiste=!=!=?!??\n" unless ($not_found{$channel}++);
+		next;
+	}
+   $to_get{$site_ids{$channel}.";".$data}++;
+   }
+}
+$bar = new XMLTV::ProgressBar('getting listings', ((scalar keys %filters) -2)) if not $opt_quiet;
+
+#this is where we grab the data
+pollfilters(4000, [3..18]);
+
+
+if (not $opt_no_cache_summaries and -f 'oldsummaries.cache') {
+	warn "reading summaries from cache\n" if ($opt_verbose);
+	open OLDCACHE, "<oldsummaries.cache";
+	while (<OLDCACHE>) {
+		my ($date, $channel_id, $event_id, $desc) = split /\|/, $_;
+		if (not $seen_descs{"$date|$channel_id|$event_id"} and $to_get{"$channel_id;$date"}) {
+			print CACHE "$date|$channel_id|$event_id|$desc|\n";
+			$seen_descs{"$date|$channel_id|$event_id"}++;
+			if ($desc ne '') {
+				$titles{$channel_id}{$event_id}->{desc}=[[$desc, $LANG] ];
+				my %data;
+				skylife_parse_data_slow($desc, \%data);
+				foreach (keys %data) {
+					$titles{$channel_id}{$event_id}{$_}=$data{$_} if (not defined $titles{$channel_id}{$event_id}{$_}); #we might have duplicates
+				}
+			}
+		}
+	}
+	close OLDCACHE;
+}
+
+foreach my $channel_id (keys %titles) {
+	my $xmltv_id = xmltv_chanid($channels_info{$channel_id}{name});
+	foreach my $program_id(keys %{$titles{$channel_id}}) {
+		my $programme;
+
+		$programme->{channel} = $xmltv_id;
+		foreach (keys %{$titles{$channel_id}{$program_id}}) {
+			$programme->{$_} = $titles{$channel_id}{$program_id}{$_};
+		}
+
+		$w->write_programme($programme) if (defined $programme->{start} and defined $programme->{title}); #i think we might have some orphan summaries
+    }
+}
+
+
+
+$w->end;
+$bar->finish() if not $opt_quiet;
+close CACHE unless ($opt_no_cache_summaries);
+unlink 'oldsummaries.cache' unless ($opt_no_cache_summaries);
+#####################
+# general functions #
+#####################
+
+####################################################
+# xmltv_chanid
+# to handle channels that are not yet in the channel_ids file
+sub xmltv_chanid {
+    my $channel_id =  shift;
+
+	return unless ($channel_id);
+
+#    my %chan_ids = reverse %channels;
+
+    if (defined $channels{$channel_id}) {
+        return $channels{$channel_id};
+        }
+    else {
+        warn ("***Channel |$channel_id| is not in channel_ids, should be updated.\n") unless $opt_quiet;
+
+        #print("$channel_id\n");
+		my $or_channel_id = $channel_id;
+		$channel_id=~ s/\W//gs;
+
+        #make up an id
+        my $id = lc($channel_id).".skyepg.dvb";
+		$channels {$or_channel_id} = $id;
+
+
+        return $id;
+    }
+}
+
+#########################################################
+# tidy
+# decodes entities and removes some illegal chars
+sub tidy {
+    for (my $tmp=shift) {
+    s/[\000-\037]//gm;   # remove control characters
+    s/[\222]/\'/gm;      # messed up char
+    s/[\224]/\"/gm;      # end quote
+    s/[\205]/\.\.\./gm;  # ... must be something messed up in my regexps?
+    s/[\223]/\"/gm;      #start quote
+    s/[\221]/\'/gm;
+    s/\\\'/\'/gm;
+    #s/Ã/à/gm;#     s/Ã¨/è/g;#     s/â/\'/g;#     s/Ã¨/è/g;#     s/Ã /à/g;#     s/Ã¬/ì/g;#     s/â¦/\.\.\./g; #mah...    
+    
+
+    if (s/[\200-\237]//g) {
+        if ($opt_verbose){
+            warn ("VERBOSE: removing illegal char: |\\".ord($&)."|\n");
+         }
+    }
+
+    # Remove leading white space
+    s/^\s*//;
+    # Remove trailing white space
+    s/\s*$//;
+    return decode_entities($_);
+    }
+}
+
+
+
+sub skylife_parse_data_slow {
+    my ($desc, $programme) = @_;
+    
+	my ($cast, $country, $director, $year, $length, $subtitle, $episode, $season, $prossima, $fulldesc, $filmcat);
+	  $desc=~s/\\\'/\'/igm;
+
+	if ($desc=~/(.*?)\' Stagione - Ep.(\d+?) - (.*)/) {
+			$season = $1;
+			$episode =$2;
+		$desc = $3 if ($3 ne '');
+	}
+	elsif ($desc=~/(.*?)\' Stagione  Episodio (\d+?) - (.*)/) {
+			$season = $1;
+			$episode =$2;
+		$desc = $3 if ($3 ne '');
+	}
+	elsif ($desc=~/(.*?)\' Stagione Ep.(\d+?) -(.*)/) {
+			$season = $1;
+			$episode =$2;
+		$desc = $3 if ($3 ne '');
+	}          
+
+	if ($desc=~/(.*?) - (.*)/) {
+#fixme		$subtitle = $1 if ($1 ne '' and $1 ne $programme->{title});
+		$subtitle = $1 if ($1 ne '');
+		$desc = $2 if ($2 ne '');
+		
+		if ($subtitle=~/(.*?)\\\' Stagione/){$season = $1;}
+		   if ($subtitle=~/Ep.(\d+)/) {$episode = $1;}
+		 $subtitle='' if ($season or $episode);
+	}
+	$desc=~s/^\s+//;
+
+
+	if ($desc=~/^\'(.*?)\' (.*)/) {
+		$subtitle.= ' - ' if ($subtitle);
+#fixme		$subtitle= $1 if ($1 ne '' and $1 ne $programme->{title});
+		$subtitle= $1 if ($1 ne '');
+		$desc = $2 if ($2 ne '');
+	}
+	
+	my $strseason = '';
+		$strseason.= 'Stagione '.$season if ($season);
+		if ($episode and $season){
+			 $strseason.= ' Episodio '.$episode ;
+	}
+		elsif ($episode) {
+			 $strseason.= 'Episodio '.$episode ;
+	  }
+
+		if ($strseason ne '' and $subtitle){
+			$subtitle="$strseason - ".$subtitle ;
+		}
+		elsif ($strseason ne '') {
+			$subtitle=$strseason;
+		};
+		
+		$fulldesc = $desc;
+#		if ($cat eq 'film'){
+#		   if ($desc=~/(.*)  (Prox:.*)$/) {
+#			  $desc = $1;
+#			  $prossima = $2;
+#		}
+#		}
+
+	if ($desc=~/(.*)\. (\w+)\. \((\d+)\'\) Di (.*?). Con (.*?) \(([A-Z]+) (\d+?)\)$/) {
+		$filmcat = $2;
+		$length = $3;
+		$director = $4;
+		$cast = $5;
+		$country = $6;
+		$year = $7;
+		$desc = $1 || '';
+	 }
+	 elsif ($desc=~/Regia di (.*?), con (.*?); (.*?) (\d+?)\.(.*)/) {
+		 $director = $1;
+		 $cast = $2;
+		 $country = $3;
+		 $year = $4;
+		 my $length = $5;
+		 $desc = $6 || '';
+	 }
+	 elsif ($desc=~/Regia di (.*?), con (.*?); (.*?) (\d+?) \((\d+) min\)\. (.*)/) {
+		 $director = $1;
+		 $cast = $2;
+		 $country = $3;
+		 $year = $4;
+		 my $length = $5;
+		 $desc = $6 || '';
+	 }
+	 elsif ($desc=~/^(\d+)\. Con ([A-Z].*?)\.(.*)/) {
+		 $year = $1;
+		 $cast = $2;
+		 $desc = $3 || '';
+	   }
+	 elsif ($desc=~/^Con ([A-Z].*?)\. (.*)/) {
+		 $cast = $1;
+		 $desc = $2 || '';
+	   }
+	  
+	   #tricky one
+	 if ($desc=~/^con (.*?)\. (.*)/) {
+	   $desc = $2;
+	   $cast = $1;
+	   if ($cast=~/(.*?); (.*)/) {
+			$cast = $1;
+			$country = $2;
+		}
+	 }
+	 
+	 
+	if ($cast) {
+	   my $lastcast;
+	   ($cast, $lastcast) = split / e /, $cast;
+	   my @cast = split /,/, $cast; push @cast, $lastcast if ($lastcast);
+			 foreach (@cast) {
+				  s/^\s+//; s/\s+$//;
+				  (push @{$programme->{credits}->{actor}}, $_);
+			  }
+	}
+
+#   $content=~s/[\n|\r]+//gm;
+	undef $season if (defined $season and $season!~/\d+/);
+
+   $programme->{length}= $length*60 if ($length);
+   $programme->{date}= $year if ($year);
+   $programme->{'sub-title'}=[[$subtitle, $LANG] ] if ($subtitle);	
+   push@{$programme->{'episode-num'}}, [$strseason, 'onscreen'] if ($strseason);	
+   push@{$programme->{'episode-num'}}, [(defined $season ? ($season-1) : '').".".(defined $episode ? ($episode-1) : '').".0/1", 'xmltv_ns'] if ($strseason);
+   #push@{$programme->{category}}, [tidy($filmcat), $LANG ] if (tidy($filmcat) ne '');	
+
+   push @{$programme->{credits}->{director}}, $director if ($director);
+   push (@{$programme->{country}}, [$country, $LANG]) if ($country);
+   $programme->{desc}=[[tidy($fulldesc), $LANG ]] if ($fulldesc ne '');
+}
+
+
+
+##############################################################
+# loads huffman dictionary to decode text data, from lukkinosat
+sub load_code_table {
+  my %ct;
+
+  warn ("VERBOSE: reading huffman dictionary table.\n") if ($opt_verbose);
+  my $filename = shift;
+  my @lines = read_file($filename) ;
+
+  foreach (@lines) {
+	chop;
+	my ($t, $c) = split /=/;
+	if (exists $ct{"$c"}) {
+		die "huffman table: code $t for $c already exists!\n";
+	}
+	else {
+		$ct{"$c"} = "$t";
+	}
+   }
+  return \%ct;
+}
+
+##############################################################
+# loads byte->category table, from lukkinosat
+sub load_themes {
+  my %ct;
+
+  warn ("VERBOSE: reading category table.\n") if ($opt_verbose);
+  my $filename = shift;
+  my @lines = read_file($filename) ;
+
+  foreach (@lines) {
+	chop;
+	my ($t, $c) = split /=/;
+	$t=~/..(..)/; $t=hex($1);
+	if (exists $ct{"$t"}) {
+		die "category table: code $t for $c already exists!\n";
+	}
+	else {
+		$ct{"$t"} = "$c";
+	}
+   }
+  return \%ct;
+}
+
+##############################################################
+# huffman decoding 
+sub dehuff { 
+    my $string = shift;
+    my $decode = shift;
+
+
+	my $string2= unpack('B*', $string); #not b*!!!
+	#discard first two bits
+	$string2=~/^..(.*)$/; 
+	$string2=$1;
+
+	my $ret = ''; my $c = '';
+	for (split//, $string2){
+        $c .= $_;
+        next unless (exists $decode->{$c});
+        last if ($decode->{$c} eq '_eos');
+
+        $ret .= $decode->{$c};
+        $c = '';
+    }
+
+	return $ret;
+}
+
+##########################################################################################
+#all of the tuning stuff, diseqc, and so on is mostly a port of the according parts in szap
+sub tune {
+ my ($freq, $fec_inner, $inversion, $symbol_rate, $polarity) = @_;
+ my $ifreq;
+
+ #this comes from szap, not sure if it will ever be useful here
+ my %lnb_types=(
+		'UNIVERSAL'=>{
+			description=> "Europe\n"."10800 to 11800 MHz and 11600 to 12700 Mhz\n"."Dual LO, loband 9750, hiband 10600 MHz",
+			low_val => 9750,
+			high_val => 10600,
+			switch_val => 11700
+		},
+		'DBS'=>{ 
+			description=> "Expressvu, North America\n"."12200 to 12700 MHz\n"."Single LO, 11250 MHz",
+			low_val => 11250,
+			high_val => 0,
+			switch_val => 0
+		},
+		'STANDARD'=>{ 
+			description=> "10945 to 11450 Mhz\n"."Single LO, 10000 Mhz\n",
+			low_val => 10000,
+			high_val => 0,
+			switch_val => 0
+			},
+		'ENHANCED'=>{ 
+			description=> "Astra\n"."10700 to 11700 MHz\n"."Single LO, 9750 MHz",
+			low_val => 9750,
+			high_val => 0,
+			switch_val => 0
+			},
+		'C-BAND'=>{ 
+			description=> "Big Dish\n"."3700 to 4200 MHz\n"."Single LO, 5150 Mhz",
+			low_val => 5150,
+			high_val => 0,
+			switch_val => 0
+			}
+	);
+
+ my %lnb_type=%{$lnb_types{'UNIVERSAL'}};
+ $lnb_type{low_val} *= 1000;	# convert to kiloherz */
+ $lnb_type{high_val} *= 1000;# convert to kiloherz */
+ $lnb_type{switch_val} *= 1000;	# convert to kiloherz */
+
+ my $hiband = 0;
+ $hiband = 1 if ($lnb_type{switch_val} && $lnb_type{high_val} &&	$freq >= $lnb_type{switch_val});
+
+ my $sat_no = 0; #not sure what this is yet
+ 
+ if ($hiband) {$ifreq = $freq - $lnb_type{high_val};}
+   else {
+	   if ($freq < $lnb_type{low_val}) {
+		   $ifreq = $lnb_type{low_val} - $freq;
+	   }
+       else {$ifreq = $freq - $lnb_type{low_val};}
+ }
+
+
+ warn ("VERBOSE: starting tuning process, adapter $opt_adapter.\n") if ($opt_verbose);
+ $fe = new Linux::DVB::Frontend "/dev/dvb/adapter$opt_adapter/frontend0", 1;
+ die("errore nell'aprire frontend!!\n") if (not defined $fe);
+ $fe->blocking (1);
+
+ if ($opt_verbose > 1) {
+	 warn "VERBOSE: DVB: adapter number $opt_adapter\n";
+	 warn "VERBOSE: DVB: adapter name: ".$fe->{name}."\n";
+	 warn "VERBOSE: DVB: ber: ".$fe->read_ber." snr: ".$fe->read_snr." signal strength: ".$fe->signal_strength."\n";
+ }
+
+ if (diseqc($sat_no, $polarity, $hiband)){
+	if (do_tune($ifreq, $symbol_rate)) {
+			my $status;
+			for (0..10) {
+				$status = print_frontend_status($fe->read_status);
+				warn "status: $status \n" if ($opt_verbose > 1);
+				last if ($status=~/HAS_LOCK/);
+				sleep(1);
+			}
+			die "DVB: can't tune!\n" unless ($status=~/HAS_LOCK/);		
+	}
+	else {
+		return 0;
+	}
+ }
+
+ return 1;
+}
+
+
+sub do_tune {
+	my ($ifreq, $sr) = @_;
+
+	die("DVB: FE_SET_FRONTEND failed") unless 
+		($fe->set (
+		fec_inner   => FEC_AUTO,
+		frequency   => $ifreq,
+		inversion   => INVERSION_AUTO,
+		symbol_rate => $sr));
+
+	return 1;
+}
+
+#this whole process is explained in the linux dvb api
+sub diseqc_send_msg {
+   my ($voltage, $cmd, $tone, $mini) = @_;
+
+   die("DVB: FE_SET_TONE failed") if ($fe->diseqc_tone(0) == -1);
+   die("DVB: FE_SET_VOLTAGE failed") if ($fe->diseqc_voltage($voltage) == -1);
+   Time::HiRes::usleep (15*1000);
+
+   die("DVB: FE_DISEQC_SEND_MASTER_CMD failed") if ($fe->diseqc_cmd($cmd->{msg}) == -1);
+   Time::HiRes::usleep ($cmd->{wait}*1000) if ($cmd->{wait});
+   Time::HiRes::usleep (15*1000);
+
+   die("DVB: FE_DISEQC_SEND_BURST failed") if ($fe->diseqc_send_burst($mini) == -1);
+   Time::HiRes::usleep (15*1000);
+   die("DVB: FE_SET_TONE failed") if ($fe->diseqc_tone($tone) == -1);
+
+   return 1;
+}
+
+
+sub diseqc {
+	 my ($sat_no, $pol_vert, $hi_band) = @_;
+
+	 my $cmd;
+	 @{$cmd->{msg}} = (0xe0, 0x10, 0x38, 0xf0);
+	 $cmd->{msg_len} = 4;
+
+	 $cmd->{msg}->[3] = 0xf0 | ((($sat_no * 4) & 0x0f) | ($hi_band ? 1 : 0) | ($pol_vert ? 0 : 2));
+
+	 diseqc_send_msg($pol_vert ? 13 : 18,
+		   $cmd, $hi_band ? 1 : 0,
+		   ($sat_no / 4) % 2 ? 1 : 0);
+
+	 return 1;
+}
+# end dvb tuning stuff
+
+
+##########################################################################################
+# we pass this sub: timeout for reading data; the id of the filters we want to start
+sub pollfilters{
+	my ($timeout, $filternums) = @_;
+
+	my $MAX_FILTERS = ($MAX_ACTIVE_FILTERS > scalar @{$filternums} ? scalar @{$filternums} : $MAX_ACTIVE_FILTERS);
+
+	my $sel = new IO::Select;
+
+	warn "VERBOSE: Starting $MAX_FILTERS filters\n" if ($opt_verbose > 1);
+	for (0..($MAX_FILTERS-1)) {
+		start_filter($sel, $filternums->[$_]);
+	}
+
+	warn "VERBOSE: Starting polling\n" if ($opt_verbose > 1);
+	while (my @ready = $sel->can_read($timeout)) {
+			foreach my $fd (@ready) {
+				warn print_filters_status() if ($opt_verbose > 2);
+				my $buf="";
+				my $filter = get_filter_no($fd);
+				next if (not defined $filter);
+				sysread($fd, $buf, $read_buf_size);
+				if (parsebuf($filter, $buf)) { #parsebuf returns 1 if filters needs to be stopped
+					next unless($filters{$filter}->{finished});
+					$filters{$filter}->{demux}->stop;
+					$sel->remove($filters{$filter}->{demux}->fh);
+					$filters{$filter}->{active}=0;
+					update $bar if (not $opt_quiet);
+					my $all_done = 1;
+					my $active_filters = 0;
+					#we start another filter
+					checktime();
+					foreach my $filternum (0..(scalar @{$filternums}-1)){
+						$active_filters++ if($filters{$filternums->[$filternum]}->{active});
+						last if ($active_filters>=($MAX_FILTERS-1));
+						next if($filters{$filternums->[$filternum]}->{finished});
+						next if($filters{$filternums->[$filternum]}->{active});
+						$all_done = 0;
+						start_filter($sel, $filternums->[$filternum]);
+						checktime();
+						last;
+					}
+					last if ($all_done);
+				}
+			}
+	}
+	warn print_filters_status() if ($opt_verbose > 2);
+}
+
+sub start_filter {
+	my $flags = DMX_CHECK_CRC | DMX_IMMEDIATE_START;
+	my ($sel, $filter_num) = @_;
+
+	warn "VERBOSE: DVB: creating filter $filters{$filter_num}->{pid_mask}->[0], $filters{$filter_num}->{pid_mask}->[1]\n" if ($opt_verbose > 1);
+	$filters{$filter_num}->{demux} = new Linux::DVB::Demux  "/dev/dvb/adapter$opt_adapter/demux0";
+	die("Error creating demux filter!\n") if (not defined $filters{$filter_num}->{demux});
+	die("Error setting demux buffer!\n") unless $filters{$filter_num}->{demux}->buffer($read_buf_size);
+	die("Error setting filter\n") unless $filters{$filter_num}->{demux}->sct_filter ($filters{$filter_num}->{pid_mask}->[0],  $filters{$filter_num}->{pid_mask}->[1],  $filters{$filter_num}->{pid_mask}->[2], $TIMEOUT_FILTER, $flags);
+	$filters{$filter_num}->{demux}->start || die ("Error starting filter\n"); 
+    $sel->add($filters{$filter_num}->{demux}->fh) || die ("Error selecting demux filehandle\n");;
+
+	$filters{$filter_num}->{active}=1;
+
+	warn "VERBOSE: DVB: filter created ok\n" if ($opt_verbose > 1);
+
+	return 1;
+}
+
+###########################################################
+# dvb stream parsing subs
+# most of this is a port of lukkinosat's loadepg
+
+sub parsebuf {
+	warn "Starting parsing buffer\n" if ($opt_verbose > 2);
+	my ($filter, $buf) = @_;
+
+	my $type = substr($buf, 0, 1);
+
+	if (length $buf < 3) {
+		return;
+	}
+
+	if  ($type eq "\x4a" or $type eq "\x46" or $type eq "\x42"){# (/\x4a|\x46|\x42/){
+		 warn "Parsing data for channels skybox\n"  if ($opt_verbose > 2);
+		 return parsechannels($filter, $buf);
+	 }
+	 elsif ($type eq "\xa0" or $type eq "\xa1" or $type eq "\xa2" or $type eq "\xa3"){#(/\xa0|\xa1|\xa2|\xa3/)  {
+		 warn "Parsing data for titles skybox\n"  if ($opt_verbose > 2);
+		 return parsetitles($filter, $buf);
+		}
+	 elsif ($type eq "\xa8" or $type eq "\xa9" or $type eq "\xaa" or $type eq "\xab"){#/\xa8|\xa9|\xaa|\xab/)  { 
+		warn "Parsing data for summaries skybox\n" if ($opt_verbose > 2);
+		return parsesummaries($filter, $buf);
+		}
+	 elsif ($type eq "\x4e"){#/\x4e/)  { #now /next
+		#my $si_decoded_hashref = Linux::DVB::Decode::si $buf;
+		#print Data::Dump::dump $si_decoded_hashref;
+		#return;
+	 }
+	  elsif ($type eq "\xa5" or $type eq "\xa6" or $type eq "\xa7")  {
+		  #TODO what are this packets??
+		  return;
+
+	 }
+	else {
+		warn "Unexpected data type ".ord($type)."\n" if ($opt_verbose > 1);
+		return;
+	 }
+
+	#print $buf;
+
+	return;
+}
+
+sub parsechannels {
+	 my ($filterid, $data) = @_;
+
+	 my %types = ("\x01" => 'video channel',
+				  "\x02" => 'audio channel',
+				  "\x05" => 'other', 
+				  "\x19" => 'skyHD');
+
+	 my @bytes = split //, $data;
+
+ 	 my $section_number = ord($bytes[6]);
+	 my $last_section_number = ord($bytes[7]);
+
+	 # SDT
+	 if ($data=~/^\x42/ or $data=~/^\x46/) {
+
+		return unless ($endBAT > $maxBAT);
+		warn ("VERBOSE: DVB: Parsing SDT\n") if ($opt_verbose > 2);
+		$endSDT = 1 if (checkchannels());
+		
+		if( $endSDT ) {
+			$filters{$filterid}->{finished}=1;
+			warn (" ******************* END SDT table\n")  if ($opt_verbose > 3);
+			return 1;
+		}
+		 
+		 my $tid = ( ord($bytes[3]) << 8 ) | ord($bytes[4]);
+		 my $nid = ( ord($bytes[8]) << 8 ) | ord($bytes[9]);
+		 my $p = 11;
+		 my ($descriptor_tag, $descriptor_length, $service_name_length, $service_provider_name_length);
+
+		 warn ("tid $tid, nid $nid\n")  if ($opt_verbose > 4);
+
+		 while ($p < (length ($data)-4)) {
+			 my $descriptors_loop_length = ( ( ord($bytes[$p+3]) & 0x0f ) << 8 ) | ord($bytes[$p+4]);
+			 my $sid = ( ord($bytes[$p]) << 8 ) | ord($bytes[$p+1]);
+			 die if (not defined $sid);
+
+			 warn ("descriptors_loop_length $descriptors_loop_length, sid $sid\n")  if ($opt_verbose > 4);
+
+			 my $i = $p + 5;
+			 my $loop = 0;
+
+			 while($loop < $descriptors_loop_length ) {
+					 if ($i+$descriptors_loop_length > (length ($data)+12)) {
+						 warn "Loop length is greater than data length? (".($i+$descriptors_loop_length).")\n" if ($opt_verbose > 3);
+						 return;
+						 }
+
+					 my @bytes2 = split //, substr ($data, $i, $descriptors_loop_length);
+					 $descriptor_length = ord($bytes2[1]);
+					 #descriptor_tag
+					 if ($bytes2[0] eq "\x48") {
+						 $service_provider_name_length = ord($bytes2[3]);
+						 $service_name_length = ord($bytes2[4+$service_provider_name_length]) - 1;
+						 #warn ("service_provider_name_length $service_provider_name_length, service_name_length $service_name_length, descriptor length $descriptor_length\n") if ($opt_verbose > 3);
+						 my $name = substr ($data, $i+6+$service_provider_name_length, $service_name_length );
+						 my $provider = substr ($data, $i+5, $service_provider_name_length -1);
+
+
+						 my $channel_id = find_channel_id($sid, $tid);
+						 warn ("provider |$provider| nome |$name|\n")  if ($opt_verbose > 3);
+						 $channels_info{$channel_id}{name}=$name;
+						 $channels_info{$channel_id}{tid}=$tid;
+						 $channels_info{$channel_id}{nid}=$nid;
+						 $channels_info{$channel_id}{sid}=$sid;
+						 $channels_info{$channel_id}{provider}=$provider;
+					 }
+					 elsif ($bytes2[0] eq "\xc0" ) {
+						 #this channels have no epg available
+						 $service_name_length = $descriptor_length - 1;
+						 my $name = substr ($data, $i+3, $service_name_length );
+						 my $channel_id = find_channel_id($sid, $tid);
+						 warn ("nome |$name|\n")  if ($opt_verbose > 3);
+						 $channels_info{$channel_id}{name}=$name;
+						 $channels_info{$channel_id}{tid}=$tid;
+						 $channels_info{$channel_id}{nid}=$nid;
+						 $channels_info{$channel_id}{sid}=$sid;
+					 }
+
+
+
+
+					 $i += ( $descriptor_length + 2 );
+					 $loop += ( $descriptor_length + 2 );
+			 }
+			 $p += ( $descriptors_loop_length + 5 );
+		 }
+	 }
+	 elsif ($data=~/^\x4a/) {
+		 #bat table
+		 if( $endBAT > $maxBAT ) {
+			 #$filters{$filterid}->{finished}=1;
+			 warn "------------------------- END BAT -------------------\n"  if ($opt_verbose > 3);;
+			 return;
+		 }
+
+		 warn ("Parsing BAT TABLE\n")  if ($opt_verbose > 3);
+		 warn ("BAT section number $section_number / $last_section_number\n")  if ($opt_verbose > 3);			
+
+		 my $bouquet_id = ( ord($bytes[3]) << 8 ) | ord($bytes[4]);
+		 my $bouquet_descriptors_length = ( ( ord($bytes[8]) & 0x0f ) << 8 ) | ord($bytes[9]);
+		 my $transport_stream_loop_length = ( ( ord($bytes[$bouquet_descriptors_length+10]) & 0x0f ) << 8 ) | ord($bytes[$bouquet_descriptors_length+11]);
+		 my $p1 = ( $bouquet_descriptors_length + 12 );
+
+		 $bouquets{$bouquet_id}{last_section_number}= $last_section_number;
+ 		 $bouquets{$bouquet_id}{sections}{$section_number}++;
+
+		 my $bouquet_descriptor = substr ($data, 12, $bouquet_descriptors_length);
+  		 $bouquets{$bouquet_id}{descriptor}=$bouquet_descriptor;
+		 warn ("bouquet_id $bouquet_id, bouquet_descriptors_length $bouquet_descriptors_length, descriptor transport_stream_loop_length $transport_stream_loop_length\n") if ($opt_verbose > 3);
+
+		 while( $transport_stream_loop_length > 0 ) {
+			 my $tid = ( ord($bytes[$p1]) << 8 ) | ord($bytes[$p1+1]);
+			 my $nid = ( ord($bytes[$p1+2]) << 8 ) | ord($bytes[$p1+3]);
+
+			 my $transport_descriptors_length = ( ( ord($bytes[$p1+4]) & 0x0f ) << 8 ) | ord($bytes[$p1+5]);
+			 my $p2 = ( $p1 + 6 );
+			 $p1 += ( $transport_descriptors_length + 6 );
+			 $transport_stream_loop_length -= ( $transport_descriptors_length + 6 );
+
+			 warn("tid $tid, nid $nid, transport_descriptors_length $transport_descriptors_length, transport_stream_loop_length $transport_stream_loop_length\n") if ($opt_verbose > 3);
+
+			 while( $transport_descriptors_length > 0 ) {
+				my $descriptor_tag = $bytes[$p2];
+				my $descriptor_length = ord($bytes[$p2+1]);
+				my $p3 = ( $p2 + 2 );
+				$p2 += ( $descriptor_length + 2 );
+				$transport_descriptors_length -= ( $descriptor_length + 2 );
+
+				###################################################
+				 if ($descriptor_tag eq "\xb1" ) {
+					 $p3+=2;
+					 $descriptor_length-=2;
+
+					 while( $descriptor_length > 0 ) {
+						 if( $bytes[$p3+2] eq "\x01" or $bytes[$p3+2] eq "\x02" or $bytes[$p3+2] eq "\x05" or $bytes[$p3+2] eq "\x10") {
+							 my $sid = ( ord($bytes[$p3]) << 8 ) | ord($bytes[$p3+1]);
+							 my $channel_id = ( ord($bytes[$p3+3]) << 8 ) | ord($bytes[$p3+4]);
+							 my $sky_number = ( ord($bytes[$p3+5]) << 8 ) | ord($bytes[$p3+6]);
+							 my $type = $bytes[$p3+2];
+							 
+
+							 # if ($sky_number > 99 and $sky_number < 1000) {
+								warn ("sid $sid, tid $tid, nid $nid, channel_id $channel_id, sky_number $sky_number type ".$types{$type}."\n") if ($opt_verbose > 3);
+							    $channels_info{$channel_id}{nid}=$nid;
+								$channels_info{$channel_id}{tid}=$tid;
+								$channels_info{$channel_id}{sid}=$sid;
+								$channels_info{$channel_id}{sky_number}=$sky_number;
+								$channels_info{$channel_id}{type}=$type;
+								$channels_info{$channel_id}{type_txt}=$types{$type};
+							 #}
+
+						 }
+						 else {
+							 warn ("unknown type ".ord($bytes[$p3+2])."\n") if ($opt_verbose > 3);
+						 }
+						 $p3 += 9;
+						 $descriptor_length -= 9;
+
+					 }
+				 }
+				 else {
+					 warn ("unknown descriptor tag ".ord($descriptor_tag)."?!?!?\n")  if ($opt_verbose > 3);
+				 }
+			 }
+		
+		
+		 }
+		 #check that we received all of the bouquet sections
+		 my $ok = 1;
+		 foreach my $b (keys %bouquets) {
+			 next unless (exists $bouquets{$b}{last_section_number});
+			 for my $s(0..$bouquets{$b}{last_section_number}){
+				 $ok = 0 unless ($bouquets{$b}{sections}{$s});
+			 }
+		 }
+		 my @tmp = keys %bouquets;
+		 $endBAT+=$ok if ($#tmp> 1);
+	 }
+
+ return;		
+}
+
+sub parsetitles {
+	my ($filterid, $data) = @_;
+
+	if (length($data)<20) {
+		warn "data < 20 \n" if ($opt_verbose > 3);
+		return;
+	}
+
+	#if we see this sequence a second time it means the filters has started repeating data and we can stop it
+	my $testdata = $data;
+	if (exists $filters{$filterid}->{startdata} and defined $filters{$filterid}->{startdata}) {
+	    if ($testdata eq $filters{$filterid}->{startdata} or $sigint_stop) {
+	    	$filters{$filterid}->{finished}=1;
+			return 1;
+	    }
+	}
+	else {
+		$filters{$filterid}->{startdata}=$testdata;
+	}
+
+	my @bytes = split //, $data;
+	my $tid = ( ord($bytes[3]) << 8 ) | ord($bytes[4]);
+
+	my $channel_id = ( ord($bytes[3]) << 8 ) | ord($bytes[4]);
+	my $mjd_time = ( ord($bytes[8]) << 8 ) | ord($bytes[9]);
+
+	my ($mday,$mon,$year) = Linux::DVB::Decode::date $mjd_time;
+	$mon='0'.$mon if ($mon<10);
+	$mday='0'.$mday if ($mday<10);
+	warn "filter $filterid channel_id $channel_id mjd_time $mjd_time $mday,$mon,$year\n" if ($opt_verbose > 3);
+
+	#outside --days scope
+	return unless ($to_get{"$channel_id;$year$mon$mday"});
+	
+	if ($mjd_time>0 and $channel_id>0) {
+		my $p = 10;
+
+   	    while ($p < (length ($data)-4)) {			
+			my $event_id = ( ord($bytes[$p]) << 8 ) | ord($bytes[$p+1]);
+			my $len1 = ( (ord($bytes[$p+2]) & 0x0f) << 8 ) | ord($bytes[$p+3]);
+
+			if (($p+4)> $#bytes) {
+				return;
+			}
+			if ( ord($bytes[$p+4]) != 0xb5 ) {
+				warn ("errore gettitles, data error signature\n") if ($opt_verbose > 3);
+				return 1;
+			}
+			if ($len1 > length($data)) {
+				warn ("errore gettitles, data length\n") if ($opt_verbose > 3);
+				return 1;
+			}
+
+			$p += 4;
+			my $len2 = ord($bytes[$p+1]) -7;
+			my $start_time =  ( ( $mjd_time - 40587 ) * 86400 ) + ( ( ord($bytes[$p+2]) << 9 ) | ( ord($bytes[$p+3]) << 1 ) );
+			my $duration = ( ( ord($bytes[$p+4]) << 9 ) | ( ord($bytes[$p+5]) << 1 ) );
+			my $genre_ID = ord($bytes[$p+6]);
+			my $len_data = $len2;
+
+			my $title = substr ($data, $p+9, ($len2));
+			warn "chanid $channel_id event_id $event_id start ".xmltv_date($start_time)." duration ".printduration($duration)." title \"".dehuff($title, $code)."\" genre_ID $genre_ID(".
+				$themes->{$genre_ID}.")\n"  if ($opt_verbose > 3);
+
+			$titles{$channel_id}{$event_id}->{start}=xmltv_date($start_time);
+			$titles{$channel_id}{$event_id}->{stop}=xmltv_date($start_time+$duration);
+			$titles{$channel_id}{$event_id}->{title}=[[tidy(dehuff($title, $code)), $LANG] ];
+			#$titles{$channel_id}{$event_id}->{desc}=[["chanid $channel_id evid $event_id title ".dehuff($title, $code), $LANG] ];
+            $titles{$channel_id}{$event_id}->{category}=[[tidy($themes->{$genre_ID}), $LANG ]] if ($themes->{$genre_ID});
+
+			$p += $len1;
+		}
+	}
+ return;
+}
+
+sub parsesummaries {
+	my ($filterid, $data) = @_;
+
+	if (length($data)<20) {
+		return;
+	}
+
+	#we stop the filter if we've already seen this packet
+	my $testdata = $data;
+	if (exists $filters{$filterid}->{startdata} and defined $filters{$filterid}->{startdata}) {
+	    if ($testdata eq $filters{$filterid}->{startdata} or $sigint_stop) {
+	    	$filters{$filterid}->{finished}=1;
+			warn "filter $filterid da stoppare \n" if ($opt_verbose > 2);
+
+			return 1;
+	    }
+	}
+	else {
+		$filters{$filterid}->{startdata}=$testdata;
+	}
+
+	my @bytes = split //, $data;
+	
+	my $channel_id = ( ord($bytes[3]) << 8 ) | ord($bytes[4]);
+	my $mjd_time = ( ord($bytes[8]) << 8 ) | ord($bytes[9]);
+
+	my ($mday,$mon,$year) = Linux::DVB::Decode::date $mjd_time;
+	$mon='0'.$mon if ($mon<10);
+	$mday='0'.$mday if ($mday<10);
+	warn "filter $filterid channel_id $channel_id mjd_time $mjd_time $mday,$mon,$year\n" if ($opt_verbose > 3);
+
+	#outside --days scope
+	return unless ($to_get{"$channel_id;$year$mon$mday"});
+
+	if ($mjd_time>0 and $channel_id>0) {
+		my $p = 10;
+
+		while ($p < (length ($data)-4)) {		
+			my $event_id = ( ord($bytes[$p]) << 8 ) | ord($bytes[$p+1]);
+			my $len1 = ( (ord($bytes[$p+2]) & 0x0f) << 8 ) | ord($bytes[$p+3]);
+			if (($p+4)> $#bytes) {
+				return;
+			}
+			if ( ord($bytes[$p+4]) != 0xb9 ) {
+				warn ("errore gettitles, data error signature\n") if ($opt_verbose > 3);
+				return 1;
+			}
+			if ($len1 > length($data)) {
+				warn ("errore gettitles, data length\n") if ($opt_verbose > 3);
+				return 1;
+			}
+
+			$p += 4;
+			my $len2 = ord($bytes[$p+1]);
+			my $len_data = $len2;
+			my $title = substr ($data, $p+2, ($len2));
+			my $desc = tidy(dehuff($title, $code));
+			warn "chanid $channel_id event_id $event_id summ $desc \n"  if ($opt_verbose > 3);
+			unless ($opt_no_cache_summaries){
+				print CACHE "$year$mon$mday|$channel_id|$event_id|$desc|\n"  unless($seen_descs{"$year$mon$mday|$channel_id|$event_id"});
+				$seen_descs{"$year$mon$mday|$channel_id|$event_id"}++;
+			}
+
+			$titles{$channel_id}{$event_id}->{desc}=[[$desc, $LANG] ] if ($desc ne '');
+			my %data;
+			skylife_parse_data_slow($desc, \%data);
+			foreach (keys %data) {
+				$titles{$channel_id}{$event_id}{$_}=$data{$_} if (not defined $titles{$channel_id}{$event_id}{$_}); #we might have duplicates
+			}
+			$p += $len1;
+		}
+	}
+ return;
+}
+
+##########################################################################################
+sub print_frontend_status {
+	my $status = shift;
+	
+	my $str;
+	$str.= "FE_HAS_SIGNAL " if ($status & FE_HAS_SIGNAL);
+	$str.= "FE_HAS_CARRIER " if ($status & FE_HAS_CARRIER);
+	$str.= "FE_HAS_VITERBI " if ($status & FE_HAS_VITERBI);
+	$str.= "FE_HAS_SYNC " if ($status & FE_HAS_SYNC);
+	$str.= "FE_HAS_LOCK " if ($status & FE_HAS_LOCK);
+	$str.= "FE_TIMEDOUT " if ($status & FE_TIMEDOUT);
+	$str.= "FE_REINIT " if ($status & FE_REINIT);
+	return $str;
+}
+
+sub print_filters_status {
+	my $str;
+
+	foreach (0..((scalar keys %filters)-1)) {
+		$str.=$_;
+		$str.= ($filters{$_}->{active} ? 'A' : 'X');
+		$str.= (exists $filters{$_}->{startdata} ? 'D' : ' ');
+		$str.= (exists $filters{$_}->{finished} ? 'F' : ' ');
+		$str.= ' |';
+	}
+
+	return $str."\n";
+}
+
+sub get_filter_no {
+	my $f = shift;
+
+	warn "VERBOSE: DEMUX fh: looking for filter $f\n" if ($opt_verbose > 4);
+
+	foreach (keys %filters) {
+		if (defined $filters{$_}->{demux}) {
+			if ($f eq $filters{$_}->{demux}->fh) {
+				return $_;
+			}
+		}
+	}
+
+   warn "VERBOSE: DEMUX fh: ...not found!\n" if ($opt_verbose > 3);
+   return undef;
+}
+
+sub xmltv_date {
+	my $epoch = shift;
+
+	my ($sec,$min,$hour,$mday,$mon,$year,$wday,$yday,$isdst) = localtime($epoch);
+	my $month = $mon + 1; 
+	$month='0'.$month if ($month<10);
+	$mday='0'.$mday if ($mday<10);
+	$hour='0'.$hour if ($hour<10);
+	$min='0'.$min if ($min<10);
+	my $YYYY  = $year + 1900;
+
+    return utc_offset($YYYY.$month.$mday.$hour.$min."00", '+0100');
+
+}
+
+sub printduration {
+	my $seconds = shift;
+	my @parts = gmtime($seconds);
+	my $str = sprintf("%2dh%2dm",@parts[2,1,0]);
+
+	return $str;
+}
+
+sub checktime {
+	my $nowtime = time;
+
+	if (($nowtime - $starttime) > $maxtime) {
+		warn "timeout, closing up\n" unless ($opt_quiet);
+		$DEBUG = 0;
+		closeup();
+	}
+	else {
+		return 1;
+	}
+}
+
+sub closeup {
+    $SIG{INT} = \&closeup;           # See ``Writing A Signal Handler''
+	
+	if (not $DEBUG) {
+		warn "caught sigint, finishing xml\n" unless ($opt_quiet);
+		$sigint_stop = 1;
+		return;
+	}
+
+	use Data::Dump;
+	print "fe ############################################\n";
+	print Data::Dump::dump $fe->get;
+	print "############################################\n";
+
+	print "bouquets ############################################\n";
+	print Data::Dump::dump %bouquets;
+	print "############################################\n";
+
+	print "channels ############################################\n";
+	print Data::Dump::dump %channels;
+	print "############################################\n";
+
+	print "channels_info ############################################\n";
+	print Data::Dump::dump %channels_info;
+	print "############################################\n";
+
+	print "display_names ############################################\n";
+	print Data::Dump::dump %display_names;
+	print "############################################\n";
+
+	print "site_ids ############################################\n";
+	print Data::Dump::dump %site_ids;
+	print "############################################\n";
+
+	print "titles ############################################\n";
+	print Data::Dump::dump %titles;
+	print "############################################\n";
+
+	
+	exit;
+}
+
+sub checkchannels {
+	foreach (keys %channels_info) {
+		return 0 if (not defined $channels_info{$_}{name});
+	}
+
+	return 1;
+}
+
+sub find_channel_id {
+  my ($sid, $tid) = @_;
+
+  foreach (keys %channels_info) {
+	  return $_ if ($channels_info{$_}{sid}==$sid and $channels_info{$_}{tid}==$tid);
+  }
+
+  return "$tid$sid";
+}
