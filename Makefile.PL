@@ -403,8 +403,22 @@ my @opt_components
        to_clean => [ 'grab/it/tv_grab_it', 'grab/it/tv_grab_it.in2' ],
        deps => [ 'grab/it/tv_grab_it' => [ 'grab/it/tv_grab_it.in' ] ],
        grab_need_share => [ 'it' ],
-       prereqs => { 'XML::Simple' => 0, }
+     },
 
+     { name => 'tv_grab_it_dvb',
+       blurb => 'Grabber for Italy from DVB-S stream',
+       exes => [ 'grab/it_dvb/tv_grab_it_dvb' ],
+       pl_files => { 'grab/it_dvb/tv_grab_it_dvb.PL' => 'grab/it_dvb/tv_grab_it_dvb' },
+       share_files => { 'grab/it_dvb/channel_ids' => 'tv_grab_it_dvb/channel_ids',
+		                'grab/it_dvb/sky_it.dict' => 'tv_grab_it_dvb/sky_it.dict',
+                        'grab/it_dvb/sky_it.themes' => 'tv_grab_it_dvb/sky_it.themes',
+                   },
+       to_clean => [ 'grab/it_dvb/tv_grab_it_dvb' ],
+       deps => [ 'grab/it_dvb/tv_grab_it_dvb' => [ 'grab/it_dvb/tv_grab_it_dvb.in' ] ],
+       grab_need_share => [ 'it_dvb' ],
+       prereqs => { 'Linux::DVB' => 0, 
+                    'Time::HiRes' => 0,
+                    'IO::Select' => 0 } ,
      },
 
      { name     => 'tv_grab_na_dd',
