@@ -121,6 +121,10 @@ A programme entry with an invalid start-time was found.
 
 A programme entry with an invalid stop-time was found.
 
+=item badepisode
+
+A programme entry with an invalid episode number was found.
+
 =back
 
 If no errors are found, an empty list is returned.
@@ -222,9 +226,9 @@ sub ValidateFile {
 
 	if( $xmltv_episode =~ /\S/ ) {
 	    $w->($p, "Invalid episode-number '$xmltv_episode'", 'badepisode' )
-		if $xmltv_episode !~ /^\s*\d*(\/\s*\d+)*\s*\. 
-		                       \s*\d*(\/\s*\d+)*\s*\. 
-		                       \s*\d*(\/\s*\d+)*\s*$/x; 
+		if $xmltv_episode !~ /^\s*\d* (\s* \/ \s*\d+)? \s* \. 
+		                       \s*\d* (\s* \/ \s*\d+)? \s* \. 
+		                       \s*\d* (\s* \/ \s*\d+)? \s* $/x; 
 	}
     }
 
