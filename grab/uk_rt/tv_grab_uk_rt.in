@@ -573,10 +573,10 @@ sub load_available_channels {
     # Times and XMLTV channel IDs. These will deal sensibly with a new RT
     # channel that isn't yet mentioned in the channel_ids file.
     
-    # Provide statistics for the number of usable, unusable, timeshifted
-    # and part-time channels listed in channel_ids.
+    # Provide statistics for the number of usable, unusable, timeshifted,
+    # part-time, and part-time timeshifted channels listed in channel_ids.
     my ($num_good_channels, $num_bad_channels, 
-        $num_ts_channels, $num_pt_channels);
+        $num_ts_channels, $num_pt_channels, $num_pt_ts_channels);
 
     # Retrieve grabber's channel_ids file via XMLTV::Supplement
     my $xmltv_channel_ids = GetSupplement("$grabber_name", 'channel_ids');
@@ -616,6 +616,9 @@ sub load_available_channels {
         # channel name has changed
         my ($xmltv_id, $rt_id,          $extra_dn, 
             $icon_url, $channel_offset, $broadcast_hours) = @fields;
+
+        # Flag timeshifted and part-time channels for stats
+        my ($is_timeshift, $is_parttime);
 
         # Check for required XMLTV ID and RT ID fields, skip if missing
         if (!defined $xmltv_id  || $xmltv_id eq '') {
@@ -684,7 +687,7 @@ sub load_available_channels {
             else {
                 $channel_offset{$xmltv_id} = $channel_offset;
                 t("Channel '$xmltv_id' has timeshift of '$channel_offset'");
-                $num_ts_channels++;
+                $is_timeshift = 1;
             }
         }
         
@@ -696,7 +699,7 @@ sub load_available_channels {
             else {
                 $broadcast_hours{$xmltv_id} = $broadcast_hours;
                 t("Channel '$xmltv_id' is on air '$broadcast_hours'");
-                $num_pt_channels++;
+                $is_parttime = 1;
             }
         }
 
@@ -705,6 +708,17 @@ sub load_available_channels {
         # which map multiple XMLTV IDs to a single RT ID.
         push @{$rt_to_xmltv{$rt_id}}, $xmltv_id;
         $xmltv_to_rt{$xmltv_id} = $rt_id;
+
+        # Update the counts of part-time and timeshifted channels
+        if ($is_timeshift && $is_parttime) {
+            $num_pt_ts_channels++;
+        }
+        elsif ($is_timeshift) {
+            $num_ts_channels++;
+        }
+        elsif ($is_parttime) {
+            $num_pt_channels++;
+        }
 
         # Finally, update count of good/bad channels
         if ($extra_dn =~ /\(Do\ Not\ Use\)/) {
@@ -738,12 +752,6 @@ sub load_available_channels {
 
     my @rt_channels = split /\n/, $rt_channels_dat;
     my $num_rt_channels = scalar @rt_channels;
-
-    if (!$opt->{quiet}) {
-        say("The Radio Times reports available listings for $num_rt_channels channels.\n" 
-           . "We have flagged $num_bad_channels of these channels as unusable as they\n" 
-           . "currently contain no listings.\n");
-    }
 
     $need_final_update = 0;
     my $chans_bar;
@@ -865,8 +873,9 @@ sub load_available_channels {
         say("\nThe Radio Times has usable data available for $num_good_rt_channels channels which we\n"
             . "can use to generate TV listings for regular and some timeshifted\n"
             . "channels. The tv_grab_uk_rt software also has support for an additional\n"
-            . "$num_ts_channels timeshifted and $num_pt_channels part-time channels based on the Radio Times data.\n"
-            . "In total, the software currently supports $num_good_channels channels.\n");
+            . "$num_ts_channels timeshifted, $num_pt_channels part-time, and $num_pt_ts_channels part-time timeshifted channels\n"
+            . "based on the Radio Times data.\n\n"
+            . "In total, tv_grab_uk_rt currently supports $num_good_channels channels.\n");
     }
 
     # Report any channels listed in channel_ids not seen on the Radio Times
@@ -1338,6 +1347,14 @@ sub write_listings_data {
         # http://en.wikipedia.org/wiki/UTF-8
         # http://www.eki.ee/letter/
         #
+        #
+        # 2009-06-30
+        #
+        # The UTF-8 source data may contain the bytes [EF][BF][BD] which 
+        # are frequently found in film listings whenever an accented character is
+        # mis-encoded. There is no way to determine the intended character without using
+        # a search and replace for each individual occurence when observed.
+        #
         t("  Checking '$rt_name' listings file contents for bad characters");
         for ($page) {
             # Remove any occurences of null characters
@@ -1351,7 +1368,7 @@ sub write_listings_data {
                 t("    Removed CR+SP characters from '$rt_name' listings data");
             }
 
-            # Replace any mis-encoded UTF-8 characters in the data
+            # Replace mis-encoded UTF-8 characters in the data that we *can* handle
             t("    Looking for potentially mis-encoded UTF-8 characters...");
 
             if ( /[\xC3][\x82][\xC2][\xA0-\xAF]/g ) {
@@ -1459,14 +1476,17 @@ sub write_listings_data {
                 s/\xC3\xA2\xC2\x80\xC2\x94/\x2D/g; # <2D> -> -
             }
 
-
-            if (/[\xC2][\x80-\x9F]/) {
-                t("\n  ** Data for '$rt_name' may still contain mis-encoded UTF-8 **\n");
-            }
-
             # Remove any remaining non-printing control characters (keep \t \n and \r)
             if (s/[\x00-\x08\x0B-\x0C\x0E-\x1F\x7F-\x9F]//g) {
-                t("  Removing non-printing characters from $rt_name listings data");
+                t("    Removing non-printing characters from '$rt_name' listings data");
+            }
+            
+            # Check each line for remaining bad UTF-8 chars that we *do not* handle
+            if ( /\xC2[\x80-\x9F]/g ) {
+                t("    Data for '$rt_name' contains characters in range [C2][80-9F]\n");
+            }
+            if ( /\xEF\xBF\xBD/g ) {
+                t("    Data for '$rt_name' contains bad UTF-8 characters [EF][BF][BD]\n");
             }
         }
 
@@ -1474,7 +1494,7 @@ sub write_listings_data {
         decode_entities($page);
 
         # Convert listings data from UTF-8 to configured encoding scheme if required
-        if ($xml_encoding ne $source_encoding) {
+        if (uc $xml_encoding ne uc $source_encoding) {
             t("  Converting listings from " . $source_encoding  . " to " 
                         . $xml_encoding . "\n");
             Encode::from_to($page, $source_encoding, $xml_encoding );
@@ -1489,6 +1509,7 @@ sub write_listings_data {
 
         PROGRAMME:
         foreach my $prog (split /\n/, $page) {
+
             my @fields = split /\~/, $prog;
             if (scalar @fields != 23) {
                 if ($warned_wrong_num_fields{$ch}++) {
