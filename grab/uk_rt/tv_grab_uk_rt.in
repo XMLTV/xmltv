@@ -14,7 +14,7 @@ use File::Basename;
 use LWP::Simple qw($ua get); $ua->agent("xmltv/$XMLTV::VERSION");
 use HTTP::Cache::Transparent;
 use Getopt::Long;
-use Encode;
+use Encode qw/decode/;
 use Date::Manip; Date_Init('TZ=+0000'); # UTC required for XMLTV::DST
 use HTML::Entities;
 
@@ -50,9 +50,10 @@ my $rt_copyright
 my $rt_root_dir = '@@rt_root_dir';
 my $rt_channels_uri = "$rt_root_dir/channels.dat";
 
-# Character encodings to use - can be overwritten by config
+# The reported format of the Radio Times data
 my $source_encoding = "utf-8";
-my $xml_encoding = "iso-8859-1";
+# Default output encodings to use - can be overwritten by config
+my $xml_encoding    = "utf-8";
 
 my %tv_attributes = (
     'source-info-name'    => 'Radio Times XMLTV Service',
@@ -152,6 +153,12 @@ my %replacement_titles;   # old title is the key, replacement title the value
 # 'manufactured' titles which may include temporary 'season' information
 my %prog_titles;
 
+# Create hashes to store names/urls of channels with occurences of mis-encoded
+# UTF-8 data after our replacement routines have run
+my %hasC280chars;
+my %hasC2A0chars;
+my %hadEFBFBD;
+
 # Track problems during listings retrieval. Currently we exit(1) only if
 # listings data is missing for any requested channels
 my $warnings = 0;
@@ -185,19 +192,20 @@ if ($opt->{debug}) {
         print_titles_with_colons();
         print_titles_with_hyphens();
     }
+    print_misencoded_utf8_data();
 }
 
 # Give a useful exit status if data for some channels was not downloaded
 if ($warnings) {
     if (!$opt->{quiet}) {
-        say("Finished, but listings for some channels are missing. " .
+        say("\nFinished, but listings for some channels are missing. " .
             "Check error log.\n");
     }
     exit(1);
 }
 else {
     if (!$opt->{quiet}) {
-        say("Finished!\n");
+        say("\nFinished!\n");
     }
     exit(0);
 }
@@ -599,7 +607,7 @@ sub load_available_channels {
         # to channel_ids now we are using XMLTV::Supplement.
         if (scalar @fields < 2) {
             t("Wrong number of fields in XMLTV channel_ids entry:\n"
-                    . "\t" . '$line');
+                    . "\t" . $line);
             next XMLTV_CHANID_ENTRY;
         }
 
@@ -736,19 +744,20 @@ sub load_available_channels {
 
 
     # Read in the Radio Times channels.dat file, which is supplied in UTF-8
-    # format and is converted to ISO-8859-1. We process the list of available
-    # channels and check for presence of duplicate IDs or names.
+    # format. We process the list of available channels and check for 
+    # presence of duplicate IDs or names.
     #
-    t("Retrieving list of available channels from Radio Times");
+    # First, grab the octets
+    t("Retrieving channel list from Radio Times website");
     my $rt_channels_dat = get $rt_channels_uri;
 
     die "Error: Radio Times channels.dat data is missing, exiting\n"
         . "Please check $rt_channels_uri"
         if (!defined $rt_channels_dat || $rt_channels_dat eq '');
         
-    t("Converting list of available channels from " . $source_encoding 
-                . " to " . $xml_encoding . "\n");
-    Encode::from_to( $rt_channels_dat, $source_encoding, $xml_encoding );
+    # Next, decode the UTF-8 octets into Perl's internal format
+    t("Decoding channel list text from " . $source_encoding . " octets\n");
+    Encode::decode($source_encoding, $rt_channels_dat);
 
     my @rt_channels = split /\n/, $rt_channels_dat;
     my $num_rt_channels = scalar @rt_channels;
@@ -953,7 +962,7 @@ sub get_channels_by_postcode {
         # We need 2 fields (xmltv_id,postcodes).
         if (scalar @fields != 2) {
             t("Wrong number of fields in XMLTV regional_channels_by_postcode entry:\n"
-                    . "\t" . '$line');
+                    . "\t" . $line);
             next XMLTV_POSTCODE_ENTRY;
         }
         my ( $xmltv_id, $postcodes ) = @fields;
@@ -1021,7 +1030,7 @@ sub get_channels_by_platform {
         # We need 2 fields (xmltv_id,platform(s)).
         if (scalar @fields != 2) {
             t("Wrong number of fields in XMLTV channels_platforms entry:\n"
-                    . "\t" . '$line');
+                    . "\t" . $line);
             next XMLTV_PLATFORM_ENTRY;
         }
         my ( $xmltv_id, $platforms ) = @fields;
@@ -1148,8 +1157,8 @@ sub load_prog_titles_to_process {
             my @fields = split /\|/, $line;
             # Each entry requires 2 fields
             if (scalar @fields != 2) {
-                t("Wrong number of fields seen in prog_titles_to_process" 
-                  . " file, skipping entry '" . $line . "'");
+                t("Wrong number of fields in XMLTV prog_titles_to_process entry:\n"
+                        . "\t" . $line);
                 next PROG_TITLE_ENTRY;
             }
             # The prog_titles_to_process fields are:
@@ -1268,11 +1277,15 @@ sub write_listings_data {
             next WANTED_CH;
         }
 
-        # Read in the listings data for the channel
+        # Create the channel's URL based on ID
         my $uri = "$rt_root_dir/$rt_id.dat";
+        # Include the URL in any warn/die messages
         local $SIG{__DIE__} = sub { die "$uri: $_[0]" };
         local $SIG{__WARN__} = sub { warn "$uri: $_[0]" };
 
+        # Read in the listings data for the channel as UTF-8 octets. We will 
+        # process the raw octets before decoding them to Perl's internal
+        # format below.
         t("\nRetrieving listings for '$rt_name'");
         my $page = get $uri;
 
@@ -1307,7 +1320,8 @@ sub write_listings_data {
         # Tidy up any bad characters in the Radio Times source data. Although the
         # data is provided in UTF-8 format the text may contain mis-encoded UTF-8
         # or the NULL character which should be corrected as far as possible 
-        # before processing.
+        # before processing. We process the raw octets first before using Encode
+        # to decode the octets to Perl's internal format
         #
         # 2009-01-12
         #
@@ -1350,12 +1364,17 @@ sub write_listings_data {
         #
         # 2009-06-30
         #
-        # The UTF-8 source data may contain the bytes [EF][BF][BD] which 
+        # The UTF-8 source data may also contain the bytes [EF][BF][BD] which 
         # are frequently found in film listings whenever an accented character is
-        # mis-encoded. There is no way to determine the intended character without using
-        # a search and replace for each individual occurence when observed.
+        # mis-encoded. See code below for more detailed information.
         #
-        t("  Checking '$rt_name' listings file contents for bad characters");
+        # 2009-07-27
+        #
+        # Before we decode the read octets to Perl's internal format, we apply
+        # the following regexes to clean up any bad bytes before attempting
+        # to have Encode decode them as valid UTF-8.
+        #
+        t("  Checking '$rt_name' listings data for mis-encoded UTF-8 chars");
         for ($page) {
             # Remove any occurences of null characters
             if (s/\x00//g) {
@@ -1469,37 +1488,66 @@ sub write_listings_data {
             }
 
             if ( /[\xC3][\xA0-\xAF][\xC2][\x80-\xBF]/g ) {
-                t("      Replacing mis-encoded UTF-8 chars using 6 bytes");
+                t("      Replacing mis-encoded 6-byte UTF-8 punctuation chars");
                 s/\xC3\xA2\xC2\x80\xC2\x99/\x27/g; # <27> -> '
                 s/\xC3\xA2\xC2\x80\xC2\x9C/\x22/g; # <22> -> "
                 s/\xC3\xA2\xC2\x80\xC2\x9D/\x22/g; # <22> -> "
                 s/\xC3\xA2\xC2\x80\xC2\x94/\x2D/g; # <2D> -> -
             }
 
-            # Remove any remaining non-printing control characters (keep \t \n and \r)
-            if (s/[\x00-\x08\x0B-\x0C\x0E-\x1F\x7F-\x9F]//g) {
-                t("    Removing non-printing characters from '$rt_name' listings data");
-            }
-            
             # Check each line for remaining bad UTF-8 chars that we *do not* handle
             if ( /\xC2[\x80-\x9F]/g ) {
                 t("    Data for '$rt_name' contains characters in range [C2][80-9F]\n");
+                $hasC280chars{$rt_name} = $uri;
             }
-            if ( /\xEF\xBF\xBD/g ) {
-                t("    Data for '$rt_name' contains bad UTF-8 characters [EF][BF][BD]\n");
+
+            # Here we replace specific sequences of characters regularly seen
+            # in the source data, containing characters in range [C2][A0]-[C2][BF].
+            # Running a grep on the source files can help to reveal these sequences.
+            #
+            if ( /\xC2[\xA0-\xBF]/g ) {
+                if (s/\xC3\xA2\xC2\xC2\xA6/\xE2\x80\xA6/g) {
+                    t("      Replaced mis-encoded \"ellipsis\" character");
+                }
+                if (s/\xC3\xA9\xC2\xAF\xC2\xAE/\xC3\xA9\x6F\x6E/g) {
+                    t("      Replaced mis-encoded \"eon\" characters");
+                }
+                if (s/\xC3\xA7\xC2\xAF\xC2\xA9\x73/\xC3\xA7\x6F\x69\x73/g) {
+                    t("      Replaced mis-encoded \"cois\" characters");
+                }
+
+                # Check for remaining potentially bad UTF-8 chars that we *do not* handle
+                if ( /\xC2[\xA0-\xBF]/g ) {
+                    t("    Data for '$rt_name' contains characters in range [C2][A0-BF]\n");
+                    $hasC2A0chars{$rt_name} = $uri;
+                }
+            }
+
+            # The 0xEFBFBD bad bytes are likely due to a double UTF-8 encoding, the
+            # first of which resulted in the bytes 0xFFFD (untranslatable character)
+            # and the second of which re-encoded 0xFFFD into UTF-8 again. There is no
+            # way to detemrine which replacement character to use in this case.
+            #
+            # See http://stackoverflow.com/questions/844432/how-do-i-convert-stored-misencoded-data
+            if ( s/\xEF\xBF\xBD/\x3F/g ) {
+                t("    Data for '$rt_name' contains bad UTF-8 characters [EF][BF][BD]. " 
+                        . "Replacing with \"?\"\n");
+                $hadEFBFBD{$rt_name} = $uri;
+            }
+
+            # Finally, remove any remaining non-printing control characters (keep \t \n and \r)
+            if (s/[\x00-\x08\x0B-\x0C\x0E-\x1F\x7F-\x9F]//g) {
+                t("    Removing non-printing characters from '$rt_name' listings data");
             }
         }
 
         # Decode any HTML entities seen in the UTF-8 text to their Unicode equivalent
         decode_entities($page);
 
-        # Convert listings data from UTF-8 to configured encoding scheme if required
-        if (uc $xml_encoding ne uc $source_encoding) {
-            t("  Converting listings from " . $source_encoding  . " to " 
-                        . $xml_encoding . "\n");
-            Encode::from_to($page, $source_encoding, $xml_encoding );
-        }
-        
+        # Now decode the 'cleaned' UTF-8 octets into Perl's internal format
+        t("  Decoding channel data from " . $source_encoding . " octets\n");
+        Encode::decode($source_encoding, $page);
+
         # Start to process individual programme entries found in listings
         t("  Started writing <programme> elements for channel '$rt_name'\n");
         my $num_titles;
@@ -1513,7 +1561,7 @@ sub write_listings_data {
             my @fields = split /\~/, $prog;
             if (scalar @fields != 23) {
                 if ($warned_wrong_num_fields{$ch}++) {
-                    t("  Wrong number of fields in line:\n$prog\n");
+                    t("  Wrong number of fields in line:\n  $prog\n");
                 }
                 next PROGRAMME;
             }
@@ -2306,6 +2354,30 @@ sub print_titles_with_hyphens {
     }
 }
 
+sub print_misencoded_utf8_data {
+    if (%hasC280chars && scalar keys %hasC280chars >= 1) {
+        say("\nStart of list of channels containing bad bytes in range [C2][80-9F]");
+        foreach my $chan (sort keys %hasC280chars) {
+            say("  $chan ($hasC280chars{$chan})");
+        }
+        say("End of list of channels");
+    }
+    if (%hasC2A0chars && scalar keys %hasC2A0chars >= 1) {
+        say("\nStart of list of channels containing bad bytes in range [C2][A0-BF]");
+        foreach my $chan (sort keys %hasC2A0chars) {
+            say("  $chan ($hasC2A0chars{$chan})");
+        }
+        say("End of list of channels");
+    }
+    if (%hadEFBFBD && scalar keys %hadEFBFBD >= 1) {
+        say("\nStart of list of channels containing bad bytes [EF][BF][BD]");
+        foreach my $chan (sort keys %hadEFBFBD) {
+            say("  $chan ($hadEFBFBD{$chan})");
+        }
+        say("End of list of channels");
+    }
+}
+
 __END__
 
 =head1 NAME
@@ -2402,7 +2474,7 @@ only. L<http://www.radiotimes.com/>
 
 During configuration, the software asks the user to choose the character
 encoding for the channel and listings data output. Current supported encodings
-are UTF-8 (Unicode) and ISO-8859-1 (Latin-1).
+are Unicode (using UTF-8) and ISO-8859-1 (Latin-1).
 
 =head1 TITLE PROCESSING
 
@@ -2508,6 +2580,7 @@ it.
 =head1 AUTHOR
 
 The current maintainer is Nick Morrott (knowledgejunkie at gmail dot com). 
+
 The original author was Ed Avis (ed at membled dot com). Parts of this code
 were copied from tv_grab_se_swedb by Mattias Holmlund, and from the XMLTV
 wiki L<http://www.xmltv.org/wiki/>. Regional postcode information was kindly
