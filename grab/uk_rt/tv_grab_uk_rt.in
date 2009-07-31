@@ -14,7 +14,7 @@ use File::Basename;
 use LWP::Simple qw($ua get); $ua->agent("xmltv/$XMLTV::VERSION");
 use HTTP::Cache::Transparent;
 use Getopt::Long;
-use Encode qw/decode/;
+use Encode qw/from_to/;
 use Date::Manip; Date_Init('TZ=+0000'); # UTC required for XMLTV::DST
 use HTML::Entities;
 
@@ -50,9 +50,9 @@ my $rt_copyright
 my $rt_root_dir = '@@rt_root_dir';
 my $rt_channels_uri = "$rt_root_dir/channels.dat";
 
-# The reported format of the Radio Times data
+# The format of the Radio Times source data (set to strict UTF-8)
 my $source_encoding = "utf-8";
-# Default output encodings to use - can be overwritten by config
+# Default XML output encoding to use (set to strict UTF-8)
 my $xml_encoding    = "utf-8";
 
 my %tv_attributes = (
@@ -307,8 +307,7 @@ sub config_stage {
             id => 'encoding',
             title => [ [ 'Encoding', 'en' ] ],
             description => [
-                [ "Select which character encoding to use for channel and " .
-                'listings data.',
+                [ "Select which output format to use",
                 'en' ] ],
         } );
         $writer->write_option( {
@@ -317,7 +316,7 @@ sub config_stage {
         } );
         $writer->write_option( {
             value => 'iso-8859-1',
-            text => [ [ 'ISO 8859-1 (Latin-1)', 'en' ] ],
+            text => [ [ 'ISO-8859-1 (Latin-1)', 'en' ] ],
         } );
         $writer->end_selectone();
 
@@ -755,9 +754,9 @@ sub load_available_channels {
         . "Please check $rt_channels_uri"
         if (!defined $rt_channels_dat || $rt_channels_dat eq '');
         
-    # Next, decode the UTF-8 octets into Perl's internal format
-    t("Decoding channel list text from " . $source_encoding . " octets\n");
-    Encode::decode($source_encoding, $rt_channels_dat);
+    # In-place convert source UTF-8 into configured output format
+    t("Converting channel data to \"" . $xml_encoding . "\" for output\n");
+    from_to($rt_channels_dat, $source_encoding, $xml_encoding);
 
     my @rt_channels = split /\n/, $rt_channels_dat;
     my $num_rt_channels = scalar @rt_channels;
@@ -1118,7 +1117,7 @@ sub setup_xmltv_writer {
         $d_args{cutoff} = "000000";
     }
 
-    t("Started writing XMLTV output using " . $xml_encoding . " encoding");
+    t("Setting up XMLTV::Writer using \"" . $xml_encoding . "\" for output");
     $writer = new XMLTV::Writer(%g_args, %d_args, encoding => $xml_encoding);
 }
 
@@ -1524,9 +1523,10 @@ sub write_listings_data {
             }
 
             # The 0xEFBFBD bad bytes are likely due to a double UTF-8 encoding, the
-            # first of which resulted in the bytes 0xFFFD (untranslatable character)
+            # first of which resulted in the bytes 0xFFFD (a replacement character)
             # and the second of which re-encoded 0xFFFD into UTF-8 again. There is no
-            # way to detemrine which replacement character to use in this case.
+            # way to detemrine which replacement character to use in this case, so we
+            # substitute a '?' char
             #
             # See http://stackoverflow.com/questions/844432/how-do-i-convert-stored-misencoded-data
             if ( s/\xEF\xBF\xBD/\x3F/g ) {
@@ -1536,24 +1536,37 @@ sub write_listings_data {
             }
 
             # Finally, remove any remaining non-printing control characters (keep \t \n and \r)
-            if (s/[\x00-\x08\x0B-\x0C\x0E-\x1F\x7F-\x9F]//g) {
-                t("    Removing non-printing characters from '$rt_name' listings data");
+            # Refer to above table for Latin-1 and UTF-8 Unicode encodings for chars
+            #
+            # First, chars in UTF-8 range [00]-[1F] (Latin-1 range [00]-[1F])
+            if (s/[\x00-\x08\x0B-\x0C\x0E-\x1F]//g) {
+                t("    Removing non-printing characters (range [00]-[1F]) from '$rt_name' listings data");
+            }
+            # Next chars in range [C2][7F]-[C2][9F] (Latin-1 range [7F]-[9F])
+            if (s/[\xC2][\x7F-\x9F]//g) {
+                t("    Removing non-printing characters (range [C2][7F]-[C2][9F]) from '$rt_name' listings data");
             }
         }
 
         # Decode any HTML entities seen in the UTF-8 text to their Unicode equivalent
         decode_entities($page);
 
-        # Now decode the 'cleaned' UTF-8 octets into Perl's internal format
-        t("  Decoding channel data from " . $source_encoding . " octets\n");
-        Encode::decode($source_encoding, $page);
+        # In-place convert source UTF-8 into configured output format
+        #
+        # We need to ensure that text processing after this point does not depend
+        # on the data being in Perl's internal string format
+        #
+        t("  Converting listings data to \"" . $xml_encoding . "\" for output\n");
+        from_to($page, $source_encoding, $xml_encoding);
 
         # Start to process individual programme entries found in listings
         t("  Started writing <programme> elements for channel '$rt_name'\n");
-        my $num_titles;
 
         # list to store programme elements for writing when each channel is parsed
         my @programmes = ();
+
+        # Track number of programmes per channel
+        my $num_titles;
 
         PROGRAMME:
         foreach my $prog (split /\n/, $page) {
@@ -2416,7 +2429,7 @@ machine-readable files made available from the Radio Times website.
 
 First run B<tv_grab_uk_rt --configure> to choose which channels you want to 
 receive listings for.  Then run B<tv_grab_uk_rt> with no arguments to get
-14 days of listings for the configured channels.
+around 14 days of listings for your configured channels.
 
 =head1 OPTIONS
 
@@ -2466,15 +2479,14 @@ in XMLTV format.
 
 =head1 SOURCE DATA
 
-The source data for the grabber is obtained from, and copyrighted by, the 
-Radio Times. As such, the use of this data is restricted to personal use
-only. L<http://www.radiotimes.com/>
+All data is the copyright of the Radio Times and the use of this data is 
+restricted to personal use only. L<http://www.radiotimes.com/>
 
 =head1 CHARACTER ENCODING
 
 During configuration, the software asks the user to choose the character
-encoding for the channel and listings data output. Current supported encodings
-are Unicode (using UTF-8) and ISO-8859-1 (Latin-1).
+encoding to be used for output. Current supported encodings are UTF-8 and 
+ISO-8859-1.
 
 =head1 TITLE PROCESSING
 
