@@ -153,6 +153,10 @@ my %replacement_titles;   # old title is the key, replacement title the value
 # 'manufactured' titles which may include temporary 'season' information
 my %prog_titles;
 
+# Hash to store bad character strings and their replacments that are used when
+# processing the source data to remove mis-encoded UTF-8 characters
+my %utf8_fixups;
+
 # Create hashes to store names/urls of channels with occurences of mis-encoded
 # UTF-8 data after our replacement routines have run
 my %hasC280chars;
@@ -1227,6 +1231,71 @@ sub load_prog_titles_to_process {
     }
 }
 
+# Read in the utf8_fixups file
+sub load_utf8_fixups {
+    my $utf8_fixups = undef;
+    # Retrieve utf8_fixups via XMLTV::Supplement
+    $utf8_fixups 
+            = GetSupplement("$grabber_name", 'utf8_fixups');
+
+    if (defined $utf8_fixups) {
+        my @utf8_fixups = split /[\n\r]+/, $utf8_fixups;
+
+        t("\nLoading UTF-8 fixups\n");
+        UTF8_FIXUP_ENTRY:
+        foreach my $line (@utf8_fixups) {
+            # Comments are allowed if they are at the start of the line
+            next UTF8_FIXUP_ENTRY if ($line =~ /^#/);
+            my @fields = split /\|/, $line;
+            # Each entry requires 2 fields
+            if (scalar @fields != 2) {
+                t("Wrong number of fields in XMLTV UTF-8 fixup entry:\n"
+                        . "\t" . $line);
+                next UTF8_FIXUP_ENTRY;
+            }
+            # The utf8_fixups fields are:
+            # 1) bad utf-8 characters to find and replace (as hex)
+            # 2) the replacement characters (as hex)
+            #
+            my ($bad_chars, $replacement) = @fields;
+            if (!defined $bad_chars || $bad_chars eq '') {
+                t("Invalid UTF-8 fixup entry: " . $line . "'");
+                next UTF8_FIXUP_ENTRY;
+            }
+
+            if (!defined $replacement || $replacement eq '') {
+                t("Invalid UTF-8 fixup entry: " . $line . "'");
+                next UTF8_FIXUP_ENTRY;
+            }
+                        
+            # Remove the \x chars read from the file leaving a simple hex string
+            # containing only [0-9A-F] chars
+            $replacement =~ s/\\x//g;
+            # Now convert each byte (2 hex chars) into its character equivalent
+            $replacement =~ s/([0-9A-F][0-9A-F])/chr(hex($1))/eig;
+
+            # Process the regex to get a character string to print. We'll use
+            # the preserved hex string during processing later
+            my $bad_chars_chr = $bad_chars;
+            $bad_chars_chr =~ s/\\x//g;
+            $bad_chars_chr =~ s/([0-9A-F][0-9A-F])/chr(hex($1))/eig;
+
+            $utf8_fixups{$bad_chars} = $replacement;
+            t("UTF-8 fixup: will replace \"" . $bad_chars_chr . "\" with \"" 
+                    . $replacement . "\" if seen");
+            next UTF8_FIXUP_ENTRY;
+        }
+    }
+    else {
+        if (!$opt->{quiet}) {
+            say("No additional UTF-8 fixups were found.");
+        }
+    }
+    if (!$opt->{quiet}) {
+        say("\n");
+    }
+}
+
 # Download listings data for configured channels that are available
 sub write_listings_data {
     my ( $available_channels, $wanted_chs ) = @_;
@@ -1256,6 +1325,9 @@ sub write_listings_data {
     else {
         t("Extra title processing is disabled\n");
     }
+
+    # Load the UTF-8 fixups
+    load_utf8_fixups();
 
     # Hash to hold warnings of incorrect number of fields. The warning
     # is given once per listings file if noticed more than once
@@ -1319,8 +1391,7 @@ sub write_listings_data {
         # Tidy up any bad characters in the Radio Times source data. Although the
         # data is provided in UTF-8 format the text may contain mis-encoded UTF-8
         # or the NULL character which should be corrected as far as possible 
-        # before processing. We process the raw octets first before using Encode
-        # to decode the octets to Perl's internal format
+        # before processing.
         #
         # 2009-01-12
         #
@@ -1338,7 +1409,7 @@ sub write_listings_data {
         #  0xC0-0xFF      [C3][80]-[C3][BF]     64         2        Printing
         #
         # The badly-encoded UTF-8 characters seen in the raw Radio Times data often
-        # use 4/6 bytes to represent a single ISO-8859-1 char (where 1/2 UTF-8 bytes
+        # use 4 or 6 bytes to represent a single ISO-8859-1 char (where 1/2 UTF-8 bytes
         # would normally be required).
         #
         # A mis-encoded UTF-8 character that uses 4 bytes (but should use only 2
@@ -1497,37 +1568,20 @@ sub write_listings_data {
             # Here we replace specific sequences of characters regularly seen
             # in the source data, containing characters in range [C2][A0]-[C2][BF].
             # Running a grep on the source files can help to reveal these sequences.
+            # 
+            # We use a supplemental file to store these fixups to allow updating
+            # without needing to update the grabber itself
             #
             if ( /\xC2[\xA0-\xBF]/g ) {
-                if (s/\xC3\xA2\xC2\xC2\xA6/\xE2\x80\xA6/g) {
-                    t("      Replaced mis-encoded \"ellipsis\" character");
-                }
-                if (s/\xC3\xA9\xC2\xAF\xC2\xAE/\xC3\xA9\x6F\x6E/g) {
-                    t("      Replaced mis-encoded \"eon\" characters");
-                }
-                if (s/\xC3\xA7\xC2\xAF\xC2\xA9\x73/\xC3\xA7\x6F\x69\x73/g) {
-                    t("      Replaced mis-encoded \"cois\" characters");
-                }
-                if (s/\x4A\x65\x74\xC3\xA9\xC2\xA5\xC2\xAC/\x4A\x65\x74\xC3\xA9\x65\x2C/g) {
-                    t("      Replaced mis-encoded \"Jetee,\" characters");
-                }
-                if (s/\x64\xC3\xA9\xC2\xA3\xC2\xAF\x6C/\x64\xC3\xA9\x63\x6F\x6C/g) {
-                    t("      Replaced mis-encoded \"decol\" characters");
-                }
-                if (s/\x50\x65\xC3\xB1\xC2\xA1\xC2\xBC\xC2\x83\x61/\x50\x65\xC3\xB1\x61\x7C\x43\x61/g) {
-                    t("      Replaced mis-encoded \"Pena|Ca\" characters");
-                }
-                if (s/\x52\x65\x6E\xC3\xA9\xC2\xA0\xC2\x84\x65/\x52\x65\x6E\xC3\xA9\x20\x44\x65/g) {
-                    t("      Replaced mis-encoded \"Rene De\" characters");
-                }
-                if (s/\x63\x6C\x69\x63\x68\xC3\xA9\xC2\xA4\xC2\xA0/\x63\x6C\x69\x63\x68\xC3\xA9\x64\x20/g) {
-                    t("      Replaced mis-encoded \"cliched \" characters");
-                }
-                if (s/\x63\x6C\x69\x63\x68\xC3\xAF\xC2\xBF\xC2\xBD\x73/\x63\x6C\x69\x63\x68\xC3\xA9\x73/g) {
-                    t("      Replaced mis-encoded \"cliches\" characters");
-                }
-                if (s/\x4E\x6F\xC3\xAB\xC2\xAC\xC2\xA0/\x4E\x6F\xC3\xAB\x6C\x20/g) {
-                    t("      Replaced mis-encoded \"Noel \" characters");
+
+                if (%utf8_fixups) {
+                    foreach my $bad_chars (keys %utf8_fixups) {
+                        my $replacement = $utf8_fixups{$bad_chars};
+                        # Now search for the regex string and replace with char string
+                        if (s/$bad_chars/$replacement/g) {
+                            t("      Replaced mis-encoded chars with \"" . $replacement . "\"");
+                        }
+                    }
                 }
 
                 # Check for remaining potentially bad UTF-8 chars that we *do not* handle
@@ -1537,8 +1591,8 @@ sub write_listings_data {
                 }
             }
 
-            # The 0xEFBFBD bad bytes are likely due to a double UTF-8 encoding, the
-            # first of which resulted in the bytes 0xFFFD (a replacement character)
+            # The [EF][BF][BD] bad bytes are likely due to a double UTF-8 encoding, the
+            # first of which resulted in the bytes [FF][FD] (a replacement character)
             # and the second of which re-encoded 0xFFFD into UTF-8 again. There is no
             # way to detemrine which replacement character to use in this case, so we
             # substitute a '?' char
@@ -1578,6 +1632,11 @@ sub write_listings_data {
         #
         # We need to ensure that text processing after this point does not depend
         # on the data being in Perl's internal string format
+        #
+        #FIXME
+        #
+        # We need to ensure that versions of LWP > 5.827 which now return decoded
+        # octets when calling get() work seamlessly.
         #
         t("  Converting listings data to \"" . $xml_encoding . "\" for output\n");
         from_to($page, $source_encoding, $xml_encoding);
@@ -1908,7 +1967,7 @@ sub write_listings_data {
                         }
                     }
                 }
-                # Now we process inconsistent titiles  that have been processed
+                # Now we process inconsistent titiles that have been processed
                 # for mixed titles/subtitles
                 if (%replacement_titles) {
                     REPLACEMENT_TITLE:
