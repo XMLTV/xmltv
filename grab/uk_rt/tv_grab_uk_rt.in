@@ -9,6 +9,7 @@ use XMLTV::Supplement qw/GetSupplement SetSupplementRoot/;
 use XMLTV::Options qw/ParseOptions/;
 use XMLTV::Configure::Writer;
 use XMLTV::Ask;
+use XMLTV::Lineup;
 use File::Path;
 use File::Basename;
 use LWP::Simple qw($ua get); $ua->agent("xmltv/$XMLTV::VERSION");
@@ -23,7 +24,7 @@ use HTML::Entities;
 ###############################################
 
 # Grabber name
-my $grabber_name='@@name';
+my $grabber_name = '@@name';
 
 # Grabber version
 my $grabber_cvs_id = '$Id$';
@@ -35,6 +36,18 @@ if ( $grabber_cvs_id =~ m!\$Id: [^,]+,v (\S+) ([0-9/: -]+)! ) {
 else {
     $grabber_version = "Unknown";
 }
+
+# Lineup writer
+my $lineup_writer;
+
+#type id source-data-url generator-info-name generator-info-url
+my %xmltv_lineup_attributes = (
+    'type'                => 'DVB-T',
+    'id'                  => 'test.freeview.co.uk',
+    'source-data-url'     => 'tv_grab_uk_rt FreeView channels',
+    'generator-info-name' => "XMLTV/$XMLTV::VERSION, $grabber_name $grabber_version",
+    'generator-info-url'  => 'http://www.xmltv.org',
+);
 
 # Required to be displayed by Radio Times
 my $rt_copyright 
@@ -80,12 +93,14 @@ my ( $opt, $conf ) = ParseOptions( {
     grabber_name => "$grabber_name",
     version => "$grabber_cvs_id",
     description => "@@desc",
-    capabilities => [qw/baseline manualconfig cache preferredmethod tkconfig apiconfig/],
+    capabilities => [qw/baseline manualconfig cache preferredmethod tkconfig apiconfig lineups/],
     stage_sub => \&config_stage,
     listchannels_sub => \&list_channels,
     load_old_config_sub => \&load_old_config,
     preferredmethod => 'allatonce',
-    defaults => { days => 15, offset => 0, quiet => 0, debug => 0, },
+    defaults => { days => 15, offset => 0, quiet => 0, debug => 0 },
+    list_lineups_sub => \&list_lineups,
+    get_lineup_sub => \&get_lineup,
 } );
 
 # At this point, grabbing routines take over from ParseOptions
@@ -2473,6 +2488,82 @@ sub print_misencoded_utf8_data {
     }
 }
 
+#FIXME
+#
+# The following subs are subject to change and are currently proof of concept
+
+sub list_lineups {
+    say("test.freeview.co.uk|DVB-T|FreeView");
+    say("test.freesat.co.uk|DVB-S|Freesat");
+}
+
+sub get_lineup {
+
+    # get the lineup_id we're passed
+    # my $lineup_id = shift;
+    # say("Lineup provided was: " . $lineup_id);
+ 
+    # Configure output and write XMLTV lineup data - header, name, channels 
+    # and footer
+    #
+    #my $lineup_writer;
+    setup_xmltv_lineup_writer();
+    write_xmltv_lineup_header();
+
+    #write_lineup_name();
+    write_lineup_channels();
+
+    write_xmltv_lineup_footer();
+}
+
+# Determine options for, and create XMLTV::Lineup::Writer object
+sub setup_xmltv_lineup_writer {
+    # output options
+    my %g_args = ();
+    if (defined $opt->{output}) {
+#        t("\nOpening XML output file '$opt->{output}'\n");
+        my $fh = new IO::File ">$opt->{output}";
+        die "Error: Cannot write to '$opt->{output}', exiting" if (!$fh);
+        %g_args = (OUTPUT => $fh);
+    }
+
+    my %d_args = ();
+
+#    t("Started writing XMLTV output using " . $xml_encoding . " encoding");
+    $lineup_writer = new XMLTV::Lineup::Writer(%g_args, %d_args, encoding => $xml_encoding);
+}
+
+sub write_xmltv_lineup_header {
+
+#    t("Writing XMLTV lineup header");
+    $lineup_writer->start(\%xmltv_lineup_attributes);
+}
+
+sub write_lineup_name {
+
+    my %dn = ();
+    $lineup_writer->write_display_name(\%dn);
+}
+
+sub write_lineup_channels {
+    
+    my %ch = ( 'id' => 'bbc1.bbc.co.uk',
+               'display-name' => [ [ 'BBC One', 'en' ] ],
+               'service-id' => '1111',
+               'network-id' => '9999',
+               'provider-name' => [ 'BBC', 'en' ],
+               'service-name' => [ 'BBC ONE', 'en' ],
+               'icon' => [ { 'src' => 'http://www.bbc.co.uk/bbcone.jpg' } ],
+               'url' => "http://www.bbc.co.uk/bbcone",
+             );
+    $lineup_writer->write_channel(\%ch);
+}
+
+sub write_xmltv_lineup_footer {
+#    t("Writing XMLTV lineup footer\n");
+    $lineup_writer->end;
+}
+
 __END__
 
 =head1 NAME
@@ -2500,6 +2591,10 @@ __END__
 
 @@name --list-channels [--config-file FILE]
 @@nspc [--output FILE] [--quiet] [--debug]
+
+@@name --list-lineups
+
+@@name --lineup LINEUP_ID
 
 =head1 DESCRIPTION
 
@@ -2559,6 +2654,12 @@ to use for output, and also regional and TV platform information.
 B<--list-channels> Outputs a list of every channel available to the grabber
 in XMLTV format.
 
+B<--list-lineups> Outputs a list of every channel lineup available to the 
+grabber in XMLTV format.
+
+B<--lineup LINEUP_ID> Outputs the given channel lineup in XMLTV format for
+the given LINEUP_ID.
+
 =head1 SOURCE DATA
 
 All data is the copyright of the Radio Times and the use of this data is 
@@ -2603,6 +2704,15 @@ of these entries will filter the channel selection list (shown at the end of
 the configuration phase) to show only those channels available on the chosen 
 platform. If the user has entered a valid postcode, the channel list will 
 also only include those regional channels available in the user's locality.
+
+=head1 LINEUPS
+
+** Work in progress ** In order to allow more straightforward configuration
+of programs that make use of XMLTV data, lineups contain a list of channels
+and their names, EPG numbers and identifiers, to allow such programs to quickly
+match XMLTV channel data against channels configured in the program. The
+intention is to allow programs to be made aware of changes to a lineup and to
+allow automated configuration of XMLTV listings.
 
 =head1 ERROR HANDLING
 

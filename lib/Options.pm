@@ -73,6 +73,10 @@ my %cap_options = (
 		   preferredmethod => [qw/
 				       preferredmethod
 				       /],
+                   lineups => [qw/
+                               lineup=s
+                               list-lineups
+                               /],
 		   );
 
 my %cap_defaults = (
@@ -108,7 +112,11 @@ my %cap_defaults = (
 		    preferredmethod => {
 			preferredmethod => 0,
 		    },
-		    );
+                    lineups => {
+                        lineup => undef,
+                        'list-lineups' => 0,
+                    }
+		   );
 
 =head1 USAGE
 
@@ -122,9 +130,11 @@ The entries in the hash configure the behaviour of ParseOptions.
     grabber_name => 'tv_grab_test',
     version => '$Id$',
     description => 'Sweden (tv.swedb.se)',
-    capabilities => [qw/baseline manualconfig apiconfig/],
+    capabilities => [qw/baseline manualconfig apiconfig lineups/],
     stage_sub => \&config_stage,
     listchannels_sub => \&list_channels,
+    list_lineups_sub => \&list_lineups,
+    get_lineup_sub => \&get_lineup,
   } );
 
 ParseOptions returns two hashrefs:
@@ -165,8 +175,8 @@ the preferredmethod option has been specified in the call to ParseOptions.
 =back
 
 ParseOptions also takes care of the following options without returning,
-by calling the listchannels_sub and stage_sub callbacks supplied by
-the grabber:
+by calling the stage_sub, listchannels_sub and listlineups_sub  callbacks 
+supplied by the grabber:
 
 =over
 
@@ -174,9 +184,13 @@ the grabber:
 
 =item --configure-api
 
+=item --stage
+
 =item --list-channels
 
-=item --stage
+=item --list-lineups
+
+=item --lineup
 
 =back
 
@@ -265,6 +279,22 @@ XMLTV::Configure::LoadConfig fails to parse the configuration file. This
 allows the grabber to load configuration files created with an older
 version of the grabber.
 
+=item list_lineups_sub
+
+Optional. A coderef that takes a configuration
+hash as returned by XMLTV::Configure::LoadConfig as the first parameter
+and an option hash as returned by ParseOptions as the second parameter, 
+and returns an xml-string containing a list of all the channel lineups 
+that the grabber can deliver data for using the supplied configuration. 
+Note that the listsub shall not use any channel-configuration from the 
+hashref.
+
+=item get_lineup_sub
+
+Optional. A coderef that takes a lineup ID as a parameter and returns 
+an xml-string that describes the given lineup. The xml-string shall 
+follow the xmltv-lineup.dtd.
+
 =item preferredmethod
 
 Optional. A value to return when the grabber is called with the 
@@ -278,6 +308,8 @@ Optional. A value to return when the grabber is called with the
     stage_sub => \&config_stage,
     listchannels_sub => \&list_channels,
     preferredmethod => 'allatonce',
+    list_lineups_sub => \&list_lineups,
+    get_lineup_sub => \&get_lineup,
   } );
 
 =item defaults
@@ -462,6 +494,26 @@ sub ParseOptions
 	exit 0;
     }
 
+    if( $opt->{"list-lineups"} )
+    {
+        print &{$p->{list_lineups_sub}}($conf,$opt);
+
+        exit 0;
+    }
+
+    if( $opt->{"lineup"} )
+    {
+        if ( (not defined $opt->{lineup}) or ($opt->{lineup} eq '') )
+        {
+	    print STDERR "You need to provide a valid lineup ID.\n";
+	    exit 1;
+	}
+
+        print &{$p->{get_lineup_sub}}( $opt->{lineup} );
+
+        exit 0;
+    }
+
     if( not defined( $conf ) )
     {
 	print STDERR "You need to configure the grabber by running it with --configure";
@@ -514,6 +566,15 @@ $en [--output FILE]
 
 $gn --list-channels [--config-file FILE]
 $en [--output FILE] [--quiet] [--debug]
+/;
+    }
+
+    if( supports( "lineups", $p ) )
+    {
+        print qq/
+$gn --list-lineups
+
+$gn --lineup LINEUP_ID [--output FILE]
 /;
     }
 }

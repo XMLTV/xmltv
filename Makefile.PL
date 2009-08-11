@@ -142,13 +142,14 @@ my %pm
      'lib/IMDB.pm'                => '$(INST_LIBDIR)/XMLTV/IMDB.pm',
      'lib/Gunzip.pm'              => '$(INST_LIBDIR)/XMLTV/Gunzip.pm',
      'lib/Capabilities.pm'        => '$(INST_LIBDIR)/XMLTV/Capabilities.pm',
-     'lib/Description.pm'        => '$(INST_LIBDIR)/XMLTV/Description.pm',
+     'lib/Description.pm'         => '$(INST_LIBDIR)/XMLTV/Description.pm',
      'lib/Configure.pm'           => '$(INST_LIBDIR)/XMLTV/Configure.pm',
      'lib/Configure/Writer.pm'    => '$(INST_LIBDIR)/XMLTV/Configure/Writer.pm',
      'lib/Options.pm'             => '$(INST_LIBDIR)/XMLTV/Options.pm',
      'lib/ValidateFile.pm'        => '$(INST_LIBDIR)/XMLTV/ValidateFile.pm',
      'lib/ValidateGrabber.pm'     => '$(INST_LIBDIR)/XMLTV/ValidateGrabber.pm',
      'lib/PreferredMethod.pm'     => '$(INST_LIBDIR)/XMLTV/PreferredMethod.pm',
+     'lib/Lineup.pm'              => '$(INST_LIBDIR)/XMLTV/Lineup.pm',
      'filter/Grep.pm'             => '$(INST_LIBDIR)/XMLTV/Grep.pm',
      'grab/Memoize.pm'            => '$(INST_LIBDIR)/XMLTV/Memoize.pm',
      'grab/Grab_XML.pm'           => '$(INST_LIBDIR)/XMLTV/Grab_XML.pm',
@@ -180,7 +181,8 @@ my %pl_files = ('filter/tv_grep.PL'     => 'filter/tv_grep',
                 'tools/tv_validate_file.PL'     => 'tools/tv_validate_file',
                 'tools/tv_validate_grabber.PL'     => 'tools/tv_validate_grabber',
 		'lib/XMLTV.pm.PL'       => 'lib/XMLTV.pm',
-		'lib/Supplement.pm.PL'     => 'lib/Supplement.pm'
+		'lib/Supplement.pm.PL'     => 'lib/Supplement.pm',
+                'lib/Lineup.pm.PL'     => 'lib/Lineup.pm',
 	       );
 
 # Some tools which are generated from .PL files need the share/
@@ -200,14 +202,15 @@ my %share_files = ('xmltv.dtd' => 'xmltv.dtd');
 my @to_clean = ('filter/tv_grep',
                 'tools/tv_validate_file',
                 'tools/tv_validate_grabber',
-		'lib/XMLTV.pm', 'lib/Supplement.pm');
+		'lib/XMLTV.pm', 'lib/Supplement.pm', 'lib/Lineup.pm');
 
 # Extra dependencies to add to the Makefile.
 my @deps = ('filter/tv_grep' => [ qw(filter/tv_grep.in pm_to_blib) ],
             'tools/tv_validate_file' => [ qw(tools/tv_validate_file.in) ],
             'tools/tv_validate_grabber' => [ qw(tools/tv_validate_grabber.in) ],
 	    'lib/XMLTV.pm' => [ 'lib/XMLTV.pm.in' ],
-	    'lib/Supplement.pm' => [ 'lib/Supplement.pm.in' ],);
+	    'lib/Supplement.pm' => [ 'lib/Supplement.pm.in' ],
+            'lib/Lineup.pm' => [ 'lib/Lineup.pm.in' ]);
 
 # Some grabbers which are generated from .PL files need the share/
 # directory passed as an extra argument.
