@@ -194,7 +194,8 @@ my @need_share = ( 'tools/tv_validate_file',
                    );
 
 # Files to be installed in the system-wide share/ directory.
-my %share_files = ('xmltv.dtd' => 'xmltv.dtd');
+my %share_files = ('xmltv.dtd' => 'xmltv.dtd',
+                   'xmltv-lineup.dtd' => 'xmltv-lineup.dtd');
 
 # Files which 'make clean' should remove, but doesn't by default, so
 # we have to patch it.
@@ -1061,6 +1062,7 @@ windows_dist ::
         #
 	perl -MExtUtils::Command -e rm_rf $location/bin/ $location/lib/ $(INSTMANDIR) $(INSTALLMAN3DIR)
 	perl -MExtUtils::Command -e cp xmltv.dtd $location
+	perl -MExtUtils::Command -e cp xmltv-lineup.dtd $location
 	perl -MExtUtils::Command -e cp ChangeLog $location/ChangeLog.txt
 	# The following command will not be necessary when the source
 	# tree was checked out on a DOSish system.  It may not even

@@ -9,7 +9,7 @@ package XMLTV::Lineup;
 use strict;
 use base 'Exporter';
 our @EXPORT = ();
-our @EXPORT_OK = qw(write_data best_name list_channel_keys list_programme_keys);
+our @EXPORT_OK = qw(write_data best_name list_channel_keys);
 
 # Work around changing behaviour of XML::Twig.  On some systems (like
 # mine) it always returns UTF-8 data unless KeepEncoding is specified.
@@ -71,19 +71,24 @@ BEGIN {
 # to call.
 #
 
-our @Display_Name_Attributes = ([ 'with-lang', '?' ]);
-
 our @Channel_Attributes = ([ 'id', '1' ]);
 our @Channel_Handlers =
   (
    [ 'display-name',     'with-lang', '+' ],
+   [ 'icon',             'icon',      '*' ],
+   [ 'homepage-url',     'scalar',    '?' ],
+   [ 'old-id',           'scalar',    '*' ],
    [ 'preferred-preset', 'scalar',    '?' ],
    [ 'service-id',       'scalar',    '?' ],
-   [ 'network-id',       'scalar',    '?' ],
-   [ 'provider-name',    'with-lang', '?' ],
    [ 'service-name',     'with-lang', '?' ],
-   [ 'icon',             'icon',      '*' ],
-   [ 'url',              'scalar',    '?' ],
+   [ 'provider-name',    'with-lang', '?' ],
+   [ 'network-id',       'scalar',    '?' ],
+   [ 'freq-number',      'scalar',    '?' ],
+   [ 'freq-hertz',       'scalar',    '?' ],
+   [ 'iptv-addr',        'scalar',    '?' ],
+   [ 'multicast-addr',   'scalar',    '?' ],
+   [ 'multicast-port',   'scalar',    '?' ],
+   [ 'preset',           'scalar',    '?' ],
   );
 
 # And a hash mapping names like 'with-lang' to pairs of subs.  The
@@ -312,9 +317,6 @@ sub list_keys( $$ ) {
     return \%r;
 }
 # Public.
-#sub list_display_name_keys() {
-#    list_keys(\@Display_Name_Attributes, \@Display_Name_Handlers);
-#}
 sub list_channel_keys() {
     list_keys(\@Channel_Attributes, \@Channel_Handlers);
 }
@@ -551,39 +553,11 @@ element: B<*> (any number) will give a list of values in Perl, B<+>
 (one or more) will give a nonempty list, B<?> (maybe one) will give a
 scalar, and B<1> (exactly one) will give a scalar which is not undef.
 
-=head2 Handlers for <display-name>
-
-@DISPLAY_NAME_HANDLERS
-
 =head2 Handlers for <channel>
 
 @CHANNEL_HANDLERS
 
 =cut
-
-# Private.
-#sub node_to_display_name( $ ) {
-#    my $node = shift; die if not defined $node;
-#    my %display_name;
-#    t 'node_to_display_name() ENTRY';
-#
-#    %display_name = %{get_attrs($node)};
-#    t 'attributes: ' . d \%display_name;
-#
-##    if (not defined $channel{id}) {
-##        warn "channel missing 'id' attribute\n";
-##    }
-#    foreach (keys %display_name) {
-#	unless (/^_/ or $_ eq 'id') {
-#	    warn "deleting unknown attribute '$_'";
-#	    delete $display_name{$_};
-#	}
-#    }
-#		
-#    t '\@Display_Name_Handlers=' . d \@Display_Name_Handlers;
-#    call_handlers_read($node, \@Display_Name_Handlers, \%display_name);
-#    return \%display_name;
-#}
 
 # Private.
 sub node_to_channel( $ ) {
@@ -842,7 +816,7 @@ sub new {
 Write the start of the <xmltv-lineup> element.  Parameter is a hashref which gives
 the attributes of this element.
 
-Attributes are 'type' and 'id'
+Attributes are 'type', 'id' and 'version'
 
 =cut
 sub start {
@@ -854,7 +828,7 @@ sub start {
 	if ($_ eq 'new') {
 	    # Okay.
 	}
-	elsif ($_ eq 'displaynames' or $_ eq 'channels') {
+	elsif ($_ eq 'displaynames' or $_ eq 'lineupicon' or $_ eq 'channels') {
 	    croak 'cannot call start() more than once on XMLTV::Lineup::Writer';
 	}
 	elsif ($_ eq 'end') {
@@ -862,7 +836,7 @@ sub start {
 	}
 	else { die }
 
-	$_ = 'channels';
+	$_ = 'displaynames';
     }
     $self->startTag('xmltv-lineup', order_attrs(%{$attrs}));
 }
@@ -877,8 +851,8 @@ in the XML file.
 =cut
 sub write_display_name {
     my ($self, $dn) = @_;
-    croak 'undef display name hash passed' if not defined $dn;
-    croak "expected a hashref, got: $dn" if ref $dn ne 'HASH';
+    croak 'undef display name array passed' if not defined $dn;
+    croak "expected arrayref, got: $dn" if ref $dn ne 'ARRAY';
 
     for ($self->{xmltv_lineup_writer_state}) {
 	if ($_ eq 'new') {
@@ -887,8 +861,11 @@ sub write_display_name {
 	elsif ($_ eq 'displaynames') {
 	    # Okay.
 	}
+	elsif ($_ eq 'lineupicon') {
+	    croak 'must write display names before icon';
+	}
 	elsif ($_ eq 'channels') {
-	    croak 'cannot write display name after writing channels';
+	    croak 'must write display names before channels';
 	}
 	elsif ($_ eq 'end') {
 	    croak 'cannot do anything with end()ed XMLTV::Lineup::Writer';
@@ -896,11 +873,48 @@ sub write_display_name {
 	else { die }
     }
 
-    my %dn = %$dn; # make a copy
-    my $id = delete $dn{id};
-    die "no 'id' attribute in channel" if not defined $id;
-    write_element_with_handlers($self, 'display-name', { id => $id },
-				\@XMLTV::Lineup::Display_Name_Handlers, \%dn);
+    my @dn = @$dn; # make a copy
+
+    XMLTV::Lineup::write_with_lang($self, 'display-name', \@dn, 0, 0);
+    $self->{xmltv_lineup_writer_state} = 'lineupicon';
+}
+
+=pod
+
+=item write_lineup_icon()
+
+Write an icon for the lineup. This is written before channel elements in the XML 
+file.
+
+=cut
+sub write_lineup_icon {
+    my ($self, $icon) = @_;
+    croak 'undef icon hash passed' if not defined $icon;
+    croak "expected hash, got: $icon" if ref $icon ne 'HASH';
+
+    for ($self->{xmltv_lineup_writer_state}) {
+	if ($_ eq 'new') {
+	    croak 'must call start() on XMLTV::Lineup::Writer first';
+	}
+	elsif ($_ eq 'displaynames') {
+	    croak 'must write icon after display names';
+	}
+	elsif ($_ eq 'lineupicon') {
+	    # Okay.
+	}
+	elsif ($_ eq 'channels') {
+	    croak 'must write icon before channels';
+	}
+	elsif ($_ eq 'end') {
+	    croak 'cannot do anything with end()ed XMLTV::Lineup::Writer';
+	}
+	else { die }
+    }
+
+    my %icon = %$icon; # make a copy
+
+    XMLTV::Lineup::write_icon($self, 'lineup-icon', \%icon);
+    $self->{xmltv_lineup_writer_state} = 'channels';
 }
 
 =pod
@@ -921,6 +935,9 @@ sub write_channels {
     for ($self->{xmltv_lineup_writer_state}) {
 	if ($_ eq 'new') {
 	    croak 'must call start() on XMLTV::Lineup::Writer first';
+	}
+	elsif ($_ eq 'displayname') {
+	    croak 'must write display names before channels';
 	}
 	elsif ($_ eq 'channels') {
 	    # Okay.
@@ -958,7 +975,10 @@ sub write_channel {
 	if ($_ eq 'new') {
 	    croak 'must call start() on XMLTV::Lineup::Writer first';
 	}
-	elsif ($_ eq 'channels') {
+        elsif ($_ eq 'displaynames') {
+	    croak 'must write display names before channels';
+	}
+        elsif ($_ eq 'channels') {
 	    # Okay.
 	}
 	elsif ($_ eq 'end') {
@@ -1014,9 +1034,9 @@ sub end {
 sub order_attrs {
     die "expected even number of elements, from a hash"
       if @_ % 2;
-    my @a = ((map { $_->[0] } (@XMLTV::Lineup::Display_Name_Attributes,
-			       @XMLTV::Lineup::Channel_Attributes)),
-	     qw(type id source-data-url generator-info-name generator-info-url));
+    my @a = ((map { $_->[0] } (@XMLTV::Lineup::Channel_Attributes)),
+	     qw(type id version source-info-url source-info-name 
+                source-data-url generator-info-name generator-info-url));
 
     my @r;
     my %in = @_;
