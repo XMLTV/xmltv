@@ -382,6 +382,7 @@ my @opt_components
      },
 
 # 2008-11-09 disabled after ident string was blocked
+# 200
 #     { name => 'tv_grab_be',
 #       blurb => 'Grabber for Belgium and Luxemburg',
 #       exes => [ 'grab/be/tv_grab_be' ],
@@ -486,13 +487,12 @@ my @opt_components
        blurb => 'Alternative grabber for Spain using miguiatv.com',
        exes => [ 'grab/es_miguiatv/tv_grab_es_miguiatv' ],
        prereqs => { 'HTML::TreeBuilder' => 0 } },#
-# 10/23/2007 - removed due to active agent-string blocking
-#
-#     { name => 'tv_grab_nl',
-#       blurb => 'Grabber for the Netherlands',
-#       exes => [ 'grab/nl/tv_grab_nl' ],
-#       prereqs => { 'HTML::TreeBuilder' => 0 },
-#     },
+
+     { name => 'tv_grab_nl',
+       blurb => 'Grabber for the Netherlands',
+       exes => [ 'grab/nl/tv_grab_nl' ],
+       prereqs => { 'HTML::TreeBuilder' => 0 },
+     },
 
 # 2008-07-12 - removed by rmeden, not getting programs for a while. 
 #
