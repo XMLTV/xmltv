@@ -178,10 +178,16 @@ my %utf8_fixups;
 my %hasC27FBFchars;
 my %hadEFBFBD;
 
-# Create hashes to stores uncategories programmes and available categories
+# Create hashes to store uncategories programmes and available categories
 # to potentially use for such programmes
 my %uncategorised_progs;
 my %categories;
+
+# Create hashes to store episode details that may still contain series, episode
+# or part numbering, after processing to handle these has been carried out
+my %possible_series_nums;
+my %possible_episode_nums;
+my %possible_part_nums;
 
 # Track problems during listings retrieval. Currently we exit(1) only if
 # listings data is missing for any requested channels
@@ -218,6 +224,7 @@ if ($opt->{debug}) {
     }
     print_categories();
     print_uncategorised_progs();
+    print_possible_prog_numbering();
     print_misencoded_utf8_data();
 }
 
@@ -253,27 +260,36 @@ sub word_to_digit {
 
     my $word = shift;
     return undef if !defined $word;
-    for ($word) { 
-        if    (/one/i)       { return 1 }
-        elsif (/two/i)       { return 2 }
-        elsif (/three/i)     { return 3 }
-        elsif (/four/i)      { return 4 }
-        elsif (/five/i)      { return 5 }
-        elsif (/six/i)       { return 6 }
-        elsif (/seven/i)     { return 7 }
-        elsif (/eight/i)     { return 8 }
-        elsif (/nine/i)      { return 9 }
-        elsif (/ten/i)       { return 10 }
-        elsif (/eleven/i)    { return 11 }
-        elsif (/twelve/i)    { return 12 }
-        elsif (/thirteen/i)  { return 13 }
-        elsif (/fourteen/i)  { return 14 }
-        elsif (/fifteen/i)   { return 15 }
-        elsif (/sixteen/i)   { return 16 }
-        elsif (/seventeen/i) { return 17 }
-        elsif (/eighteen/i)  { return 18 }
-        elsif (/nineteen/i)  { return 19 }
-        elsif (/twenty/i)    { return 20 }
+    for (lc $word) { 
+        if    (/^one$/)       { return 1 }
+        elsif (/^two$/)       { return 2 }
+        elsif (/^three$/)     { return 3 }
+        elsif (/^four$/)      { return 4 }
+        elsif (/^five$/)      { return 5 }
+        elsif (/^six$/)       { return 6 }
+        elsif (/^seven$/)     { return 7 }
+        elsif (/^eight$/)     { return 8 }
+        elsif (/^nine$/)      { return 9 }
+        elsif (/^ten$/)       { return 10 }
+        elsif (/^eleven$/)    { return 11 }
+        elsif (/^twelve$/)    { return 12 }
+        elsif (/^thirteen$/)  { return 13 }
+        elsif (/^fourteen$/)  { return 14 }
+        elsif (/^fifteen$/)   { return 15 }
+        elsif (/^sixteen$/)   { return 16 }
+        elsif (/^seventeen$/) { return 17 }
+        elsif (/^eighteen$/)  { return 18 }
+        elsif (/^nineteen$/)  { return 19 }
+        elsif (/^twenty$/)    { return 20 }
+        # handle 1-8 in roman numberals
+        elsif (/^i$/)         { return 1 }
+        elsif (/^ii$/)        { return 2 }
+        elsif (/^iii$/)       { return 3 }
+        elsif (/^iv$/)        { return 4 }
+        elsif (/^v$/)         { return 5 }
+        elsif (/^vi$/)        { return 6 }
+        elsif (/^vii$/)       { return 7 }
+        elsif (/^viii$/)      { return 8 }
         # return undef if input unhandled
         else                 { return undef }
     }
@@ -1928,7 +1944,7 @@ sub write_listings_data {
                         m{
                           ^                    # start at beginning of episode details
                           \s*                  # ignore any whitespace
-                          (?:Part|Pt)          # check for Part/Pt text
+                          (?:Part|Pt(?:\.)?)   # check for Part/Pt text
                           \s*                  # ignore any whitespace
                           (\d+)                # CAPTURE part number
                           \s*                  # ignore any whitespace
@@ -1948,7 +1964,7 @@ sub write_listings_data {
                           (?:,|;|:|-)?         # check for optional punctuation characters
                           \s*                  # ignore any whitespace
                           (?:\()               # opening paren
-                          (?:Part|Pt)          # check for Part/Pt text
+                          (?:Part|Pt(?:\.)?)   # check for Part/Pt text
                           \s*                  # ignore any whitespace
                           (\d+)                # CAPTURE part number
                           \s*                  # ignore any whitespace
@@ -1970,7 +1986,7 @@ sub write_listings_data {
                           \s*                  # ignore any whitespace
                           (?:,|;|:|-)          # punctuation characters
                           \s*                  # ignore any whitespace
-                          (?:Part|Pt)          # check for Part/Pt text
+                          (?:Part|Pt(?:\.)?)   # check for Part/Pt text
                           \s*                  # ignore any whitespace
                           (\d+)                # CAPTURE part number
                           \s*                  # ignore any whitespace
@@ -1988,7 +2004,7 @@ sub write_listings_data {
                           ^                    # start at beginning of episode details
                           (.*\b)               # CAPTURE the episode details before part numbering
                           \s*                  # ignore any whitespace
-                          (?:Part|Pt)          # check for Part/Pt text
+                          (?:Part|Pt(?:\.)?)   # check for Part/Pt text
                           \s*                  # ignore any whitespace
                           (\d+)                # CAPTURE part number
                           \s*                  # ignore any whitespace
@@ -2000,23 +2016,51 @@ sub write_listings_data {
                                 $part_num = $2 - 1;
                                 $processed = 1;
                     }
+                    # this regex looks for bare part numbering after a comma, semicolon, 
+                    # colon or hyphen, where the numbering is given in words
+                    elsif ($episode =~
+                        m{
+                          ^                    # start at beginning of episode details
+                          (.*\b)               # CAPTURE the episode details before part numbering
+                          \s*                  # ignore any whitespace
+                          (?:,|;|:|-)          # punctuation characters
+                          \s*                  # ignore any whitespace
+                          (?:Part|Pt(?:\.)?)   # check for Part/Pt text
+                          \s+                  # ignore any whitespace
+                          (\w+)                # CAPTURE part number wording
+                          \s*                  # ignore any whitespace
+                          $                    # finish at end of episode details
+                         }ix )
+                    {
+                                my $part_digits = word_to_digit($2);
+                                if ( defined $part_digits and $part_digits > 0 ) {
+                                    t("    Part number found: part $part_digits (regex #5, parsed as $2)");
+                                    $episode = $1 . " (Part " . $part_digits . ")";
+                                    $part_num = $part_digits - 1;
+                                    $processed = 1;
+                                }
+                    }
                     # check for potential part numbering left unprocessed
                     #
                     # we do this at the end of the if-else because the (Part x) text is
                     # not (yet) removed from the episode details, only made consistent
-                    elsif ($episode =~ /(Part|Pt)\s*\d+/i) {
+                    elsif ($episode =~ /(Part|Pt(?:\.)?)\s+(\d+|\w+)/i) {
                         t("    Possible part numbering still seen: $episode");
+                        $possible_part_nums{$episode} = $episode;
                     }
                 }
 
                 # after processing see if $episode contains "series" text
                 if ($episode =~ /series/i) {
                     t("    Possible series numbering still seen:  $episode");
+                    $possible_series_nums{$episode} = $episode;
                 }
                 
                 # check for potential episode numbering left unprocessed
-                if ($episode =~ /\d+/ && $episode !~ /(Part|Pt)\s*\d+/) {
+                if ( ($episode =~ /^\d+/ || $episode =~ /\d+$/) 
+                        && $episode !~ /(Part|Pt(?:\.)?)\s+(\d+|\w+)/) {
                     t("    Possible episode numbering still seen: $episode");
+                    $possible_episode_nums{$episode} = $episode;
                 }
 
                 # Set $episode to undefined if empty/whitespace
@@ -2681,6 +2725,30 @@ sub print_categories {
             say("  $category");
         }
         say("End of list of programme categories seen");
+    }
+}
+
+sub print_possible_prog_numbering {
+    if (%possible_series_nums && scalar keys %possible_series_nums > 0) {
+        say("\nStart of list of possible series numbering seen in listings");
+        foreach my $poss (sort keys %possible_series_nums) {
+            say("  $poss");
+        }
+        say("End of list of possible series numbering seen in listings");
+    }
+    if (%possible_episode_nums && scalar keys %possible_episode_nums > 0) {
+        say("\nStart of list of possible episode numbering seen in listings");
+        foreach my $poss (sort keys %possible_episode_nums) {
+            say("  $poss");
+        }
+        say("End of list of possible episode numbering seen in listings");
+    }
+    if (%possible_part_nums && scalar keys %possible_part_nums > 0) {
+        say("\nStart of list of possible part numbering seen in listings");
+        foreach my $poss (sort keys %possible_part_nums) {
+            say("  $poss");
+        }
+        say("End of list of possible part numbering seen in listings");
     }
 }
 
