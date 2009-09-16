@@ -26,6 +26,9 @@ print '-nologo
 -bind=libxml2.dll[file=\perl\bin\libxml2.dll,extract]
 -trim="Apache::Const;Apache::RequestIO;DIME::Payload;MIME::Entity;Apache::RequestRec;DIME::Message;I18N::Langinfo"
 -trim="Apache2::RequestUtil;APR::Table;Apache2::Const;Apache2::RequestRec;Apache2::RequestIO"
+-trim=DateTime::Format
+-trim=DateTime::Locale
+-trim=grab/eu_epgdata/tv_grab_eu_epgdata
 -info CompanyName="XMLTV Project http://www.xmltv.org"
 -info FileDescription="EXE bundle of XMLTV tools to manage TV Listings"
 -info InternalName=xmltv.exe
