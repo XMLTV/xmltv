@@ -3,7 +3,7 @@
 use warnings;
 use strict;
 use XMLTV::ProgressBar;
-use XMLTV::Memoize; XMLTV::Memoize::check_argv('get');
+use XMLTV::Memoize; XMLTV::Memoize::check_argv('get_octets');
 use XMLTV::DST;
 use XMLTV::Supplement qw/GetSupplement SetSupplementRoot/;
 use XMLTV::Options qw/ParseOptions/;
@@ -12,10 +12,10 @@ use XMLTV::Ask;
 use XMLTV::Lineup;
 use File::Path;
 use File::Basename;
-use LWP::Simple qw($ua get); $ua->agent("xmltv/$XMLTV::VERSION");
+use LWP::UserAgent;
 use HTTP::Cache::Transparent;
 use Getopt::Long;
-use Encode qw/from_to decode encode/;
+use Encode qw/decode encode/;
 use Date::Manip; Date_Init('TZ=+0000'); # UTC required for XMLTV::DST
 use HTML::Entities;
 
@@ -36,6 +36,10 @@ if ( $grabber_cvs_id =~ m!\$Id: [^,]+,v (\S+) ([0-9/: -]+)! ) {
 else {
     $grabber_version = "Unknown";
 }
+
+# Set up LWP::UserAgent
+my $ua = LWP::UserAgent->new;
+$ua->agent("xmltv/$XMLTV::VERSION");
 
 # Lineup writer
 my $lineup_writer;
@@ -196,8 +200,10 @@ my $warnings = 0;
 
 # Output XMLTV library and grabber versions
 if (!$opt->{quiet}) {
+    say("Program/library version information:\n");
     say("XMLTV library version: $XMLTV::VERSION");
-    say("$grabber_name version: $grabber_version\n");
+    say("$grabber_name version: $grabber_version");
+    say("  libwww-perl version: $LWP::VERSION\n");
 }
 
 # Retrieve list of all channels currently available
@@ -254,6 +260,11 @@ sub t {
     if ($opt->{debug}) {
         print STDERR $message . "\n";
     }
+}
+
+# Method for use with XMLTV::Memoize)
+sub get_octets( $ ) {
+    return $ua->get(shift)->content;
 }
 
 # Return the digit equivalent of its word, i.e. "one" -> "1"
@@ -820,17 +831,23 @@ sub load_available_channels {
     # format. We process the list of available channels and check for 
     # presence of duplicate IDs or names.
     #
-    # First, grab the octets
+    # Grab the octets
     t("Retrieving channel list from Radio Times website");
-    my $rt_channels_dat = get $rt_channels_uri;
+    my $rt_channels_dat = get_octets( $rt_channels_uri );
 
     die "Error: Radio Times channels.dat data is missing, exiting\n"
         . "Please check $rt_channels_uri"
         if (!defined $rt_channels_dat || $rt_channels_dat eq '');
         
-    # In-place convert source UTF-8 into configured output format
-    t("Converting channel data to \"" . $xml_encoding . "\" for output\n");
-    from_to($rt_channels_dat, $source_encoding, $xml_encoding);
+    # Decode source UTF-8 octets, process for HTML entities, and encode 
+    # into configured output encoding
+    my $decoded_rt_channels_dat;
+    t("\nDecoding channel data from $source_encoding octets into Perl's internal format");
+    $decoded_rt_channels_dat = decode($source_encoding, $rt_channels_dat);
+    t("Processing for HTML entities seen in the channel data");
+    decode_entities($decoded_rt_channels_dat);
+    t("Encoding channel data from Perl's internal format into $xml_encoding octets\n");
+    $rt_channels_dat = encode($xml_encoding, $decoded_rt_channels_dat);
 
     my @rt_channels = split /\n/, $rt_channels_dat;
     my $num_rt_channels = scalar @rt_channels;
@@ -1426,16 +1443,16 @@ sub write_listings_data {
         }
 
         # Create the channel's URL based on ID
-        my $uri = "$rt_root_dir/$rt_id.dat";
+        my $rt_listings_uri = "$rt_root_dir/$rt_id.dat";
         # Include the URL in any warn/die messages
-        local $SIG{__DIE__} = sub { die "$uri: $_[0]" };
-        local $SIG{__WARN__} = sub { warn "$uri: $_[0]" };
+        local $SIG{__DIE__} = sub { die "$rt_listings_uri: $_[0]" };
+        local $SIG{__WARN__} = sub { warn "$rt_listings_uri: $_[0]" };
 
         # Read in the listings data for the channel as UTF-8 octets. We will 
         # process the raw octets before decoding them to Perl's internal
         # format below.
         t("\nRetrieving listings for '$rt_name'");
-        my $page = get $uri;
+        my $page = get_octets( $rt_listings_uri );
 
         if (!defined $page || $page eq '') {
             if (!$opt->{quiet}) {
@@ -1686,7 +1703,7 @@ sub write_listings_data {
                     }
                     else {
                         t("    After fixups, data for '$rt_name' still contains characters in range [C2][7F-BF]\n");
-                        $hasC27FBFchars{$rt_name} = $uri;
+                        $hasC27FBFchars{$rt_name} = $rt_listings_uri;
                     }
                 }
 
@@ -1700,7 +1717,7 @@ sub write_listings_data {
                 if ( $page =~ s/\xEF\xBF\xBD/\x3F/g ) {
                     t("    After fixups, data for '$rt_name' still contains bad UTF-8 characters [EF][BF][BD]. " 
                             . "Replaced with \"?\"\n");
-                    $hadEFBFBD{$rt_name} = $uri;
+                    $hadEFBFBD{$rt_name} = $rt_listings_uri;
                 }
             }
 
@@ -1719,25 +1736,17 @@ sub write_listings_data {
             }
         }
 
-        # Convert source data (UTF-8) into configured output format
-        #
-        # First we decode the source octets into a Perl string, then apply
-        # decode_entities to remove any extraneous HTML entities, then encode the
-        # string back into octets in the desired character set
-        #
-        # We need to ensure that text processing after this point does not depend
-        # on the data being in Perl's internal string format
-        #
-        #FIXME?
-        #
-        # We need to ensure that versions of LWP > 5.827 which now return decoded
-        # octets when calling get() work seamlessly.
-        #
-        my $string = decode($source_encoding, $page);
-        t("  Processing HTML entities seen in the source data");
-        decode_entities($string);
-        t("  Converting data to \"" . $xml_encoding . "\" for output\n");
-        $page = encode($xml_encoding, $string);
+        # Decode source UTF-8 octets, process for HTML entities, and encode 
+        # into configured output encoding
+        my $decoded_page;
+        t("\nDecoding listings data from $source_encoding octets into Perl's internal format");
+        $decoded_page = decode($source_encoding, $page);
+        t("Processing for HTML entities seen in the listings data");
+        decode_entities($decoded_page);
+        t("Encoding listings data from Perl's internal format into $xml_encoding octets\n");
+        $page = encode($xml_encoding, $decoded_page);
+
+        ##### From this point, $data is in octets #####
 
         # Start to process individual programme entries found in listings
         t("  Started writing <programme> elements for channel '$rt_name'\n");
