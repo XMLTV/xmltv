@@ -464,11 +464,10 @@ my @opt_components
 
 # 2008-07-12 rmeden - site "down for maintanence" for over a month.. goodbye
 #
-#     { name => 'tv_grab_il',
-#       blurb => 'Grabber for Israel',
-#       exes => [ 'grab/il/tv_grab_il' ],
-#       prereqs => { 'HTML::TreeBuilder' => 0, 
-#                    'Text::Bidi' => 0 } },
+     { name => 'tv_grab_il',
+       blurb => 'Grabber for Israel',
+       exes => [ 'grab/il/tv_grab_il' ],
+       prereqs => {'Text::Iconv' => 0 } },
 #
 #
 # tv_grab_es_digital no longer functioning due to site changes
