@@ -167,6 +167,7 @@ my $have_title_data = 0;
 my (@non_title_info,       @mixed_title_subtitle, 
     @mixed_subtitle_title, @reversed_title_subtitle) = ();
 my %replacement_titles;   # key = old title, value = replacement title
+my %replacement_episodes; # key = title, value = hash (where key = old ep, value = new ep)
 my %replacement_cats;     # key = title, value = category
 
 # Create global hash to store the programme titles for all programmes on all
@@ -1309,6 +1310,13 @@ sub load_prog_titles_to_process {
                     . "' to category '" . $cat . "'");
                 next PROG_TITLE_ENTRY;
             }
+            elsif ($code eq '7') {
+                my( $ep_title, $old_ep, $new_ep ) = split( /~/, $process_text, 3);
+                $replacement_episodes{$ep_title}->{$old_ep} = $new_ep;
+                t("Will check for inconsistent episode data '" . $old_ep 
+                    . "' for title '" . $ep_title . "'");
+                next PROG_TITLE_ENTRY;
+            }
             else {
                 t("Unknown code seen in prog_titles_to_process file," 
                   . " skipping entry '" . $line . "'");
@@ -1953,6 +1961,192 @@ sub write_listings_data {
                 }
             }
 
+            # Title and episode processing. We process titles if the user has 
+            # not explicitly disabled title processing during configuration
+            # and we have supplement data to process programmes against.
+            #
+            # We run a series of search and replace routines to clean up 
+            # the title/episode information. Leaving non-title information in 
+            # the title, or having inconsistent title/episode formatting  will 
+            # result in PVR applications being unable to consistently match 
+            # programme titles and episode information.
+            #
+            #
+            # First, remove any non-title information found in the title. This 
+            # information is placed at the start of the 'real' title, separated 
+            # by a colon (to date, this has always been the case in the RT
+            # listings).
+            #
+            if ($have_title_data && @non_title_info && $title =~ /:/) {
+
+                NON_TITLE_TEXT:
+                foreach my $non_title_info (@non_title_info) {
+                    if ($title =~ s/^($non_title_info)\s*:\s*//) {
+                        t("  Removed '" . $non_title_info 
+                          . "' from title. New title '" . $title . "'");
+                        last NON_TITLE_TEXT;
+                    }
+                }
+            }
+
+            # If the title still contains a colon or hyphen, there is a chance it may
+            # contain merged title and episode data, which we now process.
+            if ($have_title_data && $title =~ /:|-/) {
+
+                # Some programme titles contain both the title and episode,
+                # separated by a colon ($title:$episode) or a hyphen 
+                # ($title - $episode). Here we reassign the episode to the 
+                # $episode element, leaving only the programme's title in the 
+                # $title element
+                #
+                if (@mixed_title_subtitle) {
+
+                    MIXED_TITLE_SUBTITLE:
+                    foreach my $mixed_title_subtitle (@mixed_title_subtitle) {
+                        if ($title =~ /^($mixed_title_subtitle)\s*(?::|-)\s*(.*)/) {
+                            if (!defined $episode) {
+                                t("  Moved '" . $2 . "' to sub-title,"
+                                  . " new title is '" . $1 . "'");
+                                $title = $1;
+                                $episode = $2;
+                                last MIXED_TITLE_SUBTITLE;
+                            }
+                            elsif ($episode eq $2) {
+                                t("  Sub-title '" . $episode . "' seen in "
+                                  . "title already exists, new title is '"
+                                  . $1 . "'");
+                                $title = $1;
+                                last MIXED_TITLE_SUBTITLE;
+                            }
+                            else {
+                                t("  Concatenating sub-title '" . $2 
+                                  . "' seen in title with existing episode info '" 
+                                  . $episode . "'");
+                                $title = $1;
+                                $episode = $2 . ": " . $episode;
+                                last MIXED_TITLE_SUBTITLE;
+                            }
+                        }
+                    }
+                }
+
+                # Some programme titles contain both the episode and title,
+                # separated by a colon ($episode:$title) or a hyphen
+                # ($episode - $title). Here we reassign the episode to the 
+                # $episode element, leaving only the programme's title in the 
+                # $title element.
+                #
+                if (@mixed_subtitle_title) {
+
+                    MIXED_SUBTITLE_TITLE:
+                    foreach my $mixed_subtitle_title (@mixed_subtitle_title) {
+                        if ($title =~ /^(.*)\s*(?::|-)\s*($mixed_subtitle_title)/) {
+                            if (!defined $episode) {
+                                t("  Moved '" . $1 . "' to sub-title, " 
+                                  . "new title is '" . $2 . "'");
+                                $title = $2;
+                                $episode = $1;
+                                last MIXED_SUBTITLE_TITLE;
+                            }
+                            elsif ($episode eq $1) {
+                                t("  Identical sub-title '" . $episode 
+                                  . "' also seen in title, new title is '" 
+                                  . $2 . "'");
+                                $title = $2;
+                                last MIXED_SUBTITLE_TITLE;
+                            }
+                            else {
+                                t("  Concatenating sub-title '" . $1 
+                                  . "' seen in title with existing episode info '" 
+                                  . $episode . "'");
+                                $title = $2;
+                                $episode = $1 . ": " . $episode;
+                                last MIXED_SUBTITLE_TITLE;
+                            }
+                        }
+                    }
+                }
+            }
+
+            # Listings for some channels may include programme details which have
+            # reversed title and sub-title information ($title = episode and 
+            # $episode = title). In order to create more consistent data, we check 
+            # for flagged programme titles and reverse the given title and 
+            # sub-title
+            #
+            if ($have_title_data && @reversed_title_subtitle && defined $episode) {
+
+                REVERSED_TITLE_SUBTITLE:
+                foreach my $reversed_title_subtitle (@reversed_title_subtitle) {
+                    if ($reversed_title_subtitle eq $episode) {
+                        t("  Seen reversed title-subtitle for '" 
+                          . $title . ":" . $episode . "' - reversing" );
+                        $episode = $title;
+                        $title = $reversed_title_subtitle;
+                        t("  New title is '" . $title . "' and new " 
+                          . "sub-title is '" . $episode . "'");
+                        last REVERSED_TITLE_SUBTITLE;
+                    }
+                }
+            }
+
+            # After processing title and episode information, using S&R based
+            # on the original listings data, we can now process inconsistent 
+            # title and episode data content.
+            #
+            # First, replace inconsistent titles
+            #
+            if ($have_title_data && %replacement_titles) {
+                REPLACEMENT_TITLE:
+                foreach my $bad_title (keys %replacement_titles) {
+                    if ($title eq $bad_title) {
+                        $title = $replacement_titles{$bad_title};
+                        t("  Replaced title '" . $bad_title . "' with '"
+                          . $title . "' for consistency");
+                        last REPLACEMENT_TITLE;
+                    }
+                }
+            }
+            #
+            # Second, replace inconsistent episodes. The 
+            # %replacement_episodes data structure is a hash of hashes.
+            #
+            if ($have_title_data && %replacement_episodes) {
+                REPLACEMENT_EPISODE:
+                foreach my $bad_episode_title (keys %replacement_episodes) {
+                    # First, check whether we have matched the programme title
+                    if ($title eq $bad_episode_title) {
+                        # Now look for a specific episode match for the title
+                        foreach my $bad_episode (keys %{$replacement_episodes{$bad_episode_title}}) {
+                            if ($episode eq $bad_episode) {
+                                $episode = $replacement_episodes{$bad_episode_title}->{$bad_episode};
+                                t("  Replaced episode info '" . $bad_episode . "' for title '" 
+                                  . $bad_episode_title . "' with '" . $episode . "' for consistency");
+                                last REPLACEMENT_EPISODE;
+                            }
+                        }
+                    }
+                }
+            }
+            
+            # After processing the data for inconsistent title and episode data
+            # we now process titles that may not be categorised ($genre).
+            # Untitled programmes and film are ignored.
+            #
+            if ($have_title_data && %replacement_cats && $genre =~ /(No Genre|TBA|^\s*$)/ 
+                                  && $title !~ /To Be Announced/ && !$film) {
+                my $oldgenre = $genre;
+                REPLACEMENT_CAT:
+                foreach my $uncat_title (keys %replacement_cats) {
+                    if ($title eq $uncat_title) {
+                        $genre = $replacement_cats{$uncat_title};
+                        t("  Assigned title '" . $title . "' to new "
+                          . "category '" . $genre . "' (old category '" . $oldgenre . "')");
+                        last REPLACEMENT_CAT;
+                    }
+                }
+            }
+
             # Extract any series/episode numbers from $episode information.
             # At this point, $episode may contain episode title and number
             # information. Make sure this is carried out before we process 
@@ -2287,182 +2481,6 @@ sub write_listings_data {
                 if ($processed && defined $episode) {
                     $episode =~ s/\s+/ /g;  # tidy whitespace
                     t("  Post-processing episode details '$episode'");
-                }
-            }
-
-            # Title and sub-title processing. This procesing can be disabled during
-            # configuration.
-            #
-            # If the programme's title is found to contain a colon, we run a series
-            # of search and replacement routines to clean up the title and sub-title
-            # information. Leaving non-title information in the title or having
-            # inconsistent title/sub-title formats will result in PVR applications 
-            # being unable to consistently match programme titles.
-            #
-            # We process titles if the user has not explicitly disabled processing
-            # and we have some available data to process against
-            
-            # Remove any non-title information found in the title. This information
-            # is placed at the start of the 'real' title, separated by a colon.
-            #
-            if ($have_title_data && @non_title_info && $title =~ /:/) {
-
-                NON_TITLE_TEXT:
-                foreach my $non_title_info (@non_title_info) {
-                    if ($title =~ s/^($non_title_info)\s*:\s*//) {
-                        t("  Removed '" . $non_title_info 
-                          . "' from title. New title '" . $title . "'");
-                        last NON_TITLE_TEXT;
-                    }
-                }
-            }
-
-            # Some programme titles are inconsistent, across channels or over 
-            # time. Here we search for such flagged titles and replace them
-            # with a more consistent title if found. First we process titles
-            # that will not be processed for mixed titles/episodes. Those that
-            # will be processed are handled later
-            #
-            if ($have_title_data && %replacement_titles && $title !~ /:/) {
-
-                REPLACEMENT_TITLE:
-                foreach my $bad_title (keys %replacement_titles) {
-                    if ($title eq $bad_title) {
-                        $title = $replacement_titles{$bad_title};
-                        t("  Replaced title '" . $bad_title . "' with '"
-                          . $title . "' for consistency");
-                        last REPLACEMENT_TITLE;
-                    }
-                }
-            }
-            if ($have_title_data && $title =~ /:|-/) {
-                # Remove any non-title information found in the title. This information
-                # is placed at the start of the 'real' title, separated by a colon.
-                #
-                if (@non_title_info) {
-
-                    NON_TITLE_TEXT:
-                    foreach my $non_title_info (@non_title_info) {
-                        if ($title =~ s/^($non_title_info)\s*:\s*//) {
-                            t("  Removed '" . $non_title_info 
-                              . "' from title. New title '" . $title . "'");
-                            last NON_TITLE_TEXT;
-                        }
-                    }
-                }
-                # Some programme titles contain both the title and sub-title,
-                # separated by a colon ($title:$episode). Here we reassign the 
-                # sub-title to the $episode element, leaving only the programme's 
-                # title in the $title element
-                #
-                if (@mixed_title_subtitle) {
-
-                    MIXED_TITLE_SUBTITLE:
-                    foreach my $mixed_title_subtitle (@mixed_title_subtitle) {
-                        if ($title =~ /^($mixed_title_subtitle)\s*(?::|-)\s*(.*)/) {
-                            if (!defined $episode) {
-                                t("  Moved '" . $2 . "' to sub-title,"
-                                  . " new title is '" . $1 . "'");
-                                $title = $1;
-                                $episode = $2;
-                                last MIXED_TITLE_SUBTITLE;
-                            }
-                            elsif ($episode eq $2) {
-                                t("  Sub-title '" . $episode . "' seen in "
-                                  . "title already exists, new title is '"
-                                  . $1 . "'");
-                                $title = $1;
-                                last MIXED_TITLE_SUBTITLE;
-                            }
-                            else {
-                                t("  Cannot move sub-title '" . $2 
-                                  . "' seen in title as episode '" 
-                                  . $episode . "' also given");
-                                last MIXED_TITLE_SUBTITLE;
-                            }
-                        }
-                    }
-                }
-                # Some programme titles contain both the sub-title and title,
-                # separated by a colon ($episode:$title). Here we reassign the
-                # sub-title to the $episode element, leaving only the programme's
-                # title in the $title element.
-                #
-                if (@mixed_subtitle_title) {
-
-                    MIXED_SUBTITLE_TITLE:
-                    foreach my $mixed_subtitle_title (@mixed_subtitle_title) {
-                        if ($title =~ /^(.*)\s*(?::|-)\s*($mixed_subtitle_title)/) {
-                            if (!defined $episode) {
-                                t("  Moved '" . $1 . "' to sub-title, " 
-                                  . "new title is '" . $2 . "'");
-                                $title = $2;
-                                $episode = $1;
-                                last MIXED_SUBTITLE_TITLE;
-                            }
-                            elsif ($episode eq $1) {
-                                t("  Identical sub-title '" . $episode 
-                                  . "' also seen in title, new title is '" 
-                                  . $2 . "'");
-                                $title = $2;
-                                last MIXED_SUBTITLE_TITLE;
-                            }
-                            else {
-                                t("  Cannot move sub-title '" . $1 
-                                  . "' seen in title as episode '" . $episode
-                                  . "' also given");
-                                last MIXED_SUBTITLE_TITLE;
-                            }
-                        }
-                    }
-                }
-                # Now we process inconsistent titles that have been processed
-                # for mixed titles/subtitles
-                if (%replacement_titles) {
-                    REPLACEMENT_TITLE:
-                    foreach my $bad_title (keys %replacement_titles) {
-                        if ($title eq $bad_title) {
-                            $title = $replacement_titles{$bad_title};
-                            t("  Replaced title '" . $bad_title . "' with '"
-                              . $title . "' for consistency");
-                            last REPLACEMENT_TITLE;
-                        }
-                    }
-                }
-            }
-            # Listings for some channels may include programme details which have
-            # reversed title and sub-title information ($title = episode and 
-            # $episode = title). In order to create more consistent data, we check 
-            # for flagged programme titles and reverse the given title and 
-            # sub-title
-            if (@reversed_title_subtitle && defined $episode) {
-
-                REVERSED_TITLE_SUBTITLE:
-                foreach my $reversed_title_subtitle (@reversed_title_subtitle) {
-                    if ($reversed_title_subtitle eq $episode) {
-                        t("  Seen reversed title-subtitle for '" 
-                          . $title . ":" . $episode . "' - reversing" );
-                        $episode = $title;
-                        $title = $reversed_title_subtitle;
-                        t("  New title is '" . $title . "' and new " 
-                          . "sub-title is '" . $episode . "'");
-                        last REVERSED_TITLE_SUBTITLE;
-                    }
-                }
-            }
-
-            # Process titles that may not be categorised correctly, or at all
-            if ($have_title_data && %replacement_cats && $genre =~ /(No Genre|TBA|^\s*$)/ 
-                                 && $title !~ /To Be Announced/ && !$film) {
-                my $oldgenre = $genre;
-                REPLACEMENT_CAT:
-                foreach my $uncat_title (keys %replacement_cats) {
-                    if ($title eq $uncat_title) {
-                        $genre = $replacement_cats{$uncat_title};
-                        t("  Assigned title '" . $title . "' to new "
-                          . "category '" . $genre . "' (old category '" . $oldgenre . "')");
-                        last REPLACEMENT_CAT;
-                    }
                 }
             }
 
