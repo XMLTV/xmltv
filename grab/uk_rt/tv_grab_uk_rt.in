@@ -175,6 +175,9 @@ my %replacement_cats;     # key = title, value = category
 # 'manufactured' titles which may include temporary 'seasonal' information
 my %prog_titles;
 
+# Array to store any overlapping programmes that are detected
+my @overlapping_progs;
+
 # Hash to store bad character strings and their replacments that are used when
 # processing the source data to remove mis-encoded UTF-8 characters
 my %utf8_fixups;
@@ -235,6 +238,7 @@ if ($opt->{debug}) {
     print_uncategorised_progs();
     print_possible_prog_numbering();
     print_misencoded_utf8_data();
+    print_overlapping_progs();
 }
 
 # Give a useful exit status if data for some channels was not downloaded
@@ -1841,6 +1845,11 @@ sub write_listings_data {
         # Track number of programmes per channel
         my $num_titles;
 
+        # Keep a reference to the previous programme that was processed. Set it
+        # to undef initially as programmes are processed in transmission order.
+        # We update it whenever a programme is successfully processed below.
+        my $previous_programme = undef;
+
         PROGRAMME:
         foreach my $prog (split /\n/, $page) {
 
@@ -2723,28 +2732,29 @@ sub write_listings_data {
 
             # Broadcast date, start/stop times, and timezone adjustments.
             #
-            # The RT data includes the date at start of broadcast, the start time,
-            # and the stop time of the programme.
+            # For each programme entry, the Radio Times data includes the 
+            # date at start of broadcast, the start time and the stop time.
             #
             # The Radio Times sometimes explicitly flags a programme's start/stop
             # times as being in a specific timezone (GMT or BST). We parse this
             # information out when processing the programme's title and apply it
             # to the start time of any such programmes ($explicit_tz). Flagged
-            # programmes are usually seen in the date in March and October, when
+            # programmes are usually seen in the data in March and October, when
             # British Summer Times begins and ends.
             #
             # For the majority of programmes where the timezone is not flagged 
-            # explicity, we determine the TZ/offset of the programme's start time
+            # explicitly, we determine the UTC offset of the programme's start time
             # via XMLTV::DST::utc_offset().
             #
-            # For all programmes we then calculate the programme's stop time 
-            # using the programme's TZ-corrected start time and stated length.
-            # This allows us to handle occasions when programmes having mixed 
-            # GMT/BST timings are not flagged.
+            # We then calculate the programme's stop time using the 
+            # UTC-offset-corrected start time and its stated length. This allows 
+            # us to handle occasions when programmes having mixed GMT/BST 
+            # timings are not flagged.
             #
-            # During the GMT->BST transition, any unflagged programme starting before 
-            # 0100 +0000 generally has both start/stop times given in GMT (+0000) 
-            # in the RT  data (although this is not always the case).
+            # On the day of the  GMT->BST transition, any unflagged programme 
+            # starting before 0100 +0000 generally has both start/stop times 
+            # given in GMT (+0000) in the RT data (although this is not always 
+            # the case).
             #
             # utc_offset() will only provide the correct stop time if we ensure 
             # dates have the correct UTC offset applied. DateCalc will always use
@@ -2920,10 +2930,49 @@ sub write_listings_data {
                 next PROGRAMME;
             }
 
-            t("");
+            # Check that this programme's start time is not earlier than the
+            # previous programme's stop time. This is seen very infrequently
+            # in the data, and might be due to last minute schedule changes
+            # where the overlapping timings have not been noticed/corrected.
+            #
+            # If an overlap is detected, move the start time of the second 
+            # programme to be the same as the stop time for the first programme. 
+            # This has been chosen to try to ensure that the first programme 
+            # does not lose its ending, which is almost always more important 
+            # than the start of a programme.
+            #
+            # FIXME
+            # However, examination of a recent occurence of an overlap showed 
+            # that the start time of the second programme was correct, and that
+            # the end time and duration of the previous programme was incorrect
+            # so this behaviour may need to be reversed/altered if start times
+            # are found to be consistently correct
+            if ( defined $previous_programme && Date_Cmp($p{start}, $$previous_programme{stop}) < 0 ) {
+                # determine overlap
+                my $delta = DateCalc( ParseDate( $p{start} ),
+                                      ParseDate( $$previous_programme{stop} ) );
+                # get the overlap in minutes
+                my $overlap = Delta_Format($delta, 1, "%mv");
+                t("  Scheduling overlap detected (" . $overlap . " mins) with " 
+                        . "previous programme '" . $$previous_programme{title}->[0]->[0] . "'");
+                # Record the overlap for debug output
+                push @overlapping_progs, 
+                        $p{start} . " (" . $rt_name . "): Start of '" . $p{title}->[0]->[0] 
+                        . "' overlaps end of '" . $$previous_programme{title}->[0]->[0] 
+                        . "' by " . $overlap . " minutes";
+                $p{start} = $$previous_programme{stop};
+                t("  Adjusting start time of '" . $p{title}->[0]->[0] . "' to remove overlap");
+                t("  $p{start} - Start time after overlap adjustment");
+                t("  $p{stop} - Stop time after overlap adjustment");
+            }
+
             # Finally, write the programme's XML data to programme list
             push @programmes, \%p;
+            # Update reference to previous programme
+            $previous_programme = \%p;
+            
             $num_titles++;
+            t("");
         }
 
         # Write the channel's programme elements to output
@@ -3046,6 +3095,16 @@ sub print_possible_prog_numbering {
             say("  $poss");
         }
         say("End of list of possible part numbering seen in listings");
+    }
+}
+
+sub print_overlapping_progs {
+    if (@overlapping_progs) {
+        say("\nStart of list of overlapping programmes seen in listings");
+        foreach my $overlap (@overlapping_progs) {
+            say("  " . $overlap);
+        }
+        say("End of list of overlapping programmes seen in listings");
     }
 }
 
