@@ -1,5 +1,8 @@
 #!/usr/bin/perl -w
 
+eval 'exec /usr/bin/perl -w -S $0 ${1+"$@"}'
+    if 0; # not running under some shell
+
 =pod
 
 =head1 NAME
@@ -102,37 +105,19 @@ L<xmltv(5)>.
 
 use strict;
 use XMLTV::Options qw/ParseOptions/;
+use XMLTV::ProgressBar;
 use XMLTV::Configure::Writer;
 use XMLTV::Get_nice qw(get_nice_tree);
-use POSIX qw(strftime);
+
 use Text::Iconv;
-
-# Check if a cache engine is available and use it
-my $usecache;
-{
-  eval { require HTTP::Cache::Transparent };
-  if ($@) {
-    $usecache = 0;
-  } else {
-    $usecache = 1;
-  }
-}
-
-if ($usecache) {
-  if (-d "/tmp/tv_grab_il" || mkdir '/tmp/tv_grab_il') {
-    HTTP::Cache::Transparent::init({
-      BasePath => '/tmp/tv_grab_il',
-      NoUpdate => 15*60,
-    });
-  }
-}
+use POSIX qw(strftime);
 
 # Use XMLTV::Options::ParseOptions to parse the options and take care of the basic capabilities that a tv_grabber should
-my ($opt, $conf) = ParseOptions({ 
+our ($opt, $conf) = ParseOptions({ 
   grabber_name => "tv_grab_il",
   capabilities => [qw/baseline manualconfig apiconfig/],
   stage_sub => \&config_stage,
-  listchannels_sub => \&list_channels,
+  listchannels_sub => \&fetch_channels,
   version => '$Id$',
   description => "Israel (tv.walla.co.il)"
 });
@@ -149,16 +134,17 @@ sub config_stage {
   return $result;
 }
 
-sub list_channels {
+sub fetch_channels {
   my ($opt, $conf) = @_;
 
-  return &fetch_channels();
-}
-
-sub fetch_channels {
   my $result;
   my $converter = Text::Iconv->new('WINDOWS-1255', 'UTF-8');
   my $channels = {};
+
+  my $bar = new XMLTV::ProgressBar({
+    name => "Fetching channels",
+    count => 1
+  }) unless ($opt->{quiet} || $opt->{debug});
 
   # Get the page containing the list of channels 
   my $tree = XMLTV::Get_nice::get_nice_tree('http://tv.walla.co.il/?w=/4');
@@ -167,12 +153,19 @@ sub fetch_channels {
     sub { !$_[0]->look_down('_tag', 'img') }
   );
 
+  $bar->update() && $bar->finish && undef $bar if defined $bar;
+
+  $bar = new XMLTV::ProgressBar({
+    name => "Parsing result",
+    count => scalar @channels
+  }) unless ($opt->{quiet} || $opt->{debug});
+
   # Browse through the downloaded list of channels and map them to a hash XMLTV::Writer would understand
   foreach my $channel (@channels) {
     if ($channel->as_text()) {
       my ($id) = $channel->attr('href') =~ /\?w=\/[0-9]\/\/([0-9]*)\/\/[0-9-]*\/1/;
 
-      # Try and retrieve the icon
+      # Try to fetch the icon
       my $icon = $channel->parent();
       $icon = $icon->right if $icon;
       $icon = $icon->look_down('_tag', 'a', 'href', qr/\?w=\/[0-9]\/\/[0-9]*\/\/[0-9-]*\/1/) if $icon;
@@ -186,13 +179,25 @@ sub fetch_channels {
         icon => [ {src => ($icon || '')} ]
       };
     }
+
+    $bar->update() if defined $bar;
   }
+
+  $bar->finish() && undef $bar if defined $bar;
+
+  # Notifying the user :)
+  $bar = new XMLTV::ProgressBar({
+    name => "Reformatting",
+    count => 1
+  }) unless ($opt->{quiet} || $opt->{debug});
 
   # Let XMLTV::Writer format the results as a valid xmltv file
   my $writer = new XMLTV::Writer(OUTPUT => \$result, encoding => 'utf-8');
   $writer->start({'generator-info-name' => 'tv_grab_il'});
   $writer->write_channels($channels);
   $writer->end();
+
+  $bar->update() && $bar->finish() if defined $bar;
 
   return $result;
 }
@@ -201,14 +206,20 @@ sub fetch_channels {
 my $timezones = {IST => '+0200', IDT => '+0300'};
 
 # Fetch the channels again to see what's available
-my $data = XMLTV::parse(&fetch_channels());
+my $data = XMLTV::parse(&fetch_channels($opt, $conf));
 my ($encoding, $credits, $channels, $programmes) = @{$data};
 
-# Create a converter according to $conf
+# Create a converter so that data would export in UTF-8
 my $converter = Text::Iconv->new('WINDOWS-1255', 'UTF-8');
 
-# Create a new hash for the channels so that it would validate
+# Create a new hash for the channels so that channels without programmes won't appear in the final XML
 my $w_channels = {};
+
+# Progress Bar :)
+my $bar = new XMLTV::ProgressBar({
+  name => "Fetching channels listings",
+  count => (scalar @{$conf->{channel}}) * $opt->{days}
+}) unless ($opt->{quiet} || $opt->{debug});
 
 # Fetch listings per channel
 foreach my $channel_id (@{$conf->{channel}}) {
@@ -254,9 +265,13 @@ foreach my $channel_id (@{$conf->{channel}}) {
         }
       } else {
       }
+
+      $bar->update if defined $bar;
     }
   }
 }
+
+$bar->finish() && undef $bar if defined $bar;
 
 my %w_args;
 
@@ -277,5 +292,3 @@ $data->[2] = $w_channels;
 $data->[3] = $programmes;
 
 XMLTV::write_data($data, %w_args);
-
- 	  	 
