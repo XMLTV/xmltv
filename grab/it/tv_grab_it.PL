@@ -160,7 +160,7 @@ L<xmltv(5)>.
 
 Davide Chiarini, davide.chiarini\@gmail.com
 
-you can find some more help at http://lnx.htpcpoint.it/forum/
+you can find some more help at http://www.htpcpoint.it/forum/
 
 =cut
 END
@@ -298,7 +298,7 @@ L<xmltv(5)>.
 
 Davide Chiarini, davide.chiarini\@gmail.com
 
-puoi anche trovare varie informazioni nel forum http://lnx.htpcpoint.it/forum/
+puoi anche trovare varie informazioni nel forum http://www.htpcpoint.it/forum/
 
 =cut
 END
