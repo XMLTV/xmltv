@@ -508,8 +508,7 @@ sub ParseOptions
 	    print STDERR "You need to provide a valid lineup ID.\n";
 	    exit 1;
 	}
-
-        print &{$p->{get_lineup_sub}}( $opt->{lineup} );
+        print &{$p->{get_lineup_sub}}($opt);
 
         exit 0;
     }
