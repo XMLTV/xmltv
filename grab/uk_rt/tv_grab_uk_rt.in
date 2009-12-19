@@ -173,7 +173,9 @@ my (@non_title_info,       @mixed_title_subtitle,
 my %replacement_titles;   # key = old title, value = replacement title
 my %replacement_episodes; # key = title, value = hash (where key = old ep, value = new ep)
 my %replacement_cats;     # key = title, value = category
-
+my %replacement_title_eps;# key = 'old_title . old_ep', value = (new_title, new_ep)
+my %flagged_title_eps;    # key = old_title from title fixup routine 8
+                
 # Create global hash to store the programme titles for all programmes on all
 # channels, as we will process this last after grabbing to determine any
 # 'manufactured' titles which may include temporary 'seasonal' information
@@ -251,6 +253,7 @@ if ($opt->{debug}) {
     print_misencoded_utf8_data();
     print_overlapping_progs();
     print_empty_listings();
+    print_flagged_title_eps();
 }
 
 # Give a useful exit status if data for some channels was not downloaded
@@ -1318,49 +1321,73 @@ sub load_prog_titles_to_process {
             # processing codes are documented in prog_titles_to_process file
             if ($code eq '1')  {
                 push @non_title_info, $process_text;
-                t("Will remove '" . $process_text . "' from title " 
+                t("[1] Will remove '" . $process_text . "' from title " 
                   . "if found");
                 $have_title_data = 1;
             }
             elsif ($code eq '2') {
                 push @mixed_title_subtitle, $process_text;
-                t("Will check for subtitle after title for '" 
+                t("[2] Will check for subtitle after title for '" 
                   . $process_text . "'");
                 $have_title_data = 1;
                 next PROG_TITLE_ENTRY;
             }
             elsif ($code eq '3') {
                 push @mixed_subtitle_title, $process_text;
-                t("Will check for subtitle before title for '" 
+                t("[3] Will check for subtitle before title for '" 
                   . $process_text . "'");
                 $have_title_data = 1;
                 next PROG_TITLE_ENTRY;
             }
             elsif ($code eq '4') {
                 push @reversed_title_subtitle, $process_text;
-                t("Will check for reversed title/subtitle for '" 
+                t("[4] Will check for reversed title/subtitle for '" 
                   . $process_text . "'");
                 next PROG_TITLE_ENTRY;
             }
             elsif ($code eq '5') {
                 my( $old_title, $new_title ) = split( /~/, $process_text, 2);
                 $replacement_titles{$old_title} = $new_title;
-                t("Will check for inconsistent title '" 
+                t("[5] Will check for inconsistent title '" 
                   . $old_title . "'");
                 next PROG_TITLE_ENTRY;
             }
             elsif ($code eq '6') {
                 my( $uncat_title, $cat ) = split( /~/, $process_text, 2);
                 $replacement_cats{$uncat_title} = $cat;
-                t("Will assign title '" . $uncat_title 
+                t("[6] Will assign title '" . $uncat_title 
                     . "' to category '" . $cat . "'");
                 next PROG_TITLE_ENTRY;
             }
             elsif ($code eq '7') {
                 my( $ep_title, $old_ep, $new_ep ) = split( /~/, $process_text, 3);
                 $replacement_episodes{$ep_title}->{$old_ep} = $new_ep;
-                t("Will check for inconsistent episode data '" . $old_ep 
+                t("[7] Will check for inconsistent episode data '" . $old_ep 
                     . "' for title '" . $ep_title . "'");
+                next PROG_TITLE_ENTRY;
+            }
+            elsif ($code eq '8') {
+                my @fields = split( /~/, $process_text, 4);
+                if (scalar @fields != 4) {
+                    t("[8] Invalid number of fields (need 4) in processing text: '" . $process_text . "'");
+                    next PROG_TITLE_ENTRY;
+                }
+                foreach my $field (@fields) {
+                    $field = "" if !defined $field;
+                }
+                my( $old_title, $old_ep, $new_title, $new_ep ) = @fields;
+                if ($old_title eq '' or $new_title eq '') {
+                    t("[8] Ignoring fixup '" . $process_text . "' as old/new title not given");
+                    next PROG_TITLE_ENTRY;
+                }
+                # remember old title so that we can output a debug list of
+                # programmes that may also need to be handled via this fixup
+                $flagged_title_eps{$old_title} = $old_title;
+                
+                my $key = ("" . $old_title . "|" . $old_ep);
+                $replacement_title_eps{$key} = [$new_title, $new_ep];
+                t("[8] Will update old title/subtitle '" . $old_title . ": " . $old_ep 
+                    . "' to '" . $new_title . ": " . $new_ep . "'");
                 next PROG_TITLE_ENTRY;
             }
             else {
@@ -2227,7 +2254,40 @@ sub write_listings_data {
                     }
                 }
             }
-            
+            #
+            # Allow arbitrary replacement of one title/episode pair with another.
+            # To be used where previous title/episode replacement routines
+            # do not allow the desired correction (i.e. one-off changes).
+            # THIS MUST BE USED WITH CARE!
+            #
+            if ($have_title_data && %replacement_title_eps) {
+                # Handle potential undef episode value, as the empty string
+                # was used in place of an undef episode during concatenation
+                # in the replacement hash
+                my $tmp_ep;
+                (!defined $episode) ? ($tmp_ep = '') : ($tmp_ep = $episode);
+                my $key = "" . $title . "|" . $tmp_ep;
+                REPLACEMENT_TITLE_EPISODE:
+                foreach my $bad_title_episode (keys %replacement_title_eps) {
+                    # Check whether we have matched the old programme
+                    # title/episode combo
+                    if ( $key eq $bad_title_episode) {
+                        # Now replace the old title/ep values with new ones
+                        my ($old_title, $old_ep) = ($title, $tmp_ep);
+                        my ($new_title, $new_ep) = @{$replacement_title_eps{$key}};
+                        # update the title
+                        $title = $new_title;
+                        # if new episode value is empty string, replace with undef;
+                        # otherwise use new value
+                        ($new_ep eq '') ? ($episode = undef) : ($episode = $new_ep);
+                        t("  Replaced old title/ep '" . $old_title . ": " . $old_ep
+                            . "' with new title/ep '" . $new_title . ": " . $new_ep
+                            . "' for consistency");
+                        last REPLACEMENT_TITLE_EPISODE;
+                    }
+                }
+            }
+
             # After processing the data for inconsistent title and episode data
             # we now process titles that may not be categorised ($genre).
             # Untitled programmes and film are ignored.
@@ -3283,6 +3343,27 @@ sub print_empty_listings {
             say("  $chan ($empty_listings{$chan})");
         }
         say("End of list of channels providing no listings");
+    }
+}
+
+sub print_flagged_title_eps {
+    if (%flagged_title_eps && scalar keys %flagged_title_eps >= 1) {
+        my %titles_to_output; # temp hash to store matches
+        foreach my $flagged_title (sort keys %flagged_title_eps) {
+            foreach my $title (sort keys %prog_titles) {
+                if (lc $flagged_title eq lc $title) {
+                    $titles_to_output{$flagged_title} = $flagged_title;
+                }
+            }
+        }
+        # only output something if at least 1 matching title
+        if (%titles_to_output && scalar keys %titles_to_output >= 1) {
+            say("\nStart of list of titles that may need fixing individually");
+            foreach my $title (sort keys %titles_to_output) {
+                say("  $title");
+            }
+            say("End of list of titles that may need fixing individually");
+        }
     }
 }
 
