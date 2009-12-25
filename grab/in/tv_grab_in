@@ -136,9 +136,8 @@ use XMLTV::Description 'India (Whats On)';
 use Data::Dumper;
 use Date::Manip;
 use Getopt::Long;
-use XML::Simple;
 use IO::Scalar;
-
+use XML::LibXML;
 
 use XMLTV;
 use XMLTV::Ask;
@@ -310,10 +309,19 @@ sub get_nice_gzip( $ ) {
 # get lineups
 #
 sub get_lineups {
-    return 0 if exists $lineups{name};
+    return 0 if (keys %lineups);
     my $content=get_nice_gzip("http://www.zipazap.com/videoportal/mediacenter/lineup.xml");
     die "Error fetching lineup list " unless $content;
-    $lineups= XMLin($content);
+    my $parser = XML::LibXML->new();
+    my $doc = $parser->parse_string( $content );
+    my $root = $doc->getDocumentElement;
+
+    foreach my $lineup ($root->findnodes('url')) {
+       my $name= $lineup->getAttribute('name');
+       my $url = $lineup->getFirstChild->getData;
+       $lineups{$name}=$url;
+    }
+
 }
 
 #
@@ -322,29 +330,19 @@ sub get_lineups {
 sub get_stations {
     die "Can't get stations without a lineup!" unless $opt_lineup;
 
-    $guide_data=get_guide($opt_lineup_url);
+    my $guide_string=get_guide($opt_lineup_url);
 
-#
-# ok, let's walk through the data
-#
-{
-    $bar = new XMLTV::ProgressBar('processing data',length($guide_data)+1) unless ($opt_quiet);
-    my $guide_fh = new IO::Scalar \$guide_data;
-    my $skip=0;
-    my $count=0;
-    my $lineup_data="";
-    while (defined($_ = $guide_fh->getline)) {
-        $bar->update(tell($guide_fh)) if $bar && (++$count%1000==0);
-        last if /\<programme /;
-	$lineup_data .= $_;
-        }
-    $lineup_data .= "</tv>";
-    $guide_fh->close;
-    $bar->finish() if $bar;
-    printf STDERR "processing lineups, now %d bytes\n",length($lineup_data);
-    $guide_data=XMLin($lineup_data);
+    my $parser = XML::LibXML->new();
+    my $doc = $parser->parse_string( $guide_string );
+    my $root = $doc->getDocumentElement;
+
+    foreach my $station ($root->findnodes('channel')) {
+       my $id  = $station->getAttribute('id');
+       my $name= $station->getElementsByTagName('display-name')->[0]->getFirstChild->getData;
+       $guide_data->{channel}{$id}{'display-name'}=$name;
+    }
+
     die "Error fetching channel list for lineup\n" unless $guide_data->{channel};
-}
 } # get_stations
 
 #
@@ -353,7 +351,7 @@ sub get_stations {
 if ($opt_list_lineups)
 {
     get_lineups();
-    foreach (sort keys %{$lineups->{url}}) {
+    foreach (sort keys %lineups) {
         printf STDOUT "$_\n";
         }
     exit 0;    
@@ -366,11 +364,11 @@ if ($opt_configure) {
     my %station_map=();
 
     get_lineups();
-    my @choices=sort keys %{$lineups->{url}};
+    my @choices=sort keys %lineups;
     my $val = $opt_lineup || $choices[0];
     $val = ask_choice("\nWhich Lineup? ($opt_lineup)",$val,@choices);
     $opt_lineup=$val;
-    $opt_lineup_url=$lineups->{url}->{$opt_lineup}->{content};
+    $opt_lineup_url=$lineups{$opt_lineup};
    
 #
 # get station names
