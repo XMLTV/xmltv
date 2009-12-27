@@ -428,6 +428,13 @@ my @opt_components
                     'IO::Select' => 0 } ,
      },
 
+     { name     => 'tv_grab_in',
+       blurb => 'Grabber for India (zipazap.com)',
+       exes     => [ 'grab/in/tv_grab_in' ],
+       prereqs => { 'XML::LibXML' => 0,
+                  },
+     },
+
      { name     => 'tv_grab_na_dd',
        blurb => '$$ Grabber for North America-schedulesdirect.org',
        exes     => [ 'grab/na_dd/tv_grab_na_dd' ],
@@ -435,7 +442,8 @@ my @opt_components
        deps     => [ 'grab/na_dd/tv_grab_na_dd' => [ 'grab/na_dd/tv_grab_na_dd.in' ] ],
        to_clean => [ 'grab/na_dd/tv_grab_na_dd' ],
        prereqs => { 'SOAP::Lite' => 0.67,
-		    'Term::ReadKey' => 0 },
+           		    'Term::ReadKey' => 0,
+                     'XML::Twig' => 3.28,		            },
        grab_need_share => [ 'na_dd' ],
      },
 
@@ -615,7 +623,12 @@ my @opt_components
        blurb => 'Grabber for some European countries (epgdata.com)',
        exes => [ 'grab/eu_epgdata/tv_grab_eu_epgdata' ],
        share_files => { 'grab/eu_epgdata/channel_ids' => 'tv_grab_eu_epgdata/channel_ids' },
-       prereqs => { 'XML::Twig' => 0, 'Archive::Zip' => 0, 'HTML::Entities' => 0, 'LWP::Simple' => 0, 'File::Temp' => 0, 'DateTime::Format::Strptime' => 0 },
+       prereqs => { 'XML::Twig' => 0,
+                    'Archive::Zip' => 0,
+                    'HTML::Entities' => 0,
+                    'LWP::Simple' => 0,
+                    'File::Temp' => 0,
+                    'DateTime::Format::Strptime' => 0 },
      },
 
 
