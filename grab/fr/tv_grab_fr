@@ -1,5 +1,8 @@
 #!/usr/bin/perl
 
+eval 'exec /usr/bin/perl  -S $0 ${1+"$@"}'
+    if 0; # not running under some shell
+
 =head1 NAME
 
 tv_grab_fr - Grab TV listings for France.
@@ -94,6 +97,10 @@ with some patches from :
   - Francois Gouget, fgouget@free.fr
   - Niel Markwick, nielm@bigfoot.com
 
+Support for the updated telepoche.guidetele.com site was contributed
+by Zubrick, zubrick@number6.ch.
+
+
 =cut
 
 # TODO / FIXME
@@ -138,7 +145,6 @@ END
 
 use warnings;
 use strict;
-use utf8;
 use XMLTV::Version '$Id$ ';
 use XMLTV::Capabilities qw/baseline manualconfig cache/;
 use XMLTV::Description 'France';
@@ -160,35 +166,35 @@ use File::Temp;
 use LWP::Simple;
 use POSIX;
 
+
 #***************************************************************************
 # Main declarations
 #***************************************************************************
 my $GRID_BY_CHANNEL = 'http://telepoche.guidetele.com/gtv/semaine?openagent&d=0&c=';
-my $GRID_BY_CHANNEL_PER_DAY = 'http://telepoche.guidetele.com/gtv/journee?openagent&';
+my $GRID_BY_CHANNEL_PER_DAY = 'http://telepoche.guidetele.com/programmes-tv/chaine/';
 my $GRID_FOR_CHANNEL = 'http://telepoche.guidetele.com/programmes-tv/';
-my $SHEET_URL = 'http://telepoche.guidetele.com/fiche/emi_';
 my $ROOT_URL  = 'http://telepoche.guidetele.com';
-my $CHECK_CHANNEL_URL = 'http://telepoche.guidetele.com/gtv/journee?openagent&c=';
+my $CHECK_CHANNEL_URL = 'http://telepoche.guidetele.com/programmes-tv/chaine/';
 my $LANG = "fr";
 my $MAX_STARS = 4;
-my $VERSION   = "280208-01";
+my $VERSION   = "280110-01";
 
 # FIXME: Temporary avoid XML warnings (to be investigated)
 no warnings;
 
 # Grid id defined by the website according to channel types (needed to build the URL)
-my %GridType = (  "HERTZIENNE" => "hertzienne",
+my %GridType = (  "HERTZIENNE" => "hertziennes",
                   "TNT"        => "tnt",
                   "CABLE/SAT"  => "cable_sat",
-                  "CANAL SAT"  => "canal_sat",
-                  "FREEBOX"    => "free_box",
+                  "CANAL SAT"  => "canalsat",
+                  "FREEBOX"    => "freebox",
                   "ETRANGERES" => "chaines_etrangeres", 
                   "FILMS"      => "films",
                   "SPORT"      => "sport",
                   "MUSIQUE"    => "musique",
-                  "SERIES"     => "serie_feuilletons",
+                  "SERIES"     => "feuilleton",
                   "JEUNESSE"   => "jeunesse", 
-                  "DOCU/CULTURE" => "documentaire_culture" );
+                  "DOCU/CULTURE" => "documentaire" );
 
 # Slot of hours according to the website (needed to build the URL)
 my @offsets = (2, 3, 4, 5, 6, 7);
@@ -235,6 +241,8 @@ GetOptions('days=i'    => \$opt_days,
 ##/patch
     )
   or usage(0);
+
+$opt_slow=1;
 
 #***************************************************************************
 # Options processing, warnings, checks and default parameters
@@ -332,7 +340,7 @@ sub tidy {
       tr/\222/''/;
       s/\234/oe/g;
       s/&#8722;/ /g;
-
+      
       # Remove nasty caracters, thanks to nielm
       s/&ldquo;|&rdquo;|&\#8219;|&\#8220;|&\#x201[89];/&quot/g;
       s/&lsquo;|&rsquo;|&\#8216;|&\#8217;|&\#8218;|&\#x201[cdCD];/\'/g;
@@ -345,7 +353,7 @@ sub tidy {
       s/(&\#x[0-9a-zA-Z]{3,};)//g;
       # Not strictly a bad character but it does get in the way.
       s/&nbsp;/ /g;
-      tr/\240/ /;
+      #tr/\240/ /; #donne des mauvais a accent grave
       tr/\t/ /;
       s/([^\012\015\040-\176\240-\377])//g;
       return $_;
@@ -516,7 +524,9 @@ if (defined $opt_output) {
     $w_args{OUTPUT} = $fh;
 }
 
-$w_args{encoding} = 'ISO-8859-1';
+#$w_args{encoding} = 'ISO-8859-1';
+$w_args{encoding} = 'UTF-8';
+
 
 # In fast mode, the datasource contains data for all days at once,
 # so we let XMLTV::Writer filter out the days that the user wanted.
@@ -604,10 +614,14 @@ foreach $ind (sort { $a <=> $b } keys %channels) {
     my $chid = $channels{$ind}{chid};
     my $url;
     my $i;
+    my $dayoff;
     $writer->write_channel({ id => "C".$chid.".telepoche.com", 'display-name' => [[$channels{$ind}{name}]], 'icon' => [{src=>$channels{$ind}{icon}}]});
     if ( $opt_per_days ) {
-      for ($i=$opt_offset+2; $i < $opt_offset+$opt_days+2; $i++ ) {
-        $url = $GRID_BY_CHANNEL_PER_DAY . "d=$i&c=$chid&h=0";
+      for ($i=$opt_offset; $i < $opt_offset+$opt_days; $i++ ) {
+	  debug_print( "i: $i\n");
+	$dayoff = strftime("%Y-%m-%d", gmtime(time() + 3600 * 24 * $i));
+	  debug_print( "dayoff  : " . gmtime(time() + 3600 * 24 * $i) ."\n");
+	$url = $GRID_BY_CHANNEL_PER_DAY . "$chid/telepoche/soir/$dayoff";
         push @to_get, [ $url, $chid, $i ];
       }
     } else {
@@ -698,8 +712,9 @@ sub return_other_channels( ) {
 # Return the link to the icon. Parameter : channel id
 sub get_more_channel_icon( $ ) {
   my $chid = shift;
-  my $url = $CHECK_CHANNEL_URL.$chid;
-    
+  my $today = strftime("%Y-%m-%d", localtime());
+  my $url = $CHECK_CHANNEL_URL.$chid.'/telepoche/soiree/'.$today;
+  print $chid;  
   # Get the current page
   my $t = get_nice_tree($url);           
     
@@ -709,8 +724,8 @@ sub get_more_channel_icon( $ ) {
 
   foreach my $cellTree ( $t->look_down( "_tag", "img") ) {
     my $chiconsrc = $cellTree->attr('src');
-    if ( $chiconsrc =~ /\/c_img\/chaine\/(.*)/ ) {
-      $chicon = "http://static.guidetele.com/c_img/chaine/".$1;
+    if ( $chiconsrc =~ /\/medias\/chaines\/(.*)/ ) {
+      $chicon = "http://telepoche.guidetele.com/medias/chaines/".$1;
     }
   }
   $t->delete(); undef $t;
@@ -728,25 +743,24 @@ sub get_channels( $ ) {
   }   
 
   # Get the current page
-  my $today = strftime("%d%m%Y", localtime());
-  my $url = $GRID_FOR_CHANNEL.$gridid.'/soiree_'.$today.'.html';
+  my $today = strftime("%Y-%m-%d", localtime());
+  my $url = $GRID_FOR_CHANNEL.'grille/'.$gridid.'/soiree/'.$today;
   my $t = get_nice_tree($url);           
     
   debug_print( "URL  : " . $url ."\n");
- 
-  foreach my $cellTree ( $t->look_down( "_tag", "td", "width", "55", "height", "85" ) ) {
-    my $tag = $cellTree->look_down( "_tag", "a", 'href', '#' ); 
+
+  foreach my $cellTree ( $t->look_down( "_tag", "td", "class", "channel" ) ) {
+       
+       
+    my $tag = $cellTree->look_down( "_tag", "a" ); 
+
     if ($tag != undef) {
-      my $chid = $tag->attr('onclick');
-      if ( $chid =~ /goChaine\('(.*)','(.*)',''\);/ ) {
+      my $progurl = $tag->attr('href');
+      if ( $progurl =~ /^\/programmes-tv\/chaine\/(\d+)/ ) {
         $chid = $1;
         my $imgCell = $cellTree->look_down( "_tag", "img" );
-        my $chicon = $imgCell->attr('src');
-        my $chname = $imgCell->attr('src');
-        $chname =~ s/http:\/\/static.guidetele.com\/c_img\/chaine\///;
-        $chname =~ s/http:\/\/static.digitalmondadori.fr\/gtv\/visu\/chaine\///;
-        $chname =~ s/\.gif//;
-        $chname =~ s/\.GIF//;
+        my $chicon = $ROOT_URL.$imgCell->attr('src');
+        my $chname = $imgCell->attr('alt');
         debug_print "Found channel : $chid - " . $chname . "\n";
         $channels{$chid} = {'name' =>  $chname, 'icon' => $chicon };
       }
@@ -761,8 +775,10 @@ sub process_fucking_damned_page( $$$$$ ) {
   my ($genre, $lastshowview, $showview, $hours, $starthour, $endhour) = 0;
   my ($title, $subgenre, $star_rating, $datecreate) = 0;
 
+
   # Each show is described in a table cell with a 'prog' class
-  foreach my $show ($myrow->look_down('_tag', 'td', 'class', 'prog') ) {
+  foreach my $show ($myrow->look_down('_tag', 'td', 'class', 'program ') ) {
+
     # Each cell contains zero or more links describing the show.
     # - If no information is available for the time slot, then the cell
     #   is empty (&nbsp; actually).
@@ -770,7 +786,7 @@ sub process_fucking_damned_page( $$$$$ ) {
     #   to the per-show web page with the extra information.
     # - Other links contain less detailed information and no pointer to
     #   a per-show page.
-    my $link=$show->look_down('_tag', 'a', 'class', 'fiche') ||
+    my $link=$show->look_down('_tag', 'a', 'class', 'details') ||
              $show->look_down('_tag', 'a', 'onmouseover', qr/^showmenu/);
     next if (!$link);
 
@@ -780,7 +796,7 @@ sub process_fucking_damned_page( $$$$$ ) {
     $title = tidy($2);
     my $mydata = $1;
     next if ( $title eq 'Fin des programmes');
-    ($hours, $genre, $showview) = split (/<br>/, $mydata);
+    ($hours, $genre, $showview) = split (/<br \/>/, $mydata);
     next if ( !$hours );
     # Process the title, sometimes a showview field is shown
     $title =~ s/^\d{7,8} //;
@@ -817,6 +833,7 @@ sub process_fucking_damned_page( $$$$$ ) {
     # Process the start/stop dates
     my $start = $dateindex.$starthour."00";
     my $stop  = $dateindex.$endhour."00";
+
     
     # Dummy site : the slot 0-4 of day n is in fact the slot 0-4 for day n+1
     # Again, specific parsing if we are in "per days" mode
@@ -899,7 +916,7 @@ sub process_fucking_damned_page( $$$$$ ) {
       $showview =~ s/Showview : //;
       for ($showview) { s/^\s+//; s/\s+$//; s/\xA0//; }          
       $prog{showview} = $showview;
-      next if ( $showview == $lastshowview );
+      #next if ( $showview == $lastshowview );
       $lastshowview = $showview;
     }
 
@@ -941,8 +958,8 @@ sub process_fucking_damned_page( $$$$$ ) {
     }
 
     # Now get program description if the longlisting option is set
-    if ( $opt_slow && $link->attr('class') eq 'fiche' ) {
-      get_detailed_fic( $link->attr('onclick'), \%prog, $title );
+    if ( $opt_slow && $link->attr('class') eq 'details' ) {
+      get_detailed_fic( $link->attr('href'), \%prog, $title );
     }
 
 ##patch: tigerlol: correction des chevauchements d'horaire
@@ -1050,12 +1067,13 @@ sub process_channel_grid_page( $$$$ ) {
     # Reset some working variables
     my $day = 0; my $month = 0; my $year = 0;
 
-    if ( my $tableTree = $t->look_down('_tag', 'table', 'width', '600', 'height', '70', 'bgcolor', '#ffffff') ) {
+    if ( my $tableTree = $t->look_down('_tag', 'div', 'id', 'channel_navigation') ) {
+	debug_print(".\n");
       # Get the list of rows of the table
       my @dateRowTab = $tableTree->content_list();
       # Now loop thru rows
       foreach my $dateRow (@dateRowTab) {
-        my $daterow = $dateRow->look_down('_tag', 'td', 'width', '403');
+        my $daterow = $dateRow->look_down('_tag', 'span', 'id', 'logo_text');
         if ( $daterow ) {
           my $startdate = $daterow->as_text();
           if ( $opt_per_days ) {
@@ -1068,14 +1086,16 @@ sub process_channel_grid_page( $$$$ ) {
         }
       }
     }
-    
+
+
     # If we are grabbing in "per days" mode, then enter here
     if ( $opt_per_days) {
+
       $date = DateCalc($month."/".$day."/".$year, "+0 days");
       $dateindex = UnixDate($date, "%Y%m%d");
-      foreach my $tableTree ($t->look_down('_tag', 'table', 'width', '655')) {
+      foreach my $tableTree ($t->look_down('_tag', 'table', 'class', 'programs')) {
         # Skip table which do not contain program
-        next if(!$tableTree->look_down('_tag', 'td', 'class', 'prog'));
+        next if($tableTree->look_down('_tag', 'td', 'class', 'program'));
         process_fucking_damned_page( $writer, $chid, $tableTree, $dateindex, $slot);
       }
     # Default old per week grabbing process
@@ -1090,6 +1110,7 @@ sub process_channel_grid_page( $$$$ ) {
           debug_print "Now parsing date : $day $month \n";
           $date = DateCalc($month."/".$day."/".$year, "+0 days");
           $dateindex = UnixDate($date, "%Y%m%d");
+
           # We need to limit the number of days fetched in slow mode, but in fast mode no limit is needed since
           # there is a single fetch for all days.
           if ($opt_slow) {
@@ -1127,17 +1148,17 @@ sub parse_name_list( $ )
 
 sub get_detailed_fic( $$$ ) 
 {
-  my $id    = shift;
+  my $url    = shift;
   my $prog  = shift;
   my $title = shift;
   my $nbretry = 0;
-  $id =~ /fiche\('(\d+)'\)/ or die "expected fiche(x), got: $id";
-  $id = $1;         
+  #$id =~ /fiche\('(\d+)'\)/ or die "expected fiche(x), got: $id";
+  #$id = $1;         
   my $FIC_FILE = new File::Temp(SUFFIX => '.xmltv' );
-  debug_print("Calling sheet URL : " . $SHEET_URL . $id . "\n");
+  debug_print("Calling sheet URL : " . $ROOT_URL . $url . "\n");
 
   # Get the current page
-  while ( HTTP::Status::is_error(getstore($SHEET_URL . $id, $FIC_FILE->filename )) ) {
+  while ( HTTP::Status::is_error(getstore($ROOT_URL . $url, $FIC_FILE->filename )) ) {
     sleep(1); $nbretry++;
     return if ($nbretry == 5 );
   }
@@ -1146,7 +1167,7 @@ sub get_detailed_fic( $$$ )
   $tfic->parse_file( $FIC_FILE->filename );  
 
   # Get the duration and the year
-  if ( my $tdesc = $tfic->look_down('_tag', 'td', 'bgcolor', '#F8F8F8') ) {
+  if ( my $tdesc = $tfic->look_down('_tag', 'table', 'width', '300', 'class', 'bord') ) {
     if (my $img = $tdesc->look_down('_tag', 'img', 'alt', qr/^(Accord|Interdit)/)) {
       my $text=$img->attr('alt');
       my $rating;
@@ -1167,13 +1188,17 @@ sub get_detailed_fic( $$$ )
       }
     }
 
+    foreach my $year ($tdesc->look_down('_tag', 'td', 'class', 'blc12') ) {
+	if ($year->as_text() =~ /^(\d\d\d\d)$/i) {
+	    $prog->{'date'} = $1;
+	}
+    }
+
     debug_print "RAWDATA: " . tidy($tdesc->as_text()) . "\n";
     foreach my $field ( split(/\s+/, tidy($tdesc->as_text())) ) {
       # Set to lowercase for better color/b&w detection
       $field = lc($field);
-      if ( $field =~ s/^(\d\d\d\d)$//i ) {
-        $prog->{'date'} = $1;
-      } elsif ( $field =~ s/^coul.*//i ) {
+      if ( $field =~ s/^coul.*//i ) {
         $prog->{'video'}{colour} = 1;
       } elsif ( $field =~ s/^noir.*//i ) {
         $prog->{'video'}{colour} = 0;
@@ -1206,25 +1231,35 @@ sub get_detailed_fic( $$$ )
   #   and 2 after it.
   my $actors_section=0;
   my $first_actor;
-  if (my $comment=$tfic->look_down('_tag', '~comment', 'text', qr/DISTRIBUTION/)) {
+  foreach my $comment ($tfic->look_down('_tag', 'table', 'width', '609', 'cellpadding', '4')) {
+
     my $sibling=$comment->right();
-    if (!ref $sibling) {
+    #if (!ref $sibling) {
       # $sibling is a string, what we want is the next HTML element
-      $sibling=($comment->parent()->content_list())[$comment->pindex()+2];
-    }
-    if (defined $sibling) {
-      $first_actor=$sibling->look_down('_tag', 'span', 'class', 'noir11');
+      #$sibling=($comment->parent()->content_list())[$comment->pindex()+2];
+    #}
+    if( my $first_actor = $comment->look_down('_tag', 'td', 'class', 'bleuf11' ) ) {
+	if ($first_actor->as_text() eq "Acteur") {
+	    foreach my $actor ($comment->look_down('_tag', 'td', 'class', 'bleuf11' )) {
+		next if ($actor->as_text() eq "Acteur");
+		next if ($actor->as_text() eq "");
+		push @{$prog->{credits}{actor}}, tidy($actor->as_text());
+	    }
+	    
+	    
+	}
     }
   }
+  
 
   # Now get descriptions, summary, advices, actors and director
   # These are represented as <span class='noir11'> / <span class='noir11r'>
   # pairs.
   my ($resume, $histoire, $avis);
-  foreach my $span ($tfic->look_down('_tag', 'span', 'class', 'noir11')) {
+  foreach my $span ($tfic->look_down('_tag', 'span', 'class', 'bleuf11')) {
     my $sibling=$span->right();
     next if (!defined $sibling);
-
+    
     my $value="";
     if (!ref $sibling) {
       # $sibling is a string, what we want is the next HTML element
@@ -1232,13 +1267,29 @@ sub get_detailed_fic( $$$ )
       $sibling=($span->parent()->content_list())[$span->pindex()+2];
       next if (!defined $sibling);
     }
+
+    my $name=$span->as_text();
+
     if ($sibling->attr('_tag') ne "span" or
-        $sibling->attr('class') ne "noir11r") {
+        $sibling->attr('class') ne "bleuf11r") {
+	    
+	    my $parent = text_cleanup(tidy($sibling->parent->as_HTML()));
+	    my @fields = split ("<br />", $parent);
+	    for (my $tmp=0;$tmp < $#fields; $tmp++) {
+		if ($fields[$tmp] =~ /$name/i) {
+		    $value.=$fields[$tmp+1];
+		    if ($name =~ /R.*sum/i) {
+			push @{$prog->{desc}}, [tidy($value), $LANG ];
+		    }
+		}
+	    }
+
       # Not a valid value span tag
       next;
+    } else {
+	#$value.=$sibling->as_text();
     }
-    $value.=$sibling->as_text();
-    my $name=$span->as_text();
+
 
     if ($name =~ /^Titre original/i) {
       # FIXME: Still in the works...
@@ -1255,23 +1306,18 @@ sub get_detailed_fic( $$$ )
     } elsif ($name =~ /Musique/i) {
       # No xmltv field for this
       ;
-    } elsif ($name eq "HISTOIRE") {
+    } elsif ($name =~ /^Histoire/i) {
+	
       $histoire = text_cleanup(tidy($value));
       $actors_section=2;
-    } elsif ($name eq "RESUME") {
+    } elsif ($name =~ /R.*sum/i) {
+
       $resume = text_cleanup(tidy($value));
       $actors_section=2;
     } elsif ($name eq "AVIS") {
       $avis = text_cleanup(tidy($value));
       $actors_section=2;
-    } elsif ($actors_section == 1 or
-             ($actors_section == 0 and defined $first_actor and $span eq $first_actor)) {
-      my $actorname = text_cleanup(tidy($name));
-      if ( $actorname ne "" ) {
-        push @{$prog->{credits}{actor}}, $actorname;
-      }
-      $actors_section=1;
-    }
+    } 
   }
 
   # RESUME is the main definition, HISTOIRE is shorter.
@@ -1283,7 +1329,7 @@ sub get_detailed_fic( $$$ )
     if ($prog->{desc}) {
       $prog->{desc}->[0]->[0] .= " Critique : " . $avis;
     } else {
-      push @{$prog->{desc}}, [ $avis, $LANG ];
+      push @{$prog->{desc}}, [ tidy($avis), $LANG ];
     }
   }
 
