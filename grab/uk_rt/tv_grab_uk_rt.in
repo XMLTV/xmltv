@@ -170,12 +170,13 @@ HTTP::Cache::Transparent::init( {
 my $have_title_data = 0;
 my (@non_title_info,       @mixed_title_subtitle, 
     @mixed_subtitle_title, @reversed_title_subtitle) = ();
-my %replacement_titles;   # key = old title, value = replacement title
-my %replacement_episodes; # key = title, value = hash (where key = old ep, value = new ep)
-my %replacement_cats;     # key = title, value = category
-my %replacement_title_eps;# key = 'old_title . old_ep', value = (new_title, new_ep)
-my %flagged_title_eps;    # key = old_title from title fixup routine 8
-                
+my %replacement_titles;       # key = old title, value = replacement title
+my %replacement_episodes;     # key = title, value = hash (where key = old ep, value = new ep)
+my %replacement_cats;         # key = title, value = category
+my %replacement_title_eps;    # key = 'old_title . old_ep', value = (new_title, new_ep)
+my %flagged_title_eps;        # key = old_title from title fixup routine 8
+my %replacement_ep_from_desc; # key = title, value = hash (where key = desc, value = new ep)
+
 # Create global hash to store the programme titles for all programmes on all
 # channels, as we will process this last after grabbing to determine any
 # 'manufactured' titles which may include temporary 'seasonal' information
@@ -1346,21 +1347,36 @@ sub load_prog_titles_to_process {
                 next PROG_TITLE_ENTRY;
             }
             elsif ($code eq '5') {
-                my( $old_title, $new_title ) = split( /~/, $process_text, 2);
+                my @fields = split( /~/, $process_text, 2);
+                if (scalar @fields != 2) {
+                    t("[5] Invalid number of fields (need 2) in processing text: '" . $process_text . "'");
+                    next PROG_TITLE_ENTRY;
+                }
+                my( $old_title, $new_title ) = @fields;
                 $replacement_titles{$old_title} = $new_title;
                 t("[5] Will check for inconsistent title '" 
                   . $old_title . "'");
                 next PROG_TITLE_ENTRY;
             }
             elsif ($code eq '6') {
-                my( $uncat_title, $cat ) = split( /~/, $process_text, 2);
+                my @fields = split( /~/, $process_text, 2);
+                if (scalar @fields != 2) {
+                    t("[6] Invalid number of fields (need 2) in processing text: '" . $process_text . "'");
+                    next PROG_TITLE_ENTRY;
+                }
+                my( $uncat_title, $cat ) = @fields;
                 $replacement_cats{$uncat_title} = $cat;
                 t("[6] Will assign title '" . $uncat_title 
                     . "' to category '" . $cat . "'");
                 next PROG_TITLE_ENTRY;
             }
             elsif ($code eq '7') {
-                my( $ep_title, $old_ep, $new_ep ) = split( /~/, $process_text, 3);
+                my @fields = split( /~/, $process_text, 3);
+                if (scalar @fields != 3) {
+                    t("[7] Invalid number of fields (need 3) in processing text: '" . $process_text . "'");
+                    next PROG_TITLE_ENTRY;
+                }
+                my( $ep_title, $old_ep, $new_ep ) = @fields;
                 $replacement_episodes{$ep_title}->{$old_ep} = $new_ep;
                 t("[7] Will check for inconsistent episode data '" . $old_ep 
                     . "' for title '" . $ep_title . "'");
@@ -1388,6 +1404,18 @@ sub load_prog_titles_to_process {
                 $replacement_title_eps{$key} = [$new_title, $new_ep];
                 t("[8] Will update old title/subtitle '" . $old_title . ": " . $old_ep 
                     . "' to '" . $new_title . ": " . $new_ep . "'");
+                next PROG_TITLE_ENTRY;
+            }
+            elsif ($code eq '9') {
+                my @fields = split( /~/, $process_text, 3);
+                if (scalar @fields != 3) {
+                    t("[9] Invalid number of fields (need 3) in processing text: '" . $process_text . "'");
+                    next PROG_TITLE_ENTRY;
+                }
+                my( $title, $episode, $desc ) = @fields;
+                $replacement_ep_from_desc{$title}->{$desc} = $episode;
+                t("[9] Will update subtitle to '" . $episode . "' for title '" . $title 
+                    . "' based on given description '" . $desc . "'");
                 next PROG_TITLE_ENTRY;
             }
             else {
@@ -2287,10 +2315,35 @@ sub write_listings_data {
                     }
                 }
             }
-
+            #
+            # Replace inconsistent/missing episode subtitle using a given 
+            # description (should be unique per title). The %replacement_ep_from_desc 
+            # data structure is a hash of hashes.
+            #
+            if ($have_title_data && %replacement_ep_from_desc && defined $desc) {
+                REPLACEMENT_EPISODE_FROM_DESC:
+                foreach my $bad_episode_title (keys %replacement_ep_from_desc) {
+                    # First, check whether we have matched the programme title
+                    if ($title eq $bad_episode_title) {
+                        # Now look for a specific episode match for the title
+                        foreach my $bad_ep_desc (keys %{$replacement_ep_from_desc{$bad_episode_title}}) {
+                            if ($desc eq $bad_ep_desc) {
+                                my $old_ep;
+                                (defined $episode) ? ($old_ep = $episode) : ($old_ep = '');
+                                $episode = $replacement_ep_from_desc{$bad_episode_title}->{$bad_ep_desc};
+                                t("  Updated episode from '" . $old_ep . "' to '" . $episode 
+                                    . "' for title '" . $bad_episode_title . "' based on desc '" 
+                                    . $bad_ep_desc . "' for consistency");
+                                last REPLACEMENT_EPISODE_FROM_DESC;
+                            }
+                        }
+                    }
+                }
+            }
+            #
             # After processing the data for inconsistent title and episode data
             # we now process titles that may not be categorised ($genre).
-            # Untitled programmes and film are ignored.
+            # Untitled programmes ("To Be Announced") and films are ignored.
             #
             if ($have_title_data && %replacement_cats && defined $genre
                     && $genre =~ /(No Genre|TBA)/ && $title !~ /To Be Announced/ && !$film) {
