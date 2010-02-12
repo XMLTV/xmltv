@@ -41,8 +41,8 @@ our %errors = ();
 
 
 sub error_msg($) {
-	my ($url) = @_;
-	$errors{$url};
+    my ($url) = @_;
+    $errors{$url};
 }
 sub get_nice( $ ) {
     # This is to ensure scalar context, to work around weirdnesses
@@ -75,7 +75,7 @@ sub get_nice_aux( $ ) {
         # A page has already been retrieved recently.  See if we need
         # to sleep for a while before getting the next page - being
         # nice to the server.
-	#
+        #
         my $next_get_time = $last_get_time + (rand $Delay);
         my $sleep_time = $next_get_time - time();
         sleep $sleep_time if $sleep_time > 0;
@@ -92,18 +92,18 @@ sub get_nice_aux( $ ) {
     #
     $last_get_time = time();
 
-	if ($r->is_error) {
-    	# At the moment download failures seem rare, so the script dies if
-    	# any page cannot be fetched.  We could later change this routine
-    	# to return undef on failure.  But dying here makes sure that a
-    	# failed page fetch doesn't get stored in XMLTV::Memoize's cache.
-    	#
-    	die "could not fetch $url, error: " . $r->status_line . ", aborting\n" if $FailOnError;
-		$errors{$url} = $r->status_line;
-		return undef;
+    if ($r->is_error) {
+        # At the moment download failures seem rare, so the script dies if
+        # any page cannot be fetched.  We could later change this routine
+        # to return undef on failure.  But dying here makes sure that a
+        # failed page fetch doesn't get stored in XMLTV::Memoize's cache.
+        #
+        die "could not fetch $url, error: " . $r->status_line . ", aborting\n" if $FailOnError;
+        $errors{$url} = $r->status_line;
+        return undef;
     } else {
-		return $r->content;
-	}
+        return $r->content;
+    }
 
 }
 
