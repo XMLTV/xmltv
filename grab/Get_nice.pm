@@ -1,7 +1,7 @@
 # $Id$
 #
-# Library to wrap LWP::Simple to put in a random delay between
-# requests and to set User-Agent.  We really should be using
+# Library to wrap LWP::UserAgent to put in a random delay between
+# requests and set the User-Agent string.  We really should be using
 # LWP::RobotUI but this is better than nothing.
 #
 # If you're sure your app doesn't need a random delay (because it is
@@ -14,19 +14,12 @@
 # XMLTV::Memoize or whatever.  If you want an HTML::Tree object use
 # get_nice_tree().
 #
-# If you want to change what function is called to get pages, set
-# $XMLTV::Get_nice::get to a code reference that takes a URL and
-# returns a page.  Perhaps the right thing would be to decouple the
-# delay logic into a separate module, but at the moment fetching web
-# pages is the only use of it.
-#
 
 use strict;
 
 package XMLTV::Get_nice;
 use base 'Exporter';
 our @EXPORT = qw(get_nice get_nice_tree error_msg);
-#use LWP::Simple qw($ua);
 use LWP::UserAgent;
 use XMLTV;
 our $Delay = 5; # in seconds
@@ -36,7 +29,6 @@ our $FailOnError = 1; # Fail on fetch error
 our $ua = LWP::UserAgent->new;
 $ua->agent("xmltv/$XMLTV::VERSION");
 $ua->env_proxy;
-#our $get = \&LWP::Simple::get;
 our %errors = ();
 
 
