@@ -294,14 +294,14 @@ sub dst_dates( $ ) {
 
     my ($start_dst, $end_dst);
     foreach (1 .. 31) {
-	my $mar = "$year-03-$_" . ' 01:00';
+	my $mar = "$year-03-$_" . ' 01:00:00 +0000';
 	my $mar_d = parse_date($mar);
 	$start_dst = $mar_d if UnixDate($mar_d, "%A") =~ /Sunday/;
 
 	# A time between '00:00' and '01:00' just before the last
 	# Sunday in October is ambiguous.
 	#
-	my $oct = "$year-10-$_" . ' 01:00';
+	my $oct = "$year-10-$_" . ' 01:00:00 +0000';
 	my $oct_d = parse_date($oct);
 	$end_dst = $oct_d if UnixDate($oct_d, "%A") =~ /Sunday/;
     }
