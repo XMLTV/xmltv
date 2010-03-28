@@ -293,7 +293,7 @@ sub dst_dates( $ ) {
     die "don't know about DST before 1998" if $year < 1998;
 
     my ($start_dst, $end_dst);
-    foreach (1 .. 31) {
+    foreach (25 .. 31) {
 	my $mar = "$year-03-$_" . ' 01:00:00 +0000';
 	my $mar_d = parse_date($mar);
 	$start_dst = $mar_d if UnixDate($mar_d, "%A") =~ /Sunday/;
