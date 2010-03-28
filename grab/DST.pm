@@ -11,7 +11,7 @@ package XMLTV::DST;
 use strict;
 use Carp qw(croak);
 use Date::Manip; # no Date_Init(), that can be done by the app
-use XMLTV::TZ qw(gettz tz_to_num);
+use XMLTV::TZ qw(gettz tz_to_num offset_to_gmt);
 use XMLTV::Date;
 
 # Three modes:
@@ -126,12 +126,12 @@ sub parse_local_date($$) {
 	($start_dst, $end_dst) = @{dst_dates_na($year, $winter_tz)};
     }
     elsif ($Mode eq 'none') {
-	return Date_ConvTZ($dp, $winter_tz, 'UTC');
+	return Date_ConvTZ($dp, offset_to_gmt($winter_tz), 'UTC');
     }
     else { die }
 
     foreach ($start_dst, $end_dst) {
-	$_ = Date_ConvTZ($_, 'UTC', $winter_tz);
+	$_ = Date_ConvTZ($_, 'UTC', offset_to_gmt($winter_tz));
     }
 
     # The clocks shift backwards and forwards by one hour.
@@ -181,11 +181,11 @@ sub parse_local_date($$) {
 
     if ($summer) {
 	t "summer time, converting $dp from $summer_tz to UTC";
-	return Date_ConvTZ($dp, $summer_tz, 'UTC');
+	return Date_ConvTZ($dp, offset_to_gmt($summer_tz), 'UTC');
     }
     else {
 	t "winter time, converting $dp from $winter_tz to UTC";
-	return Date_ConvTZ($dp, $winter_tz, 'UTC');
+	return Date_ConvTZ($dp, offset_to_gmt($winter_tz), 'UTC');
     }
 }
 
@@ -226,7 +226,7 @@ sub date_to_local( $$ ) {
 	($start_dst, $end_dst) = @{dst_dates_na($year, $base_tz)};
     }
     elsif ($Mode eq 'none') {
-	return [ Date_ConvTZ($d, 'UTC', $base_tz), $base_tz ];
+	return [ Date_ConvTZ($d, 'UTC', offset_to_gmt($base_tz)), $base_tz ];
     }
     else { die }
 
@@ -245,7 +245,7 @@ sub date_to_local( $$ ) {
 	$use_tz = $base_tz;
     }
     die if not defined $use_tz;
-    return [ Date_ConvTZ($d, 'UTC', $use_tz), $use_tz ];
+    return [ Date_ConvTZ($d, 'UTC', offset_to_gmt($use_tz)), $use_tz ];
 }
 
 # utc_offset()
@@ -335,7 +335,7 @@ sub dst_dates_na_old( $$ ) {
 		# standard time.
 		#
 		$start_dst = Date_ConvTZ(parse_date("$date 02:00"),
-					 "-$winter_tz", 'UTC');
+					 offset("-$winter_tz"), 'UTC');
 	    }
 	}
 
@@ -346,7 +346,7 @@ sub dst_dates_na_old( $$ ) {
 	# last Sunday).  DST ends at 01:00 local standard time.
 	#
 	$end_dst = Date_ConvTZ(parse_date("$date 01:00"),
-			       "-$winter_tz", 'UTC');
+			       offset_to_gmt("-$winter_tz"), 'UTC');
     }
     die if not defined $start_dst or not defined $end_dst;
 
@@ -374,7 +374,7 @@ sub dst_dates_na_new( $$ ) {
 		    # local standard time.
 		    #
 		    $start_dst = Date_ConvTZ(parse_date("$date 02:00"),
-					     "-$winter_tz", 'UTC');
+					     offset_to_gmt("-$winter_tz"), 'UTC');
 		}
 		else {
 		    $seen_Sunday_in_March = 1;
@@ -390,7 +390,7 @@ sub dst_dates_na_new( $$ ) {
 	# at 01:00 local standard time.
 	#
 	$end_dst = Date_ConvTZ(parse_date("$date 01:00"),
-			       "-$winter_tz", 'UTC');
+			       offset_to_gmt("-$winter_tz"), 'UTC');
     }
     die if not defined $start_dst or not defined $end_dst;
 
