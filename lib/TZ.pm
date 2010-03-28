@@ -64,7 +64,7 @@ sub ParseDate_PreservingTZ($) {
     $ltz=$tz if $ltz eq "1"; # if Date_TimeZone returns a bad value, use something ok
 
 #    print STDERR "date $u parsed to $p (timezone read as $tz)\n";
-    $p = Date_ConvTZ($p, $ltz, $tz);
+    $p = Date_ConvTZ($p, offset_to_gmt($ltz), offset_to_gmt($tz));
 #    print STDERR "...converted to $p\n";
     return $p;
 }
