@@ -66,8 +66,7 @@ Utility class that helps grabbers write configuration descriptions.
   $writer->end();
 
   print $result;
-                                      
-                                   
+
 =head1 EXPORTED FUNCTIONS
 
 None.
@@ -104,7 +103,9 @@ sub new {
     return $self;
 }
 
-=pod
+=head1 METHODS
+
+=over
 
 =item start()
 
@@ -139,6 +140,8 @@ element:
     default => "",
     } );
 
+=back
+
 =cut
 
 sub write_string {
@@ -155,7 +158,7 @@ sub write_string_tag {
     my ($self, $tag, $ch) = @_;
     croak 'undef parameter hash passed' if not defined $ch;
     croak "expected a hashref, got: $ch" if ref $ch ne 'HASH';
-    
+
     for ($self->{xmltv_state}) {
 	if ($_ eq 'new') {
 	    croak 'must call start() on XMLTV::Configure::Writer first';
@@ -315,7 +318,7 @@ sub write_lang_tag
 {
     my $self = shift;
     my( $tag, $aref ) = @_;
-    
+
     foreach my $texts (@{$aref})
     {
 	my $text =$texts->[0];
@@ -329,12 +332,12 @@ sub write_lang_tag
 sub end {
     my $self = shift;
     my( $nextstage ) = @_;
-    
+
     if( not defined $nextstage )
     {
 	croak "must supply a nextstage parameter to end()";
     }
-    
+
     for ($self->{xmltv_state}) {
 	if ($_ eq 'new') {
 	    croak 'must call start() first';
@@ -343,9 +346,9 @@ sub end {
 	    croak 'cannot call end twice';
 	}
     }
-    
+
     $self->emptyTag( 'nextstage', ( stage => $nextstage ) );
-    
+
     $self->endTag('xmltvconfiguration');
     $self->SUPER::end(@_);
 }

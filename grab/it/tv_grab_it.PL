@@ -35,7 +35,6 @@ tv_grab_it [--config-file FILE] [--output FILE]
            [--slow] [--verbose] [--errors-in-xml]
            [--backend SITE1[,SITE2[,SITE3]]]
 	   [--cache-slow]
-        
 
 =head1 DESCRIPTION
 
@@ -152,9 +151,11 @@ grabs the full data for the next three days using the default backend order and 
 
 =item tv_grab_it --cache --slow --cache-slow --errors-in-xml
 
+=back
+
 =head1 SEE ALSO
 
-L<xmltv(5)>.
+L<xmltv>.
 
 =head1 AUTHOR
 
@@ -163,6 +164,7 @@ Davide Chiarini, davide.chiarini\@gmail.com
 you can find some more help at http://www.htpcpoint.it/forum/
 
 =cut
+
 END
 
 my $ITA_POD=<<END;
@@ -183,7 +185,6 @@ tv_grab_it [--config-file FILE] [--output FILE]
            [--slow] [--verbose] [--errors-in-xml]
            [--backend SITE1[,SITE2[,SITE3]]]
 	   [--cache-slow]
-        
 
 =head1 DESCRIZIONE
 
@@ -289,10 +290,11 @@ prende tutti i dati per i prossimi tre giorni ed usa una cache su disco (sempre 
 
 =item tv_grab_it --cache --slow --cache-slow --errors-in-xml
 
+=back
 
 =head1 VEDERE ANCHE
 
-L<xmltv(5)>.
+L<xmltv>.
 
 =head1 AUTORE
 
@@ -301,6 +303,7 @@ Davide Chiarini, davide.chiarini\@gmail.com
 puoi anche trovare varie informazioni nel forum http://www.htpcpoint.it/forum/
 
 =cut
+
 END
 
 # and here it's the code itself

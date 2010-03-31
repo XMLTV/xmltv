@@ -28,8 +28,6 @@ of functionality that is common to all XMLTV grabbers.
 
 All these functions are exported on demand.
 
-=over 4
-
 =cut
 
 use XMLTV;
@@ -120,6 +118,8 @@ my %cap_defaults = (
 
 =head1 USAGE
 
+=over
+
 =item B<ParseOptions>
 
 ParseOptions shall be called by a grabber to parse the command-line
@@ -171,7 +171,7 @@ ParseOptions handles the following options automatically without returning:
 
 Handled automatically if the preferredmethod capability has been set and
 the preferredmethod option has been specified in the call to ParseOptions.
- 
+
 =back
 
 ParseOptions also takes care of the following options without returning,
@@ -323,6 +323,8 @@ Getopt::Long (See "Storing options in a hash" in  L<Getopt::Long>).
 Optional. Default []. An arrayref containing option definitions in the
 format accepted by Getopt::Long. This can be used to support grabber-specific
 options. The use of grabber-specific options is discouraged.
+
+=back
 
 =back
 
