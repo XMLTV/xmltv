@@ -15,7 +15,7 @@ tv_grab_dk_dr - Grab TV listings for Denmark.
 
 tv_grab_dk_dr --help
 
-tv_grab_dk_dr [--config-file FILE] --configure [--gui OPTION]
+tv_grab_dk_dr --configure [--config-file FILE] [--gui OPTION]
 
 tv_grab_dk_dr [--config-file FILE] [--output FILE] [--days N]
 [--offset N] [--quiet]
@@ -34,8 +34,7 @@ First run B<tv_grab_dk_dr --configure> to choose, which channels you want
 to download. Then running B<tv_grab_dk_dr> with no arguments will output
 listings in XML format to standard output.
 
-B<--configure> Prompt for which channels,
-and write the configuration file.
+B<--configure> Prompt for which channels, and write the configuration file.
 
 B<--config-file FILE> Set the name of the configuration file, the
 default is B<~/.xmltv/tv_grab_dk_dr.conf>.  This is the file written by
@@ -69,699 +68,699 @@ L<xmltv(5)>.
 
 =head1 AUTHOR
 
-S�ren Pingel Dalsgaard (soren@dalsgaards.dk). Based on the tv2 grabber by
-Jesper Skov (jskov@zoftcorp.dk). Originally based on tv_grab_nl by
-Guido Diepen and Ed Avis (ed@membled.com) and tv_grab_fi by Matti
-Airas.
-Additions by Jesper Toft (jesper@bzimage.dk)
-
-=head1 BUGS
-
-Things in the programme descriptions to handle:
-
-* Better categories from descriptions.
-
-* Customization of subtitles "Episode #" - perhaps even make it optional
+This version of tv_grab_dk_dr was written by Thomas Horsten <thomas at horsten dot com>
 
 =cut
 
-######################################################################
-# initializations
-
 use strict;
-use XMLTV::Version '$Id$ ';
-use XMLTV::Capabilities qw/baseline manualconfig cache/;
-use XMLTV::Description 'Denmark';
-use Getopt::Long;
-use HTML::TreeBuilder;
-use HTML::Entities; # parse entities
-use IO::File;
-use URI;
-
-use Date::Manip;
+use warnings;
 
 use XMLTV;
-use XMLTV::Memoize;
 use XMLTV::ProgressBar;
-use XMLTV::Ask;
-use XMLTV::Mode;
-use XMLTV::Config_file;
-use XMLTV::DST;
-use XMLTV::Date;
-# Todo: perhaps we should internationalize messages and docs?
-use XMLTV::Usage <<END
-$0: get Danish television listings in XMLTV format
-To configure: $0 --configure [--config-file FILE]
-To grab listings: $0 [--config-file FILE] [--output FILE] [--days N]
-[--offset N] [--quiet]
-To show capabilities: $0 --capabilities
-To show version: $0 --version
-END
-;
+use XMLTV::Options qw/ParseOptions/;
+use XMLTV::Configure::Writer;
 
-# Use Log::TraceMessages if installed.
-BEGIN {
-    eval { require Log::TraceMessages };
-    if ($@) {
-        *t = sub {};
-        *d = sub { '' };
-    }
-    else {
-        *t = \&Log::TraceMessages::t;
-        *d = \&Log::TraceMessages::d;
-        Log::TraceMessages::check_argv();
-    }
-}
+use Data::Dumper;
+use Parse::RecDescent;
+use LWP::Simple;
+use LWP::Simple qw($ua get);
 
-use LWP::UserAgent;
-my $ua = LWP::UserAgent->new;
+use DateTime;
+
 $ua->agent("xmltv/$XMLTV::VERSION");
 
-# Initialize cookie_jar
-use HTTP::Cookies;
-my $cookies = HTTP::Cookies->new;
-$ua->cookie_jar($cookies);
+binmode STDOUT,":utf8";
 
-# Whether zero-length programmes should be included in the output.
-my $WRITE_ZERO_LENGTH = 0;
+my $grabber_name = 'tv_grab_dk_dr';
+my $id_prefix = '.dr.dk';
 
-# default language
-my $LANG = 'da';
+# HASDONE: Change this when DR's schedule comes out of beta
+my $default_root_url = 'http://www.dr.dk/tjenester/programoversigt/';
 
-# Winter time in Denmark - summer time is one hour ahead of this.
-my $TZ = '+0100';
+my %grabber_tags = ( 'source-info-url'	   =>
+		     'http://www.dr.dk/tjenester/programoversigt/',
+		     'source-info-name'	   =>
+		     'DR TV Oversigt',
+		     'generator-info-name' =>
+		     'XMLTV',
+		     'generator-info-url'  =>
+		     'http://niels.dybdahl.dk/xmltvdk/',
+    );
 
-sub process_summary_page( $$$ );
-sub process_listings_page( $$$$$ );
+# Time zone the server uses
+my $server_tz = 'Europe/Copenhagen';
 
-######################################################################
-# get options
+# Language ID's used in the channel info's country_code field,
+# we use it to choose default language of program titles etc.
+my %dr_language_codes = (
+    '1' => 'da',
+    '2' => 'sv',
+    '3' => 'no',
+    '4' => 'fr',
+    '6' => 'en',
+    '7' => 'de'
+    );
 
-# Known categories.
-my %categories = (      'Film'          => 'movie',
-                        'Serie'         => 'series',
-                        'Sport'         => 'sport',
-                        'Nyheder'       => 'news',
-                        'TV Avisen'     => 'news',
-                        'Alment'        => 'misc',
-                        'Musik'         => 'music',
-                        'Dokumentar'    => 'documentary',
-                        'B�rn'          => 'kids',
-                        'Underholdning' => 'entertainment',
-                        'Erotik'        => 'adult');
+my $warnings = 0;
 
-my %movietypes = (      'action'        => 'action',
-                        'drama'         => 'drama',
-                        'erotisk'       => 'erotic',
-                        'eventyr'       => 'adventure',
-                        'gyser'         => 'horror',
-                        'komedie'       => 'comedy',
-                        'krimi'         => 'crime',
-                        'thriller'      => 'thriller',
-                        'romantisk'     => 'romance',
-                        'western'       => 'western'
-			);
-# Get options
-XMLTV::Memoize::check_argv('get_url');
-my ($opt_days, $opt_offset, $opt_help, $opt_output,
-    $opt_configure, $opt_config_file, $opt_gui,
-    $opt_quiet, $opt_list_channels);
-$opt_offset = 0; # default
-GetOptions('days=i'        => \$opt_days,
-           'offset=i'      => \$opt_offset,
-           'help'          => \$opt_help,
-           'configure'     => \$opt_configure,
-           'config-file=s' => \$opt_config_file,
-           'gui:s'         => \$opt_gui,
-           'output=s'      => \$opt_output,
-           'quiet'         => \$opt_quiet,
-           'list-channels' => \$opt_list_channels,
-	   )
-    or usage(0);
+my $opt;
+my $conf;
 
-usage(1) if $opt_help;
+sub main()
+{
+    ( $opt, $conf ) = ParseOptions( {
+	grabber_name => $grabber_name,
+	capabilities => [qw/baseline manualconfig tkconfig apiconfig/],
+	stage_sub => \&config_stage,
+	listchannels_sub => \&list_channels,
+	#load_old_config_sub => \&load_old_config,
+	version => '$Id$grabber_name . ',v 0.99.1 2009-06-17',
+	description => "TV Oversigten fra Danmarks Radios (2009) ".
+	    "(www.dr.dk/tjenester/programoversigt)",
+				      } );
 
-die 'number of days must not be negative'
-    if ((defined $opt_days && $opt_days < 0) || ($opt_offset < 0));
-
-die "dr.dk only provide information for today and the next 18 days."
-    if ($opt_offset > 18);
-
-if (! defined $opt_days) {
-    # If there is no --days given. Set it to as many as possible.
-    $opt_days = 18 - $opt_offset;
-} else {
-    # --days option was given. Warn if its too high.
-    if (($opt_days + $opt_offset) > 19) {
-	$opt_days = 18 - $opt_offset;
-	warn "dr.dk only provide information for today and the next 18 days (and not for all channels).";
-    }
-}
-
-XMLTV::Ask::init($opt_gui);
-
-my $mode = XMLTV::Mode::mode('grab', # default
-                             $opt_configure => 'configure',
-                             $opt_list_channels => 'list-channels',
-			     );
-
-# File that stores which channels to download.
-my $config_file
-    = XMLTV::Config_file::filename($opt_config_file, 'tv_grab_dk_dr', $opt_quiet);
-
-if ($mode eq 'configure') {
-    XMLTV::Config_file::check_no_overwrite($config_file);
-      open(CONF, ">$config_file") or die "cannot write to $config_file: $!";
-      # find list of available channels
-      my $bar = new XMLTV::ProgressBar('getting list of channels', 1)
-	  if not $opt_quiet;
-      my %channels = get_channels();
-      die 'no channels could be found' if (scalar(keys(%channels)) == 0);
-      update $bar if not $opt_quiet;
-      $bar->finish() if not $opt_quiet;
-      
-      # Ask about each channel.
-      my @chs = sort keys %channels;
-      my @names = map { $channels{$_} } @chs;
-      my @qs = map { "add channel $_?" } @names;
-      my @want = ask_many_boolean(1, @qs);
-      foreach (@chs) {
-	  my $w = shift @want;
-	  warn("cannot read input, stopping channel questions"), last
-	      if not defined $w;
-	  # No need to print to user - XMLTV::Ask is verbose enough.
-
-	  # Print a config line, but comment it out if channel not wanted.
-	  print CONF '#' if not $w;
-	  my $name = shift @names;
-	  print CONF "channel $_ $name\n";
-	  # TODO don't store display-name in config file.
-      }
-      
-      close CONF or warn "cannot close $config_file: $!";
-      say("Finished configuration.");
-
-      exit();
-  }
-
-# Not configuring, we will need to write some output.
-die if $mode ne 'grab' and $mode ne 'list-channels';
-
-# If we are grabbing, check we can read the config file before doing
-# anything else.
-#
-my @config_lines;
-if ($mode eq 'grab') {
-    @config_lines = XMLTV::Config_file::read_lines($config_file);
-}
-
-my %w_args;
-if (defined $opt_output) {
-    my $fh = new IO::File(">$opt_output");
-    die "cannot write to $opt_output: $!" if not defined $fh;
-    $w_args{OUTPUT} = $fh;
-}
-$w_args{encoding} = 'ISO-8859-1';
-my $writer = new XMLTV::Writer(%w_args);
-# TODO: standardize these things between grabbers.
-$writer->start
-    ({ 'source-info-url'     => 'http://www.dr.dk/tjenester/programoversigten/w3c/epg.asp',
-       'source-data-url'     => 'http://www.dr.dk/tjenester/programoversigten/w3c/epg.asp',
-       'generator-info-name' => 'XMLTV',
-       'generator-info-url'  => 'http://membled.com/work/apps/xmltv/',
-   });
-
-if ($opt_list_channels) {
-    my $bar = new XMLTV::ProgressBar('getting list of channels', 1)
-	if not $opt_quiet;
-    my %channels = get_channels();
-    die 'no channels could be found' if (scalar(keys(%channels)) == 0);
-    update $bar if not $opt_quiet;
-
-    foreach my $ch_did (sort(keys %channels)) {
-	my $ch_name = $channels{$ch_did};
-	my $ch_xid = "$ch_did.dr.dk";
-	$writer->write_channel({ id => $ch_xid,
-                                 'display-name' => [ [ $ch_name ] ],
-                                 'icon' => [{'src' => get_icon($ch_did)}]
-				 });
-    }
-    $bar->finish() if not $opt_quiet;
-    $writer->end();
-    exit();
-}
-
-# Not configuring or writing channels, must be grabbing listings.
-die if $mode ne 'grab';
-my (%channels, @channels, $ch_did, $ch_name);
-my $line_num = 1;
-foreach (@config_lines) {
-    ++ $line_num;
-    next if not defined;
-
-    # FIXME channel data should be read from the site, and then the
-    # config file only gives the XMLTV ids that are interesting.
-    #
-    if (/^channel:?\s+(\S+)\s+([^\#]+)/) {
-	$ch_did = $1;
-	$ch_name = $2;
-	$ch_name =~ s/\s*$//;
-	push @channels, $ch_did;
-	$channels{$ch_did} = $ch_name;
-    } else {
-	warn "$config_file:$.: bad line\n";
-    }
-}
-
-######################################################################
-# begin main program
-
-my $now = parse_date('now');
-die if not defined $now;
-
-Date_Init('TZ=UTC');
-
-my @to_get;
-
-# the order in which we fetch the channels matters
-my $today = UnixDate($now, '%Y-%m-%d'); die if not defined $today;
-
-# It looks like 5:00 is midnight at tv2.dk..
-# This means we have to be extra carefull at 0:00 and 5:00
-# Give a warning 30 min before and after.. Just in case.
-if ((UnixDate(DateCalc($now,'+30min'),'%H') == 5) || (UnixDate(DateCalc($now,'+30min'),'%H') == 0)) {
-    warn 'It is not recomended to run this script at 23:30-00:30 and 4:30-5:30';
-}
-
-foreach $ch_did (@channels) {
-    $ch_name = $channels{$ch_did};
-    my $ch_xid = "$ch_did.dr.dk";
-    $writer->write_channel({ id => $ch_xid,
-                             'display-name' => [ [ $ch_name ] ],
-			     'icon' => [{'src' => get_icon($ch_did)}]
-			     });
-    for (my $i = $opt_offset;$i<($opt_offset + $opt_days);$i++) {
-	# Request day when constructing URL since it is represented as
-	# an integere offset from today. Still pass in the computed
-	# date - may need it sometime...
-	my $day = UnixDate(DateCalc($today, "+ $i days"), '%Y-%m-%d');
-	t "turned offset $i (from $today) into date $day";
-	push @to_get, [ $i, $day, $ch_xid, $ch_did ];
-    }
-}
-
-my %warned_ch_name; # suppress duplicate warnings
-
-my $bar = new XMLTV::ProgressBar('fetching data', scalar @to_get)
-    if not $opt_quiet;
-my @to_get_detailed;
-my $num_detailed = 0;
-foreach (@to_get) {
-    my ($drdate, $date, $ch_xmltv_id, $ch_tvgids_id) = @$_;
-    t "going to get $ch_xmltv_id for $date";
-    process_listings_page($writer, $ch_xmltv_id, $drdate, $ch_tvgids_id , $date);
-    update $bar if not $opt_quiet;
-}
-$bar->finish() if not $opt_quiet;
-$writer->end();
-exit(0);
-
-######################################################################
-# subroutine definitions
-
-# arguments:
-#   XMLTV::Writer object to write to
-#   XMLTV id of channel
-#   URL to fetch
-#   Date::Manip object giving day for programmes in page (at least
-#     until they cross midnight)
-
-my ($warned_discarding_parts, $commented_episode_num);
-sub process_listings_page ( $$$$$ ){
-#    local $Log::TraceMessages::On = 1;
-    my ($writer, $ch_xmltv_id, $drdate, $drchan, $day_obj) = @_;
-    my $next_day = 0;
-    my $day = UnixDate($day_obj, '%Q');
-    my $dayOffset = 0;
-    t "getting channel $ch_xmltv_id, date $day";
-    
-    # If after midnight and before 5, we are off by a day.
-    if (UnixDate($now,'%H') < 5) {
-	$dayOffset = 1;
-    }
-    
-    # We make an HTML::TreeBuilder object, get the information
-    # from it and them delete it.
-    my $t = get_tree("http://www.dr.dk/tjenester/programoversigten/w3c/inc/channel.aframe?channel=".$drchan."&seldate=".($drdate+$dayOffset)."&seltime=0");
-
-    my @elems = $t->look_down(_tag => 'td');
-
-    if (not @elems) {
-	warn "No data for channel $drchan $drdate days from now, skipping";
-	return;
+    if (not defined( $conf->{'root-url'} )) {
+	print STDERR "Root URL not defined in configfile " .
+	    $opt->{'config-file'} . "\n" .
+	    "Please run the grabber with --configure.\n";
+	exit 1;
     }
 
-    my $crossed_midnight = 0;
-
-    # Preprocess $elems
-    my @prog_list;
-    my @prog;
-    for (my $i = 0; $i <= $#elems; $i++) {
-        my $e = $elems[$i];
-        my $clss = $e->attr("class");
-        my $is_genre = 0;
-        if (defined $clss && $clss eq "p_text") {
-            $is_genre = 1;
-        }
-#       if ($e->attr("class") && $e->attr("class") eq "p_text") {
-#           print "Line: ".$#prog." - ". ($e->as_text()) . "\n";
-#           print "  ".join(", ",@prog)."\n";
-#           $_ = $e->as_text();
-#           if (/(.+?)\s+fra (\d\d\d\d)(.+)/) {
-#               $_ = $1 . $3;
-#               push @prog, "Dato: " . $2;
-#               print "Changed to: " . $_;
-#           }
-#       }
-        my @lines = $e->content_list();
-        for (my $linenum = 0; $linenum <= $#lines; $linenum++) {
-            my $line = $lines[$linenum];
-            if (ref $line) {
-                my $alt = $line->attr("alt");
-                if (defined $alt) {
-                    if ($alt =~ /^Genudsendelse$/) {
-                        $line = "(G)";
-                    } elsif ($alt =~ /^Stereo$/) {
-                        $line = "(S)";
-                    } elsif ($alt =~ /^Tekstning for h.reh.mmede$/) {
-                        $line = "(TH)";
-                    } elsif ($alt =~ /^Tekst TV$/) {
-                        $line = "(TTV)";
-                    }
-                }
-                $line = $line->as_text() if ref $line;
-            }
-            $line =~ s/\xA0/ /g;
-            $line =~ s/\s+$//g;
-            $line =~ s/^\s+//g;
-            $line =~ s/ \.//g;
-
-            if ($is_genre && length $line) {
-                $line = "Genre: " . $line;
-            }
-            
-            if ($linenum == 0 && $line =~ /^(\d\d)\.(\d\d) (.+)$/) {
-                push @prog_list, [ @prog ] if $#prog > 0;
-                @prog = ($1 . ":" . $2, $3);
-            } else {
-                push @prog, $line if length $line;
-            }
-        }
+    if (not defined( $conf->{'accept-copyright-disclaimer'} )) {
+	print STDERR "Copyright disclaimer not defined in configfile " .
+	    $opt->{'config-file'} . "\n" .
+	    "Please run the grabber with --configure.\n";
+	exit 1;
     }
-    push @prog_list, [ @prog ] if $#prog > 0;
 
-    my @info;
-    for (my $i = 0; $i <= $#prog_list; $i++) {
-	my ($start, $stop, # exactly one
-	    $title, $sub_title, $genre, $date,               #
-	    $episode_num, $actors, $writers, $commentators, #
-	    $director, $previously_shown, $orig_title,      # at most one
-	    $aspect, $colour, $stereo, $texted,
-	    @presenter, @url # zero or more
-	    );
-        
-	my $teletext_sub = 0;  # boolean
+    if ($conf->{'accept-copyright-disclaimer'}[0] ne 'accept') {
+	print STDERR
+	    "You have to accept the copyright disclaimer " .
+	    "if you want to use this\n" .
+	    "program. Please run the grabber with " .
+	    "--configure to change options.\n";
+	exit 1;
+    }
 
-	# defaults
-	$aspect = "4:3";
-	$colour = 1;
+    if (not defined( $conf->{'channel'} )) {
+	print STDERR "No channels selected in configfile " .
+	    $opt->{'config-file'} . "\n" .
+	    "Please run the grabber with --configure.\n";
+	exit 1;
+    }
 
-	my @prog = @{$prog_list[$i]};
+    my %writer_args = ( encoding => 'utf-8' );
+    if (defined $opt->{'output'}) {
+	my $fh = IO::File->new($opt->{'output'}, ">:utf8");
+	die "Cannot write to $opt->{'output'}" if not $fh;
+	$writer_args{'OUTPUT'} = $fh;
+    }
+    my $writer = new XMLTV::Writer(%writer_args);
 
-	my $eur_date = "$day " . $prog[0];
-	$start = parse_local_date($eur_date, $TZ);
+    $writer->start(\%grabber_tags);
 
-	# When looking for the end time, we may also have to bump $day
-	# to the next day
-	if ($i+1 <= $#prog_list) {
-	    my @next_prog = @{$prog_list[$i+1]};
-	    $stop = parse_local_date("$day " . $next_prog[0], $TZ);
-	    if (0 < Date_Cmp($start, $stop)) {
-		my $err;
-		$day = nextday($day);
-		$stop = parse_local_date("$day " . $next_prog[0], $TZ);
-	    }
-	    if (Date_Cmp($start, $stop) == 0) {
-		warn "zero minutes programme, skipping (".$prog[1].")\n" if not $opt_quiet;
-		next;
-	    }
-	}
-	# If the stop time is not set, it's not set.  We don't guess
-	# some arbitrary value.
-	#
+    #print "Grabbing channel list\n";
+    my $chanlist = &get_channel_list($conf) || die "Couldn't get channel list";
 
-	if (defined $prog[1]) {
-	    $title = $prog[1];
-	    if ($title =~ /^(.+)\s*\((\d+)\)$/) {
-		$title = $1;
-		$episode_num = $2;
-	    }
-	    if ($title =~ /^(.*?)\s*\:\s+(.*)$/ || $title =~ /^(.*?)\s+\-\s+(.*)$/) {
-		$title= $1;
-		$sub_title = $2;
-	    }
+    # Check channels specified are valid
+    my @channels = ();
+    foreach my $cid (@{$conf->{'channel'}}) {
+	my $chan = $chanlist->{$cid};
+	if (!$chan) {
+	    &warning("Unknown channel ".$cid." in config file\n");
 	} else {
-	    warn "no title, skipping programme\n";
-	    next;
+	    $writer->write_channel($chan);
+	    push (@channels, $cid);
 	}
+    }
 
-	my @desc; # bits of description
-	for (my $line = 2; $line <= $#prog; $line++) {
-	    $_ = $prog[$line];
-#               if (s/Vises i 16:9 format.|Vises i bredformat.//) {
-#                               $aspect = "16:9";
-#               }
+    my $date = DateTime->today('time_zone'=>$server_tz);
+    $date->add(days=>$opt->{'offset'});
 
-	    # Description contains more than just textual blurb.
-	    if (/^Genre:\s*(.*)/) {
-		$genre = $1;
-		if ($genre =~ /(.*)\s+fra (\d\d\d\d)(.*)/) {
-		    $genre = $1 . $3;
-		    $date = $2;
-		}
-		# Genre is also sometimes part of the title!
-		$_ = $genre;
-	    } elsif (/^Manuskript:\s*(.*)/) {
-		my @w = split(/, | og /, $1);
-		s/[.]$// foreach @w;
-		push @$writers, @w;
-		next;
-	    } elsif (/^Instrukt�r:\s*(.*)/) {
-		$director = $1;
-		$director =~ s/[.]$//;
-		next;
-	    } elsif (/^Originaltitel:\s*(.*)/) {
-		$orig_title = $1;
-		$orig_title =~ s/[.]$//;
-		next;
-	    } elsif (/^Kommentatorer:\s*(.*)/) {
-		push @$commentators, $1;
-		next;
-	    } elsif (/^Medvirkende:\s*(.*)/) {
-		my @a = split(/, | og /, $1);
-		s/[.]$// foreach @a;
-		push @$actors, @a;
-		next;
-	    } elsif (/^Sendt f�rste gang .*/) {
-		$previously_shown = {};
-		next;
-	    } elsif (/^Sendes ogs� .*/) {
-		# do not insert into description
-		next;
-	    }
+    my $dates_available = &get_available_dates();
 
-	    if (/^\(TTV\)$/) {
-		$teletext_sub = 1;
-	    } elsif (/^\(TH\)$/) {
-		$texted = 1;
-	    } elsif (/^\((\d+)\)$/) {
-		$episode_num = $1;
-	    } elsif (/^\(G\)$/) {
-		$previously_shown = {};
-	    } elsif (/^\(S\)$/) {
-		$stereo = {};
-	    } else {
-		if (!defined $episode_num) {
-		    if (/^(.*?)\s+\((\d+)\)\.?\s*(.*)/) {
-			$episode_num = $2;
-			if (!defined $sub_title) {
-			    $sub_title = "$1";
-			    $_ = $3;
+    for (my $c=0; $c<$opt->{'days'}; $c++) {
+	my $fmtdate = $date->strftime("%Y-%m-%d");
+
+	if (!$dates_available->{$fmtdate}) {
+	    &warning("No data for $fmtdate\n");
+	} else {
+	    #print "Grabbing data for: $fmtdate\n";
+	    #print Dumper $conf->{'channel'};
+	    foreach my $cid (@channels) {
+		my $chan = $chanlist->{$cid};
+		if (!$chan) {
+		    &warning("Unknown channel $cid\n");
+		} else {
+		    #print "ID: $cid Name: " .
+		    	#$chan->{'display-name'}[0][0]."\n";
+		    my $schedules = get_schedules($chan, $fmtdate);
+		    if ("ARRAY" ne ref($schedules)) {
+			warning("Schedules for $cid on $fmtdate not valid - empty?\n");
+			next;
+		    }
+		    foreach my $s (@$schedules) {
+			#print Dumper $s;
+			if ("HASH" ne ref($s)) {
+			    warn("Weird listing:\n");
+			    print STDERR Dumper $s;
 			} else {
-			    $_ = $1.". ".$3;
+			    $writer->write_programme($s);
 			}
-		    } elsif (/\((\d+)\)/) {
-			$episode_num = $2;
 		    }
 		}
-		push @desc, $_ if length;
 	    }
 	}
-        
-	my @title_data = ([ $title, $LANG]);
-	push @title_data, [ $orig_title ] if defined $orig_title;
-	my ($start_base, $start_tz) = @{date_to_local($start, $TZ)};
 
-	my %prog = (channel  => $ch_xmltv_id,
-                    title    => \@title_data,
-                    start    => UnixDate($start_base, '%q') . " $start_tz");
-	if (defined $stop) {
-	    my ($stop_base, $stop_tz) = @{date_to_local($stop, $TZ)};
-	    $prog{stop} = UnixDate($stop_base, '%q') . " $stop_tz";
+	$date->add(days=>1);
+    }
+    $writer->end();
+    exit 0 unless $warnings != 0;
+    print STDERR "$warnings warnings\n";
+    exit 1;
+}
+
+sub warning($)
+{
+    print STDERR "WARNING: " . join(' ',@_);
+    $warnings++;
+}
+
+sub config_stage
+{
+    my( $stage, $conf ) = @_;
+    my $result;
+
+    $stage eq "start" || die "Unknown stage $stage";
+
+    my $writer = new XMLTV::Configure::Writer( OUTPUT => \$result,
+					       encoding => 'utf-8' );
+    if( $stage eq 'start' ) {
+	$writer->start( { grabber => $grabber_name } );
+	$writer->start_selectone( {
+	    id => 'accept-copyright-disclaimer',
+	    title => [ [ 'Acceptér ansvarsfraskrivelse', 'da'],
+		       [ 'Accept disclaimer', 'en'] ],
+	    description => [ [ "Data fra DR's programoversigt er " .
+			       "beskyttet af loven om ophavsret, " .
+			       "og må kun anvendes til personlige, " .
+			       "ikke-kommercielle formål. " .
+			       "Dette programs forfatter(e) kan ikke " .
+			       "holdes ansvarlig for evt. misbrug.", 'da' ],
+			     [ "Data from DR's program guide is " .
+			       "protected by copyright law and may " .
+			       "only be used for personal, non-commercial " .
+			       "purposes. The author(s) " .
+			       "of this program accept no responsibility " .
+			       "for any mis-use.",
+			       'en' ] ] } );
+	$writer->write_option( {
+	    value=>'reject',
+	    text=> [ [ 'Jeg accepterer IKKE betingelserne', 'da'],
+		     [ 'I do NOT accept these conditions', 'en'] ] } );
+	$writer->write_option( {
+	    value=>'accept',
+	    text=> [ [ 'Jeg accepterer betingelserne', 'da'],
+		     [ 'I accept these conditions', 'en'] ] } );
+	$writer->end_selectone();
+	$writer->start_selectone( {
+	    id => 'include-radio',
+	    title => [ [ 'Medtag radio-kanaler', 'da'],
+		       [ 'Include radio channels', 'en'] ],
+	    description => [ [ "DR's programoversigt indeholder " .
+			       "radiokanaler, du kan her vælge " .
+			       "om de skal medtages i listen.", 'da' ],
+			     [ "DR's program guide includes radio " .
+			       "channels, here you can choose whether " .
+			       "to include them.", 'en' ] ] } );
+	$writer->write_option( {
+	    value=>'0',
+	    text=> [ [ 'Udelad radio-kanaler', 'da'],
+		     [ 'Exclude radio channels', 'en'] ] } );
+	$writer->write_option( {
+	    value=>'1',
+	    text=> [ [ 'Medtag radio-kanaler', 'da'],
+		     [ 'Include radio channels', 'en'] ] } );
+	$writer->end_selectone();
+	$writer->write_string( {
+	    id => 'root-url',
+	    title => [ [ 'Root URL for grabbing data', 'en' ],
+		       [ 'Grund-URL for grabberen', 'da' ] ],
+	    description => [ [ 'Provide the URL of DR\'s program guide ' .
+			       'data data engine, ' .
+			       'including the trailing slash.', 'en' ],
+			     [ 'Indtast URL\'en på DR\'s tv-oversigs data ' .
+			       'engine, inklusive den ' .
+			       'efterfølgende skråstreg.', 'da' ] ],
+	    default => $default_root_url } );
+    }
+    $writer->end( 'select-channels' );
+
+    return $result;
+}
+
+sub list_channels($$)
+{
+    my( $conf, $opt ) = @_;
+    my $chanlist = &get_channel_list($conf);
+    #print Dumper $chanlist;
+    my $result="";
+    my $fh = new IO::Scalar \$result;
+    my $oldfh = select( $fh );
+    my $writer = new XMLTV::Writer(OUTPUT => $fh, encoding => 'utf-8');
+    $writer->start(\%grabber_tags);
+    $writer->write_channels($chanlist);
+    $writer->end();
+    select( $oldfh );
+    $fh->close();
+
+    #print "RESULT:\n$result\n";
+    return $result;
+}
+
+sub get_available_dates()
+{
+    my ( $chan, $date ) = @_;
+
+    my @schedules = ();
+
+    my $url = $conf->{'root-url'}->[0] .
+	'DBService.ashx/availableBroadcastDates';
+    #print "Get: $url\n";
+    my $content = get($url) || return 0;
+    my $parsed = &parse(\$content) || die "Error parsing date list";
+     #print Dumper $parsed;
+     my %available_dates = ();
+     for (@{@$parsed[0]->{'result'}[0]})
+     {
+	#print "Date: $_\n";
+	m/^([0-9]+-[0-9]+-[0-9]+).*/;
+	$available_dates{$1} = 1;
+     }
+     return \%available_dates;
+}
+
+sub get_schedules($$)
+{
+    my ( $chan, $date ) = @_;
+
+    my @schedules = ();
+
+    my $src = $chan->{'_source_url'};
+    $src =~ s/([^A-Za-z0-9])/sprintf("%%%02X", ord($1))/seg;
+    my $url = $conf->{'root-url'}->[0] .
+	'DBService.ashx/getSchedule?channel_source_url=' .
+	$src . '&broadcastDate=' .$date . "&random=".rand();
+    #print "Get: $url\n";
+    my $content = get($url) || return 0;
+    my $parsed = &parse(\$content) || die "Error parsing channel list";
+    #push(@results, @{@$parsed[0]->{'result'}});
+    #print Dumper $parsed;
+    my @results = ();
+    if ( ("HASH" ne ref (@$parsed[0])) ||
+	 ("ARRAY" ne ref(@$parsed[0]->{'result'}))) {
+	    warning("Parser barfed while processing channel " .
+		    $chan->{'_name'}. " date ". $date . " (empty result?) URL: $url\n" . $content . "\n");
+	    #print STDERR Dumper $parsed;
+	return \@results;
+    }
+
+    foreach my $listing (@{@$parsed[0]->{'result'}}) {
+	my %p = ();
+	#print "Processing: ";
+	# Delete things that we don't want to use before dumping
+	# This way we can see if we're missing something useful..
+	#delete $listing->{'ppu_islive'}; # Always "1"..
+	#delete $listing->{'prd_is_own_production'}; # Always "true"..
+	#print Dumper $listing;
+	# attributes
+	$p{'channel'} = $chan->{'id'};
+	$p{'start'} = dr_date_to_xml($listing->{'pg_start'});
+	$p{'stop'} = dr_date_to_xml($listing->{'pg_stop'});
+	# elements
+
+	########################################
+	# Episode
+	# $episode_match fjerner (x:y) eller (x)
+	# fra titler hvor episode nummeret allerede
+	# er gemt i det dertil indrettede felt
+	my $episode_match = '';
+	if ($listing->{'prd_episode_total_number'} &&
+	    $listing->{'prd_episode_number'}) {
+	    $p{'episode-num'} = [ [ " . " .
+				    ($listing->{'prd_episode_number'} - 1) .
+				    "/" .
+				    ($listing->{'prd_episode_total_number'}) .
+				    " . ", "xmltv_ns" ] ];
+	    $episode_match = " \\(" . $listing->{'prd_episode_number'} . ":" .
+		$listing->{'prd_episode_total_number'} . "\\)";
+
+	} elsif ($listing->{'prd_episode_number'}) {
+	    $p{'episode-num'} = [ [ " . " .
+				    ($listing->{'prd_episode_number'} - 1) .
+				    " . ", "xmltv_ns" ] ];
+	    $episode_match = " \\(" . $listing->{'prd_episode_number'} . "\\)";
 	}
 
-	# Would be better split into paragraphs but the current format
-	# doesn't allow that.
+	########################################
+	# Titel
+	# Sprog gættes fra kanalens landekode.
+	# Hvis der er en alternativ titel ser vi om
+	# sproget fremgår af undertitlen, ellers gætter
+	# vi på engelsk..
 	#
-	$prog{desc} = [ [ join(' ', @desc), $LANG ] ] if @desc;
-        
-	$prog{video} = { present => 1,
-                         aspect => $aspect,
-                         colour => $colour };
+	# Rettelse: Der er rent faktisk nogen der har
+	# oversat alle TV5's titler til dansk, så den
+	# "alternative" titel er dansk for alle disse
+	# programmer mens standard titlen er på
+	# originalsproget. Weird. Men det gælder kun
+	# TV5 så jeg har ikke giddet fixe det når jeg
+	# alligevel aldrig kunne finde på at se fransk
+	# TV :)
+	my @title;
+	my $t = $listing->{'ppu_title'};
+	if ($episode_match ne '') {
+	    #print "EpMatch: $episode_match\n";
+	    $t =~ s/$episode_match$//;
+	}
+	push (@title, [ $t, $chan->{'_lang'} ]);
+	if ($listing->{'ppu_title_alt'}) {
+	    my $original_lang = guess_original_language($listing);
+	    if (!$original_lang) {
+		$original_lang = 'en';
+	    }
+	    push (@title, [ $listing->{'ppu_title_alt'}, $original_lang ]);
+	}
+	$p{'title'} = \@title;
 
-	$prog{audio} = { present => 1,
-                         stereo => "stereo" } if defined $stereo;
+	########################################
+	# Undertitel
+	if ($listing->{'ppu_punchline'}) {
+	    my $pl = $listing->{'ppu_punchline'};
+	    # Der er nogle gange linjeskift i
+	    # punchlines, hvilket XMLTV ikke bryder
+	    # sig om...
+	    $pl =~ s/\s*\n\s*/ - /g;
+	    $p{'sub-title'} = [ [ $pl,
+				  $chan->{'_lang'} ] ];
+	}
 
-	if (defined $episode_num) {
-	    if (defined $sub_title) {
-		$sub_title = "$sub_title. Episode $episode_num";
+	########################################
+	# Beskrivelse
+	if ($listing->{'ppu_description'}) {
+	    $p{'desc'} = [ [ $listing->{'ppu_description'},
+				  $chan->{'_lang'} ] ];
+	}
+
+	########################################
+	# Credits
+	#if ($listing->{'ppu_credits'}) {
+	#    $p{'desc'} = [ [ $listing->{'ppu_description'},
+	#			  $chan->{'_lang'} ] ];
+	#}
+
+	########################################
+	# Genudsendelse
+	if ($listing->{'ppu_isrerun'} eq 'true') {
+	    $p{'previously-shown'} = {};
+	}
+
+	########################################
+	# Genre/kategori
+	# Her bruges genre_text, vi kunne også
+	# bruge genre_code og have en tabel
+	# til at få i det mindste den generelle
+	# kategori på engelsk (farver i MythTV!)
+	# TODO: Fix engelske kategorier
+	if ($listing->{'prd_genre_text'} &&
+	    $listing->{'prd_genre_text'} ne 'Ukategoriseret' &&
+	    $listing->{'prd_genre_text'} ne 'Andre') {
+	    $p{'category'} = [ [ $listing->{'prd_genre_text'}, 'da']];
+	}
+
+	########################################
+	# URL
+	if ($listing->{'ppu_www_url'}) {
+	    $p{'url'} = [ $listing->{'ppu_www_url'} ];
+	}
+
+	########################################
+	# Video info (kun i DR's programmer)
+	# 16:9 eller 4:3
+	if ($listing->{'ppu_video'}) {
+	    $p{'video'}{'aspect'} = $listing->{'ppu_video'};
+	}
+
+	########################################
+	# Undertekster
+	if ($listing->{'ppu_subtext_type'}) {
+	    if ($listing->{'ppu_subtext_type'} =~ '^TTV' ||
+		$listing->{'ppu_subtext_type'} eq 'EXTERN') {
+		push @{$p{subtitles}},{type=>'teletext'};
+	    } elsif ($listing->{'ppu_subtext_type'} ne 'NOTXT') {
+		push @{$p{subtitles}},{type=>'onscreen'};
+	    }
+	}
+
+	########################################
+	# Credits
+	if ($listing->{'ppu_credits'}) {
+	    my $credits = parse_dr_credits($listing->{'ppu_credits'});
+	    if ($credits) {
+		$p{'credits'} = $credits;
+	    }
+	}
+
+
+	# Sanity checks..
+	if (!$p{'start'}) { warning("No 'START' attribute"); next; }
+	if (!$p{'stop'}) { warning("No 'START' attribute"); next; }
+	if (!$p{'title'}) { warning("No 'TITLE' attribute"); next; }
+
+	#print Dumper \%p;
+	push(@results, \%p);
+    }
+    return \@results;
+}
+
+sub parse_dr_credits($)
+{
+    my ( $input ) = @_;
+    my %c = ();
+
+    #print "\nInput: $input\n";
+
+    my $director;
+    ( $director ) = $input =~ m/Instruktion:\s*(.*)/;
+    if ($director) {
+	$input =~ s/\s*Instruktion:.*//;
+	$director =~ s/.?\s*$//;
+    }
+    #print "Director: " . $director . "\n" if $director;
+    $c{'director'} = [ $director ] if $director;
+    my @actors = ();
+    my ( $actorlist ) = $input =~ /Medvirkende:\s*(.*)\s*/;
+    if ($actorlist) {
+	for my $entry (split(/\s*(?:og|,)\s*/, $actorlist)) {
+	    #print "ENTRY: '$entry'\n";
+	    if ($entry =~ m/(.*?)\s*:\s*(.*?)\.?\s*$/) {
+		#print "Actor: $2 Role: $1\n";
+		# Her smider vi rollenavnet væk selvom
+		# XMLTV understøtter det som attribute.
+		# Desværre understøtter xmltv.pm det ikke :(
+		#push(@actors, [ $2, $1 ]);
+		push(@actors, $2);
 	    } else {
-		$sub_title = "Episode $episode_num";
+		#print "Actor: $entry\n";
+		push(@actors, $entry);
 	    }
-	}
-
-	$prog{'sub-title'} = [ [ $sub_title, $LANG ] ] if defined $sub_title;
-	$prog{subtitles} = [ { type => 'teletext' } ] if $teletext_sub;
-	$prog{subtitles} = [ { type => 'onscreen' } ] if $texted;
-
-	if (defined $episode_num) {
-#               $episode_num = $episode_num - 1;
-#               # We do not get any information about seasons, nor the total
-#               # amount of episodes. Guess this is better than nothing.
-#               $prog{'episode-num'} = [ [ " . $episode_num . ", "xmltv_ns" ] ];
-	    $prog{'episode-num'} = [ [ "$episode_num", "onscreen" ] ];
-	}
-	$prog{date} = $date if defined $date;
-
-	my @cats = ();
-# In the current implementation, the $genre is not a real genre, grab it anyway
-	if (defined $genre) {
-	    @cats = ([$genre]);
-	}
-	foreach(keys(%categories)) {
-	    if ((defined $genre && ($genre =~ /$_/i || $genre =~ /$categories{$_}/i)) ||
-		($title =~ /$_/i || $title =~ /$categories{$_}/i) ||
-		($categories{$_} =~ /^series$/ && defined $episode_num)) {
-#                       @cats = ([ $categories{$_} ], @cats);
-		push @cats, [ $categories{$_} ];
-	    }
-	}
-	foreach(keys(%movietypes)) {
-	    if ((defined $genre && ($genre =~ /$_/i || $genre =~ /$movietypes{$_}/i)) ||
-		($title =~ /$_/i || $title =~ /$movietypes{$_}/i)) {
-#                               @cats = ([ $movietypes{$_} ], @cats);
-		push @cats, [ $movietypes{$_} ];
-	    }
-	}
-	$prog{'category'} = [ @cats ];
-
-	$prog{'previously-shown'} = $previously_shown if $previously_shown;
-        
-	my %c;
-
-	if ($actors) {
-	    s/.*: // foreach @$actors;
-	    $c{actor} = $actors;
-	}
-	$c{writer} = $writers if $writers;
-	$c{commentator} = $commentators if $commentators;
-	$c{director} = [ $director ] if $director;
-	$prog{credits} = \%c if %c;
-
-	$writer->write_programme(\%prog);
-    }
-    $t->delete(); undef $t;
-}
-
-# get channel listing
-sub get_channels {
-    my %channels;
-
-    my $t = get_tree('http://www.dr.dk/tjenester/programoversigten/w3c/epg.asp');
-
-    # The channels and their IDs are defined in javascript arrays
-    my @elements = $t->look_down("_tag" => "a", "class" => "verysmalltext");
-    foreach my $i (@elements) {
-	my $channel_id = $i->attr("onclick");
-	if ($channel_id =~ /channel=(.+?)\'/) {
-	    $channel_id = $1;
-
-	    my @children = $i->content_list();
-	    
-	    if (scalar(@children) != 1 || ref($children[0])) {
-		next;
-	    }
-
-	    my $channel_name = $children[0];
-
-	    $channels{$channel_id} = $channel_name if defined $channel_name;
 	}
     }
-
-    $t->delete(); undef $t;
-    return %channels;
+    if (@actors) {
+	$c{'actor'} = \@actors;
+    }
+    #print Dumper \%c;
+    return \%c;
 }
 
-# Clean up bad characters in the site's HTML.
-my $warned_bad_chars;
-sub tidy( $ ) {
-    for (my $tmp = shift) {
-	tr/\222/''/;
-	tr/\011/ /; # tabs are allowed - turn them into spaces
-	if (tr/\012\015\040-\176\240-\377//dc) {
-	    warn 'removing bad characters' unless ($warned_bad_chars++ || $opt_quiet);
-	}
-	return $_;
+# Her udnytter vi at der i ppu_punchline tit står
+# "Amerikansk serie", "Fransk dokumentar" etc..
+# Listen er ikke komplet men jeg har medtaget de
+# fleste jeg tror vil forekomme.. Listen er fra
+# http://en.wikipedia.org/wiki/List_of_ISO_639-1_codes
+sub guess_original_language($)
+{
+    my ( $listing ) = @_;
+
+    my $s = $listing->{'ppu_punchline'};
+    if ($s) {
+	return "bg" if $s =~ /^Bulgarsk /;
+	return "bs" if $s =~ /^Bosnisk /;
+	return "cz" if $s =~ /^Tjekkisk /;
+	return "de" if $s =~ /^Tysk /;
+	return "el" if $s =~ /^Græsk /;
+	return "es" if $s =~ /^Spansk /;
+	return "et" if $s =~ /^Estisk /;
+	return "fi" if $s =~ /^Finsk /;
+	return "fr" if $s =~ /^Fransk /;
+	return "fr" if $s =~ /^Fransk-/; # Fransk-Belgisk, Fransk-Canadisk...
+	return "hi" if $s =~ /^Indisk /;
+	return "hr" if $s =~ /^Kroatisk /;
+	return "hu" if $s =~ /^Ungarnsk /;
+	return "hy" if $s =~ /^Armensk /;
+	return "id" if $s =~ /^Indonesisk /;
+	return "is" if $s =~ /^Islandsk /;
+	return "it" if $s =~ /^Italiensk /;
+	return "ja" if $s =~ /^Japansk /;
+	return "ka" if $s =~ /^Georgisk /;
+	return "kk" if $s =~ /^Kazakstansk /;
+	return "ko" if $s =~ /^Koreansk /;
+	return "ku" if $s =~ /^Kurdisk /;
+	return "lt" if $s =~ /^Litauisk /;
+	return "lv" if $s =~ /^Lettisk /;
+	return "my" if $s =~ /^Burmesisk /;
+	return "nl" if $s =~ /^Belgisk /;
+	return "nl" if $s =~ /^Hollandsk /;
+	return "no" if $s =~ /^Norsk /;
+	return "pl" if $s =~ /^Polsk /;
+	return "pt" if $s =~ /^Portugisisk /;
+	return "ru" if $s =~ /^Russisk /;
+	return "sk" if $s =~ /^Slovakisk /;
+	return "sl" if $s =~ /^Slovensk /;
+	return "so" if $s =~ /^Somalisk /;
+	return "sq" if $s =~ /^Albansk /;
+	return "sr" if $s =~ /^Serbisk /;
+	return "sv" if $s =~ /^Svensk /;
+	return "tr" if $s =~ /^Tyrkisk /;
+	return "ty" if $s =~ /^Tahitiansk /;
+	return "uk" if $s =~ /^Ukrainsk /;
+	return "vi" if $s =~ /^Vietnamesisk /;
+	return "zh" if $s =~ /^Kinesisk /;
+    }
+    return 0;
+}
+
+
+sub dr_date_to_xml($)
+{
+    # 2009-06-13T12:34:56.0000000+02:00 ->
+    # 20090613123456 +0200
+    my ($d) = @_;
+    if ($d =~
+	m|^([0-9]+)-([0-9]+)-([0-9]+)T([0-9]+):([0-9]+):([0-9]+)\.[0-9]+\+([0-9]+):([0-9]+)|) {
+	$d = $1.$2.$3.$4.$5.$6.' +'.$7.$8;
+	#print "d: $d\n";
+	return $d;
+    } else {
+	return 0;
     }
 }
 
-require HTML::TreeBuilder;
-sub get_tree( $ ) {
-    my $t = new HTML::TreeBuilder;
-    my $c = get_url(shift);
-    $t->parse($c);
-    $t->eof;
-    return $t;
+sub get_channel_list($)
+{
+    my ( $conf ) = @_;
+    my $drlist = get_dr_channel_list($conf);
+    #print Dumper $drlist;
+    my %chanlist = ();
+    foreach my $chan (@$drlist) {
+	my $shortid = $chan->{'source_url'};
+	$shortid =~ s/^.*\///;
+	my $id = $shortid . $id_prefix;
+	# tv_validate_file barfs if ID contains + as for d3+.dr.dk
+	$id =~ s/\+/plus/g;
+	$chanlist{$id}->{'id'} = $id;
+	$chanlist{$id}->{'icon'} = [{ 'src'=>$conf->{'root-url'}->[0] .
+					 "Images/Logos/" . $shortid .
+					 ".gif" }];
+	$chanlist{$id}->{'_source_url'} = $chan->{'source_url'};
+	my $chan_lang = $dr_language_codes{$chan->{'country_code'}};
+	$chan_lang = 'da' unless $chan_lang;
+	$chanlist{$id}->{'_lang'} = $chan_lang;
+	$chanlist{$id}->{'display-name'} =
+	    [ [ $chan->{'name'}, $chan_lang ]];
+	$chanlist{$id}->{'_name'} = $chan->{'name'};
+    }
+
+    return \%chanlist;
 }
 
-my $fetched;
-sub get_url( $ ) {
-    sleep rand(5) if defined $fetched;
-    $fetched = 1;
-    my $c = tidy($ua->get(shift)->content);
-    return $c;
+sub get_dr_channel_list($)
+{
+    my ( $conf ) = @_;
+    my @types = ('TV');
+    if ($conf->{'include-radio'}[0] eq '1') {
+	push (@types, 'RADIO');
+    }
+    my @results = ();
+    foreach my $type (@types) {
+	#print "TYPE: $type\n";
+	my $url = $conf->{'root-url'}->[0] .
+	    'DBService.ashx/getChannels?type=' . $type;
+	#print "Get: $url\n";
+	my $content = get($url) || return 0;
+	my $parsed = &parse(\$content) || die "Error parsing channel list";
+	#print Dumper $parsed;
+	push(@results, @{@$parsed[0]->{'result'}});
+    }
+    #print Dumper \@results;
+    return \@results;
 }
 
-# Bump a YYYYMMDD date by one.
-sub nextday {
-    my $d = shift;
-    my $p = parse_date($d);
-    my $n = DateCalc($p, '+ 1 day');
-    return UnixDate($n, '%Q');
+sub fix_string($)
+{
+    # \" => "
+    # \n => newline
+    # \t => tab? har set en enkelt. fjerner.
+    my ( $str ) = @_;
+    $str =~ s/\\n/\n/g;
+    $str =~ s/\\t//g;
+    $str =~ s/\\"/"/g;
+    if ($str =~ m/\\/) {
+	warning("Weird string: $str\n");
+    }
+    return $str;
 }
 
-# Icon URL for a given channel.
-sub get_icon {
-    my ($url) = @_;
-    return "http://www.dr.dk/tjenester/programoversigten/w3c/logoer/" . $url . ".gif";
+sub parse($)
+{
+    $::RD_HINT = 1;
+
+    my $grammar = <<'EO_GRAMMAR';
+    #<autotree>
+    # TODO: Parseren fejler hvis serveren returnerer
+    # et tomt resultat for en getSchedule. Check
+    # output og ret grammer.
+	document : record(s /,/)
+	{ $return = $item{'record(s)'}; }
+	record : '{'  field(s? /,/) '}'
+	  { $return = { map { %$_ } @{$item{'field(s?)'}} }; }
+	| value(s? /,/)
+	  { $return =  $item{'value(s?)'}; }
+	field : '"' key '":' value
+	{ $return = {
+	    $item{'key'} => $item{'value'}
+	  }
+	}
+	key : /[^"]+/
+	{ $return = $item[1]; 1}
+	value : '[' record(s? /,/) ']'
+	    { $return = $item{'record(s?)'}; }
+	  | quotedstring
+	    { $return = $item[1]; 1}
+	  | literal
+	    { $return = $item[1]; 1}
+	quotedstring : '"' /(?:[^\\"]|\\.)*/ '"'
+	{ $return = ::fix_string($item[2]); 1}
+	literal : /[^,]+/
+	{ $return = $item[1]; 1}
+
+EO_GRAMMAR
+
+    my $parser = Parse::RecDescent->new($grammar)
+    or die "Could not parse grammar: $@";
+
+    return $parser->document($_[0])
+    or die "Invalid document";
 }
+
+&main;
