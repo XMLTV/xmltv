@@ -82,19 +82,16 @@ use XMLTV::Configure::Writer;
 
 use Data::Dumper;
 use Parse::RecDescent;
-use LWP::Simple;
-use LWP::Simple qw($ua get);
+use LWP;
 
 use DateTime;
 
+my $ua = LWP::UserAgent->new;
 $ua->agent("xmltv/$XMLTV::VERSION");
-
-binmode STDOUT,":utf8";
 
 my $grabber_name = 'tv_grab_dk_dr';
 my $id_prefix = '.dr.dk';
 
-# HASDONE: Change this when DR's schedule comes out of beta
 my $default_root_url = 'http://www.dr.dk/tjenester/programoversigt/';
 
 my %grabber_tags = ( 'source-info-url'	   =>
@@ -135,7 +132,7 @@ sub main()
 	listchannels_sub => \&list_channels,
 	#load_old_config_sub => \&load_old_config,
 	version => '$Id$',
-	description => "TV Oversigten fra Danmarks Radios " .
+	description => "TV Oversigten fra Danmarks Radios ".
 	    "(www.dr.dk/tjenester/programoversigt)",
 				      } );
 
@@ -171,7 +168,7 @@ sub main()
 
     my %writer_args = ( encoding => 'utf-8' );
     if (defined $opt->{'output'}) {
-	my $fh = IO::File->new($opt->{'output'}, ">:utf8");
+	my $fh = new IO::File ">".$opt->{'output'};
 	die "Cannot write to $opt->{'output'}" if not $fh;
 	$writer_args{'OUTPUT'} = $fh;
     }
@@ -216,7 +213,7 @@ sub main()
 		    	#$chan->{'display-name'}[0][0]."\n";
 		    my $schedules = get_schedules($chan, $fmtdate);
 		    if ("ARRAY" ne ref($schedules)) {
-			warning("Schedules for $cid on $fmtdate not valid - empty?\n");
+			&warning("Schedules for $cid on $fmtdate not valid - empty?\n");
 			next;
 		    }
 		    foreach my $s (@$schedules) {
@@ -244,6 +241,16 @@ sub warning($)
 {
     print STDERR "WARNING: " . join(' ',@_);
     $warnings++;
+}
+
+sub geturl($)
+{
+    my( $url ) = @_;
+
+    my $request = HTTP::Request->new('GET');
+    $request->url($url);
+    my $response = $ua->request($request);
+    return $response->content;
 }
 
 sub config_stage
@@ -347,11 +354,12 @@ sub get_available_dates()
     my $url = $conf->{'root-url'}->[0] .
 	'DBService.ashx/availableBroadcastDates';
     #print "Get: $url\n";
-    my $content = get($url) || return 0;
+    my $content = geturl($url) || return 0;
+    #print STDERR $content. "\n";
     my $parsed = &parse(\$content) || die "Error parsing date list";
      #print Dumper $parsed;
      my %available_dates = ();
-     for (@{@$parsed[0]->{'result'}[0]})
+     for (@{$parsed->{'result'}})
      {
 	#print "Date: $_\n";
 	m/^([0-9]+-[0-9]+-[0-9]+).*/;
@@ -372,27 +380,36 @@ sub get_schedules($$)
 	'DBService.ashx/getSchedule?channel_source_url=' .
 	$src . '&broadcastDate=' .$date . "&random=".rand();
     #print "Get: $url\n";
-    my $content = get($url) || return 0;
-    my $parsed = &parse(\$content) || die "Error parsing channel list";
-    #push(@results, @{@$parsed[0]->{'result'}});
-    #print Dumper $parsed;
+    my $content = geturl($url) || return 0;
     my @results = ();
-    if ( ("HASH" ne ref (@$parsed[0])) ||
-	 ("ARRAY" ne ref(@$parsed[0]->{'result'}))) {
-	    warning("Parser barfed while processing channel " .
-		    $chan->{'_name'}. " date ". $date . " (empty result?) URL: $url\n" . $content . "\n");
-	    #print STDERR Dumper $parsed;
+    my $parsed = &parse($content);
+    if ((!$parsed) || ("HASH" ne ref ($parsed)) )  { # ||
+		#	("ARRAY" ne ref(@$parsed->{'result'})))) {
+	&warning("(BUG?) Parser barfed while processing channel " .
+		 $chan->{'_name'}. " date ". $date . " (empty result?) URL: $url\n");
+	print STDERR "Content: $content\n";
+	print STDERR Dumper $parsed;
+	return \@results;
+    } elsif ( ("ARRAY" ne ref ($parsed->{'result'} )) ) {
+	    &warning("(BUG?) Parser barfed while processing channel " .
+		    $chan->{'_name'}. " date ". $date . " (empty result?) URL: $url\n");
+	    &warning("Result type: " . ref ($parsed) . "\n");
+	    print STDERR "Content: $content\n";
+	    print STDERR Dumper $parsed;
 	return \@results;
     }
-
-    foreach my $listing (@{@$parsed[0]->{'result'}}) {
+    if ( !@{$parsed->{'result'}} ) {
+	&warning("Empty result for \"".
+	       $chan->{'_name'}. "\" (".$chan->{'id'}.") date ". $date . "\n");
+	return \@results;
+    }
+    foreach my $listing (@{$parsed->{'result'}}) {
 	my %p = ();
-	#print "Processing: ";
 	# Delete things that we don't want to use before dumping
 	# This way we can see if we're missing something useful..
 	#delete $listing->{'ppu_islive'}; # Always "1"..
 	#delete $listing->{'prd_is_own_production'}; # Always "true"..
-	#print Dumper $listing;
+	#print STDERR Dumper $listing;
 	# attributes
 	$p{'channel'} = $chan->{'id'};
 	$p{'start'} = dr_date_to_xml($listing->{'pg_start'});
@@ -508,7 +525,12 @@ sub get_schedules($$)
 	# Video info (kun i DR's programmer)
 	# 16:9 eller 4:3
 	if ($listing->{'ppu_video'}) {
-	    $p{'video'}{'aspect'} = $listing->{'ppu_video'};
+	    if ($listing->{'ppu_video'} eq 'HD') {
+		$p{'video'}{'aspect'} = '16:9';
+		$p{'video'}{'quality'} = 'HDTV';
+	    } else {
+		$p{'video'}{'aspect'} = $listing->{'ppu_video'};
+	    }
 	}
 
 	########################################
@@ -533,9 +555,9 @@ sub get_schedules($$)
 
 
 	# Sanity checks..
-	if (!$p{'start'}) { warning("No 'START' attribute"); next; }
-	if (!$p{'stop'}) { warning("No 'START' attribute"); next; }
-	if (!$p{'title'}) { warning("No 'TITLE' attribute"); next; }
+	if (!$p{'start'}) { &warning("No 'START' attribute"); next; }
+	if (!$p{'stop'}) { &warning("No 'START' attribute"); next; }
+	if (!$p{'title'}) { &warning("No 'TITLE' attribute"); next; }
 
 	#print Dumper \%p;
 	push(@results, \%p);
@@ -696,13 +718,13 @@ sub get_dr_channel_list($)
 	#print "TYPE: $type\n";
 	my $url = $conf->{'root-url'}->[0] .
 	    'DBService.ashx/getChannels?type=' . $type;
-	#print "Get: $url\n";
-	my $content = get($url) || return 0;
+	#print STDERR "Get: $url\n";
+	my $content = geturl($url) || return 0;
+	#print STDERR "Content: $content\n";
 	my $parsed = &parse(\$content) || die "Error parsing channel list";
-	#print Dumper $parsed;
-	push(@results, @{@$parsed[0]->{'result'}});
+	#print STDERR Dumper $parsed;
+	push(@results, @{$parsed->{'result'}});
     }
-    #print Dumper \@results;
     return \@results;
 }
 
@@ -716,7 +738,7 @@ sub fix_string($)
     $str =~ s/\\t//g;
     $str =~ s/\\"/"/g;
     if ($str =~ m/\\/) {
-	warning("Weird string: $str\n");
+	&warning("Weird string: $str\n");
     }
     return $str;
 }
@@ -729,38 +751,35 @@ sub parse($)
     #<autotree>
     # TODO: Parseren fejler hvis serveren returnerer
     # et tomt resultat for en getSchedule. Check
-    # output og ret grammer.
-	document : record(s /,/)
-	{ $return = $item{'record(s)'}; }
-	record : '{'  field(s? /,/) '}'
+    # output og ret grammar.
+	document : object
+	object : '{'  field(s? /,/) '}'
 	  { $return = { map { %$_ } @{$item{'field(s?)'}} }; }
-	| value(s? /,/)
-	  { $return =  $item{'value(s?)'}; }
 	field : '"' key '":' value
-	{ $return = {
-	    $item{'key'} => $item{'value'}
-	  }
-	}
+	  { $return = { $item{'key'} => $item{'value'} }; 1}
 	key : /[^"]+/
-	{ $return = $item[1]; 1}
-	value : '[' record(s? /,/) ']'
-	    { $return = $item{'record(s?)'}; }
+	  { $return = $item[1]; 1}
+	value :  object
+	  | list
 	  | quotedstring
 	    { $return = $item[1]; 1}
 	  | literal
 	    { $return = $item[1]; 1}
+        list :  '[]'
+	    { $return = []; 1}
+          | '[' value(s? /,/) ']'
+	    { $return = $item{'value(s?)'};}
 	quotedstring : '"' /(?:[^\\"]|\\.)*/ '"'
-	{ $return = ::fix_string($item[2]); 1}
+	  { $return = ::fix_string($item[2]); 1}
 	literal : /[^,]+/
-	{ $return = $item[1]; 1}
+	  { $return = $item[1]; 1}
 
 EO_GRAMMAR
 
     my $parser = Parse::RecDescent->new($grammar)
     or die "Could not parse grammar: $@";
 
-    return $parser->document($_[0])
-    or die "Invalid document";
+    return $parser->document($_[0]);
 }
 
 &main;
