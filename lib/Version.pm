@@ -1,6 +1,6 @@
 =head1 NAME
 
-XMLTV::Version
+XMLTV::Version - Adds a --version argument to XMLTV grabbers
 
 =head1 DESCRIPTION
 

@@ -20,7 +20,7 @@ use Carp;
 
 =head1 NAME
 
-XMLTV::Configure::Writer
+XMLTV::Configure::Writer - Configuration file writer for XMLTV grabbers
 
 =head1 DESCRIPTION
 

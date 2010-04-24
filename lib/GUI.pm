@@ -2,7 +2,7 @@
 
 =head1 NAME
 
-    XMLTV::GUI - handles the choice of UI for XMLTV
+    XMLTV::GUI - Handles the choice of UI for XMLTV
 
 =head1 SYNOPSIS
 

@@ -17,7 +17,7 @@ my $CMD_TIMEOUT = 600;
 
 =head1 NAME
 
-XMLTV::ValidateGrabber
+XMLTV::ValidateGrabber - Validates an XMLTV grabber
 
 =head1 DESCRIPTION
 

@@ -17,7 +17,7 @@ our @EXPORT_OK;
 
 =head1 NAME
 
-XMLTV::Options
+XMLTV::Options - Command-line parsing for XMLTV grabbers
 
 =head1 DESCRIPTION
 

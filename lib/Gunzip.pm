@@ -4,7 +4,7 @@
 
 =head1 NAME
 
-    XMLTV::Gunzip - wrapper to Compress::Zlib or gzip(1)
+    XMLTV::Gunzip - Wrapper to Compress::Zlib or gzip(1)
 
 =head1 SYNOPSIS
 

@@ -23,7 +23,7 @@ my( $dtd, $parser );
 
 =head1 NAME
 
-XMLTV::ValidateFile
+XMLTV::ValidateFile - Validates an XMLTV file
 
 =head1 DESCRIPTION
 

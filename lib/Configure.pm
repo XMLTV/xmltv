@@ -17,7 +17,7 @@ use XML::LibXML;
 
 =head1 NAME
 
-XMLTV::Configure
+XMLTV::Configure - Configuration file handling for XMLTV grabbers
 
 =head1 DESCRIPTION
 

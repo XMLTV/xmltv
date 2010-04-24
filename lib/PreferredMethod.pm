@@ -1,6 +1,6 @@
 =head1 NAME
 
-XMLTV::PreferredMethod
+XMLTV::PreferredMethod - Adds a preferredmethod argument to XMLTV grabbers
 
 =head1 DESCRIPTION
 

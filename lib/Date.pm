@@ -3,7 +3,7 @@
 
 =head1 NAME
 
-XMLTV::Date - date parsing routines for the xmltv package
+XMLTV::Date - Date parsing routines for the xmltv package
 
 =head1 SEE ALSO
 
