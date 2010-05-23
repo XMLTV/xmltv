@@ -59,10 +59,12 @@ my $opt_strictdeps = 0;
 my $opt_yes = 0;
 my $opt_default = 0;
 my $opt_components;
+my $opt_exclude;
 GetOptions('strict-deps'  => \$opt_strictdeps,	# be strict about dependencies
 	   yes            => \$opt_yes,		# answer yes to all questions
    	   default        => \$opt_default,	# answer default to all questions
 	   'components=s' => \$opt_components,
+	   'exclude=s'	  => \$opt_exclude,
 	  );
 
 our $VERSION;
@@ -382,7 +384,6 @@ my @opt_components
      },
 
 # 2008-11-09 disabled after ident string was blocked
-# 200
 #     { name => 'tv_grab_be',
 #       blurb => 'Grabber for Belgium and Luxemburg',
 #       exes => [ 'grab/be/tv_grab_be' ],
@@ -748,6 +749,20 @@ countries and front-ends for managing listings.
 END
       ;
 
+    my %by_name;
+    foreach (@opt_components) {
+        $by_name{$_->{name}} = $_;
+        $_->{exclude} = 0; # default if not mentioned
+    }
+
+    if (defined $opt_exclude) {
+        foreach (split /,/, $opt_exclude) {
+            my $i = $by_name{$_};
+            die "unknown component $_\n" if not $i;
+            $i->{exclude} = 1;
+        }
+    }
+
     my $width = 0;
     foreach my $info (@opt_components) {
 	my $w = length("$info->{blurb} ($info->{name})");
@@ -760,7 +775,7 @@ END
 	# Guess a default value for {install} based on whether
 	# prerequisites were found.
 	#
-	$info->{install} = $opt_yes || not $info->{missing};
+	$info->{install} = not $info->{exclude} && ($opt_yes || not $info->{missing});
 
 	print STDERR ($s, ' ' x (1 + $width - length $s),
 		      $info->{install} ? '[yes]' : '[no]',
