@@ -71,6 +71,8 @@ L<xmltv(5)>.
 
 =head1 AUTHOR
 
+
+1.7 Mariano S. Cosentino, Mok@marianok.com.ar
 1.6 Mariano S. Cosentino, Mok@marianok.com.ar
 1.5 Christian A. Rodriguez, car@cespi.unlp.edu.ar, based on tv_grab_es, from Ramon Roca.
 
@@ -85,9 +87,13 @@ migth be a good idea to add a cache file the keeps the program description so th
 
 
 # Author's Updates
+#   1.7 	Mariano Cosentino
+#		* 	The source website changed, I've adapted the script to the new format
+#		*	Enhaced the handling of latin chars.
+#		*	Added control and cache to avoid downloading the same program data multiple times in the same session.
 #   1.6 	Mariano Cosentino
 #		* 	Added descriptions support
-#		*	All properties (director, autorr, etc) are appended to the description for added value
+#		*	All properties (director, autor, etc) are appended to the description for added value
 #		*	All times are now UTC as per XMLTV recomendations
 #		*	Cablevision and Multicanal use the same format (both are the same company now) so added variable to customize where to grab the listings from.
 
@@ -103,7 +109,6 @@ migth be a good idea to add a cache file the keeps the program description so th
 
 
 my $CableCompany = "cablevision"; #"multicanal";
-
 
 
 ######################################################################
@@ -159,6 +164,9 @@ my $LANG="es";
 
 # Global channel_data
 our @ch_all;
+
+# Global ProgID/Description Hash
+my %Descriptions = ();
 
 # Overlaping time threshold allowed in seconds
 our $allowed_overlap_tresh=180;
@@ -303,9 +311,11 @@ foreach my $ch_did (@channels) {
     my $index=0;
     my $ch_name=$channels{$ch_did};
     my $ch_xid="$ch_did.cablevision";
-    while (${$ch_all[$index]}{'id'} ne $ch_xid) {
+    my $tot_ch=@ch_all;
+    while (($tot_ch > $index) and (${$ch_all[$index]}{'id'} ne $ch_xid)) {
         $index=$index+1;
     }
+    next if ($tot_ch <= $index);
     my $ch_num=${ch_all[$index]}{'channel-num'};
     $writer->write_channel({ id => $ch_xid,
 			     'display-name' => [ [ $ch_name ],
@@ -363,11 +373,25 @@ BEGIN {
 sub process_table {
     my ($date, $ch_xmltv_id, $ch_ar_id) = @_;
     my $weekNr = GetWeekNumber($date);
-    my $url = "http://www.buscador" . $CableCompany . ".com.ar/index.php?template=fgrilla_semanal.tpl&canal=$ch_xmltv_id&semana=$weekNr";
+#initial setting
+#    my $url = "http://www.buscador" . $CableCompany . ".com.ar/index.php?template=fgrilla_semanal.tpl&canal=$ch_xmltv_id&semana=$weekNr";
+
     my $url_head = "http://www.buscador" . $CableCompany . ".com.ar/index.php?template=main_grilla_semanal.tpl&canal=$ch_xmltv_id&cantidadPasa=$weekNr";
-    t $url;
+
+#updated config
+#    my $url = "http://www.buscador" . $CableCompany . ".com.ar/index.php?template=main_grilla_semanal.tpl&canal=$ch_xmltv_id&cantidadPasa=$weekNr";
+
+    my $tree_head = get_nice_tree $url_head;
+
+    my $tree=$tree_head->look_down(
+        '_tag', 'div',sub {
+            defined $_[0]->attr('id') and $_[0]->attr('id')=~ /grillasemanal/i
+        });
+
+
+    t $url_head;
     local $SIG{__WARN__} = sub {
-        warn "$url: $_[0]";
+        warn "$url_head: $_[0]";
     };
 
     # Need to disable redirects to work
@@ -377,14 +401,8 @@ sub process_table {
 #    $XMLTV::Get_nice::ua->user_agent("MSIE 6.0");
 #    $XMLTV::Get_nice::ua->user_agent="MSIE 6.0";
     # parse the page to a document object
-    my $tree = get_nice_tree $url;
-#        warn "\n\$tree: " . $tree->as_HTML . "\n\n\n";
 
-#	my $mytree = $XMLTV::Get_nice::ua->get($url);
-#        warn "\n\$mytree: " . $mytree->content . "\n\n\n";
 
-#	die "listo";
-    my $tree_head = get_nice_tree $url_head;
     my @program_data = get_program_data($date,$tree,$tree_head,$ch_xmltv_id);
     
     my @r;
@@ -495,7 +513,6 @@ sub get_program_data {
     my $width=get_grid_row_width($tree_head);
 
     return () if  $offset_left < 0 or $offset_top < 0 or $height < 0;
-    
 
     # So we select a value that sould be inside the range 
     #   [offset_left+(width*weekday), offset_left+(width*weekday)+width]
@@ -688,12 +705,8 @@ sub get_programs_for {
             $_[0]->attr('class')=~ /layerPrograma/i and 
             defined $_[0]->attr('style') 
         });
-#	warn "\n\n@row\n" . $row[0]->as_text . "\n";
-#	warn "\n\n\@row:@row\ncontent-list:" . $row[0]->content_list . "\n";
-#    foreach my $elem (@row){
-#	warn "\telem:$elem\n\tas_html:" . $elem->as_HTML . "\n";
-#	}
-#die 'test';
+
+
     foreach my $elem (@row){
         my %ret;
         my ($top)=($elem->attr('style') =~ /top:\s*(-{0,1}\d+)\s*(px|)/i);
@@ -704,28 +717,30 @@ sub get_programs_for {
                 $left-$top_most_left <= $middle_left and $left+$width >= $middle_left and length $elem->as_text > 0){
         # We found a program!!!
 		my $TempDesc="";
-		if ( $elem->as_HTML =~ /index\.php\?verFicha.(\d+)\&/) {
+		if ( $elem->as_HTML =~ /index\.php\?verFicha.(\d+)/) {
 			my $progindex=$1;
-			my $ficha_tree=get_nice_tree("http://www.buscador" . $CableCompany . ".com.ar/index.php?verFicha=$progindex");
-			my @ficha = $ficha_tree->look_down('_tag','table'); 
+			if (exists $Descriptions{$progindex}) {
+#original format
+				#warn "\nfound index: $progindex with description [" . $Descriptions{$progindex} . "]\n\n";
+				$TempDesc=$Descriptions{$progindex}	;	
+			}
+			else {
+#original format
+#				my $ficha_tree=get_nice_tree("http://www.buscador" . $CableCompany . ".com.ar/index.php?verFicha=$progindex");
+				my $ficha_tree=get_nice_tree("http://www.buscador" . $CableCompany . ".com.ar/ficha.php?verFicha=$progindex");
+				my @ficha = $ficha_tree->look_down('_tag','table');
+
 				my $sinopsis= $ficha[0]->as_text;
 				my @Propiedades = $ficha[1]->look_down('_tag','tr');
 				$TempDesc = Clean_amp($sinopsis);
-#				warn "\n$progindex: $sinopsis\n";
-
-				    foreach my $Propiedad (@Propiedades){				
+				foreach my $Propiedad (@Propiedades){				
 					if ($Propiedad->as_HTML =~ /class="itemf1".*>(.*)<\/td>.*class="descf1".*>(.*)<\/td>/) {
-#						warn "\nPropiedad [$1] = [$2]\n";
-					$TempDesc .= Clean_amp("\n\t$1:\t$2");
+						$TempDesc .= Clean_amp("\n\t$1:\t$2");
 					}
-				     }
-#			$TempDescription =. $actor
-#			$TempDescription =. $director
-#			$TempDescription =. $country
-#			$TempDescription =. $director
-#			$TempDescription =. $director
-#			$TempDescription =. $director
-#			$TempDescription =. $director
+				}
+				$Descriptions{$progindex}=$TempDesc;
+				#warn "\nAdding index: $progindex [" . $Descriptions{$progindex} . "]\n\n";
+			}
 		}
            %ret = (
                 time =>         get_start_time($top,$offset_top,$default_height),
@@ -737,6 +752,7 @@ sub get_programs_for {
 		);
 #            print "\n*****Returned because $top <= $middle_top and ",($top+$height)," >= $middle_top and
 #                $left <= $middle_left and ",($left+$width), ">= $middle_left\n";
+
             push @data, \%ret;
         }
     }
@@ -767,6 +783,7 @@ sub trim {
 # Remove HTML tagging from extended chars
 sub Clean_amp {
     my ($texto)=@_;
+	Encode::from_to($texto, "iso-8859-1", "utf8");
 	my $textoold=$texto;
 	$texto =~ s/&amp;/&/g;
 	$texto =~ s/&acute;/á/g;
@@ -776,30 +793,8 @@ sub Clean_amp {
 	$texto =~ s/&oacute;/ó/g;
 	$texto =~ s/&uacute;/ú/g;
 	$texto =~ s/&ntilde;/ñ/g;
-	$texto =~ s/^;+//g;
-	$texto =~ s/;+$//g;
-	$texto =~ s/\.+$//g;
 
-	$texto =~ s/Ã¡/á/g;
-	$texto =~ s/Ã©/é/g;
-	$texto =~ s/Ã/í/g;
-	$texto =~ s/Ã³/ó/g;
-	$texto =~ s/Ãº/ú/g;
-	$texto =~ s/Ã±/ñ/g;
 
-#	$texto =~ s/&;//g;
-#	$texto =~ s/&;//g;
-#	$texto =~ s/&;//g;
-#	$texto =~ s/&;//g;
-#	$texto =~ s/&;//g;
-#	$texto =~ s/&;//g;
-#	$texto =~ s/&;//g;
-	$texto =~ s/Ž/'/g;
-	$texto =~ s/Ã¡/'/g;	
-	
-	if ($texto ne $textoold) {
-		$texto=Clean_amp($texto);
-	}
    return $texto;
 }
 
