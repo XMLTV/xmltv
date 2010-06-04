@@ -534,6 +534,7 @@ my @opt_components
        blurb => 'Grabber for Denmark (dr.dk)',
        exes => [ 'grab/dk_dr/tv_grab_dk_dr' ],
        prereqs => { 'Data::Dumper' => 0,
+                    'DateTime::Locale' => 0,
                     'Parse::RecDescent' => 0,
                     'LWP::Simple' => 0,
                     'DateTime' => 0,
