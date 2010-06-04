@@ -43,8 +43,6 @@ use HTML::Entities;
 # - ensure that title processing has finished
 #   before concatenating episode numbering
 #
-# - split out UTF-8 handling routines to take \$page
-#
 # - revisit handling of DST changeovers to ensure
 #   both changeovers are handled appropriately
 #   and that attempts are made to handle incorrectly
@@ -1591,6 +1589,352 @@ sub load_utf8_fixups {
     }
 }
 
+# Tidy up any bad characters in the source data. Although the data is provided
+# as UTF-8, the text may contain mis-encoded UTF-8 characters or the NULL 
+# or other extraneous characters which should be corrected where possible.
+#
+sub process_utf8_fixups($$$) {
+
+    # read in the data to be processed, a descriptive name and a URI for it
+    my $page = shift;
+    my $rt_name = shift;
+    my $rt_listings_uri = shift;
+
+    t("  Checking '$rt_name' listings data for bad UTF-8 chars...");
+    for ($page) {
+        # Programme entries containing RT reviews or updated information
+        # may have erroneous CR+SP characters which we tidy up here
+        #
+        t("    Looking for CR+SP characters...");
+        if ( s/\x0D\x20//g ) {
+            t("      Removed CR+SP characters from '$rt_name' listings data");
+        }
+
+        # Fix double-encoded UTF-8 characters (4 bytes)
+        # =============================================
+        #
+        # The ISO-8859-1 charset contains 256 codepoints (0x00-0xFF). When 
+        # encoded into UTF-8, either 1 or 2 bytes are required to encode these 
+        # characters as follows:
+        # 
+        # ISO-8859-1           UTF-8        Chars in    Bytes      Notes
+        #    range         byte(s) range     Range     Required
+        #
+        #  0x00-0x1F     [00]-[1F]             32         1        Non-printing
+        #  0x20-0x7F     [20]-[7F]             96         1        Printing
+        #  0x80-0x9F     [C2][80]-[C2][9F]     32         2        Non-printing
+        #  0xA0-0xBF     [C2][A0]-[C2][BF]     32         2        Printing
+        #  0xC0-0xFF     [C3][80]-[C3][BF]     64         2        Printing
+        #
+        # A double-encoded UTF-8 character that uses 4 bytes (but should use 
+        # only 2 if properly encoded) uses the first 2 bytes to contain the 
+        # UTF-8 representation of the first byte of the proper UTF-8 
+        # representation of the character, and the second 2 bytes to contain 
+        # the UTF-8 representation of the second byte.
+        #
+        # E.g.:
+        #
+        # The data contains a double-encoded UTF-8 encoding of the A-grave 
+        # character using 4 bytes. The correct UTF-8 encoding of this character 
+        # is [C3][80]. The data actually contains the 4 bytes [C3][83][C2][80]. 
+        # [C3][83] is the UTF-8 encoding of [C3], and [C2][80] is the UTF-8 
+        # encoding of [80]. We therefore replace this 4-byte double-encoding 
+        # with [C3][80] which is valid UTF-8 and can be successfully encoded 
+        # into other character encodings if required.
+        #
+        # The range of Unicode codepoints encoded into 2 bytes in UTF-8 lie in the 
+        # range [C2-DF][80-BF].
+        #
+        # http://en.wikipedia.org/wiki/ISO/IEC_8859-1
+        # http://en.wikipedia.org/wiki/UTF-8
+        # http://www.eki.ee/letter/
+        #
+        t("    Looking for double-encoded UTF-8 characters...");
+        if ( /[\xC3][\x82-\x83][\xC2][\x80-\xBF]/ ) {
+            # first capture each set of double-encoded UTF-8 bytes 
+            # (4 in total, 2 for each "real" UTF-8 char) into a list
+            my @double_bytes = ($page =~ /[\xC3][\x82-\x83][\xC2][\x80-\xBF]/g);
+
+            # get a unique list of the different doubly encoded bytes
+            my %unique_double_bytes;
+            foreach(@double_bytes) {
+                $unique_double_bytes{$_} = $_;
+            }
+            # Get a list of unique 4-byte sequences
+            @double_bytes = sort values %unique_double_bytes;
+            foreach (@double_bytes) {
+                t("      Found double-encoded bytes: " . $_);
+            }
+            # process the list, reading 2 pairs of bytes in each iteration
+            foreach (@double_bytes) {
+                /([\xC3][\x82-\x83])([\xC2][\x80-\xBF])/;
+                my $badbytes_1 = $1;
+                my $badbytes_2 = $2;
+                # convert each pair of bytes from UTF-8 to ISO-8859-1 to get a single 
+                # byte from the original pair
+                my $goodbyte_1 = encode("iso-8859-1", decode("utf-8", $badbytes_1) );
+                my $goodbyte_2 = encode("iso-8859-1", decode("utf-8", $badbytes_2) );
+                # finally globally replace each group of 4 bad bytes with 
+                # the 2 correct replacement bytes
+                $page =~ s/$badbytes_1$badbytes_2/$goodbyte_1$goodbyte_2/g;
+                t("      Replaced bad bytes '" . $badbytes_1 . $badbytes_2 
+                                . "' with good bytes '" . $goodbyte_1 . $goodbyte_2 . "'");
+            }
+        }
+
+        # Fix double-encoded UTF-8 General Punctuation characters (6 bytes)
+        # =================================================================
+        #
+        # Occasionally in the listings we see double-encoded characters from
+        # the Unicode General Punctuation range of characters. When encoded 
+        # into UTF-8 these characters should require 3 bytes. However, when 
+        # double-encoded they take 6 bytes. During their handling we replace 
+        # them with their ASCII equivalents which are how the characters are 
+        # usually included in the listings.
+        #
+        t("    Looking for double-encoded UTF-8 General Punctuation characters...");
+        if ( /[\xC3][\xA2][\xC2][\x80-\x81]/ ) {
+            t("      Replaced double-encoded 6-byte UTF-8 General Punctuation chars");
+            s/\xC3\xA2\xC2\x80\xC2\x90/\x2D/g; # <2D> -> -
+            s/\xC3\xA2\xC2\x80\xC2\x91/\x2D/g; # <2D> -> -
+            s/\xC3\xA2\xC2\x80\xC2\x92/\x2D/g; # <2D> -> -
+            s/\xC3\xA2\xC2\x80\xC2\x93/\x2D/g; # <2D> -> -
+            s/\xC3\xA2\xC2\x80\xC2\x94/\x2D/g; # <2D> -> -
+            s/\xC3\xA2\xC2\x80\xC2\x95/\x2D/g; # <2D> -> -
+            s/\xC3\xA2\xC2\x80\xC2\x98/\x27/g; # <27> -> '
+            s/\xC3\xA2\xC2\x80\xC2\x99/\x27/g; # <27> -> '
+            s/\xC3\xA2\xC2\x80\xC2\x9A/\x27/g; # <27> -> '
+            s/\xC3\xA2\xC2\x80\xC2\x9C/\x22/g; # <22> -> "
+            s/\xC3\xA2\xC2\x80\xC2\x9D/\x22/g; # <22> -> "
+            s/\xC3\xA2\xC2\x80\xC2\x9E/\x22/g; # <22> -> "
+            s/\xC3\xA2\xC2\x80\xC2\x9F/\x22/g; # <22> -> "
+            s/\xC3\xA2\xC2\x80\xC2\xA6/\x2E\x2E\x2E/g; # <2E><2E><2E> -> ...
+        }
+
+        # Fix mis-encoded UTF-8 characters (6/8 bytes)
+        # ============================================
+        #
+        # Frequently seen in the data (especially in film listings) are completely 
+        # mis-encoded sequences of UTF-8 characters. Each sequence of bad bytes 
+        # starts with a correctly encoded 2 byte UTF-8 character but it then
+        # followed by 2 or 3 mis-encoded ASCII-range characters. When encoded into
+        # UTF-8 these ASCII chars should take 1 byte each, but in this situation
+        # use 2 bytes which then fail to decode or display correctly.
+        #
+
+        # This fixup looks for mis-encoded character sequences in the range 
+        # [C3][A0-AF][C2][80-BF][C2][80-BF] (6 bytes)
+        #
+        t("    Looking for mis-encoded [C3][A0-AF] bytes...");
+        if ( /[\xC3][\xA0-\xAF][\xC2][\x80-\xBF][\xC2][\x80-\xBF]/ ) {
+            # first capture each sequence of mis-encoded UTF-8 bytes 
+            # (6 in total)
+            my @misencoded_bytes = 
+                    ($page =~ /[\xC3][\xA0-\xAF][\xC2][\x80-\xBF][\xC2][\x80-\xBF]/g);
+            # get a unique list of the different mis-encoded byte sequences
+            my %unique_misencoded_bytes;
+            MIS_ENC_BYTE:
+            foreach (@misencoded_bytes) {
+                # the Unicode Replacement Character is handled below, so ignore here
+                # (when double-encoded, it will match the regex above)
+                if (/\xC3\xAF\xC2\xBF\xC2\xBD/) {
+                    t("      Ignoring double-encoded Unicode Replacement Character (handled separately)");
+                    next MIS_ENC_BYTE;
+                }
+                $unique_misencoded_bytes{$_} = $_;
+            }
+            # Get a new list of the unique 6-byte sequences
+            @misencoded_bytes = sort values %unique_misencoded_bytes;
+            foreach (@misencoded_bytes) {
+                t("      Found mis-encoded bytes: " . $_);
+            }
+            # process the list, reading 4 bytes in each iteration. Bytes
+            # 1 and 2 are correct and left untouched, bytes 4 and 6 are 
+            # extracted and corrected before being output
+            foreach (@misencoded_bytes) {
+                /([\xC3][\xA0-\xAF])[\xC2]([\x80-\xBF])[\xC2]([\x80-\xBF])/;
+                my $goodbytes = $1; # correct, and used in replacement
+                my $badbyte_1 = $2; # incorrect byte value
+                my $badbyte_2 = $3; # incorrect byte value
+                # the bad bytes require 0x40 (DEC 64) to be subtracted from the char 
+                # value. 0xA0 are a special case and always converted to regular
+                # space char (0x20)
+                my $goodbyte_1;
+                if ($badbyte_1 !~ /\xA0/) {
+                    $goodbyte_1 = chr( (ord $badbyte_1) - 64);
+                }
+                else {
+                    $goodbyte_1 = "\x20";
+                }
+                my $goodbyte_2;
+                if ($badbyte_2 !~ /\xA0/) {
+                    $goodbyte_2 = chr( (ord $badbyte_2) - 64);
+                }
+                else {
+                    $goodbyte_2 = "\x20";
+                }
+                # finally globally replace each sequence of bad bytes with 
+                # the correct replacement bytes
+                $page =~ s/$_/$goodbytes$goodbyte_1$goodbyte_2/g;
+                t("      Replaced mis-encoded [C3][A0-AF] bytes '" . $_
+                                . "' with bytes '" 
+                                . $goodbytes . $goodbyte_1 . $goodbyte_2 . "'");
+            }
+        }
+
+        # This fixup looks for mis-encoded character sequences in the range 
+        # [C3][B0-BF][C2][80-BF][C2][80-BF][C2][80-BF] (8 bytes)
+        #
+        t("    Looking for mis-encoded [C3][B0-BF] bytes...");
+        if ( /[\xC3][\xB0-\xBF][\xC2][\x80-\xBF][\xC2][\x80-\xBF][\xC2][\x80-\xBF]/ ) {
+            # first capture each sequence of mis-encoded UTF-8 bytes 
+            # (8 in total)
+            my @misencoded_bytes = 
+                    ($page =~ /[\xC3][\xB0-\xBF][\xC2][\x80-\xBF][\xC2][\x80-\xBF][\xC2][\x80-\xBF]/g);
+            # get a unique list of the different mis-encoded byte sequences
+            my %unique_misencoded_bytes;
+            foreach(@misencoded_bytes) {
+                $unique_misencoded_bytes{$_} = $_;
+            }
+            # Get a new list of the unique 8-byte sequences
+            @misencoded_bytes = sort values %unique_misencoded_bytes;
+            foreach (@misencoded_bytes) {
+                t("      Found mis-encoded bytes: " . $_);
+            }
+            # process the list, reading 5 bytes in each iteration. Bytes
+            # 1 and 2 are correct and left untouched, bytes 4, 6 and 8 are 
+            # extracted and corrected before being output
+            foreach (@misencoded_bytes) {
+                /([\xC3][\xB0-\xBF])[\xC2]([\x80-\xBF])[\xC2]([\x80-\xBF])[\xC2]([\x80-\xBF])/;
+                my $goodbytes = $1; # correct, and used in replacement
+                my $badbyte_1 = $2; # incorrect byte value
+                my $badbyte_2 = $3; # incorrect byte value
+                my $badbyte_3 = $4; # incorrect byte value
+                # the bad bytes require 0x40 (DEC 64) to be subtracted from the char 
+                # value. 0xA0 are a special case and always converted to regular
+                # space char (0x20)
+                my $goodbyte_1;
+                if ($badbyte_1 !~ /\xA0/) {
+                    $goodbyte_1 = chr( (ord $badbyte_1) - 64);
+                }
+                else {
+                    $goodbyte_1 = "\x20";
+                }
+                my $goodbyte_2;
+                if ($badbyte_2 !~ /\xA0/) {
+                    $goodbyte_2 = chr( (ord $badbyte_2) - 64);
+                }
+                else {
+                    $goodbyte_2 = "\x20";
+                }
+                my $goodbyte_3;
+                if ($badbyte_3 !~ /\xA0/) {
+                    $goodbyte_3 = chr( (ord $badbyte_3) - 64);
+                }
+                else {
+                    $goodbyte_3 = "\x20";
+                }
+                # finally globally replace each sequence of bad bytes with 
+                # the correct replacement bytes
+                $page =~ s/$_/$goodbytes$goodbyte_1$goodbyte_2$goodbyte_3/g;
+                t("      Replaced mis-encoded [C3][B0-BF] bytes '" . $_
+                                . "' with bytes '" 
+                                . $goodbytes . $goodbyte_1 . $goodbyte_2 . $goodbyte_3 . "'");
+            }
+        }
+
+        # Manual Replacements
+        # ===================
+        #
+        # Here we replace specific sequences of characters seen in the source 
+        # data that cannot be handled automatically above. These include
+        # occurences of the Unicode Replace Character (single and double
+        # encoded).
+        # 
+        # We use a supplemental file to store these fixups to allow updating
+        # without needing to update the grabber itself.
+        #
+        # Unicode Replacement Character (U+FFFD)
+        # ======================================
+        #
+        # The UTF-8 source data may also contain the bytes [EF][BF][BD] which 
+        # are the UTF-8 encoding of the Unicode Replacement Character U+FFFD.
+        # It is likely that these are introduced during preparation of the 
+        # listings data by the Radio Times, as any characters that cannot be 
+        # understood are replaced by this character.
+        #
+        # Double-encoded Unicode Replacement Character (6 bytes)
+        # ======================================================
+        #
+        # The correct encoding for the Unicode Replacement Character is 
+        # [EF][BF][BD], however it has been seen double-encoded in the listings 
+        # data as [C3][AF][C2][BF][C2][BD]. As with the normal replacement 
+        # character, there is no way to determine which replacement character 
+        # to use in this case, so we substitute a '?' char if we cannot handle 
+        # the specific occurence. This error needs to have been seen at least 
+        # once in source data to be able to construct a suitable fixup.
+        #
+        t("    Looking for Unicode Replacement Character...");
+        if ( /\xEF\xBF\xBD/ || /\xC3\xAF\xC2\xBF\xC2\xBD/ ) {
+
+            if (%utf8_fixups) {
+                foreach my $bad_chars (keys %utf8_fixups) {
+                    my $replacement = $utf8_fixups{$bad_chars};
+                    # Search for the regex string and replace with char string
+                    if ($page =~ s/$bad_chars/$replacement/g) {
+                        t("      Replaced Unicode Replacement Character with \"" 
+                                . $replacement . "\"");
+                    }
+                }
+            }
+            if ( $page =~ s/\xEF\xBF\xBD/\x3F/g ) {
+                t("    After fixups, data for '$rt_name' still contained Unicode "
+                        . "Replacement character. Replaced with \"?\"\n");
+                $hadEFBFBD{$rt_name} = $rt_listings_uri;
+            }
+            if ( $page =~ s/\xC3\xAF\xC2\xBF\xC2\xBD/\x3F/g ) {
+                t("    After fixups, data for '$rt_name' still contained "
+                        . "double-encoded Unicode Replacement character. "
+                        . "Replaced with \"?\"\n");
+                # track and report any that we've missed
+                $hadC3AFC2BFC2BD{$rt_name} = $rt_listings_uri;
+            }
+        }
+
+        # After fixups replace any non-breaking space chars with regular spaces
+        t("    Looking for non-breaking spaces...");
+        if ( s/\xC2\xA0/\x20/g ) {
+            t("      Replaced non-breaking space chars with regular spaces");
+        }
+
+        # Check for remaining potentially bad UTF-8 chars that we might need
+        # to handle (below we remove any in range [C2][7F-9F])
+        if ( $opt->{debug} && /\xC2[\x7F-\x9F]/ ) {
+            t("    After fixups, data for '$rt_name' still contains " 
+                    . "characters in range [C2][7F-9F]\n");
+            # track and report any that we've missed
+            $hasC27FBFchars{$rt_name} = $rt_listings_uri;
+        }
+
+        # Finally, remove any remaining non-printing control characters (keep 
+        # \t \n and \r). Refer to above table for ISO-8859-1 and UTF-8 Unicode 
+        # encodings for chars.
+        #
+        # First, chars in UTF-8 range [00-1F] (ISO-8859-1 range [00-1F])
+        if ( s/[\x00-\x08\x0B-\x0C\x0E-\x1F]//g ) {
+            t("    Removed non-printing characters (range [00]-[1F]) from "
+                    . "'$rt_name' listings data");
+        }
+        # Next, chars in UTF-8 range [C2][7F-9F] (ISO-8859-1 range [7F-9F])
+        if ( s/[\xC2][\x7F-\x9F]//g ) {
+            t("    Removed non-printing characters (range [C2][7F-9F]) from "
+                    . "'$rt_name' listings data");
+        }
+    }
+
+    return $page;
+}
+
 # Download listings data for configured channels that are available
 sub write_listings_data {
     my ( $available_channels, $wanted_chs ) = @_;
@@ -1683,338 +2027,8 @@ sub write_listings_data {
             t("  Base timezone for utc_offset set to 'UTC' (default)\n");
         }
 
-        # Tidy up any bad characters in the Radio Times source data. Although the
-        # data is provided in UTF-8 format the text may contain mis-encoded UTF-8
-        # or the NULL character which should be corrected as far as possible 
-        # before processing continues.
-        #
-        # Double-encoded UTF-8 characters (4 bytes)
-        # =========================================
-        #
-        # The ISO-8859-1 charset contains 256 codepoints (0x00-0xFF). When encoded
-        # into UTF-8, either 1 or 2 bytes are required to encode these characters
-        # as follows:
-        # 
-        # ISO-8859-1            UTF-8        Chars in    Bytes      Notes
-        #    range          byte(s) range     Range     Required
-        #
-        #  0x00-0x1F      [00]-[1F]             32         1        Non-printing
-        #  0x20-0x7F      [20]-[7F]             96         1        Printing
-        #  0x80-0x9F      [C2][80]-[C2][9F]     32         2        Non-printing
-        #  0xA0-0xBF      [C2][A0]-[C2][BF]     32         2        Printing
-        #  0xC0-0xFF      [C3][80]-[C3][BF]     64         2        Printing
-        #
-        # A double-encoded UTF-8 character that uses 4 bytes (but should use only 2
-        # if properly encoded) uses the first 2 bytes to contain the UTF-8
-        # representation of the first byte of the proper UTF-8 representation of the
-        # character, and the second 2 bytes to contain the UTF-8 representation of the second
-        # byte.
-        #
-        # E.g.:
-        #
-        # The data contains a double-encoded UTF-8 encoding of the A-grave character using 
-        # 4 bytes. The correct UTF-8 encoding of this character is [C3][80]. The data 
-        # actually contains the 4 bytes [C3][83][C2][80]. [C3][83] is the UTF-8 encoding 
-        # of [C3], and [C2][80] is the UTF-8 encoding of [80]. We therefore replace this 
-        # 4-byte double-encoding with [C3][80] which is valid UTF-8 and can be successfully
-        # encoded into other character encodings if required.
-        #
-        # The range of Unicode codepoints encoded into 2 bytes in UTF-8 lie in the 
-        # range [C2-DF][80-BF].
-        #
-        # http://en.wikipedia.org/wiki/ISO/IEC_8859-1
-        # http://en.wikipedia.org/wiki/UTF-8
-        # http://www.eki.ee/letter/
-        #
-        # Double-encoded UTF-8 General Punctuation characters (6 bytes)
-        # =============================================================
-        #
-        # Occasionally in the listings we see double-encoded characters from
-        # the Unicode General Punctuation range of characters. When encoded into
-        # UTF-8 these characters should require 3 bytes. However, when double-encoded 
-        # they take 6 bytes. During their handling we replace them with their ASCII
-        # equivalents which are how the characters are usually included in the 
-        # listings.
-        #
-        # Mis-encoded UTF-8 characters (6/8 bytes)
-        # ========================================
-        #
-        # Frequently seen in the data (especially in film listings) are completely 
-        # mis-encoded sequences of UTF-8 characters. Each sequence of bad bytes 
-        # starts with a correctly encoded 2 byte UTF-8 character but it then
-        # followed by 2 or 3 mis-encoded ASCII-range characters. When encoded into
-        # UTF-8 these ASCII chars should take 1 byte each, but in this situation
-        # use 2 bytes which then fail to decode or display correctly.
-        #
-        # Unicode Replacement Character (U+FFFD)
-        # ======================================
-        #
-        # The UTF-8 source data may also contain the bytes [EF][BF][BD] which 
-        # are the UTF-8 encoding of the Unicode Replacement Character U+FFFD.
-        # It is likely that these are introduced during preparation of the 
-        # listings data by the Radio Times, as any characters that cannot be 
-        # understood are replaced by this character.
-        #
-        # Double-encoded Unicode Replacement Character (6 bytes)
-        # ======================================================
-        #
-        # The correct encoding for the Unicode Replacement Character is [EF][BF][BD],
-        # however it has been seen double-encoded in the listings data as 
-        # [C3][AF][C2][BF][C2][BD]. As with the normal replacement character, there 
-        # is no way to determine which replacement character to use in this case, 
-        # so we substitute a '?' char if we cannot handle the specific occurence. 
-        # This error needs to have been seen at least once in source data to be able 
-        # to construct a suitable fixup.
-        #
-        t("  Checking '$rt_name' listings data for bad UTF-8 chars...");
-        for ($page) {
-            # Programme entries containing RT reviews or updated information
-            # may have erroneous CR+SP characters which we tidy up here
-            t("    Looking for CR+SP characters...");
-            if ( s/\x0D\x20//g ) {
-                t("      Removed CR+SP characters from '$rt_name' listings data");
-            }
-
-
-            # Fixup any double-encoded UTF-8 chars (4 bytes)
-            t("    Looking for double-encoded UTF-8 characters...");
-            if ( /[\xC3][\x82-\x83][\xC2][\x80-\xBF]/ ) {
-                # first capture each set of double-encoded UTF-8 bytes 
-                # (4 in total, 2 for each "real" UTF-8 char) into a list
-                my @double_bytes = ($page =~ /[\xC3][\x82-\x83][\xC2][\x80-\xBF]/g);
-
-                # get a unique list of the different doubly encoded bytes
-                my %unique_double_bytes;
-                foreach(@double_bytes) {
-                    $unique_double_bytes{$_} = $_;
-                }
-                # Get a list of unique 4-byte sequences
-                @double_bytes = sort values %unique_double_bytes;
-                foreach (@double_bytes) {
-                    t("      Found double-encoded bytes: " . $_);
-                }
-                # process the list, reading 2 pairs of bytes in each iteration
-                foreach (@double_bytes) {
-                    /([\xC3][\x82-\x83])([\xC2][\x80-\xBF])/;
-                    my $badbytes_1 = $1;
-                    my $badbytes_2 = $2;
-                    # convert each pair of bytes from UTF-8 to ISO-8859-1 to get a single 
-                    # byte from the original pair
-                    my $goodbyte_1 = encode("iso-8859-1", decode("utf-8", $badbytes_1) );
-                    my $goodbyte_2 = encode("iso-8859-1", decode("utf-8", $badbytes_2) );
-                    # finally globally replace each group of 4 bad bytes with 
-                    # the 2 correct replacement bytes
-                    $page =~ s/$badbytes_1$badbytes_2/$goodbyte_1$goodbyte_2/g;
-                    t("      Replaced bad bytes '" . $badbytes_1 . $badbytes_2 
-                                    . "' with good bytes '" . $goodbyte_1 . $goodbyte_2 . "'");
-                }
-            }
-
-            # Fixup any double-encoded UTF-8 General Punctuation chars (6 bytes) 
-            # with their ASCII equivalents (1 byte)
-            t("    Looking for double-encoded UTF-8 General Punctuation characters...");
-            if ( /[\xC3][\xA2][\xC2][\x80-\x81]/ ) {
-                t("      Replaced double-encoded 6-byte UTF-8 General Punctuation chars");
-                s/\xC3\xA2\xC2\x80\xC2\x90/\x2D/g; # <2D> -> -
-                s/\xC3\xA2\xC2\x80\xC2\x91/\x2D/g; # <2D> -> -
-                s/\xC3\xA2\xC2\x80\xC2\x92/\x2D/g; # <2D> -> -
-                s/\xC3\xA2\xC2\x80\xC2\x93/\x2D/g; # <2D> -> -
-                s/\xC3\xA2\xC2\x80\xC2\x94/\x2D/g; # <2D> -> -
-                s/\xC3\xA2\xC2\x80\xC2\x95/\x2D/g; # <2D> -> -
-                s/\xC3\xA2\xC2\x80\xC2\x98/\x27/g; # <27> -> '
-                s/\xC3\xA2\xC2\x80\xC2\x99/\x27/g; # <27> -> '
-                s/\xC3\xA2\xC2\x80\xC2\x9A/\x27/g; # <27> -> '
-                s/\xC3\xA2\xC2\x80\xC2\x9C/\x22/g; # <22> -> "
-                s/\xC3\xA2\xC2\x80\xC2\x9D/\x22/g; # <22> -> "
-                s/\xC3\xA2\xC2\x80\xC2\x9E/\x22/g; # <22> -> "
-                s/\xC3\xA2\xC2\x80\xC2\x9F/\x22/g; # <22> -> "
-                s/\xC3\xA2\xC2\x80\xC2\xA6/\x2E\x2E\x2E/g; # <2E><2E><2E> -> ...
-            }
-
-            # Fixup any mis-encoded character sequences in range 
-            # [C3][A0-AF][C2][80-BF][C2][80-BF] (6 bytes)
-            t("    Looking for mis-encoded [C3][A0-AF] bytes...");
-            if ( /[\xC3][\xA0-\xAF][\xC2][\x80-\xBF][\xC2][\x80-\xBF]/ ) {
-                # first capture each sequence of mis-encoded UTF-8 bytes 
-                # (6 in total)
-                my @misencoded_bytes = 
-                        ($page =~ /[\xC3][\xA0-\xAF][\xC2][\x80-\xBF][\xC2][\x80-\xBF]/g);
-                # get a unique list of the different mis-encoded byte sequences
-                my %unique_misencoded_bytes;
-                MIS_ENC_BYTE:
-                foreach (@misencoded_bytes) {
-                    # the Unicode Replacement Character is handled below, so ignore here
-                    # (when double-encoded, it will match the regex above)
-                    if (/\xC3\xAF\xC2\xBF\xC2\xBD/) {
-                        t("      Ignoring double-encoded Unicode Replacement Character (handled separately)");
-                        next MIS_ENC_BYTE;
-                    }
-                    $unique_misencoded_bytes{$_} = $_;
-                }
-                # Get a new list of the unique 6-byte sequences
-                @misencoded_bytes = sort values %unique_misencoded_bytes;
-                foreach (@misencoded_bytes) {
-                    t("      Found mis-encoded bytes: " . $_);
-                }
-                # process the list, reading 4 bytes in each iteration. Bytes
-                # 1 and 2 are correct and left untouched, bytes 4 and 6 are 
-                # extracted and corrected before being output
-                foreach (@misencoded_bytes) {
-                    /([\xC3][\xA0-\xAF])[\xC2]([\x80-\xBF])[\xC2]([\x80-\xBF])/;
-                    my $goodbytes = $1; # correct, and used in replacement
-                    my $badbyte_1 = $2; # incorrect byte value
-                    my $badbyte_2 = $3; # incorrect byte value
-                    # the bad bytes require 0x40 (DEC 64) to be subtracted from the char 
-                    # value. 0xA0 are a special case and always converted to regular
-                    # space char (0x20)
-                    my $goodbyte_1;
-                    if ($badbyte_1 !~ /\xA0/) {
-                        $goodbyte_1 = chr( (ord $badbyte_1) - 64);
-                    }
-                    else {
-                        $goodbyte_1 = "\x20";
-                    }
-                    my $goodbyte_2;
-                    if ($badbyte_2 !~ /\xA0/) {
-                        $goodbyte_2 = chr( (ord $badbyte_2) - 64);
-                    }
-                    else {
-                        $goodbyte_2 = "\x20";
-                    }
-                    # finally globally replace each sequence of bad bytes with 
-                    # the correct replacement bytes
-                    $page =~ s/$_/$goodbytes$goodbyte_1$goodbyte_2/g;
-                    t("      Replaced mis-encoded [C3][A0-AF] bytes '" . $_
-                                    . "' with bytes '" 
-                                    . $goodbytes . $goodbyte_1 . $goodbyte_2 . "'");
-                }
-            }
-
-            # Fixup any mis-encoded character sequences in range 
-            # [C3][B0-BF][C2][80-BF][C2][80-BF][C2][80-BF] (8 bytes)
-            t("    Looking for mis-encoded [C3][B0-BF] bytes...");
-            if ( /[\xC3][\xB0-\xBF][\xC2][\x80-\xBF][\xC2][\x80-\xBF][\xC2][\x80-\xBF]/ ) {
-                # first capture each sequence of mis-encoded UTF-8 bytes 
-                # (8 in total)
-                my @misencoded_bytes = 
-                        ($page =~ /[\xC3][\xB0-\xBF][\xC2][\x80-\xBF][\xC2][\x80-\xBF][\xC2][\x80-\xBF]/g);
-                # get a unique list of the different mis-encoded byte sequences
-                my %unique_misencoded_bytes;
-                foreach(@misencoded_bytes) {
-                    $unique_misencoded_bytes{$_} = $_;
-                }
-                # Get a new list of the unique 8-byte sequences
-                @misencoded_bytes = sort values %unique_misencoded_bytes;
-                foreach (@misencoded_bytes) {
-                    t("      Found mis-encoded bytes: " . $_);
-                }
-                # process the list, reading 5 bytes in each iteration. Bytes
-                # 1 and 2 are correct and left untouched, bytes 4, 6 and 8 are 
-                # extracted and corrected before being output
-                foreach (@misencoded_bytes) {
-                    /([\xC3][\xB0-\xBF])[\xC2]([\x80-\xBF])[\xC2]([\x80-\xBF])[\xC2]([\x80-\xBF])/;
-                    my $goodbytes = $1; # correct, and used in replacement
-                    my $badbyte_1 = $2; # incorrect byte value
-                    my $badbyte_2 = $3; # incorrect byte value
-                    my $badbyte_3 = $4; # incorrect byte value
-                    # the bad bytes require 0x40 (DEC 64) to be subtracted from the char 
-                    # value. 0xA0 are a special case and always converted to regular
-                    # space char (0x20)
-                    my $goodbyte_1;
-                    if ($badbyte_1 !~ /\xA0/) {
-                        $goodbyte_1 = chr( (ord $badbyte_1) - 64);
-                    }
-                    else {
-                        $goodbyte_1 = "\x20";
-                    }
-                    my $goodbyte_2;
-                    if ($badbyte_2 !~ /\xA0/) {
-                        $goodbyte_2 = chr( (ord $badbyte_2) - 64);
-                    }
-                    else {
-                        $goodbyte_2 = "\x20";
-                    }
-                    my $goodbyte_3;
-                    if ($badbyte_3 !~ /\xA0/) {
-                        $goodbyte_3 = chr( (ord $badbyte_3) - 64);
-                    }
-                    else {
-                        $goodbyte_3 = "\x20";
-                    }
-                    # finally globally replace each sequence of bad bytes with 
-                    # the correct replacement bytes
-                    $page =~ s/$_/$goodbytes$goodbyte_1$goodbyte_2$goodbyte_3/g;
-                    t("      Replaced mis-encoded [C3][B0-BF] bytes '" . $_
-                                    . "' with bytes '" 
-                                    . $goodbytes . $goodbyte_1 . $goodbyte_2 . $goodbyte_3 . "'");
-                }
-            }
-
-            # Here we replace specific sequences of characters seen in the source 
-            # data that cannot be handled automatically above. These include
-            # occurences of the Unicode Replace Character (single and double
-            # encoded).
-            # 
-            # We use a supplemental file to store these fixups to allow updating
-            # without needing to update the grabber itself.
-            #
-            t("    Looking for Unicode Replacement Character...");
-            if ( /\xEF\xBF\xBD/ || /\xC3\xAF\xC2\xBF\xC2\xBD/ ) {
-
-                if (%utf8_fixups) {
-                    foreach my $bad_chars (keys %utf8_fixups) {
-                        my $replacement = $utf8_fixups{$bad_chars};
-                        # Now search for the regex string and replace with char string
-                        if ($page =~ s/$bad_chars/$replacement/g) {
-                            t("      Replaced Unicode Replacement Character with \"" 
-                                    . $replacement . "\"");
-                        }
-                    }
-                }
-                if ( $page =~ s/\xEF\xBF\xBD/\x3F/g ) {
-                    t("    After fixups, data for '$rt_name' still contained Unicode "
-                            . "Replacement character. Replaced with \"?\"\n");
-                    $hadEFBFBD{$rt_name} = $rt_listings_uri;
-                }
-                if ( $page =~ s/\xC3\xAF\xC2\xBF\xC2\xBD/\x3F/g ) {
-                    t("    After fixups, data for '$rt_name' still contained "
-                            . "double-encoded Unicode Replacement character. "
-                            . "Replaced with \"?\"\n");
-                    # track and report any that we've missed
-                    $hadC3AFC2BFC2BD{$rt_name} = $rt_listings_uri;
-                }
-            }
-
-            # after fixups replace any non-breaking space chars with regular spaces
-            t("    Looking for non-breaking spaces...");
-            if ( s/\xC2\xA0/\x20/g ) {
-                t("      Replaced non-breaking space chars with regular spaces");
-            }
-
-            # Check for remaining potentially bad UTF-8 chars that we might need
-            # to handle (below we remove any in range [C2][7F-9F])
-            if ( $opt->{debug} && /\xC2[\x7F-\x9F]/ ) {
-                t("    After fixups, data for '$rt_name' still contains " 
-                        . "characters in range [C2][7F-9F]\n");
-                # track and report any that we've missed
-                $hasC27FBFchars{$rt_name} = $rt_listings_uri;
-            }
-
-            # Finally, remove any remaining non-printing control characters (keep \t \n and \r)
-            # Refer to above table for ISO-8859-1 and UTF-8 Unicode encodings for chars
-            #
-            # First, chars in UTF-8 range [00-1F] (ISO-8859-1 range [00-1F])
-            if ( s/[\x00-\x08\x0B-\x0C\x0E-\x1F]//g ) {
-                t("    Removed non-printing characters (range [00]-[1F]) from "
-                        . "'$rt_name' listings data");
-            }
-            # Next, chars in UTF-8 range [C2][7F-9F] (ISO-8859-1 range [7F-9F])
-            if ( s/[\xC2][\x7F-\x9F]//g ) {
-                t("    Removed non-printing characters (range [C2][7F-9F]) from "
-                        . "'$rt_name' listings data");
-            }
-        }
-        # end of UTF-8 fixups
+        # correct UTF-8 errors in source data
+        $page = process_utf8_fixups($page, $rt_name, $rt_listings_uri);
 
         # Decode source UTF-8 octets, process for HTML entities, and encode 
         # into configured output encoding
