@@ -775,7 +775,7 @@ END
 	# Guess a default value for {install} based on whether
 	# prerequisites were found.
 	#
-	$info->{install} = not $info->{exclude} && ($opt_yes || not $info->{missing});
+	$info->{install} = (not $info->{exclude}) && ($opt_yes || not $info->{missing});
 
 	print STDERR ($s, ' ' x (1 + $width - length $s),
 		      $info->{install} ? '[yes]' : '[no]',
