@@ -28,11 +28,6 @@ use HTML::Entities;
 #   title and use the episode/subtitle instead as the title.
 #   This can break PVR rules.
 #
-# - refactor title processing routines to take \%prog
-#
-# - case insensitive matching during title
-#   processing
-#
 # - use hash lookups where possible instead
 #   of iterating over lists of text to match
 #
@@ -1935,6 +1930,914 @@ sub process_utf8_fixups($$$) {
     return $page;
 }
 
+# Remove non-title text found in programme title. This text is placed at the 
+# start of the 'real' title, separated from it by a colon.
+#
+sub process_non_title_info($) {
+    my $prog = shift;
+    
+    if ($have_title_data && @non_title_info && $prog->{'_title'} =~ /:/) {
+        NON_TITLE_TEXT:
+        foreach my $non_title_info (@non_title_info) {
+            if ($prog->{'_title'} =~ s/^($non_title_info)\s*:\s*//i) {
+                t("  Removed '" . $non_title_info 
+                  . "' from title. New title '" . $prog->{'_title'} . "'");
+                last NON_TITLE_TEXT;
+            }
+        }
+    }
+}
+
+# Some given programme titles contain both the title and episode data, 
+# separated by a colon ($title:$episode) or a hyphen ($title - $episode). 
+# Here we reassign the episode to the $episode element, leaving only the 
+# programme's title in the $title element
+#
+sub process_mixed_title_subtitle($) {
+    my $prog = shift;
+    
+    if ($have_title_data && $prog->{'_title'} =~ /:|-/) {
+        if (@mixed_title_subtitle) {
+
+            MIXED_TITLE_SUBTITLE:
+            foreach my $mixed_title_subtitle (@mixed_title_subtitle) {
+                if ($prog->{'_title'} =~ /^($mixed_title_subtitle)\s*(?::|-)\s*(.*)/) {
+                    # store the captured text
+                    my $new_title = $1;
+                    my $new_episode = $2;
+                    if (!defined $prog->{'_episode'}) {
+                        t("  Moved '" . $new_episode . "' to sub-title,"
+                          . " new title is '" . $new_title . "'");
+                        $prog->{'_title'} = $new_title;
+                        $prog->{'_episode'} = $new_episode;
+                        last MIXED_TITLE_SUBTITLE;
+                    }
+                    elsif ($prog->{'_episode'} eq $new_episode) {
+                        t("  Sub-title '" . $new_episode . "' seen in "
+                          . "title already exists, new title is '"
+                          . $new_title . "'");
+                        $prog->{'_title'} = $new_title;
+                        last MIXED_TITLE_SUBTITLE;
+                    }
+                    # concat subtitle after any episode numbering (x/y)
+                    elsif ($prog->{'_episode'} =~ /^\d+\s*(?:&\d+)?\s*\/\s*\d+\s*(?:\.|\/|,|;|:)?\s*-?\s*(?:series\s*(\w+)\s*(?:;|\.)?)?\s*$/) {
+                        t("  Concatenating sub-title '" . $new_episode 
+                          . "' seen in title after existing episode numbering '" 
+                          . $prog->{'_episode'} . "'");
+                        $prog->{'_title'} = $new_title;
+                        $prog->{'_episode'} = $prog->{'_episode'} . ": " . $new_episode;
+                        last MIXED_TITLE_SUBTITLE;
+                    }
+                    else {
+                        t("  Concatenating sub-title '" . $new_episode 
+                          . "' seen in title with existing episode info '" 
+                          . $prog->{'_episode'} . "'");
+                        $prog->{'_title'} = $new_title;
+                        $prog->{'_episode'} = $new_episode . ": " . $prog->{'_episode'};
+                        last MIXED_TITLE_SUBTITLE;
+                    }
+                }
+            }
+        }
+    }
+}
+
+# Some given programme titles contain both the episode and title data, 
+# separated by a colon ($episode:$title) or a hyphen ($episode - $title). 
+# Here we reassign the episode to the $episode element, leaving only the 
+# programme's title in the $title element
+#
+sub process_mixed_subtitle_title($) {
+    my $prog = shift;
+    
+    if ($have_title_data && $prog->{'_title'} =~ /:|-/) {
+        if (@mixed_subtitle_title) {
+
+            MIXED_SUBTITLE_TITLE:
+            foreach my $mixed_subtitle_title (@mixed_subtitle_title) {
+                if ($prog->{'_title'} =~ /^(.*)\s*(?::|-)\s*($mixed_subtitle_title)/) {
+                    # store the captured text
+                    my $new_title = $2;
+                    my $new_episode = $1;
+                    if (!defined $prog->{'_episode'}) {
+                        t("  Moved '" . $new_episode . "' to sub-title, " 
+                          . "new title is '" . $new_title . "'");
+                        $prog->{'_title'} = $new_title;
+                        $prog->{'_episode'} = $new_episode;
+                        last MIXED_SUBTITLE_TITLE;
+                    }
+                    elsif ($prog->{'_episode'} eq $new_episode) {
+                        t("  Identical sub-title '" . $new_episode 
+                          . "' also seen in title, new title is '" 
+                          . $new_title . "'");
+                        $prog->{'_title'} = $new_title;
+                        last MIXED_SUBTITLE_TITLE;
+                    }
+                    # concat subtitle after any episode numbering (x/y)
+                    elsif ($prog->{'_episode'} =~ /^\d+\s*(?:&\d+)?\s*\/\s*\d+\s*(?:\.|\/|,|;|:)?\s*-?\s*(?:series\s*(\w+)\s*(?:;|\.)?)?\s*$/) {
+                        t("  Concatenating sub-title '" . $new_episode 
+                          . "' seen in title after existing episode numbering '" 
+                          . $prog->{'_episode'} . "'");
+                        $prog->{'_title'} = $new_title;
+                        $prog->{'_episode'} = $prog->{'_episode'} . ": " . $new_episode;
+                        last MIXED_SUBTITLE_TITLE;
+                    }
+                    else {
+                        t("  Concatenating sub-title '" . $new_episode 
+                          . "' seen in title with existing episode info '" 
+                          . $prog->{'_episode'} . "'");
+                        $prog->{'_title'} = $new_title;
+                        $prog->{'_episode'} = $new_episode . ": " . $prog->{'_episode'};
+                        last MIXED_SUBTITLE_TITLE;
+                    }
+                }
+            }
+        }
+    }
+}
+
+# Listings for some programmes may have reversed title and sub-title information
+# ($title = 'real' episode and $episode = 'real' title. In order to create more 
+# consistent data, we check for flagged programme titles and reverse the given 
+# title and sub-title when found.
+#
+sub process_reversed_title_subtitle($) {
+    my $prog = shift;
+    
+    if ($have_title_data && @reversed_title_subtitle && defined $prog->{'_episode'}) {
+        REVERSED_TITLE_SUBTITLE:
+        foreach my $reversed_title_subtitle (@reversed_title_subtitle) {
+            if ($reversed_title_subtitle eq $prog->{'_episode'}) {
+                t("  Seen reversed title-subtitle for '" 
+                  . $prog->{'_title'} . ":" . $prog->{'_episode'} . "' - reversing" );
+                $prog->{'_episode'} = $prog->{'_title'};
+                $prog->{'_title'} = $reversed_title_subtitle;
+                t("  New title is '" . $prog->{'_title'} . "' and new " 
+                  . "sub-title is '" . $prog->{'_episode'} . "'");
+                last REVERSED_TITLE_SUBTITLE;
+            }
+        }
+    }
+}
+
+# Process inconsistent titles, replacing any flagged bad titles with
+# good titles.
+#
+sub process_replacement_titles($) {
+    my $prog = shift;
+    if ($have_title_data && %replacement_titles) {
+        REPLACEMENT_TITLE:
+        foreach my $bad_title (keys %replacement_titles) {
+            if (lc $prog->{'_title'} eq lc $bad_title) {
+                $prog->{'_title'} = $replacement_titles{$bad_title};
+                t("  Replaced title '" . $bad_title . "' with '"
+                  . $prog->{'_title'} . "' for consistency");
+                last REPLACEMENT_TITLE;
+            }
+        }
+    }
+}
+
+# Process inconsistent episodes. The %replacement_episodes data structure 
+# is a hash of hashes.
+#
+sub process_replacement_episodes($) {
+    my $prog = shift;
+    
+    if ($have_title_data && %replacement_episodes && defined $prog->{'_episode'}) {
+        REPLACEMENT_EPISODE:
+        foreach my $bad_episode_title (keys %replacement_episodes) {
+            # First, check whether we have matched the programme title
+            if ($prog->{'_title'} eq $bad_episode_title) {
+                # Now look for a specific episode match for the title
+                foreach my $bad_episode (keys %{$replacement_episodes{$bad_episode_title}}) {
+                    if ($prog->{'_episode'} eq $bad_episode) {
+                        $prog->{'_episode'} = $replacement_episodes{$bad_episode_title}->{$bad_episode};
+                        t("  Replaced episode info '" . $bad_episode . "' for title '" 
+                          . $bad_episode_title . "' with '" . $prog->{'_episode'} . "' for consistency");
+                        last REPLACEMENT_EPISODE;
+                    }
+                }
+            }
+        }
+    }
+}
+
+# Allow arbitrary replacement of one title/episode pair with another.
+# Intended to be used where previous title/episode replacement routines
+# do not allow the desired correction (i.e. for one-off changes).
+#
+# *** THIS MUST BE USED WITH CARE! ***
+#
+sub process_replacement_titles_episodes($) {
+    my $prog = shift;
+
+    if ($have_title_data && %replacement_title_eps) {
+        my $tmp_ep;
+        my $tmp_ep_num;
+        my $tmp_ep_num_text = '';
+        # Handle potential undef episode value, as the empty string
+        # was used in place of an undef episode during concatenation
+        # in the replacement hash
+        if (not defined $prog->{'_episode'}) {
+            $tmp_ep = '';
+        }
+        # Also handle an episode number that may be present in source
+        # data but not in replacement text
+        elsif ($prog->{'_episode'} =~ /^\d+\s*(?:&\d+)?\s*\/\s*\d+\s*(?:\.|\/|,|;|:)?\s*-?\s*(?:series\s*(\w+)\s*(?:;|\.)?)?\s*$/) {
+            $tmp_ep = '';
+            $tmp_ep_num = $prog->{'_episode'};
+            $tmp_ep_num_text = " (Preserving existing numbering)";
+        }
+        else {
+            $tmp_ep = $prog->{'_episode'};
+        }
+        my $key = "" . $prog->{'_title'} . "|" . $tmp_ep;
+        REPLACEMENT_TITLE_EPISODE:
+        foreach my $bad_title_episode (keys %replacement_title_eps) {
+            # Check whether we have matched the old programme
+            # title/episode combo
+            if ( lc $key eq lc $bad_title_episode) {
+                # Now replace the old title/ep values with new ones
+                my ($old_title, $old_ep) = ($prog->{'_title'}, $tmp_ep);
+                my ($new_title, $new_ep) = @{$replacement_title_eps{$key}};
+                # update the title
+                $prog->{'_title'} = $new_title;
+                # if new episode value is empty string, replace with undef;
+                # otherwise use new value
+                if ($new_ep eq '') {
+                    if (defined $tmp_ep_num) {
+                        $prog->{'_episode'} = $tmp_ep_num;
+                    }
+                    else {
+                        $prog->{'_episode'} = undef;
+                    }
+                }
+                else {
+                    if (defined $tmp_ep_num) {
+                        $prog->{'_episode'} = $tmp_ep_num . ": " . $new_ep;
+                    }
+                    else {
+                        $prog->{'_episode'} = $new_ep;
+                    }
+                }
+                t("  Replaced old title/ep '" . $old_title . ": " . $old_ep
+                    . "' with new title/ep '" . $new_title . ": " . $new_ep
+                    . "' for consistency" . $tmp_ep_num_text);
+                last REPLACEMENT_TITLE_EPISODE;
+            }
+        }
+    }
+}
+
+# Replace an inconsistent or missing episode subtitle based a given description.
+# The description should therefore be unique for each episode of the programme.
+# The %replacement_ep_from_desc data structure is a hash of hashes.
+#
+sub process_replacement_ep_from_desc($) {
+    my $prog = shift;
+    
+    if ($have_title_data && %replacement_ep_from_desc && defined $prog->{'_desc'}) {
+        REPLACEMENT_EPISODE_FROM_DESC:
+        foreach my $bad_episode_title (keys %replacement_ep_from_desc) {
+            # First, check whether we have matched the programme title
+            if ($prog->{'_title'} eq $bad_episode_title) {
+                # Now look for a specific episode match for the title
+                foreach my $bad_ep_desc (keys %{$replacement_ep_from_desc{$bad_episode_title}}) {
+                    if ($prog->{'_desc'} eq $bad_ep_desc) {
+                        my $old_ep;
+                        (defined $prog->{'_episode'}) ? ($old_ep = $prog->{'_episode'}) : ($old_ep = '');
+                        $prog->{'_episode'} = $replacement_ep_from_desc{$bad_episode_title}->{$bad_ep_desc};
+                        t("  Updated episode from '" . $old_ep . "' to '" . $prog->{'_episode'} 
+                            . "' for title '" . $bad_episode_title . "' based on desc '" 
+                            . $bad_ep_desc . "' for consistency");
+                        last REPLACEMENT_EPISODE_FROM_DESC;
+                    }
+                }
+            }
+        }
+    }
+}
+
+# Process programmes that may not be categorised, or are categorised with 
+# various categories in the source data. Untitled programmes ("To Be Announced")
+# and films are ignored. Different programmes having identical titles should not
+# be replaced using this routine as it may cause such programmes to be given 
+# inaccurate genres.
+#
+sub process_replacement_genres($) {
+    my $prog = shift;
+
+    if ($have_title_data && %replacement_cats && $prog->{'_title'} !~ /To Be Announced/i && !$prog->{'_film'}) {
+        REPLACEMENT_CAT:
+        foreach my $uncat_title (keys %replacement_cats) {
+            if ($prog->{'_title'} eq $uncat_title) {
+                $prog->{'_genre'} = $replacement_cats{$uncat_title};
+                t("  Assigned title '" . $prog->{'_title'} . "' to category '" . $prog->{'_genre'} . "'");
+                last REPLACEMENT_CAT;
+            }
+        }
+    }
+}
+
+# Extract series/episode numbering found in the $episode information. Series 
+# and episode numbering are parsed out of the text and made available in the 
+# <episode-num> element. We check for the following groups of series/episode 
+# formats:
+#
+# "1/6"
+# "1/6; ...."
+# "1/6 - ...."
+# "1/6. ...."
+# "1/6, series 1; ...."
+# "1/6, series one; ...."
+# "1&2/6"
+#
+# "Episode 1"
+# ".... - Episode 1"
+# ".... ep 2"
+#
+# "series one."
+#
+# "101- ...."
+#
+# "1-3/3 - ..."
+#
+sub extract_numbering_from_episode($) {
+    my $prog = shift;
+
+    if (defined $prog->{'_episode'}) {
+        # process majority of regexes only if subtitle contains digits
+        if ($prog->{'_episode'} =~ /\d+/) {
+            # 1) check for "x/y" format
+            if ($prog->{'_episode'} =~
+                s{
+                  ^                    # start at beginning of episode details
+                  (\d+)                # CAPTURE the first number(s) found ($episode_num)
+                  \s*                  # ignore any whitespace
+                  (?:&\d+)?            # check for "&2" details relating to following episode
+                  \s*                  # ignore any whitespace
+                  \/                   # forward slash
+                  \s*                  # ignore any whitespace
+                  (\d+)                # CAPTURE the second number(s) found ($num_episodes)
+                  \s*                  # ignore any whitespace
+                  (?:\.|\/|,|;|:)?     # check for punctuation characters
+                  \s*                  # ignore any whitespace
+                  -?                   # check for hyphen
+                  \s*                  # ignore any whitespace
+                  (?:series\s*(\w+|\d+)\s*(?:;|\.)?)? 
+                                       # check for series number information ($series_num)
+                  \s*                  # ignore any whitespace
+                }
+                {}ix ) {
+                    $prog->{'_episode_num'} = $1 - 1;
+                    $prog->{'_num_episodes'} = $2;
+                    t("    Episode number found: episode $1 of $2 (ep, x/y)");
+                    if ( defined $3 ) {
+                        my $series_digits = word_to_digit($3);
+                        if ( defined $series_digits and $series_digits > 0 ) {
+                            t("    Series number found: series $series_digits (parsed as $3 from ep, x/y)");
+                            $prog->{'_series_num'} = $series_digits - 1;
+                        }
+                    }
+                    $prog->{'_processed'} = 1;
+            }
+
+            # or 2) check for "Episode x" format
+            elsif ($prog->{'_episode'} =~
+                s{
+                  ^                      # start at beginning of episode details
+                  (?:Episode|Ep|Epiosde) # ignore "Episode" text
+                  \s*                    # ignore any whitespace
+                  (\d+)                  # CAPTURE the first number(s) found ($episode_num)
+                  $                      # finish at end of episode details
+                }
+                {}ix ) {
+                    $prog->{'_episode_num'} = $1 - 1;
+                    t("    Episode number found: episode $1 (ep, episode x)");
+                    $prog->{'_processed'} = 1;
+            }
+
+            # or 3) check for "wwww - Episode x" format
+            elsif ($prog->{'_episode'} =~
+                s{
+                  \s*                    # ignore any whitespace
+                  -?                     # check for hyphen
+                  \s*                    # ignore any whitespace
+                  (?:Episode|Ep|Epiosde) # ignore "Episode" text
+                  \s*                    # ignore any whitespace
+                  (\d+)                  # CAPTURE the first number(s) found ($episode_num)
+                  $                      # finish at end of episode details
+                }
+                {}ix ) {
+                    $prog->{'_episode_num'} = $1 - 1;
+                    t("    Episode number found: episode $1 (ep, wwww - episode x)");
+                    $prog->{'_processed'} = 1;
+            }
+
+            # or 4) check for "nnn- ...." format (parse out and ignore the numbering)
+            elsif ($prog->{'_episode'} =~
+                s{
+                  ^                    # start at beginning of episode details
+                  (\d{3})              # CAPTURE the 3 digits (unused)
+                  (?:-)                # ignore the hyphen
+                  \s*                  # ignore any whitespace
+                }
+                {}ix ) {
+                    t("    Episode number found (unhandled): episode $1 (ep, nnn-)");
+                    $prog->{'_processed'} = 1;
+            }
+
+            # or 5) check for "x-y/z - " format (parse out and ignore the numbering)
+            # this numbering is used when two or more episodes are edited together
+            # into a single programme (are these technically parts then?)
+            elsif ($prog->{'_episode'} =~
+                s{
+                 ^                     # start at beginning of episode details
+                 (\d+)                 # CAPTURE the first episode digits (unused)
+                 \s*                   # ignore any whitespace
+                 (?:-)                 # ignore the hyphen
+                 \s*                   # ignore any whitespace
+                 (\d+)                 # CAPTURE the last episode digits (unused)
+                 \s*                   # ignore any whitespace
+                 \/                    # forward slash
+                 \s*                   # ignore any whitespace
+                 (\d+)                 # CAPTURE the total episode digits (unused)
+                 \s*                   # ignore any whitespace
+                }
+                {}ix ) {
+                    t("    Episode number found (unhandled): episodes $1-$2 of $3 (ep, x-y/z)");
+                    $prog->{'_processed'} = 1;
+            }
+            # check for series/episode numbering at end of episode details
+            # "Genius Series 1, 4". Require at least one character before the
+            # numbering.
+            elsif ($prog->{'_episode'} =~
+                s{
+                  ^                      # start at beginning of episode details
+                  (.+\b[\x21-\x2F\x3F]?) # CAPTURE the title details before season numbering
+                  \s*                    # ignore any whitespace
+                  (?:,|;|:|-)?           # check for optional punctuation characters
+                  \s*                    # ignore any whitespace
+                  (?:\()?                # opening paren
+                  (?:Season|Series)      # check for Season/Series text
+                  \s*                    # ignore any whitespace
+                  (\d+)                  # CAPTURE season number
+                  (?:,)?                 # ignore comma if present
+                  \s*                    # ignore any whitespace
+                  (\d+)?                 # CAPTURE episode number if present
+                  \s*                    # ignore any whitespace
+                  (?:\))?                # closing paren
+                  $                      # finish at end of episode details
+                 }
+                 {}ix ) {
+                        $prog->{'_title'} = $1;
+                        t("    Season number found: Season $2 (title regex)");
+                        $prog->{'_series_num'} = $2 - 1;
+                        if ( defined $3 ) {
+                            t("    Episode number found: episode $3 (ep, Series x, y)");
+                            $prog->{'_episode_num'} = $3 - 1;
+                        }
+                        if ($prog->{'_episode'} eq $prog->{'_title'}) {
+                            $prog->{'_episode'} = undef;
+                        }
+                        $prog->{'_processed'} = 1;
+            }
+        }
+        # non-digit regexes here
+        else {
+            # 1) check for "series wwww" format (number given in words)
+            if ($prog->{'_episode'} =~ 
+                s{
+                  ^                    # start at beginning of episode details
+                  (?:series)           # ignore "series" text
+                  \s*                  # ignore any whitespace
+                  (\w+)                # CAPTURE series number given as a *word* ($series_num)
+                  (?:\.)?              # check for punctuation characters
+                  \s*                  # ignore any whitespace
+                }
+                {}ix ) {
+                    my $series_digits = word_to_digit($1);
+                    if ( defined $series_digits and $series_digits > 0 ) {
+                        t("    Series number found: series $series_digits (parsed as $1 from ep, series wwww)");
+                        $prog->{'_series_num'} = $series_digits - 1;
+                    }
+                    $prog->{'_processed'} = 1;
+            }
+
+        }
+    }
+}
+
+# Part numbering is parsed but unused. However, when part numbering is
+# seen in the text it is processed to make its format consistent.
+#
+# FIXME should we export part number in <episode-num> and remove
+# it from the text?
+#
+sub extract_part_numbering_from_episode($) {
+    my $prog = shift;
+    
+    if (defined $prog->{'_episode'} 
+            && ($prog->{'_episode'} =~ /(Part|Pt)/i || $prog->{'_episode'} =~ /\d\s*$/)) {
+        # this regex looks for part numbering in parentheses
+        #
+        # "Dead Man's Eleven (Part 1)"
+        # "Dead Man's Eleven - (Part 1)"
+        # "Dead Man's Eleven - (Part 1/2)"
+        # "Dead Man's Eleven (Pt 1)"
+        # "Dead Man's Eleven - (Pt. 1)"
+        # "Dead Man's Eleven - (Pt. 1/2)"
+        if ($prog->{'_episode'} =~
+            m{
+              ^                      # start at beginning of episode details
+              (.*\b[\x21-\x2F\x3F]?) # CAPTURE the episode details before part numbering
+              \s*                    # ignore any whitespace
+              (?:,|;|:|-)?           # check for optional punctuation characters
+              \s*                    # ignore any whitespace
+              (?:\()                 # opening paren
+              (?:Part|Pt(?:\.)?)     # check for Part/Pt text
+              \s*                    # ignore any whitespace
+              (\d+)                  # CAPTURE part number
+              \s*                    # ignore any whitespace
+              (?:\/\s*\d+)?          # ignore any total part number
+              (?:\))                 # closing paren
+              $                      # finish at end of episode details
+             }ix )
+        {
+                    t("    Part number found: part $2 (regex #1)");
+                    $prog->{'_episode'} = $1 . " (Part " . $2 . ")";
+                    $prog->{'_part_num'} = $2 - 1;
+                    $prog->{'_processed'} = 1;
+        }
+        # this regex looks for part numbering with no other episode information
+        #
+        # "Part 1"
+        # "Part 1/3"
+        # "Pt 2"
+        # "Pt 2/3"
+        # "Pt. 3"
+        elsif ($prog->{'_episode'} =~
+            m{
+              ^                    # start at beginning of episode details
+              (?:Part|Pt(?:\.)?)   # check for Part/Pt text
+              \s*                  # ignore any whitespace
+              (\d+)                # CAPTURE part number
+              \s*                  # ignore any whitespace
+              (?:\/\s*\d+)?        # ignore any total part number
+              $                    # finish at end of episode details
+             }ix )
+        {
+                    t("    Part number found: part $1 (regex #2)");
+                    $prog->{'_episode'} = "Part " . $1;
+                    $prog->{'_part_num'} = $1 - 1;
+                    $prog->{'_processed'} = 1;
+        }
+        # this regex looks for bare part numbering after a comma, semicolon, 
+        # colon or hyphen
+        #
+        # "Dead Man's Eleven - Part 1"
+        # "Dead Man's Eleven: Part 1"
+        # "Dead Man's Eleven; Pt 1"
+        # "Dead Man's Eleven, Pt. 1"
+        elsif ($prog->{'_episode'} =~
+            m{
+              ^                      # start at beginning of episode details
+              (.*\b[\x21-\x2F\x3F]?) # CAPTURE the episode details before part numbering
+              \s*                    # ignore any whitespace
+              (?:,|;|:|-)            # punctuation characters
+              \s*                    # ignore any whitespace
+              (?:Part|Pt(?:\.)?)     # check for Part/Pt text
+              \s*                    # ignore any whitespace
+              (\d+)                  # CAPTURE part number
+              \s*                    # ignore any whitespace
+              (?:\/\s*\d+)?          # ignore any total part number
+              $                      # finish at end of episode details
+             }ix )
+        {
+                    t("    Part number found: part $2 (regex #3)");
+                    $prog->{'_episode'} = $1 . " (Part " . $2 . ")";
+                    $prog->{'_part_num'} = $2 - 1;
+                    $prog->{'_processed'} = 1;
+        }
+        # this regex looks for part numbering immediately following episode info
+        #
+        # "Dead Man's Eleven Part 1"
+        # "Dead Man's Eleven Pt 1"
+        # "Dead Man's Eleven Pt 1/2"
+        # "Dead Man's Eleven Pt. 1"
+        elsif ($prog->{'_episode'} =~
+            m{
+              ^                      # start at beginning of episode details
+              (.*\b[\x21-\x2F\x3F]?) # CAPTURE the episode details before part numbering
+              \s*                    # ignore any whitespace
+              (?:Part|Pt(?:\.)?)     # check for Part/Pt text
+              \s*                    # ignore any whitespace
+              (\d+)                  # CAPTURE part number
+              \s*                    # ignore any whitespace
+              (?:\/\s*\d+)?          # ignore any total part number
+              $                      # finish at end of episode details
+             }ix )
+        {
+                    t("    Part number found: part $2 (regex #4)");
+                    $prog->{'_episode'} = $1 . " (Part " . $2 . ")";
+                    $prog->{'_part_num'} = $2 - 1;
+                    $prog->{'_processed'} = 1;
+        }
+        # this regex looks for a digit (conservatively between 1 and 6) following
+        # the episode details, a colon and at least one space
+        #
+        # "Dead Man's Eleven: 1"
+        elsif ($prog->{'_episode'} =~
+            m{
+              ^                    # start at beginning of episode details
+              (.*)                 # CAPTURE the episode details before part numbering
+              \s*                  # ignore any whitespace
+              (?::)                # colon
+              \s+                  # ignore any whitespace - min 1 space
+              (\d{1})              # CAPTURE single digit part number between 1 and 6
+              $                    # finish at end of episode details
+             }ix )
+        {
+                    if ($2 ge 1 && $2 le 6) {
+                        t("    Part number found: part $2 (regex #5, range 1-6)");
+                        $prog->{'_episode'} = $1 . " (Part " . $2 . ")";
+                        $prog->{'_part_num'} = $2 - 1;
+                        $prog->{'_processed'} = 1;
+                    }
+        }
+        # this regex looks for worded part numbering with no other episode information
+        #
+        # "Part One"
+        # "Pt Two"
+        # "Pt. Three"
+        elsif ($prog->{'_episode'} =~
+            m{
+              ^                    # start at beginning of episode details
+              (?:Part|Pt(?:\.)?)   # check for Part/Pt text
+              \s+                  # ignore any whitespace
+              (\w+)                # CAPTURE part number wording
+              $                    # finish at end of episode details
+             }ix )
+        {
+                    my $part_digits = word_to_digit($1);
+                    if ( defined $part_digits and $part_digits > 0 ) {
+                        t("    Part number found: part $part_digits (regex #6, parsed as $1)");
+                        $prog->{'_episode'} = "Part " . $part_digits;
+                        $prog->{'_part_num'} = $part_digits - 1;
+                        $prog->{'_processed'} = 1;
+                    }
+        }
+        # this regex looks for bare part numbering after a comma, semicolon, 
+        # colon or hyphen, where the numbering is given in words
+        #
+        # "Dead Man's Eleven - Part One"
+        # "Dead Man's Eleven: Part One"
+        # "Dead Man's Eleven; Pt One"
+        # "Dead Man's Eleven, Pt. One"
+        elsif ($prog->{'_episode'} =~
+            m{
+              ^                      # start at beginning of episode details
+              (.*\b[\x21-\x2F\x3F]?) # CAPTURE the episode details before part numbering
+              \s*                    # ignore any whitespace
+              (?:,|;|:|-)            # punctuation characters
+              \s*                    # ignore any whitespace
+              (?:Part|Pt(?:\.)?)     # check for Part/Pt text
+              \s+                    # ignore any whitespace
+              (\w+)                  # CAPTURE part number wording
+              $                      # finish at end of episode details
+             }ix )
+        {
+                    my $part_digits = word_to_digit($2);
+                    if ( defined $part_digits and $part_digits > 0 ) {
+                        t("    Part number found: part $part_digits (regex #7, parsed as $2)");
+                        $prog->{'_episode'} = $1 . " (Part " . $part_digits . ")";
+                        $prog->{'_part_num'} = $part_digits - 1;
+                        $prog->{'_processed'} = 1;
+                    }
+        }
+        # this regex looks for worded part numbering immediately following episode info
+        #
+        # "Dead Man's Eleven Part One"
+        # "Dead Man's Eleven Pt One"
+        # "Dead Man's Eleven Pt. One"
+        elsif ($prog->{'_episode'} =~
+            m{
+              ^                      # start at beginning of episode details
+              (.*\b[\x21-\x2F\x3F]?) # CAPTURE the episode details before part numbering
+              \s*                    # ignore any whitespace
+              (?:Part|Pt(?:\.)?)     # check for Part/Pt text
+              \s*                    # ignore any whitespace
+              (\w+)                  # CAPTURE part number wording
+              $                      # finish at end of episode details
+             }ix )
+        {
+                    my $part_digits = word_to_digit($2);
+                    if ( defined $part_digits and $part_digits > 0 ) {
+                        t("    Part number found: part $part_digits (regex #8, parsed as $2)");
+                        $prog->{'_episode'} = $1 . " (Part " . $part_digits . ")";
+                        $prog->{'_part_num'} = $part_digits - 1;
+                        $prog->{'_processed'} = 1;
+                    }
+        }
+        # this regex looks for worded part numbering in parentheses
+        #
+        # "Dead Man's Eleven (Part One)"
+        # "Dead Man's Eleven - (Part One)"
+        # "Dead Man's Eleven (Pt One)"
+        # "Dead Man's Eleven - (Pt. One)"
+        elsif ($prog->{'_episode'} =~
+            m{
+              ^                      # start at beginning of episode details
+              (.*\b[\x21-\x2F\x3F]?) # CAPTURE the episode details before part numbering
+              \s*                    # ignore any whitespace
+              (?:,|;|:|-)?           # check for optional punctuation characters
+              \s*                    # ignore any whitespace
+              (?:\()                 # opening paren
+              (?:Part|Pt(?:\.)?)     # check for Part/Pt text
+              \s*                    # ignore any whitespace
+              (\w+)                  # CAPTURE part number wording
+              \s*                    # ignore any whitespace
+              (?:\))                 # closing paren
+              $                      # finish at end of episode details
+             }ix )
+        {
+                    my $part_digits = word_to_digit($2);
+                    if ( defined $part_digits and $part_digits > 0 ) {
+                        t("    Part number found: part $part_digits (regex #9, parsed as $2)");
+                        $prog->{'_episode'} = $1 . " (Part " . $part_digits . ")";
+                        $prog->{'_part_num'} = $part_digits - 1;
+                        $prog->{'_processed'} = 1;
+                    }
+        }
+        # check for potential part numbering left unprocessed
+        #
+        # we do this at the end of the if-else because the (Part x) text is
+        # not (yet) removed from the episode details, only made consistent
+        elsif ($opt->{debug} && $prog->{'_episode'} =~ /\b(Part|Pt(\.)?)(\d+|\s+\w+)/i) {
+            t("    Possible part numbering still seen: " . $prog->{'_episode'});
+            $possible_part_nums{$prog->{'_episode'}} = $prog->{'_episode'};
+        }
+    }
+}
+
+# Check for potential season numbering in title
+#
+sub extract_numbering_from_title($) {
+    my $prog = shift;
+
+    if ($prog->{'_title'} =~ /(Season|Series)/i) {
+        # this regex looks for season numbering in title with
+        # in parentheses
+        #
+        # "Wheeler Dealers (Season 1)"
+        # "Wheeler Dealers - (Series 1)"
+        if ($prog->{'_title'} =~
+            m{
+              ^                      # start at beginning of title details
+              (.*\b[\x21-\x2F\x3F]?) # CAPTURE the title details before season numbering
+              \s*                    # ignore any whitespace
+              (?:,|;|:|-)?           # check for optional punctuation characters
+              \s*                    # ignore any whitespace
+              (?:\()                 # opening paren
+              (?:Season|Series)      # check for Part/Pt text
+              \s*                    # ignore any whitespace
+              (\d+)                  # CAPTURE season number
+              (?:,)?                 # ignore comma if present
+              \s*                    # ignore any whitespace
+              (\d+)?                 # CAPTURE episode number if present
+              \s*                    # ignore any whitespace
+              (?:\))                 # closing paren
+              $                      # finish at end of title details
+             }ix )
+        {
+                    $prog->{'_title'} = $1;
+                    if (defined $prog->{'_series_num'} && $prog->{'_series_num'} != $2) {
+                        t("    Season number (" . $prog->{'_series_num'} . ") already defined. "
+                            . "Ignoring different season number (" . $2 . ") in title.");
+                    }
+                    else {
+                        t("    Season number found: Season $2 (title regex)");
+                        $prog->{'_series_num'} = $2 - 1;
+                    }
+                    $prog->{'_episode_num'} = $3 - 1 if $3;
+                    $prog->{'_processed'} = 1;
+        } 
+        # this regex looks for season numbering in title without
+        # parentheses
+        #
+        # "Wheeler Dealers Series 1"
+        # "Wheeler Dealers Series 1, 3"
+        elsif ($prog->{'_title'} =~
+            m{
+              ^                      # start at beginning of title details
+              (.*\b[\x21-\x2F\x3F]?) # CAPTURE the title details before season numbering
+              \s*                    # ignore any whitespace
+              (?:,|;|:|-)?           # check for optional punctuation characters
+              \s*                    # ignore any whitespace
+              (?:Season|Series)      # check for Part/Pt text
+              \s*                    # ignore any whitespace
+              (\d+)                  # CAPTURE season number
+              (?:,)?                 # ignore comma if present
+              \s*                    # ignore any whitespace
+              (\d+)?                 # CAPTURE episode number if present
+              \s*                    # ignore any whitespace
+              $                      # finish at end of title details
+             }ix )
+        {
+                    $prog->{'_title'} = $1;
+                    if (defined $prog->{'_series_num'} && $prog->{'_series_num'} != $2) {
+                        t("    Season number (" . $prog->{'_series_num'} . ") already defined. "
+                            . "Ignoring different season number (" . $2 . ") in title.");
+                    }
+                    else {
+                        t("    Season number found: Season $2 (title regex)");
+                        $prog->{'_series_num'} = $2 - 1;
+                    }
+                    $prog->{'_episode_num'} = $3 - 1 if $3;
+                    $prog->{'_processed'} = 1;
+        }
+    }
+}
+
+# Check for potential season/episode numbering in description
+#
+sub extract_numbering_from_desc($) {
+    my $prog = shift;
+
+    # Extract series information if seen at start or end of description
+    # "(Series one) ..."
+    # "... (Series one)"
+    if ($prog->{'_desc'} =~
+        s{
+            \s*             # leading whitespace
+            \(Series        # (Series 
+            \s*             # whitespace
+            (\d+)           # CAPTURE the series number ($series_num)
+            \)              # )
+            \s*             # trailing whitespace
+        }
+        {}ix ) {
+            $prog->{'_series_num'} = $1 - 1;
+            t("  Series number found: series $1 (desc)");
+            $prog->{'_processed'} = 1;
+    }
+
+    # Extract episode numbering if seen at end of description
+    # "... (3/8)"
+    if ($prog->{'_desc'} =~
+        s{
+            \s*             # leading whitespace
+            \(              # (
+            (\d+)           # CAPTURE the first number(s) found ($episode_num)
+            \/              # forward slash
+            (\d+)           # CAPTURE the second number(s) found ($num_episodes)
+            \)              # )
+            $               # end of desc
+        }
+        {}ix ) {
+            $prog->{'_episode_num'} = $1 - 1;
+            $prog->{'_num_episodes'} = $2;
+            t("  Episode number found: episode $1 of $2 (desc)");
+            $prog->{'_processed'} = 1;
+    }
+    
+    # Extract episode and series info from start of description
+    # "1/6, series 1; ...."
+    if ($prog->{'_desc'} =~
+        s{
+          ^                    # start at beginning of episode details
+          (\d+)                # CAPTURE the first number(s) found ($episode_num)
+          \s*                  # ignore any whitespace
+          (?:&\d+)?            # check for "&2" details relating to following episode
+          \s*                  # ignore any whitespace
+          \/                   # forward slash
+          \s*                  # ignore any whitespace
+          (\d+)                # CAPTURE the second number(s) found ($num_episodes)
+          \s*                  # ignore any whitespace
+          (?:\.|\/|,|;|:)?     # check for punctuation characters
+          \s*                  # ignore any whitespace
+          -?                   # check for hyphen
+          \s*                  # ignore any whitespace
+          (?:series\s*(\w+)\s*(?:;|\.)?)? 
+                               # check for series number information ($series_num)
+          \s*                  # ignore any whitespace
+        }
+        {}ix ) {
+            $prog->{'_episode_num'} = $1 - 1;
+            $prog->{'_num_episodes'} = $2;
+            t("    Episode number found: episode $1 of $2 (desc)");
+            if ( defined $3 ) {
+                my $series_digits = word_to_digit($3);
+                if ( defined $series_digits and $series_digits > 0 ) {
+                    t("    Series number found: series $series_digits (parsed as $3 from desc)");
+                    $prog->{'_series_num'} = $series_digits - 1;
+                    $prog->{'_processed'} = 1;
+                }
+            }
+    }
+}
+
 # Download listings data for configured channels that are available
 sub write_listings_data {
     my ( $available_channels, $wanted_chs ) = @_;
@@ -2054,7 +2957,7 @@ sub write_listings_data {
         # Keep a reference to the previous programme that was processed. Set it
         # to undef initially as programmes are processed in transmission order.
         # We update it whenever a programme is successfully processed below.
-        my $previous_programme = undef;
+        my $prev_prog = undef;
 
         PROGRAMME:
         foreach my $prog (split /\n/, $page) {
@@ -2080,61 +2983,74 @@ sub write_listings_data {
             
             # Description of Radio Times data fields (23 in total):
             #
-            # title - the programme title (text)
-            # sub_title - infrequently defined - preference is given to episode
-            #             if defined in the source data (text)
-            # episode - the episode's position in the current series and/or the 
-            #           name of the particular episode of the programme (text)
-            # year - the year of production (text)
-            # director - the programme's director(s) (text)
-            # cast - the programme's cast (may include character details) (text)
-            # premiere - whether this is a film's first showing (boolean)
-            # film - whether the programme is a film (boolean)
-            # repeat - whether the programme has been shown before (boolean)
-            # subtitles - whether subtitles are available (boolean)
-            # widescreen - whether the broadcast is 16:9 widescreen (boolean)
-            # new_series - whether the programme is the first episode in a 
-            #              series new (boolean)
-            # deaf_signed - whether in-vision signing is available (boolean)
+            #           title - the programme title (text)
+            #       sub_title - infrequently defined - preference is given to episode
+            #                   if defined in the source data (text)
+            #         episode - the episode's position in the current series and/or the 
+            #                   name of the particular episode of the programme (text)
+            #            year - the year of production (text)
+            #        director - the programme's director(s) (text)
+            #            cast - the programme's cast (may include character details) (text)
+            #        premiere - whether this is a film's first showing (boolean)
+            #            film - whether the programme is a film (boolean)
+            #          repeat - whether the programme has been shown before (boolean)
+            #       subtitles - whether subtitles are available (boolean)
+            #      widescreen - whether the broadcast is 16:9 widescreen (boolean)
+            #      new_series - whether the programme is the first episode in a 
+            #                   series new (boolean)
+            #     deaf_signed - whether in-vision signing is available (boolean)
             # blank_and_white - whether the broadcast is not in colour (boolean)
-            # star_rating - a star rating between 0 and 5 for films (text)
-            # certificate - the BBFC certificate for the programme (text)
-            # genre - the genre of the programme (text)
-            # desc - a description of the programme. Can be a specific review by a
-            #        Radio Times reviewer (text)
-            # choice - whether the programme is recommended by the 
-            #          Radio Times (boolean)
-            # date - the transmission date (text)
-            # start - the transmission start time for the programme (text)
-            # stop - the transmissions stop time for the programme (text)
-            # duration_mins - the duration of the programme in minutes (text)
-            my ($title,       $sub_title,       $episode,         $year,
-                $director,    $cast,            $premiere,        $film,
-                $repeat,      $subtitles,       $widescreen,      $new_series,
-                $deaf_signed, $black_and_white, $star_rating,     $certificate,
-                $genre,       $desc,            $choice,          $date,
-                $start,       $stop,            $duration_mins,
+            #     star_rating - a star rating between 0 and 5 for films (text)
+            #     certificate - the BBFC certificate for the programme (text)
+            #           genre - the genre of the programme (text)
+            #            desc - a description of the programme. Can be a specific review by a
+            #                   Radio Times reviewer (text)
+            #          choice - whether the programme is recommended by the 
+            #                   Radio Times (boolean)
+            #            date - the transmission date (text)
+            #           start - the transmission start time for the programme (text)
+            #            stop - the transmissions stop time for the programme (text)
+            #   duration_mins - the duration of the programme in minutes (text)
+            #
+
+            # Hash to store all programme-specific variables. Initially store
+            # the channel ID.
+            my %prog = (channel => $ch);
+
+            # Store fields against temp keys. We will assign values to the XMLTV
+            # specific keys during processing. Key names starting with "_" are
+            # ignored by XMLTV::Writer.
+            ( $prog{'_title'},       $prog{'_sub_title'},       $prog{'_episode'},
+              $prog{'_year'},        $prog{'_director'},        $prog{'_cast'},
+              $prog{'_premiere'},    $prog{'_film'},            $prog{'_repeat'},
+              $prog{'_subtitles'},   $prog{'_widescreen'},      $prog{'_new_series'},
+              $prog{'_deaf_signed'}, $prog{'_black_and_white'}, $prog{'_star_rating'},
+              $prog{'_certificate'}, $prog{'_genre'},           $prog{'_desc'},
+              $prog{'_choice'},      $prog{'_date'},            $prog{'_start'},
+              $prog{'_stop'},        $prog{'_duration_mins'},
             ) = @fields;
 
-            my $updated_listing_info; # placeholder variable for future use
+#FIXME need to update validity checks for hash keys/values
 
-            if (!defined $title) {
+            if (!defined $prog{'_title'}) {
                 t("  Missing title in entry '$prog', skipping");
                 next PROGRAMME;
             }
-            t("  Processing programme title '$title'");
+            t("  Processing programme title '" . $prog{'_title'} . "'");
 
-            if (!defined $date) {
+            if (!defined $prog{'_date'}) {
                 t("  Missing date in entry '$prog', skipping");
                 next PROGRAMME;
             }
 
             # Check the true/false fields for valid data
-            foreach my $field ($premiere,    $film,            $repeat, 
-                               $subtitles,   $widescreen,      $new_series,
-                               $deaf_signed, $black_and_white, $choice, ) {
+            foreach my $field ($prog{'_premiere'},    $prog{'_film'},
+                               $prog{'_repeat'},      $prog{'_subtitles'},
+                               $prog{'_widescreen'},  $prog{'_new_series'},
+                               $prog{'_deaf_signed'}, $prog{'_black_and_white'},
+                               $prog{'_choice'}, ) {
                 if (!defined $field) {
-                    t("  A required true/false value was undefined for '$title', skipping");
+                    t("  A required true/false value was undefined for '" . $prog{'_title'} . "', skipping");
                     next PROGRAMME;
                 }
                 elsif ($field eq 'true') {
@@ -2144,7 +3060,7 @@ sub write_listings_data {
                     $field = 0;
                 }
                 else {
-                    t("  A bad true/false value '$field' was seen for '$title', skipping");
+                    t("  A bad true/false value '$field' was seen for '" . $prog{'_title'} . "', skipping");
                     next PROGRAMME;
                 }
             }
@@ -2152,51 +3068,53 @@ sub write_listings_data {
             # Check for any DST-related information the RT may include in the title
             # for a programme. If we find any explicit DST information we store it 
             # for use later and remove it from the title.
-            my $explicit_tz;
-            if ($title =~ s/^\((GMT|UTC|BST|UTC\+1)\)\s*//) {
-                $explicit_tz = $1;
+            if ($prog{'_title'} =~ s/^\((GMT|UTC|BST|UTC\+1)\)\s*//) {
+                $prog{'_explicit_tz'} = $1;
             }
 
             # Remove any last-minute scheduling info inserted into regular 
             # description that will affect later regexes.
-            if (defined $desc) {
-                $desc =~ s/\s+/ /g;
-                if ($desc =~ s/\s?(?:UPDATED|UPADTED)\s+LISTING\s?(?:-|:|@)\s?(.*)$//i) {
-                    $updated_listing_info = $1;
+            if (defined $prog{'_desc'}) {
+                $prog{'_desc'} =~ s/\s+/ /g;
+                if ($prog{'_desc'} =~ s/\s?(?:UPDATED|UPADTED)\s+LISTING\s?(?:-|:|@)\s?(.*)$//i) {
+                    $prog{'_updated_listing_info'} = $1;
                     t("  Removed updated listing information:\n"
-                      . "    '$updated_listing_info'");
+                      . "    '" . $1 . "'");
                 }
             }
             
             # Prefer $episode over $sub_title if both given in source data.
             # Retain episode $sub_title data if $episode contains only episode
             # numbering.
-            if (defined $sub_title) {
-                if (defined $episode) {
-                    if ( $episode =~ /^\d+\s*\/\s*\d+$/ ) {
-                        t("  Merging sub-title '$sub_title' with episode numbering '$episode' provided separately");
-                        $episode = $episode . ": " . $sub_title;
-                        $sub_title = undef;
+            if (defined $prog{'_sub_title'}) {
+                if (defined $prog{'_episode'}) {
+                    if ( $prog{'_episode'} =~ /^\d+\s*\/\s*\d+$/ ) {
+                        t("  Merging sub-title '" . $prog{'_sub_title'} 
+                                . "' with episode numbering '" . $prog{'_episode'} 
+                                . "' provided separately");
+                        $prog{'_episode'} = $prog{'_episode'} . ": " . $prog{'_sub_title'};
+                        $prog{'_sub_title'} = undef;
                     }
                     else {
-                        t("  Ignoring sub-title '$sub_title' as episode '$episode' provided");
-                        $sub_title = undef;
+                        t("  Ignoring sub-title '" . $prog{'_sub_title'} 
+                                . "' as episode '" . $prog{'_episode'} . "' provided");
+                        $prog{'_sub_title'} = undef;
                     }
                 }
                 else {
-                    t("  Using sub-title '$sub_title' as episode not given");
-                    $episode = $sub_title;
-                    $sub_title = undef;
+                    t("  Using sub-title '" . $prog{'_sub_title'} . "' as episode not given");
+                    $prog{'_episode'} = $prog{'_sub_title'};
+                    $prog{'_sub_title'} = undef;
                 }
             }
 
             # Remove production year information from $episode for films
-            if (defined $episode) {
-                if ($film && $episode =~ s/Prod Year (\d{4})//i) {
+            if (defined $prog{'_episode'}) {
+                if ($prog{'_film'} && $prog{'_episode'} =~ s/Prod Year (\d{4})//i) {
                     t("  Removed production year info from episode details");
-                    $episode = undef;
-                    if (!defined $year) {
-                        $year = $1;
+                    $prog{'_episode'} = undef;
+                    if (!defined $prog{'_year'}) {
+                        $prog{'_year'} = $1;
                     }
                 }
             }
@@ -2204,7 +3122,7 @@ sub write_listings_data {
             # Remove vertical bar/colon from end of title string. The v-bar
             # can interfere with title fixups (fixup file uses the v-bar as
             # as delimiter
-            if ($title =~ s/([|:])$//) {
+            if ($prog{'_title'} =~ s/([|:])$//) {
                 t("  Removed '" . $1 . "' from end of title");
             }
 
@@ -2222,969 +3140,155 @@ sub write_listings_data {
             # to provide subtitle (episode) information. The titles of these
             # programmes are uppercase and may contain season numbering. Here
             # we monitor these before further title processing is carried out.
-            if ($title eq uc($title)) {
-                $uc_prog_titles{$title} = $title;
+            if ($prog{'_title'} eq uc($prog{'_title'})) {
+                $uc_prog_titles{$prog{'_title'}} = $prog{'_title'};
             }
             
-            # First, remove any non-title information found in the title. This 
-            # information is placed at the start of the 'real' title, separated 
-            # by a colon (to date, this has always been the case in the RT
-            # listings).
-            #
-            if ($have_title_data && @non_title_info && $title =~ /:/) {
+            # Remove non-title text found in programme title.
+            process_non_title_info(\%prog);
+            
+            # If the title still contains a colon or hyphen after removing any
+            # non title text, there is a chance it may contain merged title 
+            # and episode data, which we now process.
 
-                NON_TITLE_TEXT:
-                foreach my $non_title_info (@non_title_info) {
-                    if ($title =~ s/^($non_title_info)\s*:\s*//i) {
-                        t("  Removed '" . $non_title_info 
-                          . "' from title. New title '" . $title . "'");
-                        last NON_TITLE_TEXT;
-                    }
-                }
+            # Look for $title:$episode in source title
+            process_mixed_title_subtitle(\%prog);
+
+            # Look for $episode:$title in source title
+            process_mixed_subtitle_title(\%prog);
+
+            # Look for reversed title and subtitle information
+            process_reversed_title_subtitle(\%prog);
+
+            # Look for inconsistent programme titles
+            process_replacement_titles(\%prog);
+
+            # Look for inconsistent programme subtitles
+            process_replacement_episodes(\%prog);
+            
+            # One-off title and episode replacements
+            process_replacement_titles_episodes(\%prog);
+
+            # Replace subtitle based on description
+            process_replacement_ep_from_desc(\%prog);
+
+            # Provide or update a programme's genre/category based on title
+            process_replacement_genres(\%prog);
+
+            # Look for series/episode/part numbering in programme title/subtitle
+            if (defined $prog{'_episode'}) {
+                t("  Pre-processing title/episode details '" 
+                        . $prog{'_title'} . " / " . $prog{'_episode'} . "'");
+            }
+            extract_numbering_from_episode(\%prog);
+            extract_part_numbering_from_episode(\%prog);
+            extract_numbering_from_title(\%prog);
+
+            # after processing see if $title contains "season" text that should
+            # probably be removed
+            if ($opt->{debug} && $prog{'_title'} =~ /season/i) {
+                t("    Title text contains \"Season\":  " . $prog{'_title'});
+                $title_text_to_remove{$prog{'_title'}} = $prog{'_title'};
             }
 
-            # If the title still contains a colon or hyphen, there is a chance it may
-            # contain merged title and episode data, which we now process.
-            if ($have_title_data && $title =~ /:|-/) {
-
-                # Some programme titles contain both the title and episode,
-                # separated by a colon ($title:$episode) or a hyphen 
-                # ($title - $episode). Here we reassign the episode to the 
-                # $episode element, leaving only the programme's title in the 
-                # $title element
-                #
-                if (@mixed_title_subtitle) {
-
-                    MIXED_TITLE_SUBTITLE:
-                    foreach my $mixed_title_subtitle (@mixed_title_subtitle) {
-                        if ($title =~ /^($mixed_title_subtitle)\s*(?::|-)\s*(.*)/) {
-                            # store the captured text
-                            my $new_title = $1;
-                            my $new_episode = $2;
-                            if (!defined $episode) {
-                                t("  Moved '" . $new_episode . "' to sub-title,"
-                                  . " new title is '" . $new_title . "'");
-                                $title = $new_title;
-                                $episode = $new_episode;
-                                last MIXED_TITLE_SUBTITLE;
-                            }
-                            elsif ($episode eq $new_episode) {
-                                t("  Sub-title '" . $episode . "' seen in "
-                                  . "title already exists, new title is '"
-                                  . $new_title . "'");
-                                $title = $new_title;
-                                last MIXED_TITLE_SUBTITLE;
-                            }
-                            # concat subtitle after any episode numbering (x/y)
-                            elsif ($episode =~ /^\d+\s*(?:&\d+)?\s*\/\s*\d+\s*(?:\.|\/|,|;|:)?\s*-?\s*(?:series\s*(\w+)\s*(?:;|\.)?)?\s*$/) {
-                                t("  Concatenating sub-title '" . $new_episode 
-                                  . "' seen in title after existing episode numbering '" 
-                                  . $episode . "'");
-                                $title = $new_title;
-                                $episode = $episode . ": " . $new_episode;
-                                last MIXED_TITLE_SUBTITLE;
-                            }
-                            else {
-                                t("  Concatenating sub-title '" . $new_episode 
-                                  . "' seen in title with existing episode info '" 
-                                  . $episode . "'");
-                                $title = $new_title;
-                                $episode = $new_episode . ": " . $episode;
-                                last MIXED_TITLE_SUBTITLE;
-                            }
-                        }
-                    }
-                }
-
-                # Some programme titles contain both the episode and title,
-                # separated by a colon ($episode:$title) or a hyphen
-                # ($episode - $title). Here we reassign the episode to the 
-                # $episode element, leaving only the programme's title in the 
-                # $title element.
-                #
-                if (@mixed_subtitle_title) {
-
-                    MIXED_SUBTITLE_TITLE:
-                    foreach my $mixed_subtitle_title (@mixed_subtitle_title) {
-                        if ($title =~ /^(.*)\s*(?::|-)\s*($mixed_subtitle_title)/) {
-                            # store the captured text
-                            my $new_title = $2;
-                            my $new_episode = $1;
-                            if (!defined $episode) {
-                                t("  Moved '" . $new_episode . "' to sub-title, " 
-                                  . "new title is '" . $new_title . "'");
-                                $title = $new_title;
-                                $episode = $new_episode;
-                                last MIXED_SUBTITLE_TITLE;
-                            }
-                            elsif ($episode eq $new_episode) {
-                                t("  Identical sub-title '" . $episode 
-                                  . "' also seen in title, new title is '" 
-                                  . $new_title . "'");
-                                $title = $new_title;
-                                last MIXED_SUBTITLE_TITLE;
-                            }
-                            # concat subtitle after any episode numbering (x/y)
-                            elsif ($episode =~ /^\d+\s*(?:&\d+)?\s*\/\s*\d+\s*(?:\.|\/|,|;|:)?\s*-?\s*(?:series\s*(\w+)\s*(?:;|\.)?)?\s*$/) {
-                                t("  Concatenating sub-title '" . $new_episode 
-                                  . "' seen in title after existing episode numbering '" 
-                                  . $episode . "'");
-                                $title = $new_title;
-                                $episode = $episode . ": " . $new_episode;
-                                last MIXED_SUBTITLE_TITLE;
-                            }
-                            else {
-                                t("  Concatenating sub-title '" . $new_episode 
-                                  . "' seen in title with existing episode info '" 
-                                  . $episode . "'");
-                                $title = $new_title;
-                                $episode = $new_episode . ": " . $episode;
-                                last MIXED_SUBTITLE_TITLE;
-                            }
-                        }
-                    }
-                }
+            # after processing see if $episode contains "series" text
+            if ($opt->{debug} && defined $prog{'_episode'} && $prog{'_episode'} =~ /series/i) {
+                t("    Possible series numbering still seen:  " . $prog{'_episode'});
+                $possible_series_nums{$prog{'_episode'}} = $prog{'_episode'};
             }
 
-            # Listings for some channels may include programme details which have
-            # reversed title and sub-title information ($title = episode and 
-            # $episode = title). In order to create more consistent data, we check 
-            # for flagged programme titles and reverse the given title and 
-            # sub-title
-            #
-            if ($have_title_data && @reversed_title_subtitle && defined $episode) {
-
-                REVERSED_TITLE_SUBTITLE:
-                foreach my $reversed_title_subtitle (@reversed_title_subtitle) {
-                    if ($reversed_title_subtitle eq $episode) {
-                        t("  Seen reversed title-subtitle for '" 
-                          . $title . ":" . $episode . "' - reversing" );
-                        $episode = $title;
-                        $title = $reversed_title_subtitle;
-                        t("  New title is '" . $title . "' and new " 
-                          . "sub-title is '" . $episode . "'");
-                        last REVERSED_TITLE_SUBTITLE;
-                    }
-                }
+            # check for potential episode numbering left unprocessed
+            if ($opt->{debug} && defined $prog{'_episode'}
+                    && ($prog{'_episode'} =~ /^\d{1,2}\D/ || $prog{'_episode'} =~ /\D\d{1,2}$/) 
+                    && $prog{'_episode'} !~ /(Part|Pt(\.)?)(\d+|\s+\w+)/) {
+                t("    Possible episode numbering still seen: " . $prog{'_episode'});
+                $possible_episode_nums{$prog{'_episode'}} = $prog{'_episode'};
             }
 
-            # After processing title and episode information, using S&R based
-            # on the original listings data, we can now process inconsistent 
-            # title and episode data content.
-            #
-            # First, replace inconsistent titles
-            #
-            if ($have_title_data && %replacement_titles) {
-                REPLACEMENT_TITLE:
-                foreach my $bad_title (keys %replacement_titles) {
-                    if (lc $title eq lc $bad_title) {
-                        $title = $replacement_titles{$bad_title};
-                        t("  Replaced title '" . $bad_title . "' with '"
-                          . $title . "' for consistency");
-                        last REPLACEMENT_TITLE;
-                    }
-                }
-            }
-            #
-            # Second, replace inconsistent episodes. The 
-            # %replacement_episodes data structure is a hash of hashes.
-            #
-            if ($have_title_data && %replacement_episodes && defined $episode) {
-                REPLACEMENT_EPISODE:
-                foreach my $bad_episode_title (keys %replacement_episodes) {
-                    # First, check whether we have matched the programme title
-                    if ($title eq $bad_episode_title) {
-                        # Now look for a specific episode match for the title
-                        foreach my $bad_episode (keys %{$replacement_episodes{$bad_episode_title}}) {
-                            if ($episode eq $bad_episode) {
-                                $episode = $replacement_episodes{$bad_episode_title}->{$bad_episode};
-                                t("  Replaced episode info '" . $bad_episode . "' for title '" 
-                                  . $bad_episode_title . "' with '" . $episode . "' for consistency");
-                                last REPLACEMENT_EPISODE;
-                            }
-                        }
-                    }
-                }
-            }
-            #
-            # Allow arbitrary replacement of one title/episode pair with another.
-            # To be used where previous title/episode replacement routines
-            # do not allow the desired correction (i.e. one-off changes).
-            # THIS MUST BE USED WITH CARE!
-            #
-            if ($have_title_data && %replacement_title_eps) {
-                my $tmp_ep;
-                my $tmp_ep_num;
-                my $tmp_ep_num_text = '';
-                # Handle potential undef episode value, as the empty string
-                # was used in place of an undef episode during concatenation
-                # in the replacement hash
-                if (not defined $episode) {
-                    $tmp_ep = '';
-                }
-                # Also handle an episode number that may be present in source
-                # data but not in replacement text
-                elsif ($episode =~ /^\d+\s*(?:&\d+)?\s*\/\s*\d+\s*(?:\.|\/|,|;|:)?\s*-?\s*(?:series\s*(\w+)\s*(?:;|\.)?)?\s*$/) {
-                    $tmp_ep = '';
-                    $tmp_ep_num = $episode;
-                    $tmp_ep_num_text = " (Preserving existing numbering)";
-                }
-                else {
-                    $tmp_ep = $episode;
-                }
-                my $key = "" . $title . "|" . $tmp_ep;
-                REPLACEMENT_TITLE_EPISODE:
-                foreach my $bad_title_episode (keys %replacement_title_eps) {
-                    # Check whether we have matched the old programme
-                    # title/episode combo
-                    if ( lc $key eq lc $bad_title_episode) {
-                        # Now replace the old title/ep values with new ones
-                        my ($old_title, $old_ep) = ($title, $tmp_ep);
-                        my ($new_title, $new_ep) = @{$replacement_title_eps{$key}};
-                        # update the title
-                        $title = $new_title;
-                        # if new episode value is empty string, replace with undef;
-                        # otherwise use new value
-                        if ($new_ep eq '') {
-                            if (defined $tmp_ep_num) {
-                                $episode = $tmp_ep_num;
-                            }
-                            else {
-                                $episode = undef;
-                            }
-                        }
-                        else {
-                            if (defined $tmp_ep_num) {
-                                $episode = $tmp_ep_num . ": " . $new_ep;
-                            }
-                            else {
-                                $episode = $new_ep;
-                            }
-                        }
-                        t("  Replaced old title/ep '" . $old_title . ": " . $old_ep
-                            . "' with new title/ep '" . $new_title . ": " . $new_ep
-                            . "' for consistency" . $tmp_ep_num_text);
-                        last REPLACEMENT_TITLE_EPISODE;
-                    }
-                }
-            }
-            #
-            # Replace inconsistent/missing episode subtitle using a given 
-            # description (should be unique per title). The %replacement_ep_from_desc 
-            # data structure is a hash of hashes.
-            #
-            if ($have_title_data && %replacement_ep_from_desc && defined $desc) {
-                REPLACEMENT_EPISODE_FROM_DESC:
-                foreach my $bad_episode_title (keys %replacement_ep_from_desc) {
-                    # First, check whether we have matched the programme title
-                    if ($title eq $bad_episode_title) {
-                        # Now look for a specific episode match for the title
-                        foreach my $bad_ep_desc (keys %{$replacement_ep_from_desc{$bad_episode_title}}) {
-                            if ($desc eq $bad_ep_desc) {
-                                my $old_ep;
-                                (defined $episode) ? ($old_ep = $episode) : ($old_ep = '');
-                                $episode = $replacement_ep_from_desc{$bad_episode_title}->{$bad_ep_desc};
-                                t("  Updated episode from '" . $old_ep . "' to '" . $episode 
-                                    . "' for title '" . $bad_episode_title . "' based on desc '" 
-                                    . $bad_ep_desc . "' for consistency");
-                                last REPLACEMENT_EPISODE_FROM_DESC;
-                            }
-                        }
-                    }
-                }
-            }
-            #
-            # After processing the data for inconsistent title and episode data
-            # we now process titles that may not be categorised, or are
-            # categorised with various categoriea in the source data.
-            # Untitled programmes ("To Be Announced") and films are ignored.
-            #
-            if ($have_title_data && %replacement_cats && $title !~ /To Be Announced/i && !$film) {
-                REPLACEMENT_CAT:
-                foreach my $uncat_title (keys %replacement_cats) {
-                    if ($title eq $uncat_title) {
-                        $genre = $replacement_cats{$uncat_title};
-                        t("  Assigned title '" . $title . "' to category '" . $genre . "'");
-                        last REPLACEMENT_CAT;
-                    }
-                }
+            # Set $episode to undefined if empty/whitespace
+            if (defined $prog{'_episode'} && $prog{'_episode'} =~ /^\s*$/) {
+                $prog{'_episode'} = undef;
             }
 
-            # Extract any series/episode/part numbering found in the $episode 
-            # information. Series and episode numbering are parsed out of the
-            # text and made available in the <episode-num> element. Part
-            # numbering is parsed but unused. However, when part numbering is
-            # seen in the text it is processed to make its format consistent.
-            #
-            # First we check for the following groups of series/episode formats:
-            #
-            # "1/6"
-            # "1/6; ...."
-            # "1/6 - ...."
-            # "1/6. ...."
-            # "1/6, series 1; ...."
-            # "1/6, series one; ...."
-            # "1&2/6"
-            #
-            # "Episode 1"
-            # ".... - Episode 1"
-            # ".... ep 2"
-            #
-            # "series one."
-            #
-            # "101- ...."
-            #
-            # "1-3/3 - ..."
-            #
-            my ($episode_num, $num_episodes, $series_num, $part_num);
-            if (defined $episode) {
-
-                t("  Pre-processing title/episode details '" . $title . " / " . $episode . "'");
-                my $processed = 0;
-
-                # 1) check for "x/y" format
-                if ($episode =~
-                    s{
-                      ^                    # start at beginning of episode details
-                      (\d+)                # CAPTURE the first number(s) found ($episode_num)
-                      \s*                  # ignore any whitespace
-                      (?:&\d+)?            # check for "&2" details relating to following episode
-                      \s*                  # ignore any whitespace
-                      \/                   # forward slash
-                      \s*                  # ignore any whitespace
-                      (\d+)                # CAPTURE the second number(s) found ($num_episodes)
-                      \s*                  # ignore any whitespace
-                      (?:\.|\/|,|;|:)?     # check for punctuation characters
-                      \s*                  # ignore any whitespace
-                      -?                   # check for hyphen
-                      \s*                  # ignore any whitespace
-                      (?:series\s*(\w+|\d+)\s*(?:;|\.)?)? 
-                                           # check for series number information ($series_num)
-                      \s*                  # ignore any whitespace
-                    }
-                    {}ix ) {
-                        $episode_num = $1 - 1;
-                        $num_episodes = $2;
-                        t("    Episode number found: episode $1 of $2 (ep, x/y)");
-                        if ( defined $3 ) {
-                            my $series_digits = word_to_digit($3);
-                            if ( defined $series_digits and $series_digits > 0 ) {
-                                t("    Series number found: series $series_digits (parsed as $3 from ep, x/y)");
-                                $series_num = $series_digits - 1;
-                            }
-                        }
-                        $processed = 1;
+            # output updated title/episode information after processing
+            if ($prog{'_processed'}) {
+                my $ep_out = "<UNDEF>";
+                if (defined $prog{'_episode'}) {
+                    $prog{'_episode'} =~ s/\s+/ /g;  # tidy whitespace
+                    $ep_out = $prog{'_episode'};
                 }
-
-                # or 2) check for "Episode x" format
-                elsif ($episode =~
-                    s{
-                      ^                      # start at beginning of episode details
-                      (?:Episode|Ep|Epiosde) # ignore "Episode" text
-                      \s*                    # ignore any whitespace
-                      (\d+)                  # CAPTURE the first number(s) found ($episode_num)
-                      $                      # finish at end of episode details
-                    }
-                    {}ix ) {
-                        $episode_num = $1 - 1;
-                        t("    Episode number found: episode $1 (ep, episode x)");
-                        $processed = 1;
-                }
-
-                # or 3) check for "wwww - Episode x" format
-                elsif ($episode =~
-                    s{
-                      \s*                    # ignore any whitespace
-                      -?                     # check for hyphen
-                      \s*                    # ignore any whitespace
-                      (?:Episode|Ep|Epiosde) # ignore "Episode" text
-                      \s*                    # ignore any whitespace
-                      (\d+)                  # CAPTURE the first number(s) found ($episode_num)
-                      $                      # finish at end of episode details
-                    }
-                    {}ix ) {
-                        $episode_num = $1 - 1;
-                        t("    Episode number found: episode $1 (ep, wwww - episode x)");
-                        $processed = 1;
-                }
-
-                # or 4) check for "series wwww" format (number given in words)
-                elsif ($episode =~ 
-                    s{
-                      ^                    # start at beginning of episode details
-                      (?:series)           # ignore "series" text
-                      \s*                  # ignore any whitespace
-                      (\w+)                # CAPTURE series number given as a *word* ($series_num)
-                      (?:\.)?              # check for punctuation characters
-                      \s*                  # ignore any whitespace
-                    }
-                    {}ix ) {
-                        my $series_digits = word_to_digit($1);
-                        if ( defined $series_digits and $series_digits > 0 ) {
-                            t("    Series number found: series $series_digits (parsed as $1 from ep, series wwww)");
-                            $series_num = $series_digits - 1;
-                        }
-                        $processed = 1;
-                }
-
-                # or 5) check for "nnn- ...." format (parse out and ignore the numbering)
-                elsif ($episode =~
-                    s{
-                      ^                    # start at beginning of episode details
-                      (\d{3})              # CAPTURE the 3 digits (unused)
-                      (?:-)                # ignore the hyphen
-                      \s*                  # ignore any whitespace
-                    }
-                    {}ix ) {
-                        t("    Episode number found (unhandled): episode $1 (ep, nnn-)");
-                        $processed = 1;
-                }
-
-                # or 6) check for "x-y/z - " format (parse out and ignore the numbering)
-                # this numbering is used when two or more episodes are edited together
-                # into a single programme (are these technically parts then?)
-                elsif ($episode =~
-                    s{
-                     ^                     # start at beginning of episode details
-                     (\d+)                 # CAPTURE the first episode digits (unused)
-                     \s*                   # ignore any whitespace
-                     (?:-)                 # ignore the hyphen
-                     \s*                   # ignore any whitespace
-                     (\d+)                 # CAPTURE the last episode digits (unused)
-                     \s*                   # ignore any whitespace
-                     \/                    # forward slash
-                     \s*                   # ignore any whitespace
-                     (\d+)                 # CAPTURE the total episode digits (unused)
-                     \s*                   # ignore any whitespace
-                    }
-                    {}ix ) {
-                        t("    Episode number found (unhandled): episodes $1-$2 of $3 (ep, x-y/z)");
-                        $processed = 1;
-                }
-                # check for series/episode numbering at end of episode details
-                # "Genius Series 1, 4". Require at least one character before the
-                # numbering.
-                elsif ($episode =~
-                    s{
-                      ^                      # start at beginning of episode details
-                      (.+\b[\x21-\x2F\x3F]?) # CAPTURE the title details before season numbering
-                      \s*                    # ignore any whitespace
-                      (?:,|;|:|-)?           # check for optional punctuation characters
-                      \s*                    # ignore any whitespace
-                      (?:\()?                # opening paren
-                      (?:Season|Series)      # check for Part/Pt text
-                      \s*                    # ignore any whitespace
-                      (\d+)                  # CAPTURE season number
-                      (?:,)?                 # ignore comma if present
-                      \s*                    # ignore any whitespace
-                      (\d+)?                 # CAPTURE episode number if present
-                      \s*                    # ignore any whitespace
-                      (?:\))?                # closing paren
-                      $                      # finish at end of episode details
-                     }
-                     {}ix ) {
-                            $title = $1;
-                            t("    Season number found: Season $2 (title regex)");
-                            $series_num = $2 - 1;
-                            if ( defined $3 ) {
-                                t("    Episode number found: episode $3 (ep, Series x, y)");
-                                $episode_num = $3 - 1;
-                            }
-                            if ($episode eq $title) {
-                                $episode = undef;
-                            }
-                            $processed = 1;
-                }
-
-                # Next we check for part numbering and make its formatting consistent
-                #
-                # FIXME should we export part number in <episode-num> and remove
-                # it from the text?
-                #
-                if (defined $episode && ($episode =~ /(Part|Pt)/i || $episode =~ /\d\s*$/)) {
-                    # this regex looks for part numbering in parentheses
-                    #
-                    # "Dead Man's Eleven (Part 1)"
-                    # "Dead Man's Eleven - (Part 1)"
-                    # "Dead Man's Eleven - (Part 1/2)"
-                    # "Dead Man's Eleven (Pt 1)"
-                    # "Dead Man's Eleven - (Pt. 1)"
-                    # "Dead Man's Eleven - (Pt. 1/2)"
-                    if ($episode =~
-                        m{
-                          ^                      # start at beginning of episode details
-                          (.*\b[\x21-\x2F\x3F]?) # CAPTURE the episode details before part numbering
-                          \s*                    # ignore any whitespace
-                          (?:,|;|:|-)?           # check for optional punctuation characters
-                          \s*                    # ignore any whitespace
-                          (?:\()                 # opening paren
-                          (?:Part|Pt(?:\.)?)     # check for Part/Pt text
-                          \s*                    # ignore any whitespace
-                          (\d+)                  # CAPTURE part number
-                          \s*                    # ignore any whitespace
-                          (?:\/\s*\d+)?          # ignore any total part number
-                          (?:\))                 # closing paren
-                          $                      # finish at end of episode details
-                         }ix )
-                    {
-                                t("    Part number found: part $2 (regex #1)");
-                                $episode = $1 . " (Part " . $2 . ")";
-                                $part_num = $2 - 1;
-                                $processed = 1;
-                    }
-                    # this regex looks for part numbering with no other episode information
-                    #
-                    # "Part 1"
-                    # "Part 1/3"
-                    # "Pt 2"
-                    # "Pt 2/3"
-                    # "Pt. 3"
-                    elsif ($episode =~
-                        m{
-                          ^                    # start at beginning of episode details
-                          (?:Part|Pt(?:\.)?)   # check for Part/Pt text
-                          \s*                  # ignore any whitespace
-                          (\d+)                # CAPTURE part number
-                          \s*                  # ignore any whitespace
-                          (?:\/\s*\d+)?        # ignore any total part number
-                          $                    # finish at end of episode details
-                         }ix )
-                    {
-                                t("    Part number found: part $1 (regex #2)");
-                                $episode = "Part " . $1;
-                                $part_num = $1 - 1;
-                                $processed = 1;
-                    }
-                    # this regex looks for bare part numbering after a comma, semicolon, 
-                    # colon or hyphen
-                    #
-                    # "Dead Man's Eleven - Part 1"
-                    # "Dead Man's Eleven: Part 1"
-                    # "Dead Man's Eleven; Pt 1"
-                    # "Dead Man's Eleven, Pt. 1"
-                    elsif ($episode =~
-                        m{
-                          ^                      # start at beginning of episode details
-                          (.*\b[\x21-\x2F\x3F]?) # CAPTURE the episode details before part numbering
-                          \s*                    # ignore any whitespace
-                          (?:,|;|:|-)            # punctuation characters
-                          \s*                    # ignore any whitespace
-                          (?:Part|Pt(?:\.)?)     # check for Part/Pt text
-                          \s*                    # ignore any whitespace
-                          (\d+)                  # CAPTURE part number
-                          \s*                    # ignore any whitespace
-                          (?:\/\s*\d+)?          # ignore any total part number
-                          $                      # finish at end of episode details
-                         }ix )
-                    {
-                                t("    Part number found: part $2 (regex #3)");
-                                $episode = $1 . " (Part " . $2 . ")";
-                                $part_num = $2 - 1;
-                                $processed = 1;
-                    }
-                    # this regex looks for part numbering immediately following episode info
-                    #
-                    # "Dead Man's Eleven Part 1"
-                    # "Dead Man's Eleven Pt 1"
-                    # "Dead Man's Eleven Pt 1/2"
-                    # "Dead Man's Eleven Pt. 1"
-                    elsif ($episode =~
-                        m{
-                          ^                      # start at beginning of episode details
-                          (.*\b[\x21-\x2F\x3F]?) # CAPTURE the episode details before part numbering
-                          \s*                    # ignore any whitespace
-                          (?:Part|Pt(?:\.)?)     # check for Part/Pt text
-                          \s*                    # ignore any whitespace
-                          (\d+)                  # CAPTURE part number
-                          \s*                    # ignore any whitespace
-                          (?:\/\s*\d+)?          # ignore any total part number
-                          $                      # finish at end of episode details
-                         }ix )
-                    {
-                                t("    Part number found: part $2 (regex #4)");
-                                $episode = $1 . " (Part " . $2 . ")";
-                                $part_num = $2 - 1;
-                                $processed = 1;
-                    }
-                    # this regex looks for a digit (conservatively between 1 and 6) following
-                    # the episode details, a colon and at least one space
-                    #
-                    # "Dead Man's Eleven: 1"
-                    elsif ($episode =~
-                        m{
-                          ^                    # start at beginning of episode details
-                          (.*)                 # CAPTURE the episode details before part numbering
-                          \s*                  # ignore any whitespace
-                          (?::)                # colon
-                          \s+                  # ignore any whitespace - min 1 space
-                          (\d{1})              # CAPTURE single digit part number between 1 and 6
-                          $                    # finish at end of episode details
-                         }ix )
-                    {
-                                if ($2 ge 1 && $2 le 6) {
-                                    t("    Part number found: part $2 (regex #5, range 1-6)");
-                                    $episode = $1 . " (Part " . $2 . ")";
-                                    $part_num = $2 - 1;
-                                    $processed = 1;
-                                }
-                    }
-                    # this regex looks for worded part numbering with no other episode information
-                    #
-                    # "Part One"
-                    # "Pt Two"
-                    # "Pt. Three"
-                    elsif ($episode =~
-                        m{
-                          ^                    # start at beginning of episode details
-                          (?:Part|Pt(?:\.)?)   # check for Part/Pt text
-                          \s+                  # ignore any whitespace
-                          (\w+)                # CAPTURE part number wording
-                          $                    # finish at end of episode details
-                         }ix )
-                    {
-                                my $part_digits = word_to_digit($1);
-                                if ( defined $part_digits and $part_digits > 0 ) {
-                                    t("    Part number found: part $part_digits (regex #6, parsed as $1)");
-                                    $episode = "Part " . $part_digits;
-                                    $part_num = $part_digits - 1;
-                                    $processed = 1;
-                                }
-                    }
-                    # this regex looks for bare part numbering after a comma, semicolon, 
-                    # colon or hyphen, where the numbering is given in words
-                    #
-                    # "Dead Man's Eleven - Part One"
-                    # "Dead Man's Eleven: Part One"
-                    # "Dead Man's Eleven; Pt One"
-                    # "Dead Man's Eleven, Pt. One"
-                    elsif ($episode =~
-                        m{
-                          ^                      # start at beginning of episode details
-                          (.*\b[\x21-\x2F\x3F]?) # CAPTURE the episode details before part numbering
-                          \s*                    # ignore any whitespace
-                          (?:,|;|:|-)            # punctuation characters
-                          \s*                    # ignore any whitespace
-                          (?:Part|Pt(?:\.)?)     # check for Part/Pt text
-                          \s+                    # ignore any whitespace
-                          (\w+)                  # CAPTURE part number wording
-                          $                      # finish at end of episode details
-                         }ix )
-                    {
-                                my $part_digits = word_to_digit($2);
-                                if ( defined $part_digits and $part_digits > 0 ) {
-                                    t("    Part number found: part $part_digits (regex #7, parsed as $2)");
-                                    $episode = $1 . " (Part " . $part_digits . ")";
-                                    $part_num = $part_digits - 1;
-                                    $processed = 1;
-                                }
-                    }
-                    # this regex looks for worded part numbering immediately following episode info
-                    #
-                    # "Dead Man's Eleven Part One"
-                    # "Dead Man's Eleven Pt One"
-                    # "Dead Man's Eleven Pt. One"
-                    elsif ($episode =~
-                        m{
-                          ^                      # start at beginning of episode details
-                          (.*\b[\x21-\x2F\x3F]?) # CAPTURE the episode details before part numbering
-                          \s*                    # ignore any whitespace
-                          (?:Part|Pt(?:\.)?)     # check for Part/Pt text
-                          \s*                    # ignore any whitespace
-                          (\w+)                  # CAPTURE part number wording
-                          $                      # finish at end of episode details
-                         }ix )
-                    {
-                                my $part_digits = word_to_digit($2);
-                                if ( defined $part_digits and $part_digits > 0 ) {
-                                    t("    Part number found: part $part_digits (regex #8, parsed as $2)");
-                                    $episode = $1 . " (Part " . $part_digits . ")";
-                                    $part_num = $part_digits - 1;
-                                    $processed = 1;
-                                }
-                    }
-                    # this regex looks for worded part numbering in parentheses
-                    #
-                    # "Dead Man's Eleven (Part One)"
-                    # "Dead Man's Eleven - (Part One)"
-                    # "Dead Man's Eleven (Pt One)"
-                    # "Dead Man's Eleven - (Pt. One)"
-                    elsif ($episode =~
-                        m{
-                          ^                      # start at beginning of episode details
-                          (.*\b[\x21-\x2F\x3F]?) # CAPTURE the episode details before part numbering
-                          \s*                    # ignore any whitespace
-                          (?:,|;|:|-)?           # check for optional punctuation characters
-                          \s*                    # ignore any whitespace
-                          (?:\()                 # opening paren
-                          (?:Part|Pt(?:\.)?)     # check for Part/Pt text
-                          \s*                    # ignore any whitespace
-                          (\w+)                  # CAPTURE part number wording
-                          \s*                    # ignore any whitespace
-                          (?:\))                 # closing paren
-                          $                      # finish at end of episode details
-                         }ix )
-                    {
-                                my $part_digits = word_to_digit($2);
-                                if ( defined $part_digits and $part_digits > 0 ) {
-                                    t("    Part number found: part $part_digits (regex #9, parsed as $2)");
-                                    $episode = $1 . " (Part " . $part_digits . ")";
-                                    $part_num = $part_digits - 1;
-                                    $processed = 1;
-                                }
-                    }
-                    # check for potential part numbering left unprocessed
-                    #
-                    # we do this at the end of the if-else because the (Part x) text is
-                    # not (yet) removed from the episode details, only made consistent
-                    elsif ($opt->{debug} && $episode =~ /\b(Part|Pt(\.)?)(\d+|\s+\w+)/i) {
-                        t("    Possible part numbering still seen: $episode");
-                        $possible_part_nums{$episode} = $episode;
-                    }
-                }
-
-                # Check for potential season numbering in title
-                #
-                if ($title =~ /(Season|Series)/i) {
-                    # this regex looks for season numbering in title with
-                    # in parentheses
-                    #
-                    # "Wheeler Dealers (Season 1)"
-                    # "Wheeler Dealers - (Series 1)"
-                    if ($title =~
-                        m{
-                          ^                      # start at beginning of title details
-                          (.*\b[\x21-\x2F\x3F]?) # CAPTURE the title details before season numbering
-                          \s*                    # ignore any whitespace
-                          (?:,|;|:|-)?           # check for optional punctuation characters
-                          \s*                    # ignore any whitespace
-                          (?:\()                 # opening paren
-                          (?:Season|Series)      # check for Part/Pt text
-                          \s*                    # ignore any whitespace
-                          (\d+)                  # CAPTURE season number
-                          (?:,)?                 # ignore comma if present
-                          \s*                    # ignore any whitespace
-                          (\d+)?                 # CAPTURE episode number if present
-                          \s*                    # ignore any whitespace
-                          (?:\))                 # closing paren
-                          $                      # finish at end of title details
-                         }ix )
-                    {
-                                $title = $1;
-                                if (defined $series_num && $series_num != $2) {
-                                    t("    Season number (" . $series_num . ") already defined. "
-                                        . "Ignoring different season number (" . $2 . ") in title.");
-                                }
-                                else {
-                                    t("    Season number found: Season $2 (title regex)");
-                                    $series_num = $2 - 1;
-                                }
-                                $episode_num = $3 - 1 if $3;
-                                $processed = 1;
-                    } 
-                    # this regex looks for season numbering in title without
-                    # parentheses
-                    #
-                    # "Wheeler Dealers Series 1"
-                    # "Wheeler Dealers Series 1, 3"
-                    elsif ($title =~
-                        m{
-                          ^                      # start at beginning of title details
-                          (.*\b[\x21-\x2F\x3F]?) # CAPTURE the title details before season numbering
-                          \s*                    # ignore any whitespace
-                          (?:,|;|:|-)?           # check for optional punctuation characters
-                          \s*                    # ignore any whitespace
-                          (?:Season|Series)      # check for Part/Pt text
-                          \s*                    # ignore any whitespace
-                          (\d+)                  # CAPTURE season number
-                          (?:,)?                 # ignore comma if present
-                          \s*                    # ignore any whitespace
-                          (\d+)?                 # CAPTURE episode number if present
-                          \s*                    # ignore any whitespace
-                          $                      # finish at end of title details
-                         }ix )
-                    {
-                                $title = $1;
-                                if (defined $series_num && $series_num != $2) {
-                                    t("    Season number (" . $series_num . ") already defined. "
-                                        . "Ignoring different season number (" . $2 . ") in title.");
-                                }
-                                else {
-                                    t("    Season number found: Season $2 (title regex)");
-                                    $series_num = $2 - 1;
-                                }
-                                $episode_num = $3 - 1 if $3;
-                                $processed = 1;
-                    }
-                }
-                
-                # after processing see if $title contains "season" text that should
-                # probably be removed
-                if ($opt->{debug} && $title =~ /season/i) {
-                    t("    Title text contains \"Season\":  $title");
-                    $title_text_to_remove{$title} = $title;
-                }
-                
-                # after processing see if $episode contains "series" text
-                if ($opt->{debug} && defined $episode && $episode =~ /series/i) {
-                    t("    Possible series numbering still seen:  $episode");
-                    $possible_series_nums{$episode} = $episode;
-                }
-                
-                # check for potential episode numbering left unprocessed
-                if ( $opt->{debug} && defined $episode 
-                        && ($episode =~ /^\d{1,2}\D/ || $episode =~ /\D\d{1,2}$/) 
-                        && $episode !~ /(Part|Pt(\.)?)(\d+|\s+\w+)/) {
-                    t("    Possible episode numbering still seen: $episode");
-                    $possible_episode_nums{$episode} = $episode;
-                }
-
-                # Set $episode to undefined if empty/whitespace
-                if (defined $episode && $episode =~ /^\s*$/) {
-                    $episode = undef;
-                }
-
-                # output updated title/episode information after processing
-                if ($processed) {
-                    my $ep_out = "<UNDEF>";
-                    if (defined $episode) {
-                        $episode =~ s/\s+/ /g;  # tidy whitespace
-                        $ep_out = $episode;
-                    }
-                    t("  Post-processing title/episode details '" . $title . " / " . $ep_out . "'");
-                }
+                t("  Post-processing title/episode details '" 
+                        . $prog{'_title'} . " / " . $ep_out . "'");
             }
 
             # Monitor for case/punctuation-insensitive title variations
             if ($opt->{debug}) {
-                my $title_nopunc = lc $title;
+                my $title_nopunc = lc $prog{'_title'};
                 $title_nopunc =~ s/^the\s+//;
                 $title_nopunc =~ s/(\s+and\s+|\s+&\s+)/ /g;
                 $title_nopunc =~ s/\W//g;
                 # count number of each variant
-                $case_insens_titles{$title_nopunc}{$title}++;
+                $case_insens_titles{$title_nopunc}{$prog{'_title'}}++;
             }
-            
-            # Create the hash to store the programme's details
-            my %p = (channel => $ch, title => [ [ $title ] ]);
             
             # For non-films which may contain subtitle/episode information in
             # the title, add the title to the list of programme titles for
             # later debugging
-            if (!$film) {
-                $prog_titles{$title} = $title;
+            if (!$prog{'_film'}) {
+                $prog_titles{$prog{'_title'}} = $prog{'_title'};
             }
 
             # Occasionally film listings contain the title duplicated in the 
             # $episode field, so we remove it here
-            if ($film && uc $title eq uc $episode) {
-                $episode = undef;
+            if ($prog{'_film'} && uc $prog{'_title'} eq uc $prog{'_episode'}) {
+                $prog{'_episode'} = undef;
             }
 
+            # Write out the programme's post-processed title 
+            $prog{title} = [ [ $prog{'_title'} ] ];
+            
             # Write out the programme's episode title ($episode) if present
-            if (defined $episode && $episode !~ /^\s*$/) {
-                $p{'sub-title'} = [ [ $episode ] ];
+            if (defined $prog{'_episode'} && $prog{'_episode'} !~ /^\s*$/) {
+                $prog{'sub-title'} = [ [ $prog{'_episode'} ] ];
             }
 
             # Check episode description if present
-            if (defined $desc) {
-                $desc =~ s/\s+/ /g;
+            if (defined $prog{'_desc'}) {
+                $prog{'_desc'} =~ s/\s+/ /g;
 
-                # Extract series information if seen at start or end of description
-                # "(Series one) ..."
-                # "... (Series one)"
-                if ($desc =~
-                    s{
-                        \s*             # leading whitespace
-                        \(Series        # (Series 
-                        \s*             # whitespace
-                        (\d+)           # CAPTURE the series number ($series_num)
-                        \)              # )
-                        \s*             # trailing whitespace
-                    }
-                    {}ix ) {
-                        $series_num = $1 - 1;
-                        t("  Series number found: series $1 (desc)");
-                }
-
-                # Extract episode numbering if seen at end of description
-                # "... (3/8)"
-                if ($desc =~
-                    s{
-                        \s*             # leading whitespace
-                        \(              # (
-                        (\d+)           # CAPTURE the first number(s) found ($episode_num)
-                        \/              # forward slash
-                        (\d+)           # CAPTURE the second number(s) found ($num_episodes)
-                        \)              # )
-                        $               # end of desc
-                    }
-                    {}ix ) {
-                        $episode_num = $1 - 1;
-                        $num_episodes = $2;
-                        t("  Episode number found: episode $1 of $2 (desc)");
-                }
-                
-                # Extract episode and series info from start of description
-                # "1/6, series 1; ...."
-                if ($desc =~
-                    s{
-                      ^                    # start at beginning of episode details
-                      (\d+)                # CAPTURE the first number(s) found ($episode_num)
-                      \s*                  # ignore any whitespace
-                      (?:&\d+)?            # check for "&2" details relating to following episode
-                      \s*                  # ignore any whitespace
-                      \/                   # forward slash
-                      \s*                  # ignore any whitespace
-                      (\d+)                # CAPTURE the second number(s) found ($num_episodes)
-                      \s*                  # ignore any whitespace
-                      (?:\.|\/|,|;|:)?     # check for punctuation characters
-                      \s*                  # ignore any whitespace
-                      -?                   # check for hyphen
-                      \s*                  # ignore any whitespace
-                      (?:series\s*(\w+)\s*(?:;|\.)?)? 
-                                           # check for series number information ($series_num)
-                      \s*                  # ignore any whitespace
-                    }
-                    {}ix ) {
-                        $episode_num = $1 - 1;
-                        $num_episodes = $2;
-                        t("    Episode number found: episode $1 of $2 (desc)");
-                        if ( defined $3 ) {
-                            my $series_digits = word_to_digit($3);
-                            if ( defined $series_digits and $series_digits > 0 ) {
-                                t("    Series number found: series $series_digits (parsed as $3 from desc)");
-                                $series_num = $series_digits - 1;
-                            }
-                        }
-                }
+                # Look for series/episode numbering in programme description
+                extract_numbering_from_desc(\%prog);
 
                 # Finally write out the non-empty description
-                if ($desc !~ /^\s*$/) {
-                    $p{desc} = [ [ $desc, 'en' ] ];
+                if ($prog{'_desc'} !~ /^\s*$/) {
+                    $prog{desc} = [ [ $prog{'_desc'}, 'en' ] ];
                 }
             }
 
             # Write out episode numbering information extracted from $episode 
             # and $desc fields
-            if (!defined $series_num) {
-                $series_num = '';
+            if (!defined $prog{'_series_num'}) {
+                $prog{'_series_num'} = '';
             }
-            if (!defined $episode_num) {
-                $episode_num = '';
+            if (!defined $prog{'_episode_num'}) {
+                $prog{'_episode_num'} = '';
             }
-            if (defined $num_episodes) {
-                $num_episodes = "/$num_episodes";
+            if (defined $prog{'_num_episodes'}) {
+                $prog{'_num_episodes'} = "/" . $prog{'_num_episodes'};
             }
             else {
-                $num_episodes = '';
+                $prog{'_num_episodes'} = '';
             }
             # Write out the details if we have the series and/or episode numbers
-            if ($series_num ne '' || $episode_num ne '') {
-                $p{'episode-num'} = [ [ "${series_num}.${episode_num}${num_episodes}.", "xmltv_ns" ] ];
+            if ($prog{'_series_num'} ne '' || $prog{'_episode_num'} ne '') {
+                $prog{'episode-num'} = [ [ "" . $prog{'_series_num'} . "."
+                                              . $prog{'_episode_num'} 
+                                              . $prog{'_num_episodes'} . "."
+                                              . "", "xmltv_ns" ] ];
             }
 
-            if (defined $director && $director !~ /^\s*$/) {
-                $p{credits}{director} = [ $director ];
+            if (defined $prog{'_director'} && $prog{'_director'} !~ /^\s*$/) {
+                $prog{credits}{director} = [ $prog{'_director'} ];
             }
 
             # The Radio Times data includes cast information in 2 formats:
@@ -3195,24 +3299,24 @@ sub write_listings_data {
             #
             # If 'Director' appears in the character entry, this is to be used 
             # as a regular cast member, not the programme's director
-            if (defined $cast) {
+            if (defined $prog{'_cast'}) {
                 my @cast;
-                $cast =~ s/\s+/ /g; # remove extra spaces
-                $cast =~ s/\|\|/\|/g;  # remove empty pipe-separated fields
-                $cast =~ s/,,/,/g;  # remove empty comma-separated fields
+                $prog{'_cast'} =~ s/\s+/ /g; # remove extra spaces
+                $prog{'_cast'} =~ s/\|\|/\|/g;  # remove empty pipe-separated fields
+                $prog{'_cast'} =~ s/,,/,/g;  # remove empty comma-separated fields
                 
                 # First we check for 'character*actor' entries
-                if ($cast =~ tr/*//) {
+                if ($prog{'_cast'} =~ tr/*//) {
                     # Multiple 'character*actor'entries
-                    if ($cast =~ tr/|//) {
-                        @cast = split /\|/, $cast;
+                    if ($prog{'_cast'} =~ tr/|//) {
+                        @cast = split /\|/, $prog{'_cast'};
                     }
                     # Single 'character*actor' entry
                     else {
-                        push @cast, $cast;
+                        push @cast, $prog{'_cast'};
                     }
                     
-                    # Process the list of cast entries
+                    # Now process the list of cast entries
                     foreach my $cast (@cast) {
                         # Replace any actor given as Himself/Herself with the
                         # character name given
@@ -3221,86 +3325,86 @@ sub write_listings_data {
                         }
                         # Remove the 'character*' portion of the entry
                         if ($cast !~ s/^.*[*]//) {
-                            t("  Bad cast entry for '$title': $cast");
+                            t("  Bad cast entry for '" . $prog{'_title'} . "': " . $cast);
                         }
                     }
                 }
                 # Next we check for CSV-style actor entries
-                elsif ($cast =~ tr/,//) {
-                    @cast = split /,/, $cast;
+                elsif ($prog{'_cast'} =~ tr/,//) {
+                    @cast = split /,/, $prog{'_cast'};
                 }
                 # Finally we assume a single actor's name that contains neither 
                 # '*' nor ','
                 else {
-                    push @cast, $cast;
+                    push @cast, $prog{'_cast'};
                 }
                 # Trim whitespace from beginning/end of actor names
                 foreach my $cast (@cast) {
                     $cast =~ s/^\s+//;
                     $cast =~ s/\s+$//;
                 }
-                $p{credits}{actor} = \@cast;
+                $prog{credits}{actor} = \@cast;
             }
 
-            if (defined $year) {
-                $p{date} = $year;
+            if (defined $prog{'_year'}) {
+                $prog{date} = $prog{'_year'};
             }
-            if ($film) {
-                push @{$p{category}}, [ 'Film', 'en' ];
+            if ($prog{'_film'}) {
+                push @{$prog{category}}, [ 'Film', 'en' ];
             }
-            if (defined $genre && !$film) {
-                push @{$p{category}}, [ $genre, 'en' ];
+            if (defined $prog{'_genre'} && !$prog{'_film'}) {
+                push @{$prog{category}}, [ $prog{'_genre'}, 'en' ];
                 # check for unhelpful/duplicated categories
                 if ($opt->{debug}) {
-                    $categories{$genre} = $genre;
-                    if ($genre =~ /(No Genre|TBA)/ && $title !~ /To Be Announced/) {
-                        $uncategorised_progs{$title} = $title;
+                    $categories{$prog{'_genre'}} = $prog{'_genre'};
+                    if ($prog{'_genre'} =~ /(No Genre|TBA)/ && $prog{'_title'} !~ /To Be Announced/) {
+                        $uncategorised_progs{$prog{'_title'}} = $prog{'_title'};
                     }
-                    $cats_per_prog{$title}{$genre}++;
+                    $cats_per_prog{$prog{'_title'}}{$prog{'_genre'}}++;
                 }
             }
-            if ($opt->{debug} && !defined $genre && $title !~ /To Be Announced/) {
-                $uncategorised_progs{$title} = $title;
+            if ($opt->{debug} && !defined $prog{'_genre'} && $prog{'_title'} !~ /To Be Announced/) {
+                $uncategorised_progs{$prog{'_title'}} = $prog{'_title'};
             }
-            if ($widescreen) {
-                $p{video}{aspect} = '16:9';
+            if ($prog{'_widescreen'}) {
+                $prog{video}{aspect} = '16:9';
             }
-            if ($black_and_white) {
-                $p{video}{colour} = 0;
+            if ($prog{'_black_and_white'}) {
+                $prog{video}{colour} = 0;
             }
             # override aspect if channel is flagged as HDTV
             if (defined $video_quality{$xmltv_id}) {
                 if ($video_quality{$xmltv_id} =~ /HDTV/) {
-                    $p{video}{quality} = 'HDTV';
-                    $p{video}{aspect} = '16:9';
+                    $prog{video}{quality} = 'HDTV';
+                    $prog{video}{aspect} = '16:9';
                 }
                 elsif ($video_quality{$xmltv_id} =~ /SDTV/) {
-                    $p{video}{quality} = 'SDTV';
+                    $prog{video}{quality} = 'SDTV';
                 }
             }
-            if ($repeat) {
-                $p{'previously-shown'} = {};
+            if ($prog{'_repeat'}) {
+                $prog{'previously-shown'} = {};
             }
-            if ($premiere) {
-                $p{premiere} = [ '' ];
+            if ($prog{'_premiere'}) {
+                $prog{premiere} = [ '' ];
             }
-            if ($new_series) {
-                $p{new} = 1;
+            if ($prog{'_new_series'}) {
+                $prog{new} = 1;
             }
-            if ($subtitles) {
-                push @{$p{subtitles}},{type=>'teletext'};
+            if ($prog{'_subtitles'}) {
+                push @{$prog{subtitles}}, {type=>'teletext'};
             }
-            if ($deaf_signed) {
-                push @{$p{subtitles}},{type=>'deaf-signed'};
+            if ($prog{'_deaf_signed'}) {
+                push @{$prog{subtitles}}, {type=>'deaf-signed'};
             }
-            if (defined $certificate && $certificate !~ /^\s*$/) {
-                $p{rating} = [ [ $certificate, 'BBFC' ] ];
+            if (defined $prog{'_certificate'} && $prog{'_certificate'} !~ /^\s*$/) {
+                $prog{rating} = [ [ $prog{'_certificate'}, 'BBFC' ] ];
             }
-            if (defined $star_rating  && $star_rating !~ /^\s*$/ && $film) {
-                push @{$p{'star-rating'}}, [ "$star_rating/5", 'Radio Times Film Rating' ];
+            if (defined $prog{'_star_rating'}  && $prog{'_star_rating'} !~ /^\s*$/ && $prog{'_film'}) {
+                push @{$prog{'star-rating'}}, [ "" . $prog{'_star_rating'} . "/5", 'Radio Times Film Rating' ];
             }
-            if ($choice) {
-                push @{$p{'star-rating'}}, [ '1/1', 'Radio Times Recommendation' ];
+            if ($prog{'_choice'}) {
+                push @{$prog{'star-rating'}}, [ '1/1', 'Radio Times Recommendation' ];
             }
 
             # Broadcast date, start/stop times, and timezone adjustments.
@@ -3344,46 +3448,48 @@ sub write_listings_data {
             my ($implicit_tz, $tz);
             
             # Check for valid date format
-            if ($date !~ m{(\d\d)/(\d\d)/(\d{4})$}) {
-                t("  A bad date '$date' was seen for '$title', skipping");
+            if ($prog{'_date'} !~ m{(\d\d)/(\d\d)/(\d{4})$}) {
+                t("  A bad date '" . $prog{'_date'} . "' was seen for '" . $prog{'_title'} . "', skipping");
                 next PROGRAMME;
             }
             ($dd, $mm, $yyyy) = ($1, $2, $3);
-            t("  Start time given as '$yyyy/$mm/$dd $start', duration $duration_mins mins");
+            t("  Start time given as '" . $yyyy . "/" . $mm . "/" . $dd . " " . $prog{'_start'} 
+                    . "', duration " . $prog{'_duration_mins'} . " mins");
 
             # Use BST information found in title, otherwise calculate it ourselves
-            if (defined $explicit_tz) {
-                t("  Explicit timezone '$explicit_tz' detected in title");
-                $tz = $explicit_tz;
+            if (defined $prog{'_explicit_tz'}) {
+                t("  Explicit timezone '" . $prog{'_explicit_tz'} . "' detected in title");
+                $tz = $prog{'_explicit_tz'};
             }
             else {
-                $p{start} = utc_offset( "$yyyy$mm$dd$start", $base_tz );
-                if ($p{start} !~ /([+-]\d{4})$/) {
-                    t("  Bad UTC offset '$1' detected for '$title', skipping");
+                $prog{start} = utc_offset( "" . $yyyy . $mm . $dd . $prog{'_start'} . "", $base_tz );
+                if ($prog{start} !~ /([+-]\d{4})$/) {
+                    t("  Bad UTC offset '" . $1 . "' detected for '" . $prog{'_title'} . "', skipping");
                     next PROGRAMME;
                 }
                 $implicit_tz = $1;
-                t("  Implicit timezone calculated to be '$implicit_tz'");
+                t("  Implicit timezone calculated to be '" . $implicit_tz . "'");
                 $tz = $implicit_tz;
             }
 
             # Calculate start time with correct UTC offset
-            $p{start} = utc_offset("$yyyy$mm$dd$start $tz", $base_tz);
+            $prog{start} = utc_offset("" . $yyyy . $mm . $dd . $prog{'_start'} . " " . $tz . "", $base_tz);
 
+#FIXME - need to work around stupid programme lengths e.g. 1500 minutes
             # Calculate stop time by adding length of programme to start time
             my $datecalc_stop
-                = DateCalc(ParseDate("$yyyy$mm$dd$start $tz"),
-                           ParseDateDelta($duration_mins . "minutes")
+                = DateCalc(ParseDate("" . $yyyy . $mm . $dd . $prog{'_start'} . " " . $tz . ""),
+                           ParseDateDelta($prog{'_duration_mins'} . "minutes")
                            );
             #t("  Stop time calculated as '$datecalc_stop' via DateCalc()");
             my $unixdate_stop
                 = UnixDate($datecalc_stop, "%Y%m%d%H%M %z");
             #t("  Stop time formatted as  '$unixdate_stop' via UnixDate()");
 
-            $p{stop}  = utc_offset($unixdate_stop, $base_tz);
+            $prog{stop} = utc_offset($unixdate_stop, $base_tz);
 
-            t("  $p{start} - Start time");
-            t("  $p{stop} - Stop time");
+            t("  " . $prog{start} . " - Start time");
+            t("  " . $prog{stop} . " - Stop time");
 
             # Now we have determined the correct start/stop times for the programme
             # add any required timeshift defined in channel_ids and preserve the
@@ -3391,12 +3497,12 @@ sub write_listings_data {
             #
             if (defined $channel_offset{$xmltv_id}) {
                 my $timeshift = $channel_offset{$xmltv_id};
-                my $start_ts = DateCalc( ParseDateString( $p{start} ), $timeshift );
-                my $stop_ts = DateCalc( ParseDateString( $p{stop} ), $timeshift );
-                $p{start} = utc_offset( UnixDate( $start_ts, "%Y%m%d%H%M %z" ), $base_tz );
-                $p{stop} = utc_offset( UnixDate( $stop_ts, "%Y%m%d%H%M %z" ), $base_tz );
-                t("  $p{start} - Start time after applying '$timeshift' timeshift");
-                t("  $p{stop} - Stop time after applying '$timeshift' timeshift");
+                my $start_ts = DateCalc( ParseDateString( $prog{start} ), $timeshift );
+                my $stop_ts = DateCalc( ParseDateString( $prog{stop} ), $timeshift );
+                $prog{start} = utc_offset( UnixDate( $start_ts, "%Y%m%d%H%M %z" ), $base_tz );
+                $prog{stop} = utc_offset( UnixDate( $stop_ts, "%Y%m%d%H%M %z" ), $base_tz );
+                t("  " . $prog{start} . " - Start time after applying '" . $timeshift . "' timeshift");
+                t("  " . $prog{stop} . " - Stop time after applying '" . $timeshift . "' timeshift");
             }
 
             # Now check to see whether the channel broadcasting the programme is a
@@ -3408,8 +3514,8 @@ sub write_listings_data {
             if (defined $broadcast_hours{$xmltv_id}) {
                 $broadcast_hours{$xmltv_id} =~ /(\d{4})-(\d{4})/;
                 my ($chan_start, $chan_stop) = ($1, $2);
-                $chan_start = utc_offset( "$yyyy$mm$dd$chan_start", $base_tz );
-                $chan_stop  = utc_offset( "$yyyy$mm$dd$chan_stop", $base_tz );
+                $chan_start = utc_offset( "" . $yyyy . $mm . $dd . $chan_start . "", $base_tz );
+                $chan_stop  = utc_offset( "" . $yyyy . $mm . $dd . $chan_stop. "", $base_tz );
                 # Correct the stop time if it is earlier than the start time
                 my $chan_stop_next_day = 0;
                 if (Date_Cmp( $chan_start, $chan_stop ) > 0) {
@@ -3427,21 +3533,21 @@ sub write_listings_data {
 
                 # Include the current programme if its timeslot lies inside the
                 # channel's broadcast window
-                if (Date_Cmp($p{start}, $chan_start) >= 0
-                  && Date_Cmp($p{stop}, $chan_stop) <= 0) {
-                    t("  $chan_start - Start time of channel");
-                    t("  $chan_stop - Stop time of channel");
-                    t("  '$title' shown whilst channel is on-air, adding");
+                if (Date_Cmp($prog{start}, $chan_start) >= 0
+                  && Date_Cmp($prog{stop}, $chan_stop) <= 0) {
+                    t("  " . $chan_start . " - Start time of channel");
+                    t("  " . $chan_stop . " - Stop time of channel");
+                    t("  '" . $prog{'_title'} . "' shown whilst channel is on-air, adding");
                 }
                 # If the channel starts and stops broadcasting on the same 
                 # calendar day and the programme's timeslot is outside the 
                 # broadcast window, skip it
-                elsif (( Date_Cmp( $p{start}, $chan_start) < 0 
-                                  || Date_Cmp($p{stop}, $chan_stop) > 0 ) 
+                elsif (( Date_Cmp( $prog{start}, $chan_start) < 0 
+                                  || Date_Cmp($prog{stop}, $chan_stop) > 0 ) 
                             && $chan_stop_next_day == 0 ) {
-                    t("  $chan_start - Start time of channel");
-                    t("  $chan_stop - Stop time of channel");
-                    t("  '$title' shown whilst channel is off-air, skipping\n");
+                    t("  " . $chan_start . " - Start time of channel");
+                    t("  " . $chan_stop . " - Stop time of channel");
+                    t("  '" . $prog{'_title'} . "' shown whilst channel is off-air, skipping\n");
                     next PROGRAMME;
                 }
                 else {
@@ -3472,16 +3578,16 @@ sub write_listings_data {
                                       $base_tz
                                   );
 
-                    t("  $chan_start - Start time of channel");
-                    t("  $chan_stop - Stop time of channel");
+                    t("  " . $chan_start . " - Start time of channel");
+                    t("  " . $chan_stop . " - Stop time of channel");
 
                     # Test again to see if the programme falls between the adjusted
                     # channel broadcast times
-                    if (Date_Cmp($p{start}, $chan_start) >= 0
-                      && Date_Cmp($p{stop}, $chan_stop) <= 0 ) {
-                        t("  '$title' shown whilst channel is on-air, adding");
+                    if (Date_Cmp($prog{start}, $chan_start) >= 0
+                      && Date_Cmp($prog{stop}, $chan_stop) <= 0 ) {
+                        t("  '" . $prog{'_title'} . "' shown whilst channel is on-air, adding");
                     } else {
-                        t("  '$title' shown whilst channel is off-air, skipping\n");
+                        t("  '" . $prog{'_title'} . "' shown whilst channel is off-air, skipping\n");
                         next PROGRAMME;
                     }
                 }
@@ -3490,20 +3596,20 @@ sub write_listings_data {
             # Compare the stated and calculated durations of the programme. Since
             # we use the given programme length to determine the stop time, any
             # problems here need investigating
-            my $rt_prog_length = ParseDateDelta( $duration_mins . " minutes" );
-            my $real_prog_length = DateCalc( ParseDate( $p{start} ),
-                                             ParseDate( $p{stop} ) );
+            my $rt_prog_length = ParseDateDelta( $prog{'_duration_mins'} . " minutes" );
+            my $real_prog_length = DateCalc( ParseDate( $prog{start} ),
+                                             ParseDate( $prog{stop} ) );
             if ($rt_prog_length ne $real_prog_length) {
-                t("  Calculated/stated programme durations do not agree for '$title':");
-                t("    Start time: '$p{start}'\t\tCalculated:  '$real_prog_length'");
-                t("    Stop time:  '$p{stop}'\t\tRadio Times: '$rt_prog_length'");
+                t("  Calculated/stated programme durations do not agree for '" . $prog{'_title'} . "':");
+                t("    Start time: '" . $prog{start} . "'\t\tCalculated:  '" . $real_prog_length . "'");
+                t("    Stop time:  '" . $prog{stop} . "'\t\tRadio Times: '" . $rt_prog_length . "'");
             }
 
             # Check for a programme having zero length and skip it
             my $zero_prog_length = ParseDateDelta( "0 minutes" );
             if (($rt_prog_length eq $zero_prog_length) ||
                             ($real_prog_length eq $zero_prog_length)) {
-                t("  Programme '$title' has zero length, skipping");
+                t("  Programme '" . $prog{'_title'} . "' has zero length, skipping");
                 t("");
                 next PROGRAMME;
             }
@@ -3526,41 +3632,41 @@ sub write_listings_data {
             # so this behaviour may need to be reversed/altered if start times
             # are found to be consistently correct
             #
-            if ( defined $previous_programme && Date_Cmp($p{start}, $$previous_programme{stop}) < 0 ) {
+            if ( defined $prev_prog && Date_Cmp($prog{start}, $prev_prog->{stop}) < 0 ) {
                 # ignore programmes that are listed as starting before the 
                 # previous programe has finished *and* finishing before or 
                 # at the same time the previous programme has finished 
                 # (seen with news/weather bulletins)
-                if ( Date_Cmp($p{stop}, $$previous_programme{stop}) <= 0 ) {
-                    t("  Programme '$title' starts/stops during previous programme, ignoring");
+                if ( Date_Cmp($prog{stop}, $prev_prog->{stop}) <= 0 ) {
+                    t("  Programme '" . $prog{'_title'} . "' starts/stops during previous programme, ignoring");
                     t("");
                     push @overlapping_progs,
-                            $p{start} . " (" . $rt_name . "): " . $p{title}->[0]->[0]
+                            $prog{start} . " (" . $rt_name . "): " . $prog{'_title'}
                             . " starts/stops during previous programme, IGNORING";
                     next PROGRAMME;
                 }
                 # determine overlap
-                my $delta = DateCalc( ParseDate( $p{start} ),
-                                      ParseDate( $$previous_programme{stop} ) );
+                my $delta = DateCalc( ParseDate( $prog{start} ),
+                                      ParseDate( $prev_prog->{stop} ) );
                 # get the overlap in minutes
                 my $overlap = Delta_Format($delta, 1, "%mv");
                 t("  Scheduling overlap detected (" . $overlap . " mins) with " 
-                        . "previous programme '" . $$previous_programme{title}->[0]->[0] . "'");
+                        . "previous programme '" . $prev_prog->{'_title'} . "'");
                 # Record the overlap for debug output
                 push @overlapping_progs, 
-                        $p{start} . " (" . $rt_name . "): Start of '" . $p{title}->[0]->[0] 
-                        . "' overlaps end of '" . $$previous_programme{title}->[0]->[0] 
+                        $prog{start} . " (" . $rt_name . "): Start of '" . $prog{'_title'}
+                        . "' overlaps end of '" . $prev_prog->{'_title'}
                         . "' by " . $overlap . " minutes, ADJUSTING";
-                $p{start} = $$previous_programme{stop};
-                t("  Adjusting start time of '" . $p{title}->[0]->[0] . "' to remove overlap");
-                t("  $p{start} - Start time after overlap adjustment");
-                t("  $p{stop} - Stop time after overlap adjustment");
+                $prog{start} = $prev_prog->{stop};
+                t("  Adjusting start time of '" . $prog{'_title'} . "' to remove overlap");
+                t("  " . $prog{start} . " - Start time after overlap adjustment");
+                t("  " . $prog{stop} . " - Stop time after overlap adjustment");
             }
 
             # Finally, write the programme's XML data to programme list
-            push @programmes, \%p;
+            push @programmes, \%prog;
             # Update reference to previous programme
-            $previous_programme = \%p;
+            $prev_prog = \%prog;
             
             $num_titles++;
             t("");
@@ -3602,6 +3708,8 @@ sub write_xmltv_footer {
     t("\nWriting XMLTV footer\n");
     $writer->end;
 }
+
+# Debug subroutines follow...
 
 sub print_titles_with_colons {
     if (%prog_titles) {
@@ -3694,26 +3802,6 @@ sub print_misencoded_utf8_data {
             say("  $chan ($hadC3AFC2BFC2BD{$chan})");
         }
         say("End of list of channels");
-    }
-}
-
-sub print_uncategorised_progs {
-    if (%uncategorised_progs && scalar keys %uncategorised_progs > 0) {
-        say("\nStart of list of uncategorised programmes");
-        foreach my $title (sort keys %uncategorised_progs) {
-            say("  $title");
-        }
-        say("End of list of uncategorised programmes");
-    }
-}
-
-sub print_categories {
-    if (%categories && scalar keys %categories > 0) {
-        say("\nStart of list of programme categories seen");
-        foreach my $category (sort keys %categories) {
-            say("  $category");
-        }
-        say("End of list of programme categories seen");
     }
 }
 
@@ -3823,6 +3911,26 @@ sub print_title_variants {
             }
         }
         say("\nEnd of possible title variations");
+    }
+}
+
+sub print_categories {
+    if (%categories && scalar keys %categories > 0) {
+        say("\nStart of list of programme categories seen");
+        foreach my $category (sort keys %categories) {
+            say("  $category");
+        }
+        say("End of list of programme categories seen");
+    }
+}
+
+sub print_uncategorised_progs {
+    if (%uncategorised_progs && scalar keys %uncategorised_progs > 0) {
+        say("\nStart of list of uncategorised programmes");
+        foreach my $title (sort keys %uncategorised_progs) {
+            say("  $title");
+        }
+        say("End of list of uncategorised programmes");
     }
 }
 
