@@ -24,12 +24,9 @@ use HTML::Entities;
 ##############################################
 
 # - allow renaming of title based on given title and desc
-#   (some doc series (Time Shift/Storyville) may drop the series 
+#   (some docu series (Time Shift/Storyville) may drop the series 
 #   title and use the episode/subtitle instead as the title.
 #   This can break PVR rules.
-#
-# - use hash lookups where possible instead
-#   of iterating over lists of text to match
 #
 # - only run specific procesing routines where
 #   sensible and skip further processing once a 
@@ -43,7 +40,7 @@ use HTML::Entities;
 #   and that attempts are made to handle incorrectly
 #   flagged programmes
 #
-# - if a programme lengths is wildly wrong, override
+# - if a programme length is wildly wrong, override
 #   the ignoring of later programs
 #
 # - look forward more than 1 programme when
@@ -53,8 +50,6 @@ use HTML::Entities;
 # - include actor role data where available
 #
 # - include review details where available
-#
-# - ensure lang output for relevant elements
 
 ###############################################
 ################## VARIABLES ##################
@@ -205,8 +200,10 @@ HTTP::Cache::Transparent::init( {
 
 # Variables for programme title manipulation
 my $have_title_data = 0;
-my (@non_title_info,       @mixed_title_subtitle, 
-    @mixed_subtitle_title, @reversed_title_subtitle) = ();
+my %non_title_info;           # key = title, value = title
+my %mixed_title_subtitle;     # key = title, value = title
+my @mixed_subtitle_title;     # array
+my %reversed_title_subtitle;  # key = title, value = title
 my %replacement_titles;       # key = old title, value = replacement title
 my %replacement_episodes;     # key = title, value = hash (where key = old ep, value = new ep)
 my %replacement_cats;         # key = title, value = category
@@ -1397,15 +1394,18 @@ sub load_prog_titles_to_process {
                 next PROG_TITLE_ENTRY;
             }
 
+            my $idx_char = lc(substr ($process_text, 0, 1));
+            
             # processing codes are documented in prog_titles_to_process file
             if ($code eq '1')  {
-                push @non_title_info, $process_text;
+                push @{$non_title_info{$idx_char}}, $process_text;
                 t("[1] Will remove '" . $process_text . "' from title " 
                   . "if found");
                 $have_title_data = 1;
+                next PROG_TITLE_ENTRY;
             }
             elsif ($code eq '2') {
-                push @mixed_title_subtitle, $process_text;
+                push @{$mixed_title_subtitle{$idx_char}}, $process_text;
                 t("[2] Will check for subtitle after title for '" 
                   . $process_text . "'");
                 $have_title_data = 1;
@@ -1419,9 +1419,10 @@ sub load_prog_titles_to_process {
                 next PROG_TITLE_ENTRY;
             }
             elsif ($code eq '4') {
-                push @reversed_title_subtitle, $process_text;
+                push @{$reversed_title_subtitle{$idx_char}}, $process_text;
                 t("[4] Will check for reversed title/subtitle for '" 
                   . $process_text . "'");
+                $have_title_data = 1;
                 next PROG_TITLE_ENTRY;
             }
             elsif ($code eq '5') {
@@ -1434,6 +1435,7 @@ sub load_prog_titles_to_process {
                 $replacement_titles{$old_title} = $new_title;
                 t("[5] Will check for inconsistent title '" 
                   . $old_title . "'");
+                $have_title_data = 1;
                 next PROG_TITLE_ENTRY;
             }
             elsif ($code eq '6') {
@@ -1446,6 +1448,7 @@ sub load_prog_titles_to_process {
                 $replacement_cats{$uncat_title} = $cat;
                 t("[6] Will assign title '" . $uncat_title 
                     . "' to category '" . $cat . "'");
+                $have_title_data = 1;
                 next PROG_TITLE_ENTRY;
             }
             elsif ($code eq '7') {
@@ -1458,6 +1461,7 @@ sub load_prog_titles_to_process {
                 $replacement_episodes{$ep_title}->{$old_ep} = $new_ep;
                 t("[7] Will check for inconsistent episode data '" . $old_ep 
                     . "' for title '" . $ep_title . "'");
+                $have_title_data = 1;
                 next PROG_TITLE_ENTRY;
             }
             elsif ($code eq '8') {
@@ -1482,6 +1486,7 @@ sub load_prog_titles_to_process {
                 $replacement_title_eps{$key} = [$new_title, $new_ep];
                 t("[8] Will update old title/subtitle '" . $old_title . ": " . $old_ep 
                     . "' to '" . $new_title . ": " . $new_ep . "'");
+                $have_title_data = 1;
                 next PROG_TITLE_ENTRY;
             }
             elsif ($code eq '9') {
@@ -1494,6 +1499,7 @@ sub load_prog_titles_to_process {
                 $replacement_ep_from_desc{$title}->{$desc} = $episode;
                 t("[9] Will update subtitle to '" . $episode . "' for title '" . $title 
                     . "' based on given description '" . $desc . "'");
+                $have_title_data = 1;
                 next PROG_TITLE_ENTRY;
             }
             else {
@@ -1933,12 +1939,22 @@ sub process_utf8_fixups($$$) {
 # Remove non-title text found in programme title. This text is placed at the 
 # start of the 'real' title, separated from it by a colon.
 #
+# Text to try and match against the programme title is stored in a hash of arrays
+# to shortcut the list of possible matches to those beginning with the same
+# first character as the title. It would seem to be quicker to use a regex
+# to match some amount of text up to colon character in the programme title,
+# and then use a hash lookup against the matched text. However, there is no
+# limit to the number of colons in the text to remove, so this approach cannot
+# be used. NOTE: the method is used for several of the title consistency
+# routines in order to speed up processing.
+# 
 sub process_non_title_info($) {
     my $prog = shift;
     
-    if ($have_title_data && @non_title_info && $prog->{'_title'} =~ /:/) {
+    if ($have_title_data && %non_title_info && $prog->{'_title'} =~ /:/) {
+        my $idx_char = lc(substr $prog->{'_title'}, 0, 1);
         NON_TITLE_TEXT:
-        foreach my $non_title_info (@non_title_info) {
+        foreach my $non_title_info (@{$non_title_info{$idx_char}}) {
             if ($prog->{'_title'} =~ s/^($non_title_info)\s*:\s*//i) {
                 t("  Removed '" . $non_title_info 
                   . "' from title. New title '" . $prog->{'_title'} . "'");
@@ -1956,46 +1972,44 @@ sub process_non_title_info($) {
 sub process_mixed_title_subtitle($) {
     my $prog = shift;
     
-    if ($have_title_data && $prog->{'_title'} =~ /:|-/) {
-        if (@mixed_title_subtitle) {
-
-            MIXED_TITLE_SUBTITLE:
-            foreach my $mixed_title_subtitle (@mixed_title_subtitle) {
-                if ($prog->{'_title'} =~ /^($mixed_title_subtitle)\s*(?::|-)\s*(.*)/) {
-                    # store the captured text
-                    my $new_title = $1;
-                    my $new_episode = $2;
-                    if (!defined $prog->{'_episode'}) {
-                        t("  Moved '" . $new_episode . "' to sub-title,"
-                          . " new title is '" . $new_title . "'");
-                        $prog->{'_title'} = $new_title;
-                        $prog->{'_episode'} = $new_episode;
-                        last MIXED_TITLE_SUBTITLE;
-                    }
-                    elsif ($prog->{'_episode'} eq $new_episode) {
-                        t("  Sub-title '" . $new_episode . "' seen in "
-                          . "title already exists, new title is '"
-                          . $new_title . "'");
-                        $prog->{'_title'} = $new_title;
-                        last MIXED_TITLE_SUBTITLE;
-                    }
-                    # concat subtitle after any episode numbering (x/y)
-                    elsif ($prog->{'_episode'} =~ /^\d+\s*(?:&\d+)?\s*\/\s*\d+\s*(?:\.|\/|,|;|:)?\s*-?\s*(?:series\s*(\w+)\s*(?:;|\.)?)?\s*$/) {
-                        t("  Concatenating sub-title '" . $new_episode 
-                          . "' seen in title after existing episode numbering '" 
-                          . $prog->{'_episode'} . "'");
-                        $prog->{'_title'} = $new_title;
-                        $prog->{'_episode'} = $prog->{'_episode'} . ": " . $new_episode;
-                        last MIXED_TITLE_SUBTITLE;
-                    }
-                    else {
-                        t("  Concatenating sub-title '" . $new_episode 
-                          . "' seen in title with existing episode info '" 
-                          . $prog->{'_episode'} . "'");
-                        $prog->{'_title'} = $new_title;
-                        $prog->{'_episode'} = $new_episode . ": " . $prog->{'_episode'};
-                        last MIXED_TITLE_SUBTITLE;
-                    }
+    if ($have_title_data && %mixed_title_subtitle && $prog->{'_title'} =~ /:|-/) {
+        my $idx_char = lc(substr $prog->{'_title'}, 0, 1);
+        MIXED_TITLE_SUBTITLE:
+        foreach my $mixed_title_subtitle (@{$mixed_title_subtitle{$idx_char}}) {
+            if ($prog->{'_title'} =~ /^($mixed_title_subtitle)\s*(?::|-)\s*(.*)/) {
+                # store the captured text
+                my $new_title = $1;
+                my $new_episode = $2;
+                if (!defined $prog->{'_episode'}) {
+                    t("  Moved '" . $new_episode . "' to sub-title,"
+                      . " new title is '" . $new_title . "'");
+                    $prog->{'_title'} = $new_title;
+                    $prog->{'_episode'} = $new_episode;
+                    last MIXED_TITLE_SUBTITLE;
+                }
+                elsif ($prog->{'_episode'} eq $new_episode) {
+                    t("  Sub-title '" . $new_episode . "' seen in "
+                      . "title already exists, new title is '"
+                      . $new_title . "'");
+                    $prog->{'_title'} = $new_title;
+                    last MIXED_TITLE_SUBTITLE;
+                }
+                # concat subtitle after any episode numbering (x/y)
+                elsif ($prog->{'_episode'} =~ /^\d+\s*(?:&\d+)?\s*\/\s*\d+\s*(?:\.|\/|,|;|:)?\s*-?\s*(?:series\s*(\w+)\s*(?:;|\.)?)?\s*$/) {
+                    t("  Concatenating sub-title '" . $new_episode 
+                      . "' seen in title after existing episode numbering '" 
+                      . $prog->{'_episode'} . "'");
+                    $prog->{'_title'} = $new_title;
+                    $prog->{'_episode'} = $prog->{'_episode'} . ": " . $new_episode;
+                    last MIXED_TITLE_SUBTITLE;
+                }
+                else {
+                    t("  Concatenating sub-title '" . $new_episode 
+                      . "' seen in title with existing episode info '" 
+                      . $prog->{'_episode'} . "'");
+                    $prog->{'_title'} = $new_title;
+                    $prog->{'_episode'} = $new_episode . ": " . $prog->{'_episode'};
+                    last MIXED_TITLE_SUBTITLE;
                 }
             }
         }
@@ -2010,46 +2024,43 @@ sub process_mixed_title_subtitle($) {
 sub process_mixed_subtitle_title($) {
     my $prog = shift;
     
-    if ($have_title_data && $prog->{'_title'} =~ /:|-/) {
-        if (@mixed_subtitle_title) {
-
-            MIXED_SUBTITLE_TITLE:
-            foreach my $mixed_subtitle_title (@mixed_subtitle_title) {
-                if ($prog->{'_title'} =~ /^(.*)\s*(?::|-)\s*($mixed_subtitle_title)/) {
-                    # store the captured text
-                    my $new_title = $2;
-                    my $new_episode = $1;
-                    if (!defined $prog->{'_episode'}) {
-                        t("  Moved '" . $new_episode . "' to sub-title, " 
-                          . "new title is '" . $new_title . "'");
-                        $prog->{'_title'} = $new_title;
-                        $prog->{'_episode'} = $new_episode;
-                        last MIXED_SUBTITLE_TITLE;
-                    }
-                    elsif ($prog->{'_episode'} eq $new_episode) {
-                        t("  Identical sub-title '" . $new_episode 
-                          . "' also seen in title, new title is '" 
-                          . $new_title . "'");
-                        $prog->{'_title'} = $new_title;
-                        last MIXED_SUBTITLE_TITLE;
-                    }
-                    # concat subtitle after any episode numbering (x/y)
-                    elsif ($prog->{'_episode'} =~ /^\d+\s*(?:&\d+)?\s*\/\s*\d+\s*(?:\.|\/|,|;|:)?\s*-?\s*(?:series\s*(\w+)\s*(?:;|\.)?)?\s*$/) {
-                        t("  Concatenating sub-title '" . $new_episode 
-                          . "' seen in title after existing episode numbering '" 
-                          . $prog->{'_episode'} . "'");
-                        $prog->{'_title'} = $new_title;
-                        $prog->{'_episode'} = $prog->{'_episode'} . ": " . $new_episode;
-                        last MIXED_SUBTITLE_TITLE;
-                    }
-                    else {
-                        t("  Concatenating sub-title '" . $new_episode 
-                          . "' seen in title with existing episode info '" 
-                          . $prog->{'_episode'} . "'");
-                        $prog->{'_title'} = $new_title;
-                        $prog->{'_episode'} = $new_episode . ": " . $prog->{'_episode'};
-                        last MIXED_SUBTITLE_TITLE;
-                    }
+    if ($have_title_data && @mixed_subtitle_title && $prog->{'_title'} =~ /:|-/) {
+        MIXED_SUBTITLE_TITLE:
+        foreach my $mixed_subtitle_title (@mixed_subtitle_title) {
+            if ($prog->{'_title'} =~ /^(.*)\s*(?::|-)\s*($mixed_subtitle_title)/) {
+                # store the captured text
+                my $new_title = $2;
+                my $new_episode = $1;
+                if (!defined $prog->{'_episode'}) {
+                    t("  Moved '" . $new_episode . "' to sub-title, " 
+                      . "new title is '" . $new_title . "'");
+                    $prog->{'_title'} = $new_title;
+                    $prog->{'_episode'} = $new_episode;
+                    last MIXED_SUBTITLE_TITLE;
+                }
+                elsif ($prog->{'_episode'} eq $new_episode) {
+                    t("  Identical sub-title '" . $new_episode 
+                      . "' also seen in title, new title is '" 
+                      . $new_title . "'");
+                    $prog->{'_title'} = $new_title;
+                    last MIXED_SUBTITLE_TITLE;
+                }
+                # concat subtitle after any episode numbering (x/y)
+                elsif ($prog->{'_episode'} =~ /^\d+\s*(?:&\d+)?\s*\/\s*\d+\s*(?:\.|\/|,|;|:)?\s*-?\s*(?:series\s*(\w+)\s*(?:;|\.)?)?\s*$/) {
+                    t("  Concatenating sub-title '" . $new_episode 
+                      . "' seen in title after existing episode numbering '" 
+                      . $prog->{'_episode'} . "'");
+                    $prog->{'_title'} = $new_title;
+                    $prog->{'_episode'} = $prog->{'_episode'} . ": " . $new_episode;
+                    last MIXED_SUBTITLE_TITLE;
+                }
+                else {
+                    t("  Concatenating sub-title '" . $new_episode 
+                      . "' seen in title with existing episode info '" 
+                      . $prog->{'_episode'} . "'");
+                    $prog->{'_title'} = $new_title;
+                    $prog->{'_episode'} = $new_episode . ": " . $prog->{'_episode'};
+                    last MIXED_SUBTITLE_TITLE;
                 }
             }
         }
@@ -2064,9 +2075,10 @@ sub process_mixed_subtitle_title($) {
 sub process_reversed_title_subtitle($) {
     my $prog = shift;
     
-    if ($have_title_data && @reversed_title_subtitle && defined $prog->{'_episode'}) {
+    if ($have_title_data && %reversed_title_subtitle && defined $prog->{'_episode'}) {
+        my $idx_char = lc(substr $prog->{'_title'}, 0, 1);
         REVERSED_TITLE_SUBTITLE:
-        foreach my $reversed_title_subtitle (@reversed_title_subtitle) {
+        foreach my $reversed_title_subtitle (@{$reversed_title_subtitle{$idx_char}}) {
             if ($reversed_title_subtitle eq $prog->{'_episode'}) {
                 t("  Seen reversed title-subtitle for '" 
                   . $prog->{'_title'} . ":" . $prog->{'_episode'} . "' - reversing" );
@@ -2080,20 +2092,17 @@ sub process_reversed_title_subtitle($) {
     }
 }
 
-# Process inconsistent titles, replacing any flagged bad titles with
-# good titles.
+# Process inconsistent titles, replacing any flagged bad titles with good 
+# titles. A straightforward hash lookup against the programme title is used.
 #
 sub process_replacement_titles($) {
     my $prog = shift;
     if ($have_title_data && %replacement_titles) {
-        REPLACEMENT_TITLE:
-        foreach my $bad_title (keys %replacement_titles) {
-            if (lc $prog->{'_title'} eq lc $bad_title) {
-                $prog->{'_title'} = $replacement_titles{$bad_title};
-                t("  Replaced title '" . $bad_title . "' with '"
-                  . $prog->{'_title'} . "' for consistency");
-                last REPLACEMENT_TITLE;
-            }
+        my $bad_title = $prog->{'_title'};
+        if (defined $replacement_titles{$bad_title}) {
+            $prog->{'_title'} = $replacement_titles{$bad_title};
+            t("  Replaced title '" . $bad_title . "' with '"
+              . $prog->{'_title'} . "' for consistency");
         }
     }
 }
@@ -2105,19 +2114,15 @@ sub process_replacement_episodes($) {
     my $prog = shift;
     
     if ($have_title_data && %replacement_episodes && defined $prog->{'_episode'}) {
-        REPLACEMENT_EPISODE:
-        foreach my $bad_episode_title (keys %replacement_episodes) {
-            # First, check whether we have matched the programme title
-            if ($prog->{'_title'} eq $bad_episode_title) {
-                # Now look for a specific episode match for the title
-                foreach my $bad_episode (keys %{$replacement_episodes{$bad_episode_title}}) {
-                    if ($prog->{'_episode'} eq $bad_episode) {
-                        $prog->{'_episode'} = $replacement_episodes{$bad_episode_title}->{$bad_episode};
-                        t("  Replaced episode info '" . $bad_episode . "' for title '" 
-                          . $bad_episode_title . "' with '" . $prog->{'_episode'} . "' for consistency");
-                        last REPLACEMENT_EPISODE;
-                    }
-                }
+        my $bad_episode_title = $prog->{'_title'};
+        my $bad_episode = $prog->{'_episode'};
+        # First, check whether we have matched the programme title
+        if (defined $replacement_episodes{$bad_episode_title}) {
+            # Now look for a specific episode match for the title
+            if (defined $replacement_episodes{$bad_episode_title}->{$bad_episode}) {
+                $prog->{'_episode'} = $replacement_episodes{$bad_episode_title}->{$bad_episode};
+                t("  Replaced episode info '" . $bad_episode . "' for title '" 
+                  . $bad_episode_title . "' with '" . $prog->{'_episode'} . "' for consistency");
             }
         }
     }
@@ -2153,39 +2158,34 @@ sub process_replacement_titles_episodes($) {
             $tmp_ep = $prog->{'_episode'};
         }
         my $key = "" . $prog->{'_title'} . "|" . $tmp_ep;
-        REPLACEMENT_TITLE_EPISODE:
-        foreach my $bad_title_episode (keys %replacement_title_eps) {
-            # Check whether we have matched the old programme
-            # title/episode combo
-            if ( lc $key eq lc $bad_title_episode) {
-                # Now replace the old title/ep values with new ones
-                my ($old_title, $old_ep) = ($prog->{'_title'}, $tmp_ep);
-                my ($new_title, $new_ep) = @{$replacement_title_eps{$key}};
-                # update the title
-                $prog->{'_title'} = $new_title;
-                # if new episode value is empty string, replace with undef;
-                # otherwise use new value
-                if ($new_ep eq '') {
-                    if (defined $tmp_ep_num) {
-                        $prog->{'_episode'} = $tmp_ep_num;
-                    }
-                    else {
-                        $prog->{'_episode'} = undef;
-                    }
+        # Check whether we have matched the old programme title/episode combo
+        if (defined $replacement_title_eps{$key}) {
+            # Now replace the old title/ep values with new ones
+            my ($old_title, $old_ep) = ($prog->{'_title'}, $tmp_ep);
+            my ($new_title, $new_ep) = @{$replacement_title_eps{$key}};
+            # update the title
+            $prog->{'_title'} = $new_title;
+            # if new episode value is empty string, replace with undef;
+            # otherwise use new value
+            if ($new_ep eq '') {
+                if (defined $tmp_ep_num) {
+                    $prog->{'_episode'} = $tmp_ep_num;
                 }
                 else {
-                    if (defined $tmp_ep_num) {
-                        $prog->{'_episode'} = $tmp_ep_num . ": " . $new_ep;
-                    }
-                    else {
-                        $prog->{'_episode'} = $new_ep;
-                    }
+                    $prog->{'_episode'} = undef;
                 }
-                t("  Replaced old title/ep '" . $old_title . ": " . $old_ep
-                    . "' with new title/ep '" . $new_title . ": " . $new_ep
-                    . "' for consistency" . $tmp_ep_num_text);
-                last REPLACEMENT_TITLE_EPISODE;
             }
+            else {
+                if (defined $tmp_ep_num) {
+                    $prog->{'_episode'} = $tmp_ep_num . ": " . $new_ep;
+                }
+                else {
+                    $prog->{'_episode'} = $new_ep;
+                }
+            }
+            t("  Replaced old title/ep '" . $old_title . ": " . $old_ep
+                . "' with new title/ep '" . $new_title . ": " . $new_ep
+                . "' for consistency" . $tmp_ep_num_text);
         }
     }
 }
@@ -2198,22 +2198,17 @@ sub process_replacement_ep_from_desc($) {
     my $prog = shift;
     
     if ($have_title_data && %replacement_ep_from_desc && defined $prog->{'_desc'}) {
-        REPLACEMENT_EPISODE_FROM_DESC:
-        foreach my $bad_episode_title (keys %replacement_ep_from_desc) {
-            # First, check whether we have matched the programme title
-            if ($prog->{'_title'} eq $bad_episode_title) {
-                # Now look for a specific episode match for the title
-                foreach my $bad_ep_desc (keys %{$replacement_ep_from_desc{$bad_episode_title}}) {
-                    if ($prog->{'_desc'} eq $bad_ep_desc) {
-                        my $old_ep;
-                        (defined $prog->{'_episode'}) ? ($old_ep = $prog->{'_episode'}) : ($old_ep = '');
-                        $prog->{'_episode'} = $replacement_ep_from_desc{$bad_episode_title}->{$bad_ep_desc};
-                        t("  Updated episode from '" . $old_ep . "' to '" . $prog->{'_episode'} 
-                            . "' for title '" . $bad_episode_title . "' based on desc '" 
-                            . $bad_ep_desc . "' for consistency");
-                        last REPLACEMENT_EPISODE_FROM_DESC;
-                    }
-                }
+        my $bad_episode_title = $prog->{'_title'};
+        my $bad_ep_desc = $prog->{'_desc'};
+        # First, check whether we have matched the programme title
+        if (defined $replacement_ep_from_desc{$bad_episode_title}) {
+            # Now look for a specific desc match for the title
+            if (defined $replacement_ep_from_desc{$bad_episode_title}->{$bad_ep_desc}) {
+                my $old_ep;
+                (defined $prog->{'_episode'}) ? ($old_ep = $prog->{'_episode'}) : ($old_ep = '');
+                $prog->{'_episode'} = $replacement_ep_from_desc{$bad_episode_title}->{$bad_ep_desc};
+                t("  Updated episode from '" . $old_ep . "' to '" . $prog->{'_episode'} 
+                    . "' for title '" . $bad_episode_title . "', based on desc '");
             }
         }
     }
@@ -2228,14 +2223,10 @@ sub process_replacement_ep_from_desc($) {
 sub process_replacement_genres($) {
     my $prog = shift;
 
-    if ($have_title_data && %replacement_cats && $prog->{'_title'} !~ /To Be Announced/i && !$prog->{'_film'}) {
-        REPLACEMENT_CAT:
-        foreach my $uncat_title (keys %replacement_cats) {
-            if ($prog->{'_title'} eq $uncat_title) {
-                $prog->{'_genre'} = $replacement_cats{$uncat_title};
-                t("  Assigned title '" . $prog->{'_title'} . "' to category '" . $prog->{'_genre'} . "'");
-                last REPLACEMENT_CAT;
-            }
+    if ($have_title_data && %replacement_cats && $prog->{'_title'} !~ /^(To Be Announced|TBA)/i && !$prog->{'_film'}) {
+        if (defined $replacement_cats{$prog->{'_title'}}) {
+            $prog->{'_genre'} = $replacement_cats{$prog->{'_title'}};
+            t("  Assigned title '" . $prog->{'_title'} . "' to category '" . $prog->{'_genre'} . "'");
         }
     }
 }
