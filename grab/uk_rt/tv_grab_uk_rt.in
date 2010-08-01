@@ -1541,40 +1541,51 @@ sub load_utf8_fixups {
                         . "\t" . $line);
                 next UTF8_FIXUP_ENTRY;
             }
+            
             # The utf8_fixups fields are:
             # 1) bad utf-8 characters to find and replace (as hex)
             # 2) the replacement characters (as hex)
             #
             my ($bad_chars, $replacement) = @fields;
+
             if (!defined $bad_chars || $bad_chars eq '') {
                 t("Invalid UTF-8 fixup regex: '" . $line . "'");
                 next UTF8_FIXUP_ENTRY;
             }
-
             if (!defined $replacement || $replacement eq '') {
                 t("Invalid UTF-8 fixup replacement: '" . $line . "'");
                 next UTF8_FIXUP_ENTRY;
             }
-            if ($bad_chars =~ /\\xEF\\xBF\\xBD/ || $bad_chars =~ /\\xC3\\xAF\\xC2\\xBF\\xC2\\xBD/) {
-            }
-            else {
-                t("Ignoring UTF-8 fixup handled in grabber: '" . $line . "'");
+            # ignore unknown fixup formats
+            if ($bad_chars !~ /\\xEF\\xBF\\xBD/ 
+                    && $bad_chars !~ /\\xC3\\xAF\\xC2\\xBF\\xC2\\xBD/ 
+                    && $bad_chars !~ /^\\xC2\\x[8-9][0-9A-F]$/) {
+                t("Ignoring UTF-8 fixup: '" . $line . "'");
                 next UTF8_FIXUP_ENTRY;
             }
-
             # Remove the \x chars read from the file leaving a simple hex string
             # containing only [0-9A-F] chars
             $replacement =~ s/\\x//g;
             # Now convert each byte (2 hex chars) into its character equivalent
             $replacement =~ s/([0-9A-F][0-9A-F])/chr(hex($1))/eig;
 
-            # Process the regex to get a character string to print. We'll use
-            # the preserved hex string during processing later
+            # Create hashes to store each type of fixup separately. This should
+            # improve processing speed by restricting number of fixups checked.
+            if ($bad_chars =~ /\\xEF\\xBF\\xBD/) {
+                $utf8_fixups{'EFBFBD'}{$bad_chars} = $replacement;
+            }
+            elsif ($bad_chars =~ /\\xC3\\xAF\\xC2\\xBF\\xC2\\xBD/) {
+                $utf8_fixups{'C3AFC2BFC2BD'}{$bad_chars} = $replacement;
+            }
+            elsif ($bad_chars =~ /^\\xC2\\x[8-9][0-9A-F]$/) {
+                $utf8_fixups{'C2809F'}{$bad_chars} = $replacement;
+            }
+                
+            # Process the regex to get a character string to print. We use
+            # the preserved hex string during processing
             my $bad_chars_chr = $bad_chars;
             $bad_chars_chr =~ s/\\x//g;
             $bad_chars_chr =~ s/([0-9A-F][0-9A-F])/chr(hex($1))/eig;
-
-            $utf8_fixups{$bad_chars} = $replacement;
             t("UTF-8 fixup: will replace \"" . $bad_chars_chr . "\" with \"" 
                     . $replacement . "\" if seen");
             next UTF8_FIXUP_ENTRY;
@@ -1850,7 +1861,7 @@ sub process_utf8_fixups($$$) {
         # Here we replace specific sequences of characters seen in the source 
         # data that cannot be handled automatically above. These include
         # occurences of the Unicode Replace Character (single and double
-        # encoded).
+        # encoded) and other mis-encoded characters.
         # 
         # We use a supplemental file to store these fixups to allow updating
         # without needing to update the grabber itself.
@@ -1864,6 +1875,25 @@ sub process_utf8_fixups($$$) {
         # listings data by the Radio Times, as any characters that cannot be 
         # understood are replaced by this character.
         #
+        t("    Looking for Unicode Replacement Character...");
+        if ( /\xEF\xBF\xBD/ ) {
+            if (%utf8_fixups && exists $utf8_fixups{'EFBFBD'}) {
+                foreach my $bad_chars (keys %{$utf8_fixups{'EFBFBD'}}) {
+                    my $replacement = $utf8_fixups{'EFBFBD'}{$bad_chars};
+                    # Search for the regex string and replace with char string
+                    if ($page =~ s/$bad_chars/$replacement/g) {
+                        t("      Replaced Unicode Replacement Character with \"" 
+                                . $replacement . "\"");
+                    }
+                }
+            }
+            if ( $page =~ s/\xEF\xBF\xBD/\x3F/g ) {
+                t("    After fixups, data for '$rt_name' still contains Unicode "
+                        . "Replacement character. Replaced with \"?\"\n");
+                $hadEFBFBD{$rt_name} = $rt_listings_uri;
+            }
+        }
+
         # Double-encoded Unicode Replacement Character (6 bytes)
         # ======================================================
         #
@@ -1875,6 +1905,26 @@ sub process_utf8_fixups($$$) {
         # the specific occurence. This error needs to have been seen at least 
         # once in source data to be able to construct a suitable fixup.
         #
+        t("    Looking for double-encoded Unicode Replacement Character...");
+        if ( /\xC3\xAF\xC2\xBF\xC2\xBD/ ) {
+            if (%utf8_fixups && exists $utf8_fixups{'C3AFC2BFC2BD'}) {
+                foreach my $bad_chars (keys %{$utf8_fixups{'C3AFC2BFC2BD'}}) {
+                    my $replacement = $utf8_fixups{'C3AFC2BFC2BD'}{$bad_chars};
+                    # Search for the regex string and replace with char string
+                    if ($page =~ s/$bad_chars/$replacement/g) {
+                        t("      Replaced double-encoded Unicode Replacement Character with \"" 
+                                . $replacement . "\"");
+                    }
+                }
+            }
+            if ( $page =~ s/\xC3\xAF\xC2\xBF\xC2\xBD/\x3F/g ) {
+                t("    After fixups, data for '$rt_name' still contains "
+                       . "double-encoded Unicode Replacement character. "
+                       . "Replaced with \"?\"\n");
+                $hadC3AFC2BFC2BD{$rt_name} = $rt_listings_uri;
+            }
+        }
+
         # Mis-encoded characters in range [C2][80-9F]
         # ===========================================
         #
@@ -1882,30 +1932,22 @@ sub process_utf8_fixups($$$) {
         # range [C2][80-9F] that UTF-8 decode as non-printing characters
         # instead of their intended character.
         #
-        t("    Looking for Unicode Replacement Character...");
-        if ( /\xEF\xBF\xBD/ || /\xC3\xAF\xC2\xBF\xC2\xBD/ || /\xC2[\x80-\x9F]/ ) {
-
-            if (%utf8_fixups) {
-                foreach my $bad_chars (keys %utf8_fixups) {
-                    my $replacement = $utf8_fixups{$bad_chars};
+        t("    Looking for mis-encoded characters in range [C2][80-9F]...");
+        if ( /\xC2[\x80-\x9F]/ ) {
+            if (%utf8_fixups && exists $utf8_fixups{'C2809F'}) {
+                foreach my $bad_chars (keys %{$utf8_fixups{'C2809F'}}) {
+                    my $replacement = $utf8_fixups{'C2809F'}{$bad_chars};
                     # Search for the regex string and replace with char string
                     if ($page =~ s/$bad_chars/$replacement/g) {
-                        t("      Replaced Unicode Replacement Character with \"" 
+                        t("      Replaced mis-encoded character with \"" 
                                 . $replacement . "\"");
                     }
                 }
             }
-            if ( $page =~ s/\xEF\xBF\xBD/\x3F/g ) {
-                t("    After fixups, data for '$rt_name' still contained Unicode "
-                        . "Replacement character. Replaced with \"?\"\n");
-                $hadEFBFBD{$rt_name} = $rt_listings_uri;
-            }
-            if ( $page =~ s/\xC3\xAF\xC2\xBF\xC2\xBD/\x3F/g ) {
-                t("    After fixups, data for '$rt_name' still contained "
-                        . "double-encoded Unicode Replacement character. "
-                        . "Replaced with \"?\"\n");
-                # track and report any that we've missed
-                $hadC3AFC2BFC2BD{$rt_name} = $rt_listings_uri;
+            if ( $page =~ /\xC2[\x80-\x9F]/g ) {
+                t("    After fixups, data for '$rt_name' still contains " 
+                        . "characters in range [C2][7F-9F]\n");
+                $hasC27FBFchars{$rt_name} = $rt_listings_uri;
             }
         }
 
@@ -1913,15 +1955,6 @@ sub process_utf8_fixups($$$) {
         t("    Looking for non-breaking spaces...");
         if ( s/\xC2\xA0/\x20/g ) {
             t("      Replaced non-breaking space chars with regular spaces");
-        }
-
-        # Check for remaining potentially bad UTF-8 chars that we might need
-        # to handle (below we remove any in range [C2][7F-9F])
-        if ( $opt->{debug} && /\xC2[\x7F-\x9F]/ ) {
-            t("    After fixups, data for '$rt_name' still contains " 
-                    . "characters in range [C2][7F-9F]\n");
-            # track and report any that we've missed
-            $hasC27FBFchars{$rt_name} = $rt_listings_uri;
         }
 
         # Finally, remove any remaining non-printing control characters (keep 
