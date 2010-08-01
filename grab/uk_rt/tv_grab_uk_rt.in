@@ -28,13 +28,6 @@ use HTML::Entities;
 #   title and use the episode/subtitle instead as the title.
 #   This can break PVR rules.
 #
-# - only run specific procesing routines where
-#   sensible and skip further processing once a 
-#   replacement has been made
-#
-# - ensure that title processing has finished
-#   before concatenating episode numbering
-#
 # - revisit handling of DST changeovers to ensure
 #   both changeovers are handled appropriately
 #   and that attempts are made to handle incorrectly
@@ -2026,6 +2019,7 @@ sub process_mixed_title_subtitle($) {
                 # store the captured text
                 my $new_title = $1;
                 my $new_episode = $2;
+                $prog->{'_titles_processed'} = 1;
                 if (!defined $prog->{'_episode'}) {
                     t("  Moved '" . $new_episode . "' to sub-title,"
                       . " new title is '" . $new_title . "'");
@@ -2077,6 +2071,7 @@ sub process_mixed_subtitle_title($) {
                 # store the captured text
                 my $new_title = $2;
                 my $new_episode = $1;
+                $prog->{'_titles_processed'} = 1;
                 if (!defined $prog->{'_episode'}) {
                     t("  Moved '" . $new_episode . "' to sub-title, " 
                       . "new title is '" . $new_title . "'");
@@ -2132,6 +2127,7 @@ sub process_reversed_title_subtitle($) {
                 $prog->{'_title'} = $reversed_title_subtitle;
                 t("  New title is '" . $prog->{'_title'} . "' and new " 
                   . "sub-title is '" . $prog->{'_episode'} . "'");
+                $prog->{'_titles_processed'} = 1;
                 last REVERSED_TITLE_SUBTITLE;
             }
         }
@@ -2149,6 +2145,7 @@ sub process_replacement_titles($) {
             $prog->{'_title'} = $replacement_titles{$bad_title};
             t("  Replaced title '" . $bad_title . "' with '"
               . $prog->{'_title'} . "' for consistency");
+            $prog->{'_titles_processed'} = 1;
         }
     }
 }
@@ -2169,6 +2166,7 @@ sub process_replacement_episodes($) {
                 $prog->{'_episode'} = $replacement_episodes{$bad_episode_title}->{$bad_episode};
                 t("  Replaced episode info '" . $bad_episode . "' for title '" 
                   . $bad_episode_title . "' with '" . $prog->{'_episode'} . "' for consistency");
+                $prog->{'_subtitles_processed'} = 1;
             }
         }
     }
@@ -2232,6 +2230,7 @@ sub process_replacement_titles_episodes($) {
             t("  Replaced old title/ep '" . $old_title . ": " . $old_ep
                 . "' with new title/ep '" . $new_title . ": " . $new_ep
                 . "' for consistency" . $tmp_ep_num_text);
+            $prog->{'_titles_processed'} = 1;
         }
     }
 }
@@ -2255,6 +2254,7 @@ sub process_replacement_ep_from_desc($) {
                 $prog->{'_episode'} = $replacement_ep_from_desc{$bad_episode_title}->{$bad_ep_desc};
                 t("  Updated episode from '" . $old_ep . "' to '" . $prog->{'_episode'} 
                     . "' for title '" . $bad_episode_title . "', based on desc '");
+                $prog->{'_subtitles_processed'} = 1;
             }
         }
     }
@@ -3224,35 +3224,53 @@ sub write_listings_data {
                 $uc_prog_titles{$prog{'_title'}} = $prog{'_title'};
             }
             
-            # Remove non-title text found in programme title.
+            # First, remove non-title text found in programme title.
+            #
+            # Applied to all titles in the source data.
             process_non_title_info(\%prog);
             
-            # If the title still contains a colon or hyphen after removing any
-            # non title text, there is a chance it may contain merged title 
-            # and episode data, which we now process.
-
+            # Track when titles/subtitles have been updated to allow 
+            # short-circuiting of title processing
+            $prog{'_titles_processed'} = 0;
+            $prog{'_subtitles_processed'} = 0;
+           
+            # Next, process titles to make them consistent
+            #
             # Look for $title:$episode in source title
-            process_mixed_title_subtitle(\%prog);
-
+            if (!$prog{'_titles_processed'}) {
+                process_mixed_title_subtitle(\%prog);
+            }
             # Look for $episode:$title in source title
-            process_mixed_subtitle_title(\%prog);
-
+            if (!$prog{'_titles_processed'}) {
+                process_mixed_subtitle_title(\%prog);
+            }
             # Look for reversed title and subtitle information
-            process_reversed_title_subtitle(\%prog);
-
+            if (!$prog{'_titles_processed'}) {
+                process_reversed_title_subtitle(\%prog);
+            }
             # Look for inconsistent programme titles
-            process_replacement_titles(\%prog);
-
-            # Look for inconsistent programme subtitles
-            process_replacement_episodes(\%prog);
-            
+            if (!$prog{'_titles_processed'}) {
+                process_replacement_titles(\%prog);
+            }
             # One-off title and episode replacements
-            process_replacement_titles_episodes(\%prog);
+            if (!$prog{'_titles_processed'}) {
+                process_replacement_titles_episodes(\%prog);
+            }
 
+            # Next, process subtitles to make them consistent
+            #
+            # Look for inconsistent programme subtitles
+            if (!$prog{'_subtitles_processed'}) {
+                process_replacement_episodes(\%prog);
+            }
             # Replace subtitle based on description
-            process_replacement_ep_from_desc(\%prog);
+            if (!$prog{'_subtitles_processed'}) {
+                process_replacement_ep_from_desc(\%prog);
+            }
 
-            # Provide or update a programme's genre/category based on title
+            # Last, provide/update a programme's category based on 'corrected' title
+            #
+            # Applied to all 'corrected' titles
             process_replacement_genres(\%prog);
 
             # Look for series/episode/part numbering in programme title/subtitle
