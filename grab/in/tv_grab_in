@@ -31,6 +31,8 @@ tv_grab_in - Grab TV listings for India using WhatsOn.
 
 This script downloads TV listings using What's On's XMLTV data service.
 
+You'll need a username/password which can be obtained at... <TBD>
+
 =head1 Stand-alone options
 
 =over
@@ -208,6 +210,8 @@ my $opt_days       =7;  # days to fetch
 my $opt_offset     =0;  # day to start
 my $opt_quiet      =0;  # supress messages
 my $opt_lineup     =''; # 
+my $opt_user       =''; # 
+my $opt_pass       =''; # 
 my $opt_list_channels='';
 my $opt_list_lineups='' ;
 my $opt_auto_config='';
@@ -240,7 +244,6 @@ GetOptions(
            'days=i'        => \$opt_days,
     	   'offset=i'      => \$opt_offset,
     	   'lineup=s'      => \$opt_lineup,
-    	   'lineup-url=s'  => \$opt_lineup_url,
            'list-channels' => \$opt_list_channels,
            'list-lineups'  => \$opt_list_lineups,
            'debug'         => \$DEBUG,
@@ -273,9 +276,13 @@ if (-e $config_file && ( !$opt_configure || -s $config_file ))
         {
             $opt_lineup = $val;
         }
-        elsif ( $setting eq 'lineup_url' )
+        elsif ( $setting eq 'user' )
         {
-            $lineup_url = $val;
+            $opt_user = $val;
+        }
+        elsif ( $setting eq 'pass' )
+        {
+            $opt_pass = $val;
         }
         elsif ( $setting eq 'auto-config' )
         {
@@ -297,44 +304,45 @@ if (-e $config_file && ( !$opt_configure || -s $config_file ))
 # returns       : html as scalar
 #-------------------------------------------------------------------------------
 sub get_nice_gzip( $ ) {
-    printf STDERR "downloading %s\n",$_[0] unless $opt_quiet;
+    printf STDERR "downloading %s\n",($DEBUG?$_[0]:"data") unless  $opt_quiet;
     my $data = get_nice($_[0]);
     printf STDERR "downloaded %s bytes\n",length($data) unless $opt_quiet;
     # Use heuristics to check for valid html
     if ($data =~ /<html|<head|<body|<table|<div|<tv|<lineup/i) {
         return $data;
     }
-    print STDERR "content is gzipped, deflating\n" unless $opt_quiet;
+    print STDERR "content is gzipped, deflating\n" if $DEBUG;
     return gunzip($data);
 }
-
 
 #
 # get lineups
 #
 sub get_lineups {
     return 0 if (keys %lineups);
-    my $content=get_nice_gzip("http://www.zipazap.com/videoportal/mediacenter/lineup.xml");
+    my $content=get_nice("http://www.whatsonindia.com/XMLTV_Download/FileDeliver.aspx?formatlineup=true");
     die "Error fetching lineup list " unless $content;
     my $parser = XML::LibXML->new();
     my $doc = $parser->parse_string( $content );
     my $root = $doc->getDocumentElement;
 
-    foreach my $lineup ($root->findnodes('url')) {
-       my $name= $lineup->getAttribute('name');
-       my $url = $lineup->getFirstChild->getData;
-       $lineups{$name}=$url;
+    foreach my $lineup ($root->findnodes('formatname')) {
+       my $name = $lineup->getFirstChild->getData;
+       $lineups{$name}=$name;
     }
-
-}
+} # get_lineups
 
 #
 # This needs to be replaced with a smaller download file for speed.
 #
 sub get_stations {
     die "Can't get stations without a lineup!" unless $opt_lineup;
-
-    my $guide_string=get_guide($lineup_url);
+    die "Can't get stations without a username!" unless $opt_user;
+    die "Can't get stations without a password!" unless $opt_pass;
+    
+    my $guide_string=get_nice_gzip(
+        sprintf("http://www.whatsonindia.com/xmltv_download/filedeliver.aspx?formatname=%s&requester=%s&password=%s",
+                $opt_lineup,$opt_user,$opt_pass));
 
     my $parser = XML::LibXML->new();
     my $doc = $parser->parse_string( $guide_string );
@@ -350,33 +358,29 @@ sub get_stations {
 } # get_stations
 
 #
-# --list-lineup mode
-#
-if ($opt_list_lineups)
-{
-    get_lineups();
-    foreach (sort keys %lineups) {
-        printf STDOUT "$_\n";
-        }
-    exit 0;
-}
-
-#
 # --configure
 #
 if ($opt_configure) {
     my %station_map=();
 
-    if ($opt_lineup_url) {  #override default
-        $lineup_url=$opt_lineup_url; 
-    } else {
-        get_lineups();
-        my @choices=sort keys %lineups;
-        my $val = $opt_lineup || $choices[0];
-        $val = ask_choice("\nWhich Lineup? ($opt_lineup)",$val,@choices);
-        $opt_lineup=$val;
-        $lineup_url=$lineups{$opt_lineup};
-    }
+    say("
+Registration is required in advance. 
+Sign up at ***TBD***
+
+    ");
+    $opt_user=ask("Username ($opt_user):")|| $opt_user || die "ERROR: What's On India Username Required\n";
+    $opt_user=lc($opt_user); # force lower-case on username
+    $opt_pass=ask_password("Password (default:<keep>,):")|| $opt_pass;
+
+    die "*ERROR* Username not specified. Please run --configure\n" unless $opt_user;
+    die "*ERROR* Password not specified. Please run --configure\n" unless $opt_pass;
+    
+    get_lineups();
+    my @choices=sort keys %lineups;
+    my $val = $opt_lineup || $choices[0];
+    $val = ask_choice("\nWhich Lineup? ($opt_lineup)",$val,@choices);
+    $opt_lineup=$val;
+    
 #
 # get station names
 #
@@ -418,7 +422,8 @@ if ($opt_configure) {
 #
     open(CONF,">$config_file") or die "ERROR: can't open config file: $config_file\n";
     print CONF "lineup:   $opt_lineup\n";
-    print CONF "lineup_url:  $lineup_url\n";
+    print CONF "user:   $opt_user\n";
+    print CONF "pass:   $opt_pass\n";
     print CONF "auto-config: $config_autoconfig\n" if $config_autoconfig;
 
     my %chan_found=();
@@ -438,42 +443,29 @@ if ($opt_configure) {
 } # --configure channel list
 
 #
-# get_guide
-# Until we get a standard filename for the guide, this subroutine checks
-# the folder and gets the last link from the page.
+# --list-lineup mode
 #
-sub get_guide($) {
-  my $root=shift;
-  use HTML::TokeParser;
-
-  print STDERR "Checking $root\n" unless $opt_quiet;
-  my $index_page=get_nice($lineup_url);
-  die "Error downloading index_page from $lineup_url" unless length($index_page)>100;
- 
-#
-# we want the last URL on the page
-#
-  my $p = HTML::TokeParser->new(\$index_page);
-  my $file="";
-  while (my $token = $p->get_tag("a")) {
-#      my $url = $token->[2]{href} || "-";
-      $_= $p->get_trimmed_text("/a");
-      next unless /^\w+_XMLTV_\d+_\d+.xml.gz/;
-      $file=$_;
-  }
-
-  return get_nice_gzip($root.$file);
+if ($opt_list_lineups)
+{
+    get_lineups();
+    foreach (sort keys %lineups) {
+        printf STDOUT "$_\n";
+        }
+    exit 0;
 }
 
-#
-# Get data!
-#
-    my $start = DateCalc("00:00:00","+ $opt_offset days") || die "ERROR: Can't compute <$opt_offset> days\n";
-    my $stop  = DateCalc($start    ,"+ $opt_days   days") || die "ERROR: Can't compute <$opt_days> days\n";
-print STDERR "debug: got start=$start\n" if $DEBUG;
-print STDERR "debug: got stop=$stop\n"   if $DEBUG;
 
-    $guide_data=get_guide($lineup_url);
+#
+# Process listings
+#
+
+die "Can't get stations without a lineup!" unless $opt_lineup;
+die "Can't get stations without a username!" unless $opt_user;
+die "Can't get stations without a password!" unless $opt_pass;
+
+$guide_data=get_nice_gzip(
+    sprintf("http://www.whatsonindia.com/xmltv_download/filedeliver.aspx?formatname=%s&requester=%s&password=%s",
+            $opt_lineup,$opt_user,$opt_pass));
 
 #
 # open output file
@@ -488,7 +480,6 @@ print STDERR "debug: got stop=$stop\n"   if $DEBUG;
 #
 # ok, let's walk through the data
 #
-{
 unless ($opt_quiet) {
     $bar = new XMLTV::ProgressBar('processing data',length($guide_data)+1);
 }
@@ -496,18 +487,17 @@ unless ($opt_quiet) {
     my $skip=0;
     my $count=0;
     while (defined($_ = $guide_fh->getline)) {
-# 	print STDERR $_."\n";
-# last if $count>1000;
         $bar->update(tell($guide_fh)) if $bar && (++$count%1000==0);
         next unless (/^ /); # ignore the <xml> and <tv> tags
-
         if (/<channel id="(.+?)"/) {
             $skip=0;
             $skip=1 unless $chan_config{$1};
+            $skip=0 if $opt_list_channels;
         } elsif (/<programme start=.(\d+).+channel="(.+?)"/) {
             $skip=0;
-            $skip=1 if $1 lt $start;
-            $skip=1 if $1 gt $stop;
+            $skip=1 if $opt_list_channels;
+#            $skip=1 if $1 lt $start;
+#            $skip=1 if $1 gt $stop;
             $skip=1 unless $chan_config{$2};
             $sched_count++ unless $skip;
         };
@@ -515,7 +505,7 @@ unless ($opt_quiet) {
         print "$_" unless $skip;
         }
     $guide_fh->close;
-}
+
 #
 # do some final clean-up
 #
