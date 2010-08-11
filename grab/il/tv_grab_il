@@ -111,6 +111,7 @@ use XMLTV::Get_nice qw(get_nice_tree);
 
 use Text::Iconv;
 use POSIX qw(strftime);
+use DateTime;
 
 # Use XMLTV::Options::ParseOptions to parse the options and take care of the basic capabilities that a tv_grabber should
 my ($opt, $conf) = ParseOptions({ 
@@ -203,9 +204,6 @@ sub fetch_channels {
   return $result;
 }
 
-# The timezones to map from POSIX::strftime(%Z);
-my $timezones = {IST => '+0200', IDT => '+0300'};
-
 # Fetch the channels again to see what's available
 my $data = XMLTV::parse(&fetch_channels($opt, $conf));
 my ($encoding, $credits, $channels, $programmes) = @{$data};
@@ -230,9 +228,9 @@ foreach my $channel_id (@{$conf->{channel}}) {
     my ($walla_id) = ($channel_id =~ /^([0-9]*)\..*$/);
     
     # Now grab listings for each channel on each day, according to the options in $opt
-    for (my $i=0; $i<$opt->{days}; $i++) {
-      my $utime = time() + (($i + $opt->{offset})*3600*24);
-      my $url = "http://tv.walla.co.il/?w=/4//$walla_id//" . strftime('%Y-%m-%d', localtime($utime)) . "/1";
+    for (my $i=$opt->{offset}; $i < ($opt->{offset} + $opt->{days}); $i++) {
+      my $theday = DateTime->today()->add (days => $i)->set_time_zone('Asia/Jerusalem');
+      my $url = "http://tv.walla.co.il/?w=/4//$walla_id//" . $theday->ymd() . "/1";
 
       my $tree = XMLTV::Get_nice::get_nice_tree($url);
 
@@ -244,17 +242,14 @@ foreach my $channel_id (@{$conf->{channel}}) {
             my $show_hour_element = $show->look_down('_tag', 'span', 'class', 'w3b txt-w');
             
             my @show_hour = split(/:/, $show_hour_element->as_text());
-            my $show_utime = $utime;
-            $show_utime += 3600*24 if ($show_hour[0] < 6); # Shows that belong to the next day!
-            my @show_time = localtime($show_utime);
-            
-            $show_time[0] = 0; # Zeroize the seconds!
-            $show_time[1] = $show_hour[1]; # Set the minutes
-            $show_time[2] = $show_hour[0]; # Set the hour
+            my $show_time = $theday->clone();
+            if ($show_hour[0] < 6) {
+              $show_time->add (days => 1);
+            }
+            $show_time->set(hour => $show_hour[0], minute => $show_hour[1], second => 0);
 
             push @{$programmes}, {
-              #FIXME - timezone is only output if local timezone is IST/IDT
-              start => strftime("%Y%m%d%H%M%S ", @show_time) . $timezones->{strftime("%Z", @show_time)},
+              start => $show_time->strftime("%Y%m%d%H%M%S %z"),
               title => [[ $converter->convert($title->as_text()), 'he']],
               channel => $channel_id
             };
@@ -283,7 +278,7 @@ if (($opt->{offset} != 0) || ($opt->{days} != -999)) {
   $w_args{cutoff} = '060000';
 }
 
-# XML::Writer doesn't use default ouput but STDOUT directly if not specified.
+# XML::Writer doesn't use default output but STDOUT directly if not specified.
 # In case of --output option, select() returns $XMLTV::Options::fd
 if (defined $opt->{output}) {
   my $fd = select();    # in case of --output option, this
