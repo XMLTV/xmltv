@@ -1272,6 +1272,9 @@ sub targets( $ ) {
 	    # Commands for the target.
 	    push @$curr_target, $_;
 	}
+        elsif (/^$/) {
+            # Blank lines are legal in a target definition
+        }
 	elsif (/^\s*(?:\#.*)?$/) {
 	    undef $curr_target;
 	}
