@@ -28,7 +28,7 @@ XMLTV::ValidateFile - Validates an XMLTV file
 =head1 DESCRIPTION
 
 Utility library that validates that a file is correct according to 
-http://membled.com/twiki/bin/view/Main/XmltvFileFormat.
+http://wiki.xmltv.org/index.php/XMLTVFormat.
 
 
 =head1 EXPORTED FUNCTIONS

@@ -24,7 +24,7 @@ XMLTV::ValidateGrabber - Validates an XMLTV grabber
 Utility library that validates that a grabber properly implements the
 capabilities described at
 
-http://membled.com/twiki/bin/view/Main/XmltvCapabilities
+http://wiki.xmltv.org/index.php/XmltvCapabilities
 
 The ValidateGrabber call first asks the grabber which capabilities it
 claims to support and then validates that it actually does support
