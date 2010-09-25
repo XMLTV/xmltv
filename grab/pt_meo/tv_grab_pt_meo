@@ -1,0 +1,220 @@
+#!/usr/bin/perl -w
+
+=pod
+
+Your documentation here... Copy from tv_grab_cz for example.
+
+=cut
+
+use strict;
+use CGI;
+use DateTime;
+use Encode; # used to convert 'perl strings' into 'utf-8 strings'
+#use HTTP::Cache::Transparent;
+use XML::LibXML;
+use XMLTV::Configure::Writer;
+use XMLTV::Get_nice qw/get_nice/;
+use XMLTV::Options qw/ParseOptions/;
+
+my $maxdays = 1+7; # data source is limited to n days (including today)
+
+my( $opt, $conf ) = ParseOptions( { 
+    grabber_name => "tv_grab_pt_meo",
+    capabilities => [qw/apiconfig baseline manualconfig preferredmethod/],
+    listchannels_sub => \&list_channels,
+    stage_sub => \&config_stage,
+    version => '$Id$',
+    description => "Portugal (MEO)",
+    preferredmethod => 'allatonce',
+    defaults => { days => $maxdays, offset => 0, quiet => 0, debug => 0 },
+} );
+
+# limit to maxdays in the future
+if ($opt->{offset} + $opt->{days} > $maxdays) {
+    $opt->{days} = $maxdays - $opt->{offset};
+}
+
+# Get the actual data and print it to stdout.
+my $is_success=1;
+
+my $startDate = DateTime->from_epoch( epoch => time () );
+$startDate->set_time_zone( 'Europe/Lisbon' );
+$startDate->truncate( to => 'day' );
+$startDate->add( days => $opt->{offset} );
+my $endDate=$startDate->clone()->add( days => $opt->{days} );
+$endDate->add( seconds => -1 );
+
+my $request = 'http://services.sapo.pt/EPG/GetChannelListByDateInterval';
+$request .= '?channelSiglas=' . CGI::escape( join( ',', @{$conf->{channel}} ) );
+$request .= '&startDate=' . $startDate->ymd('-') . '%20' . $startDate->hms(':');
+$request .= '&endDate=' . $endDate->ymd('-') . '%20' . $endDate->hms(':');
+
+if( !$opt->{quiet} ) {
+    print( STDERR "requesting $request\n" );
+}
+
+my $xpc = XML::LibXML::XPathContext->new;
+$xpc->registerNs('EPG', 'http://services.sapo.pt/Metadata/EPG');
+
+my $epgsource = get_nice( $request );
+my $parser=XML::LibXML->new();
+$parser->load_ext_dtd( 0 );
+my $epg=$parser->parse_string( $epgsource )->getDocumentElement();
+
+my %w_args = (
+    cutoff => '000000',
+    days => $opt->{days},
+    encoding => 'UTF-8',
+    offset => $opt->{offset}
+);
+
+# FIXME everybody and their mom handle --output themselfes, why???
+if (defined $opt->{output}) {
+    my $fh = new IO::File(">$opt->{output}");
+    die "cannot write to $opt->{output}: $!" if not defined $fh;
+    $w_args{OUTPUT} = $fh;
+}
+
+my $writer = new XMLTV::Writer( %w_args );
+$writer->start({ 'generator-info-name' => 'Example code in pod' });
+
+my $channels = $xpc->findnodes( '//EPG:Channel', $epg );
+foreach my $channel ($channels->get_nodelist()) {
+    my %ch = (
+        'display-name' => [ [ encode( 'UTF-8', $xpc->findvalue( 'EPG:Name', $channel ) ), 'pt' ] ],
+        'id' => make_channelid( $xpc->findvalue( 'EPG:Sigla', $channel ) )
+    );
+
+    $writer->write_channel(\%ch);
+}
+
+my $inprogs = $xpc->findnodes( '//EPG:Program', $epg );
+foreach my $inprog ($inprogs->get_nodelist()) {
+    my %prog;
+
+    my $chanid = $xpc->findvalue( '../../EPG:Sigla', $inprog );
+    $prog{channel} = make_channelid( $chanid );
+
+    my $title = $xpc->findvalue( 'EPG:Title', $inprog );
+    $title = parse_title (\%prog, $title);
+    $prog{title} = [ [ encode( 'UTF-8', $title ), 'pt' ] ];
+
+    my $desc = $xpc->findvalue( 'EPG:Description', $inprog );
+    $prog{desc} = [ [ encode( 'UTF-8', $desc ), 'pt' ] ];
+
+    my $starttime = $xpc->findvalue( 'EPG:StartTime', $inprog );
+    my $dtstart = dt_from_string( $starttime );
+    $prog{start} = $dtstart->strftime( '%Y%m%d%H%M%S %z' );
+
+    my $endtime = $xpc->findvalue( 'EPG:EndTime', $inprog );
+    my $dtstop = dt_from_string( $endtime );
+    $prog{stop} = $dtstop->strftime( '%Y%m%d%H%M%S %z' );
+
+    $writer->write_programme(\%prog);
+}
+
+$writer->end();
+
+if( $is_success ) {
+     exit 0;
+} else {
+     exit 1;
+}
+
+sub config_stage
+{
+     my( $stage, $conf ) = @_;
+
+     # Sample stage_sub that only needs a single stage.
+
+     die "Unknown stage $stage" if $stage ne "start";
+
+     my $result;
+     my $writer = new XMLTV::Configure::Writer( OUTPUT => \$result,
+                                                              encoding => 'utf-8' );
+     $writer->start( { grabber => 'tv_grab_pt_meo' } );
+
+     $writer->end( 'select-channels' );
+
+     return $result;
+}
+
+sub list_channels
+{
+     my( $conf, $opt ) = @_;
+
+     # Return a string containing an xmltv-document with <channel>-elements
+     # for all available channels.
+
+     my $channellist=get_nice( 'http://services.sapo.pt/EPG/GetChannelList' );
+     my $parser=XML::LibXML->new();
+     my $input=$parser->parse_string( $channellist )->getDocumentElement();
+
+     my $output=XML::LibXML::Document->new( '1.0', 'utf-8' );
+     my $root=XML::LibXML::Element->new( 'tv' );
+     $output->setDocumentElement( $root );
+
+     foreach my $channel( $input->getElementsByTagName( 'Channel') ) {
+         my @node=$channel->getElementsByTagName( 'Name' );
+         my $name=$node[0]->getFirstChild()->getData();
+         @node=$channel->getElementsByTagName( 'Sigla' );
+         my $sigla=$node[0]->getFirstChild()->getData();
+         my $tmp=XML::LibXML::Element->new( 'channel' );
+         $tmp->setAttribute( 'id', encode( 'UTF-8', $sigla ) );
+         $tmp->appendTextChild( 'display-name', encode( 'UTF-8', $name ) );
+         $root->appendChild( $tmp );
+     }
+
+     return $output->toString();
+}
+
+sub dt_from_string
+{
+    my( $string ) = @_;
+    my($year, $month, $day, $hour, $minute, $second) =
+        ($string =~ m|(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})|);
+    my $dt = DateTime->new( year   => $year,
+                            month  => $month,
+                            day    => $day,
+                            hour   => $hour,
+                            minute => $minute,
+                            second => $second,
+                            time_zone => 'Europe/Lisbon',
+    );
+    return $dt;
+}
+
+sub make_channelid
+{
+    my( $id ) = @_;
+    $id = lc( $id );
+    $id =~ s|\s+||g;
+    $id =~ s|&||g;
+    $id =~ s|\x{e7}|c|g;
+    $id .= '.tv.sapo.pt';
+    return( $id );
+}
+
+sub parse_title
+{
+    my $prog = shift;
+    my $title = shift;
+
+    if (!defined ($title)) {
+        return undef;
+    }
+
+    if ($title =~ m|\s+T\d+\s+-\s+Ep\.\s+\d+$|) {
+        # found season and episode in title
+        my ($season, $episode) = ($title =~ m|\s+T(\d+)\s+-\s+Ep\.\s+(\d+)$|);
+        $title =~ s|\s+T\d+\s+-\s+Ep\.\s+\d+$||;
+        $prog->{'episode-num'} =  [ [ ($season - 1).' . '.($episode-1).' .', 'xmltv-ns' ] ];
+    } elsif ($title =~ m|\s+-\s+Ep\.\s+\d+$|) {
+        # found episode in title
+        my ($episode) = ($title =~ m|\s+-\s+Ep\.\s+(\d+)$|);
+        $title =~ s|\s+-\s+Ep\.\s+\d+$||;
+        $prog->{'episode-num'} = [ [ '. '.($episode-1).' .', 'xmltv-ns' ] ];
+    }
+
+    return $title;
+}

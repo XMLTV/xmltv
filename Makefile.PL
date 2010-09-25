@@ -621,6 +621,11 @@ my @opt_components
 		  }
      },
 
+     { name => 'tv_grab_pt_meo',
+       blurb => 'Grabber for Portugal (MEO)',
+       exes => [ 'grab/pt_meo/tv_grab_pt_meo' ],
+     },
+
      { name => 'tv_grab_za',
        blurb => 'Grabber for South Africa',
        exes => [ 'grab/za/tv_grab_za' ],
