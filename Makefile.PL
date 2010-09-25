@@ -624,6 +624,11 @@ my @opt_components
      { name => 'tv_grab_pt_meo',
        blurb => 'Grabber for Portugal (MEO)',
        exes => [ 'grab/pt_meo/tv_grab_pt_meo' ],
+       prereqs => { 'CGI' => 0,
+                    'DateTime' => 0,
+                    'XML::LibXML' => 0,
+                    'LWP' => 0,
+                  },
      },
 
      { name => 'tv_grab_za',
