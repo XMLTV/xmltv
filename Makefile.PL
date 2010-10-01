@@ -369,6 +369,7 @@ my @opt_components
                     => [ 'grab/uk_rt/tv_grab_uk_rt.in' ] ],
        grab_need_share => [ 'uk_rt' ],
        prereqs => { 'HTTP::Cache::Transparent' => 1.0, 
+                    'IO::Stringy' => 0,
                     'LWP::UserAgent' => 0,
                     'HTML::Entities' => 1.27 } ,
      },
@@ -381,7 +382,7 @@ my @opt_components
        to_clean => [ 'grab/uk_bleb/tv_grab_uk_bleb' ],
        deps => [ 'grab/uk_bleb/tv_grab_uk_bleb' => [ 'grab/uk_bleb/tv_grab_uk_bleb.in' ] ],
        grab_need_share => [ 'uk_bleb' ],
-       prereqs => { 'IO::Scalar' => 0, 'Archive::Zip' => 0 },
+       prereqs => { 'IO::Stringy' => 0, 'Archive::Zip' => 0 },
      },
 
 # 2008-11-09 disabled after ident string was blocked
@@ -434,6 +435,7 @@ my @opt_components
        blurb => 'Grabber for India (zipazap.com)',
        exes     => [ 'grab/in/tv_grab_in' ],
        prereqs => { 'XML::LibXML' => 0,
+                    'IO::Stringy' => 0,
                   },
      },
 
@@ -536,6 +538,7 @@ my @opt_components
        exes => [ 'grab/dk_dr/tv_grab_dk_dr' ],
        prereqs => { 'Data::Dumper' => 0,
                     'DateTime::Locale' => 0,
+                    'IO::Stringy' => 0,
                     'Parse::RecDescent' => 0,
                     'LWP::Simple' => 0,
                     'DateTime' => 0,

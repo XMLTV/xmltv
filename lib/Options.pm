@@ -2,7 +2,6 @@ package XMLTV::Options;
 
 use strict;
 use warnings;
-use vars qw($fd);
 
 BEGIN {
     use Exporter   ();
@@ -35,8 +34,6 @@ use XMLTV::Configure qw/LoadConfig Configure SelectChannelsStage/;
 
 use Getopt::Long;
 use Carp qw/croak/;
-use IO::Wrap qw/wraphandle/;
-use IO::Scalar;
 
 my %cap_options = (
 		   all => [qw/
