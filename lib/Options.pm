@@ -438,14 +438,15 @@ sub ParseOptions
 
     if( defined( $opt->{output} ) )
     {
-	if( not open( $fd, "> $opt->{output}" ) )
+	# Redirect STDOUT to the file.
+	if( not open( STDOUT, "> $opt->{output}" ) )
 	{
 	    print STDERR "Cannot write to $opt->{output}.";
 	    exit 1;
 	}
 	
-	# Redirect STDOUT to the file.
-	select( $fd );
+        # Redirect default output to STDOUT
+	select( STDOUT );
     }
 
     if( $opt->{configure} )
