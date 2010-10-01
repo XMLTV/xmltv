@@ -125,6 +125,12 @@ A programme entry with an invalid stop-time was found.
 
 A programme entry with an invalid episode number was found.
 
+=item badlatin1
+
+The file is encoded in iso-8859-1 but contains characters that
+have no meaning in iso-8859-1 (or are control characters).
+A likely cause is some characters in windows-1252 encoding slipped through.
+
 =back
 
 If no errors are found, an empty list is returned.
@@ -163,6 +169,10 @@ sub ValidateFile {
 	w( "The file is not valid according to the xmltv dtd:\n $@",
 	   'notvalid' );
 	return (keys %errors);
+    }
+
+    if( $doc->encoding() =~ m/iso-8859-1/i ) {
+	verify_latin1( $file );
     }
 
     my $w = sub { 
@@ -268,6 +278,27 @@ sub verify_time
 	}
     }
     
+    return 1;
+}
+
+sub verify_latin1
+{
+    my( $filename ) = @_;
+
+    my $file_str = read_file($filename);
+
+    if( $file_str =~ m/[\x00-\x08\x0B-\x0E\x10-\x1F]+/ ) {
+        w( "file contains unexpected control characters", 'badlatin1' );
+        return 0;
+    }
+
+    if( $file_str =~ m/[\x7F-\x9F]+/ ) {
+        my ($hintpre, $hint, $hintpost) = ( $file_str =~ m/(.{0,15})([\x7F-\x9F]+)(.{0,15})/ );
+        w( "file contains bytes without meaning in iso-8859-1, maybe it's windows-1252?\n".
+           "look here \"" . $hintpre . ">>>" . $hint . "<<<" . $hintpost . "\"\n", 'badlatin1' );
+        return 0;
+    }
+
     return 1;
 }
 
