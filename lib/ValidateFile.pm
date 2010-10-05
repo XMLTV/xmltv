@@ -174,6 +174,7 @@ sub ValidateFile {
     if( $doc->encoding() =~ m/iso-8859-1/i ) {
 	verify_latin1( $file );
     }
+    verify_entities( $file );
 
     my $w = sub { 
 	my( $p, $msg, $id ) = @_;
@@ -289,14 +290,33 @@ sub verify_latin1
 
     if( $file_str =~ m/[\x00-\x08\x0B-\x0E\x10-\x1F]+/ ) {
         w( "file contains unexpected control characters", 'badlatin1' );
-        return 0;
+#        return 0;
     }
 
     if( $file_str =~ m/[\x7F-\x9F]+/ ) {
         my ($hintpre, $hint, $hintpost) = ( $file_str =~ m/(.{0,15})([\x7F-\x9F]+)(.{0,15})/ );
-        w( "file contains bytes without meaning in iso-8859-1, maybe it's windows-1252?\n".
-           "look here \"" . $hintpre . ">>>" . $hint . "<<<" . $hintpost . "\"\n", 'badlatin1' );
-        return 0;
+        w( "file contains bytes without meaning in iso-8859-1, maybe it's windows-1252?"
+#           . "\nlook here \"" . $hintpre . $hint . $hintpost . "\""
+#           . sprintf( "\n%*s", 12+length( $hintpre ) , "^" )
+           , 'badlatin1' );
+#        return 0;
+    }
+
+    return 1;
+}
+
+sub verify_entities
+{
+    my( $filename ) = @_;
+
+    my $file_str = read_file($filename);
+
+    if( $file_str =~ m/&[^#].+?;/ ) {
+        my ($entity) = ( $file_str =~ m/&([^#].+?);/ );
+        my %fiveentities = ('quot' => 1, 'amp' => 1, 'apos' => 1, 'lt' => 1, 'gt' => 1);
+        if (!exists($fiveentities{$entity})) {
+            w( "file contains undefined entity: $entity", 'badentity' );
+        }
     }
 
     return 1;
