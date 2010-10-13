@@ -125,11 +125,11 @@ A programme entry with an invalid stop-time was found.
 
 A programme entry with an invalid episode number was found.
 
-=item badlatin1
+=item badiso8859
 
-The file is encoded in iso-8859-1 but contains characters that
-have no meaning in iso-8859-1 (or are control characters).
-A likely cause is some characters in windows-1252 encoding slipped through.
+The file is encoded in iso-8859 but contains characters that
+have no meaning in iso-8859 (or are control characters).
+If it's iso-8859-1 aka Latin 1 it might be some characters in windows-1252 encoding.
 
 =back
 
@@ -171,8 +171,8 @@ sub ValidateFile {
 	return (keys %errors);
     }
 
-    if( $doc->encoding() =~ m/iso-8859-1/i ) {
-	verify_latin1( $file );
+    if( $doc->encoding() =~ m/iso-8859-\d+/i ) {
+	verify_iso8859xx( $file, $doc->encoding() );
     }
     verify_entities( $file );
 
@@ -282,24 +282,69 @@ sub verify_time
     return 1;
 }
 
-sub verify_latin1
+sub verify_iso8859xx
 {
-    my( $filename ) = @_;
+    # code points not used in iso-8859 according to http://de.wikipedia.org/wiki/ISO_8859
+    my %unused_iso8859 = (
+        'iso-8859-1'  => undef,
+        'iso-8859-2'  => undef,
+        'iso-8859-3'  => '\xa5\xae\xbe\xc3\xd0\xe3\xf0',
+        'iso-8859-4'  => undef,
+        'iso-8859-5'  => undef,
+        'iso-8859-6'  => '\xa1-\xa3\xa5-\xab\xae-\xba\xbc-\xbe\xc0\xdb-\xdf\xf3-xff',
+        'iso-8859-7'  => '\xae\xd2\xff',
+        'iso-8859-8'  => '\xa1\xbf-\xde\xfb-\xfc\xff',
+        'iso-8859-9'  => undef,
+        'iso-8859-10' => undef,
+        'iso-8859-11' => '\xdb-\xde\xfc-\xff',
+        'iso-8859-12' => undef,
+        'iso-8859-13' => undef,
+        'iso-8859-14' => undef,
+        'iso-8859-15' => undef,
+    );
+    # code points of unusual control characters used in iso-8859 according to http://de.wikipedia.org/wiki/ISO_8859
+    my %unusual_iso8859 = (
+        'iso-8859-1'  => '\x00-\x08\x0b-\x1f\x7f-\xa0\xad',
+        'iso-8859-2'  => '\x00-\x08\x0b-\x1f\x7f-\xa0\xad',
+        'iso-8859-3'  => '\x00-\x08\x0b-\x1f\x7f-\xa0\xad',
+        'iso-8859-4'  => '\x00-\x08\x0b-\x1f\x7f-\xa0\xad',
+        'iso-8859-5'  => '\x00-\x08\x0b-\x1f\x7f-\xa0\xad',
+        'iso-8859-6'  => '\x00-\x08\x0b-\x1f\x7f-\xa0\xad',
+        'iso-8859-7'  => '\x00-\x08\x0b-\x1f\x7f-\xa0\xad',
+        'iso-8859-8'  => '\x00-\x08\x0b-\x1f\x7f-\xa0\xad',
+        'iso-8859-9'  => '\x00-\x08\x0b-\x1f\x7f-\xa0\xad',
+        'iso-8859-10' => '\x00-\x08\x0b-\x1f\x7f-\xa0\xad',
+        'iso-8859-11' => '\x00-\x08\x0b-\x1f\x7f-\xa0',
+        'iso-8859-12' => '\x00-\x08\x0b-\x1f\x7f-\xa0\xad',
+        'iso-8859-13' => '\x00-\x08\x0b-\x1f\x7f-\xa0\xad',
+        'iso-8859-14' => '\x00-\x08\x0b-\x1f\x7f-\xa0\xad',
+        'iso-8859-15' => '\x00-\x08\x0b-\x1f\x7f-\xa0\xad',
+    );
+    my( $filename, $encoding ) = @_;
+    $encoding = lc( $encoding );
 
     my $file_str = read_file($filename);
+    my $unusual = $unusual_iso8859{$encoding};
+    my $unused = $unused_iso8859{$encoding};
 
-    if( $file_str =~ m/[\x00-\x08\x0B-\x0E\x10-\x1F]+/ ) {
-        w( "file contains unexpected control characters", 'badlatin1' );
-#        return 0;
+    if( defined( $unusual ) ) {
+        if( $file_str =~ m/[$unusual]+/ ) {
+            my ($hintpre, $hint, $hintpost) = ( $file_str =~ m/(.{0,15})([$unusual]+)(.{0,15})/ );
+            w( "file contains unexpected control characters"
+               . "\nlook here \"" . $hintpre . $hint . $hintpost . "\""
+               . sprintf( "\n%*s", 12+length( $hintpre ) , "^" )
+               , 'badiso8859' );
+        }
     }
 
-    if( $file_str =~ m/[\x7F-\x9F]+/ ) {
-        my ($hintpre, $hint, $hintpost) = ( $file_str =~ m/(.{0,15})([\x7F-\x9F]+)(.{0,15})/ );
-        w( "file contains bytes without meaning in iso-8859-1, maybe it's windows-1252?"
-#           . "\nlook here \"" . $hintpre . $hint . $hintpost . "\""
-#           . sprintf( "\n%*s", 12+length( $hintpre ) , "^" )
-           , 'badlatin1' );
-#        return 0;
+    if( defined( $unused ) ) {
+        if( $file_str =~ m/[$unused]+/ ) {
+            my ($hintpre, $hint, $hintpost) = ( $file_str =~ m/(.{0,15})([$unused]+)(.{0,15})/ );
+            w( "file contains bytes without meaning in " . $encoding
+               . "\nlook here \"" . $hintpre . $hint . $hintpost . "\""
+               . sprintf( "\n%*s", 12+length( $hintpre ) , "^" )
+               , 'badiso8859' );
+        }
     }
 
     return 1;
