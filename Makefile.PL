@@ -336,8 +336,8 @@ my @opt_components
 	   pl_files => { 'grab/ch_search/tv_grab_ch_search.PL' 
 	   		    => 'grab/ch_search/tv_grab_ch_search' },
 	   to_clean => [ 'grab/ch_search/tv_grab_ch_search' ],
-	   share_files => { 'grab/ch_search/channel_ids' 
-	    	    => 'tv_grab_ch_search/channel_ids' },
+#	   share_files => { 'grab/ch_search/channel_ids' 
+#	    	    => 'tv_grab_ch_search/channel_ids' },
 	   grab_need_share => [ 'ch_search' ],
 	   prereqs  => { 'HTML::Entities' => 1.27,
 	        'HTML::TreeBuilder' => 0 },
