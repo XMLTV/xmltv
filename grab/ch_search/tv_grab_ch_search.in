@@ -54,12 +54,6 @@ from now on (= zero).
 B<--quiet> Suppress the progress messages normally written to standard
 error.
 
-B<--slow> enables long strategy run: tv.search.ch publishes only some (vital)
-information on the actual listing pages, the rest is shown in a separate
-popup window. If you'd like to parse the data from these popups as well,
-supply this flag. But consider that the grab process takes much longer when
-doing so, since many more web pages have to be retrieved.
-
 B<--list-channels> Write output giving <channel> elements for every
 channel available (ignoring the config file), but no programmes.
 
@@ -77,12 +71,12 @@ L<xmltv(5)>.
 
 =head1 AUTHOR
 
-Daniel Bittel <daniel.bittel@solnet.ch>. Inspired by tv_grab_ch by Stefan Siegl.
+Daniel Bittel <betlit@gmx.net>. Inspired by tv_grab_ch by Stefan Siegl.
 
 =head1 BUGS
 
 If you happen to find a bug, you're requested to send a mail to me
-at B<daniel.bittel@solnet.ch> or to one of the XMLTV mailing lists, see webpages
+at B<betlit@gmx.net> or to one of the XMLTV mailing lists, see webpages
 at http://sourceforge.net/projects/xmltv/.
 
 =cut
@@ -90,6 +84,8 @@ at http://sourceforge.net/projects/xmltv/.
 use warnings;
 use strict;
 use Date::Manip;
+use LWP::Simple;
+use HTTP::Cookies;
 use XMLTV::Version '$Id$ ';
 use XMLTV::Capabilities qw/baseline manualconfig cache/;
 use XMLTV::Description 'Switzerland (tv.search.ch)';
@@ -115,10 +111,6 @@ Channel List: $0 --list-channels
 To show capabilities: $0 --capabilities
 To show version: $0 --version
 
-Don't try to run this grabber between midnight and ~6 o'clock in the morning
-to get data for the current day (ergo: without offset):
-When viewing search.ch's website after midnight, I found they only display 
-data from early in the morning of that day.
 END
   ;
 
@@ -145,8 +137,8 @@ sub grab_channel($);
 
 ## attributes of xmltv root element
 my $head = { 
-    'source-data-url'      => 'http://tv.search.ch/programm/',
-    'source-info-url'      => 'http://tv.search.ch/',
+    'source-data-url'      => 'http://tv.search.ch/channels.de.html',
+    'source-info-url'      => 'http://tv.search.ch/index.de.html',
     'generator-info-name'  => 'XMLTV',
     'generator-info-url'   => 'http://xmltv.org/',
 };
@@ -232,36 +224,6 @@ $bar->update() if not $opt_quiet;
 $bar->finish() if not $opt_quiet;
 
 
-
-
-# Read the file with channel mappings.
-my $CHANNEL_NAMES_FILE = "channel_ids";
-my $str = GetSupplement( 'tv_grab_ch_search', 'channel_ids' );
-my (%chid_mapping, %seen);
-my $line_num = 0;
-foreach (split( /\n/, $str )) {
-    ++ $line_num;
-    tr/\r//d;
-
-    s/#.*//;
-    next if m/^\s*$/;
-
-    my $where = "$CHANNEL_NAMES_FILE:$line_num";
-    
-    my @fields = split m/:/;
-    print @fields   if(@fields != 2 );
-    die "$where: wrong number of fields"
-      if(@fields != 2 );
-
-    my ($xmltv_id, $search_ch_id) = @fields;
-    warn "$where: search.ch id $search_ch_id seen already\n"
-      if defined $chid_mapping{$search_ch_id};
-    $chid_mapping{$search_ch_id} = $xmltv_id;
-    
-    warn "$where: XMLTV id $xmltv_id seen already\n"
-      if $seen{$xmltv_id}++;
-}
-
 my @requests;
 
 ## read our configuration file now
@@ -274,10 +236,6 @@ foreach(@config_lines) {
 	warn("\nConfigured channel $1 not available anymore. \nPlease reconfigure tv_grab_ch_search.\n"),
 	  next unless(defined($channels{$1}));
 	push @requests, $1;
-    } 
-    elsif (/^map:?\s+(\S+)\s+(\S+)/) {
-	# Override anything set in the channel_ids file.
-	$chid_mapping{$1} = $2;
     } 
     else {
 	warn "$config_file:$line: bad line\n";
@@ -363,11 +321,14 @@ die "No channels specified, run me with --configure flag\n" unless(scalar(@reque
 
 
 ## write out <channel> tags
+my $paramstr ="";
 foreach(@requests) {
     my $id = channel_id($_);
     my %channel = ('id'           => $id, 
                    'display-name' => [[$channels{$_}, $lang]]); 
     $writer->write_channel(\%channel);
+     $paramstr = $paramstr."&channel[]=".$_; 
+
 }
 
 
@@ -376,338 +337,162 @@ foreach(@requests) {
 ## programme ...
 my ($cur_year, $cur_month) = ParseDate('now') =~ m/(....)(..)/;
 
+my $url=$head->{q(source-data-url)};
+
+	
+my $ua = LWP::UserAgent->new(keep_alive => 300);	
+$ua->cookie_jar(HTTP::Cookies->new(file => "lwpcookies.txt", autosave => 1));
+$ua->agent("xmltv/$XMLTV::VERSION");
+$ua->env_proxy;
+	
+my $req = HTTP::Request->new(POST => $url);
+$req->content_type('application/x-www-form-urlencoded');
+$req->content(substr ( $paramstr, 1));
+
+my $res = $ua->request($req);
+
 ## write out <programme> tags
-$bar = new XMLTV::ProgressBar('grabbing channels       ', scalar(@requests))
-  if not $opt_quiet;
-
-foreach my $channel (@requests) {
-    grab_channel $channel;
-    update $bar if not $opt_quiet;
-}
-
-$bar->finish()
-    unless($opt_quiet);
-
-
+grab_channels();
 
 ## hey, looks like we've finished ...
 $writer->end();
 
 
-
 ## channel_id($s) :: turn site channel id into an xmltv id
 sub channel_id($) {  
-    for (my $s = shift) {
-    $_ = lc(defined($chid_mapping{$_}) ? $chid_mapping{$_} : "$_.search.ch");
-	$_ = "C$_" if /^\d/;
-	return $_;
-    }
+    my $s = shift;
+    #for (my $s = shift) {
+    #$_ = lc(defined($chid_mapping{$_}) ? $chid_mapping{$_} : "$_.search.ch");
+	#$_ = "C$_" if /^\d/;
+	#return $_;
+    #}
+    return "$s.search.ch"
 }
 
 
 
-
-
-## grab_channel($start, $laststart, $laststop, $stop)
-sub grab_channel($) {
-    my ($start, $laststart, $laststop, $stop);
-
-    my $channel = shift;
-    my $grabDate = $grab_start;
-  grab_channel_loop:
-    my $tb = HTML::TreeBuilder->new();
-    my $got = 0;
-
-    
-    my $loop_date = substr($grabDate,0,4) . '-' . substr($grabDate,4,2) . '-' . substr($grabDate,6,2);
-    
-    $tb->parse(get_page("http://tv.search.ch/programm/station/detail.php?id=$channel&day=$loop_date"))
-      or die "cannot parse content of http://tv.search.ch/programm/station/detail.php?id=$channel&day=$loop_date";    
-    $tb->eof;
-
-	if ( $opt_slow ) 
-	{
-     foreach my $blah (@{( ($tb->look_down('_tag' => 'table', 'width' => '100%', 'border' => 0, 'cellspacing' => 0, 'cellpadding' => 0))[3] )->extract_links()}) 
-     {
-		my %show;
-		$show{channel} = channel_id($channel);
-		
-		my($link, $element, $attr, $tag) = @$blah;
-		next if ( $element->as_text() eq '' );
-
-        my @details = get_details ( $link,  $element->as_text() );
-				
-		my ($start_base, $start_tz) = @{ date_to_local($details[0], $TZ) };
-		my ($stop_base, $stop_tz) = @{ date_to_local($details[1], $TZ) };
-
-		$show{start} = UnixDate($start_base, '%q') . " $start_tz";
-		$show{stop} = UnixDate($stop_base, '%q') . " $stop_tz";
-
-		$details[2] =~ s/^\s+//;
-    	$details[2] =~ s/\s+$//;
-	
-		$show{'category'} = [[$details[2], $lang]] if ( length($details[2]) ) ;
-
-        $show{'title'} = [[$details[3], $lang]]; 
-            	
-        $show{'sub-title'} = [[$details[4], $lang]] if(length($details[4]));
-       
-	    $show{desc} = [[ $details[5], $lang ]] if(length($details[5]));
-            
-       
-       
-       
-  	    if(length($details[6])) {
-       		my @actors = split(m/\s*,\s*/, $details[6]);
-       		$show{credits}{actor} = \@actors;
-       }
-       
-  	    		
-  	    if(length($details[7])) {
-        	my @directors = split(m/\s*,\s*/, $details[7]);
-        	$show{credits}{director} = \@directors;
-       }
-            	
-       if(length($details[8])) {
-			my @writers = split(m/\s*,\s*/, $details[8]);
-			$show{credits}{writer} = \@writers;
-       }
-	
-		if(length($details[9])) {
-			my @presenters = split(m/\s*,\s*/, $details[9]);
-			$show{credits}{presenter} = \@presenters;
-       }
-
-       $show{audio}{stereo} = $details[10] if(length($details[10]) );
-
-	   $show{subtitles} = [{ type => $details[11] }] if(length($details[11]));
-
-       $show{'previously-shown'} = {} if(length($details[12]));
-
-	   $show{video}{aspect} = $details[13] if(length($details[13]) );
-	   
-	   $show{'country'} = [[$details[14], $lang]] if ( length($details[14]) ) ;
-
-	   $writer->write_programme(\%show);
-	 }	
-	}
-	else
-	{
-		
-		
-			my $mainTable = ($tb->look_down('_tag' => 'table', 'width' => '100%', 'border' => 0, 'cellspacing' => 0, 'cellpadding' => 0))[3];
-			
-	
-			foreach ( $mainTable->look_down ('_tag' => 'td', 'width' => '100%' ) ) 
-			{
-			
-			next if $_->as_text() eq " TV-Guide" ;
-			my %show;
-			$show{channel} = channel_id($channel);
-
-			$show{'title'} = [[(( $_->look_down ('_tag' => 'a'))[0])->as_text(), $lang]];
-			
-			my $tmpStr = (( $_->look_down ('_tag' => 'a'))[0])->as_HTML();
-			$tmpStr =~ s/(.*)const_id=(.{10,10})(.{2,2})(.{2,2})(.*)/$2:$3/;
-						
-
-			my ($start_base, $start_tz) = @{ date_to_local(parse_local_date( ( $tmpStr), $TZ), $TZ) };
-			
-
-			$show{start} = UnixDate($start_base, '%q') . " $start_tz";
-			
-			$tmpStr = $_->as_HTML();
-			$tmpStr =~ s/(.*)<\/a>(.*)<\/td>/$2/;
-			$tmpStr =~ s/\(//g;
-			$tmpStr =~ s/\&nbsp;//g;
-			
-
-			my $tb2=new HTML::TreeBuilder();
-    		$tb2->parse($tmpStr);
-			$tmpStr = $tb2->as_text();
-			$tb2->delete();
-
-			
-			my @additional_info = split('\)', $tmpStr );
-			
-			$show{'category'} = [[$additional_info[0], $lang]] if exists $additional_info[ 0 ];
-			my $size = @additional_info;
-
-			for (my $count = 1; $count < $size; $count++) {
-			$additional_info[ $count ]  =~ s/^\s+//;
-			$additional_info[ $count ]  =~ s/\s+$//;
-
-			  $show{'previously-shown'} = {} if ( $additional_info[ $count ] eq "W" );
-			}
-
-
-			$writer->write_programme(\%show);
-			}
-
-	
-	}
-	
-   
-    $tb->delete();    
-	
-    $grabDate = &DateCalc($grabDate,"+ 1 day");
-	
-    if(Date_Cmp($grab_stop, $grabDate) > 0) {
-		goto grab_channel_loop;
-    }
-	
-}
-
-
-## get_details ($url, $title)
-
-sub get_details ($) {
-	my $url= "http://tv.search.ch" . shift;        # no slash after .ch!
-	my $title = shift;
-	## http://tv.search.ch/programm/detail/index.php?const_id=.....
-
-	my @result = ("","","","","","","","","","","","","","","");
-	## start-time, end-time, genre
-	## tilte, episode title, description, actors, director, 
-	## writer, presenter, audio, subtitles, previously-shown, aspect ratio
+sub grab_channels
+{
+ my $grabDate = $grab_start;
+ my $url = $head->{q(source-info-url)};
  
-	my $tb=new HTML::TreeBuilder();
-	$tb->no_space_compacting(1);
-	$tb->parse(get_page($url))
-	  or die "cannot parse content of $url";	
-	$tb->eof;
-	
-	## start and end-time
-	foreach (	
-	$tb->look_down('_tag' => 'table', 'cellpadding' => 0, 'cellspacing' => 0, 'border' => 0) )
-	{		
-		foreach ( $_->look_down('_tag' => 'tr' ))	
-		{
-			if ($_->as_text() =~ m/Ausstrahlung:/)
-			{
-			    my $broadcast_details = (($_->look_down('_tag' => 'td', 'class' => 'text' ))[1])->as_trimmed_text(); 
-			    
-				my $tmpStr = $broadcast_details;
-			    $tmpStr =~ s/^(.*),(.*),(.*) bis (.*)/$2/;
-			    $tmpStr =~ s/^(.*)\.(.*)\.(.*)$/$2.$1.$3/;				    
-				my $startDate = $tmpStr;
-		
-				$tmpStr = $broadcast_details;
-			    $tmpStr =~ s/^(.*),(.*),(.*) bis (.*)/$3/;
-	
-				my $start = parse_local_date( ( $startDate.$tmpStr), $TZ);
+ $bar = new XMLTV::ProgressBar('grabbing channels       ', (6*$opt_days))
+  if not $opt_quiet;
 
-				if ( Date_Cmp ($start, parse_local_date ( ( $startDate."06:00"), $TZ) ) < 0 )
-				{
-				 $start=DateCalc ( $start, "+ 1 day");
-				}
-	
-				$tmpStr = $broadcast_details;
-			    $tmpStr =~ s/^(.*),(.*),(.*) bis (.*)/$4/;				
-				if ( $tmpStr =~ m/\(/ )
-			    {
-			     $tmpStr =~ s/(.*) \((.*)/$1/;
-			    }
-				my $stop= parse_local_date( ( $startDate.$tmpStr), $TZ);
-				
-														
-				if ( Date_Cmp ($start, $stop ) > 0 ) { # if the end time is before the start time, the show ends after midnight.
-					$stop=DateCalc ( $stop, "+ 1 day");
-				}
-				$result[0] = $start;
-				$result[1] = $stop;
-			}
+ grab_channel_loop:
+ for (my $count = 0; $count < 6; $count++) 
+ {
+  my $tb = HTML::TreeBuilder->new();
 
-			if ($_->as_text() =~ m/Genre:/)
-			{
-				## category
-				$result[2] = (($_->look_down('_tag' => 'td', 'class' => 'text' ))[1])->as_trimmed_text();
-			}
+  my $loop_date = substr($grabDate,0,4) . '-' . substr($grabDate,4,2) . '-' . substr($grabDate,6,2);
 
-			if ($_->as_text() =~ m/Titel:/)
-			{
-			
-				## title and episode title
-				my @title = split ( /         - /, (($_->look_down('_tag' => 'td', 'class' => 'text' ))[1])->as_text());
-				$result[3] = $title[0];
-				$result[4] = $title[1] if (@title eq 2);
-				$result[3] =~ s/([\x00-\x1F])//g;
-				$result[4] =~ s/([\x00-\x1F])//g;
-			}
-			
-			if ($_->as_text() =~ m/Inhalt:/)
-			{
-				## description
-				$result[5] = (($_->look_down('_tag' => 'td', 'class' => 'text' ))[1])->as_trimmed_text();
-				$result[5] =~ s/([\x00-\x1F])//g;
-
-			}
-
-			if ($_->as_text() =~ m/Besetzung:/)
-			{
-				## actors
-				foreach(@{(($_->look_down('_tag' => 'td', 'class' => 'text' ))[1])->extract_links('a')}) 
-				{
-        			my($link, $element, $attr, $tag) = @$_;
-        			$result[6] = $result[6].$element->as_trimmed_text().",";
-        		}
-			}
-
-			if ($_->as_text() =~ m/Regie:/)
-			{
-				## director(s)
-				foreach(@{(($_->look_down('_tag' => 'td', 'class' => 'text' ))[1])->extract_links('a')}) 
-				{
-        			my($link, $element, $attr, $tag) = @$_;
-        			$result[7] = $result[7].$element->as_trimmed_text().",";
-        		}
-			}
-			
-			if ($_->as_text() =~ m/Drehbuch:/)
-			{
-				## writer(s)
-				foreach(@{(($_->look_down('_tag' => 'td', 'class' => 'text' ))[1])->extract_links('a')}) 
-				{
-			    	my($link, $element, $attr, $tag) = @$_;
-			    	$result[8] = $result[8].$element->as_trimmed_text().",";
-			    }
-			}
-
-			if ($_->as_text() =~ m/Moderation:/)
-			{
-				## presenter(s)
-				$result[9] = (($_->look_down('_tag' => 'td', 'class' => 'text' ))[1])->as_trimmed_text();
-			}
-			
-		
-			
-			if ($_->as_text() =~ m/Besonderes:/)
-			{
-				## audio
-			 	$result[10] = "stereo" if ((($_->look_down('_tag' => 'td', 'class' => 'text' ))[1])->as_trimmed_text() =~ m/Stereo/ );
-			 	$result[10] = "surround" if ((($_->look_down('_tag' => 'td', 'class' => 'text' ))[1])->as_trimmed_text() =~ m/Dolby Surround/ );
-				
-				## subtitles
-			 	$result[11] = "teletext" if ((($_->look_down('_tag' => 'td', 'class' => 'text' ))[1])->as_trimmed_text() =~ m/TXT-Untertitelt/ );
-			 	
-			 	## rerun
-			 	$result[12] = "rerun" if ((($_->look_down('_tag' => 'td', 'class' => 'text' ))[1])->as_trimmed_text() =~ m/Wiederholung/ );
-			 	
-			 	## aspect ratio
-			 	$result[13] = "16:9" if ((($_->look_down('_tag' => 'td', 'class' => 'text' ))[1])->as_trimmed_text() =~ m/16:9/ );
-			}
-			
-			if ($_->as_text() =~ m/Land:/)
-			{
-				$result[14] = (($_->look_down('_tag' => 'td', 'class' => 'text' ))[1])->as_trimmed_text();
-			}
-			
-	    }
-	}    
+  my $req = HTTP::Request->new(GET => "$url?time=$loop_date+" . 4*$count .".00");
+  $req->header('Accept' => 'text/html');
     
-	return @result;	
-  
+  $tb->parse(($ua->request($req))->content)
+      or die "cannot parse content of http://tv.search.ch/?time=$loop_date+" . 4*$count .".00"; ;    
+  $tb->eof;
+    
+
+  foreach ( $tb->look_down('_tag' => 'div', 'class' => 'tv_channel') )
+  {
+   my $channel_id = $_->attr('id');
+   if ( defined($channel_id) )
+   {
+    foreach ( $_->look_down('_tag' => 'tr', sub { ($_[0]->as_HTML() =~ m{tv_b_}) && !($_[0]->as_HTML() =~ m{tv_before})  && !($_[0]->as_HTML() =~ m{tv_timegroup}) } ) )
+    {
+     my %show;
+     $show{channel} = channel_id($channel_id) ."\n";
+     my $tmp = substr($grabDate,0,4) . substr($grabDate,4,2) .  substr($grabDate,6,2) .(($_->look_down('_tag', 'td'))[0])->as_text();
+     $tmp =~ s/://;
+     my $start = "$tmp"."00 $TZ";
+     $show{start} = $start;
+     $tmp  = $_->as_HTML();
+     if ( $tmp =~ /Untertitel für Gehörlose/)
+     {
+      $show{subtitles} = [{ type => 'teletext' }];
+     }
+     if ( $tmp =~ /Zweikanalton/)
+     {
+      $show{audio}{stereo} = 'bilingual';
+     }
+     if ( $tmp =~ /16:9/)
+     {
+      $show{video}{aspect} = '16:9';
+     }  
+     
+     foreach ( $_->look_down('_tag' => 'div', 
+     		sub {
+     			( ( $_[0]->attr ('class') eq "tv_tooltip") || ( $_[0]->attr ('class') eq "tv_tr_notooltip" ) )
+     		    } )
+     	     )
+     {
+      if ( $_->attr ('class') eq 'tv_tr_notooltip' )
+      {
+             $show{'title'} = [[$_->as_text(), $lang]]; 
+      }
+      else
+      {
+      
+       my $title = (($_->look_down('_tag' => 'td', 'class' => 'title'))->look_down('_tag' => 'h2'))->as_text();
+       my $sub_title = ($_->look_down('_tag' => 'td', 'class' => 'title'))->as_text();
+       $sub_title =~ s/\Q$title <E//;
+       if ( $title eq $sub_title )
+       {
+        $sub_title ="";
+       } 
+       my $description =  "";
+       foreach  ($_->look_down('_tag' => 'tr', sub { $_[0]->as_text() =~ m{Beschreibung} } ) )
+       {
+        $description = (($_->look_down('_tag', 'td'))->as_text());
+        $description =~ s/ mehr... / /;
+       }
+
+       foreach  ($_->look_down('_tag' => 'tr', sub { $_[0]->as_text() =~ m{Cast} } ) )
+       {
+        my @actors = split(m/\s*,\s*/, (($_->look_down('_tag', 'td'))->as_text()));
+        $show{credits}{actor} = \@actors;
+       }
+
+       foreach  ($_->look_down('_tag' => 'tr', sub { $_[0]->as_text() =~ m{Regisseur} } ) )
+       {
+        my @directors = split(m/\s*,\s*/, (($_->look_down('_tag', 'td'))->as_text()));
+        $show{credits}{actor} = \@directors;
+       }
+
+       foreach  ($_->look_down('_tag' => 'tr', sub { $_[0]->as_text() =~ m{Wiederholung} } ) )
+       {
+        $show{'previously-shown'} = {}
+       }
+ 
+       foreach  ($_->look_down('_tag' => 'tr', sub { $_[0]->as_text() =~ m{Drehbuch} } ) )
+       {
+        my @writers = split(m/\s*,\s*/, (($_->look_down('_tag', 'td'))->as_text()));
+        $show{credits}{writer} = \@writers;
+       }
+       $show{'title'} = [[$title, $lang]]; 
+       $show{'sub-title'} = [[$sub_title, $lang]] if(length($sub_title));
+       $show{desc} = [[ $description, $lang ]] if(length($description));
+      }
+     }
+     $writer->write_programme(\%show); 
+
+    } 
+   }
+  }
+  $tb->delete();
+  update $bar if not $opt_quiet;
+
+ }
+ $grabDate = &DateCalc($grabDate,"+ 1 day");
+ if(Date_Cmp($grab_stop, $grabDate) > 0) 
+ {
+  goto grab_channel_loop;
+ }
+ $bar->finish()
+  unless($opt_quiet);
 }
+
 
 ## get channel listing
 sub get_channels() {
@@ -720,68 +505,14 @@ sub get_channels() {
     $tb->eof;
 
 	## getting the channels directly selectable
-	foreach($tb->look_down('_tag' => 'table', 'width' => '100%', 'border' => 0, 'cellspacing' => 0, 'cellpadding' => 0, 'bgcolor' => '#ffffff' )) {
+	foreach($tb->look_down('_tag' => 'span', 'style' => 'float:right;display:inline' )) {
         next unless(ref($_) eq "HTML::Element");
+        my $channel_name = $_->as_text();
+	my $id = (((($_->look_up('_tag' => 'div'))[0])->look_down('_tag' => 'input', 'type' => 'checkbox'))[0])->attr('value');
 
-        foreach(@{$_->extract_links('a')}) {
-            my($link, $element, $attr, $tag) = @$_;
-			my $channel_name = (($element->content_list())[0]->attr('alt'));
-			$channel_name = (split (/zu /, $channel_name))[1];
-            $link =~ m/id=(\S+)/
-                or die "unable to extract chid from $link";
-
-            $channels{uri_escape($1)} = $channel_name;
-        }
+        $channels{uri_escape($id)} = $channel_name;      
     }
-
-    
-	
-
     $tb->delete;
-    
-    # ugly hack. some channels for which tv.search.ch offers epg data are not listed on their 
-    # channels-page. so we add them manually.
-    $channels{uri_escape(32)} = "9Live";    
-	$channels{uri_escape(114)} = "Animal Planet";    
-	$channels{uri_escape(121)} = "zdf neo";    
-	$channels{uri_escape(126)} = "FOCUS Gesundheit";    
-	$channels{uri_escape(130)} = "Arte FR";    
-	$channels{uri_escape(132)} = "Eurosport UK";
-	$channels{uri_escape(133)} = "Eurosport IT";
-	$channels{uri_escape(133)} = "MTV UK";
-	$channels{uri_escape(137)} = "MTV IT";
-	$channels{uri_escape(140)} = "Comedy Central";
-	$channels{uri_escape(144)} = "HD Suisse";
-	$channels{uri_escape(145)} = "Das Vierte";
-	$channels{uri_escape(147)} = "France 24 fr";
-	$channels{uri_escape(151)} = "Al Jazeera ar";
-	$channels{uri_escape(152)} = "RTP";
-	$channels{uri_escape(153)} = "TVE International";
-	$channels{uri_escape(154)} = "DMAX";
-	$channels{uri_escape(158)} = "The History Channel";
-	$channels{uri_escape(159)} = "AXN";
-	$channels{uri_escape(161)} = "FOX";    
-	$channels{uri_escape(163)} = "TIMM";    
-	$channels{uri_escape(165)} = "kabel eins classics";    
-	$channels{uri_escape(165)} = "bibel.tv";    
-	$channels{uri_escape(169)} = "tier tv";    
-	$channels{uri_escape(171)} = "sonnenklar tv";   
-	$channels{uri_escape(173)} = "K-TV";   
-	$channels{uri_escape(177)} = "deluxe music";   
-	$channels{uri_escape(178)} = "silverline";   	
-	$channels{uri_escape(179)} = "DAF";
-	$channels{uri_escape(180)} = "luxe.tv";
-	$channels{uri_escape(183)} = "biography";
-	$channels{uri_escape(184)} = "eurosport hd";
-	$channels{uri_escape(185)} = "BBC 3";
-	$channels{uri_escape(186)} = "BBC four";
-	$channels{uri_escape(187)} = "cbbc";
-	$channels{uri_escape(188)} = "CBeebies";
-	$channels{uri_escape(197)} = "romance tv";
-	$channels{uri_escape(198)} = "BBC one";
-	$channels{uri_escape(199)} = "BBC two";
-	$channels{uri_escape(240)} = "BBC HD";
-	$channels{uri_escape(241)} = "ORF 1 HD";	
     
     return %channels;
 }
