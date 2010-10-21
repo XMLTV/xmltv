@@ -131,6 +131,13 @@ The file is encoded in iso-8859 but contains characters that
 have no meaning in iso-8859 (or are control characters).
 If it's iso-8859-1 aka Latin 1 it might be some characters in windows-1252 encoding.
 
+=item badutf8
+
+The file is encoded in utf-8 but contains characters that look strange.
+1) Mis-encoded single characters represented with [EF][BF][BD] bytes
+2) Mis-encoded single characters represented with [C3][AF][C2][BF][C2][BD] bytes
+3) Mis-encoded single characters in range [C2][80-9F]
+
 =back
 
 If no errors are found, an empty list is returned.
@@ -171,8 +178,10 @@ sub ValidateFile {
 	return (keys %errors);
     }
 
-    if( $doc->encoding() =~ m/iso-8859-\d+/i ) {
+    if( $doc->encoding() =~ m/^iso-8859-\d+$/i ) {
 	verify_iso8859xx( $file, $doc->encoding() );
+    } elsif( $doc->encoding() =~ m/^utf-8$/i ) {
+	verify_utf8( $file );
     }
     verify_entities( $file );
 
@@ -345,6 +354,42 @@ sub verify_iso8859xx
                . sprintf( "\n%*s", 12+length( $hintpre ) , "^" )
                , 'badiso8859' );
         }
+    }
+
+    return 1;
+}
+
+# inspired by utf8 fixups in _uk_rt
+sub verify_utf8 {
+    my( $filename ) = @_;
+
+    my $file_str = read_file($filename);
+
+    # 1) Mis-encoded single characters represented with [EF][BF][BD] bytes
+    if( $file_str =~ m/\xEF\xBF\xBD]/ ) {
+        my ($hintpre, $hint, $hintpost) = ( $file_str =~ m/(.{0,15})(\xEF\xBF\xBD)(.{0,15})/ );
+        w( "file contains misencoded characters"
+           . "\nlook here \"" . $hintpre . $hint . $hintpost . "\""
+           . sprintf( "\n%*s", 12+length( $hintpre ) , "^" )
+           , 'badutf8' );
+    }
+
+    # 2) Mis-encoded single characters represented with [C3][AF][C2][BF][C2][BD] bytes
+    if( $file_str =~ m/\xC3\xAF\xC2\xBF\xC2\xBD/ ) {
+        my ($hintpre, $hint, $hintpost) = ( $file_str =~ m/(.{0,15})(\xC3\xAF\xC2\xBF\xC2\xBD)(.{0,15})/ );
+        w( "file contains misencoded characters"
+           . "\nlook here \"" . $hintpre . $hint . $hintpost . "\""
+           . sprintf( "\n%*s", 12+length( $hintpre ) , "^" )
+           , 'badutf8' );
+    }
+
+    # 3) Mis-encoded single characters in range [C2][80-9F]
+    if( $file_str =~ m/\xC2[\x80-\x9F]/ ) {
+        my ($hintpre, $hint, $hintpost) = ( $file_str =~ m/(.{0,15})(\xC2[\x80-\x9F])(.{0,15})/ );
+        w( "file contains unexpected control characters, misencoded windows-1252?"
+           . "\nlook here \"" . $hintpre . $hint . $hintpost . "\""
+           . sprintf( "\n%*s", 12+length( $hintpre ) , "^" )
+           , 'badutf8' );
     }
 
     return 1;
