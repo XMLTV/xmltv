@@ -183,6 +183,15 @@ If no errors are found, an empty list is returned.
 sub ValidateGrabber {
     my( $shortname, $exe, $conf, $op, $sharedir, $usecache ) = @_;
 
+    # if sharedir contains 'blib' we should prepend the relevant development paths!
+    if( $sharedir =~ m|/blib/share/$| ) {
+      my( $blib )=( $sharedir =~ m|^(.*/blib)/share/$| );
+
+      use Env qw(@PATH @PERL5LIB);
+      unshift( @PATH, $blib . '/script' );
+      unshift( @PERL5LIB, $blib . '/lib' );
+    }
+
     my @errors;
     open( $runfh, ">${op}commands.log" )
 	or die "Failed to write to ${op}commands.log";
