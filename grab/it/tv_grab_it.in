@@ -62,6 +62,9 @@
 # 18/10/2010
 # aggiunto backend la7 e riattivato mtv.it (grazie gpancot)
 # aggiunto backend mediaset
+# 25/10/2010
+# patch da mennucc per possibili errori di parsing di data
+# patch da wyrdmeister per aggiungere la7d e un fix per raiit
 #################################################
 # TODO
 # - add more informative errors in xml
@@ -912,15 +915,23 @@ sub boingtv_fetch_data {
     my @programmes = ();
     warn "VERBOSE: parsing...\n" if ($opt_verbose);
     my @lines = split /\n/, $content;
-
+    my $title = '';
+    my $time_start = '';
+    my $description = '';
     #split the lines
     foreach my $line (@lines) {
 		next unless $line=~/EVENT/;
 		$line=~/timestamp="(.*?)".*name="(.*?)".*description="(.*?)"/;
 
         my %programme = ();
-        my ($title, $time_start, $description) = ($2, utc_offset($1.'00', '+0100'), $3);
 
+        eval {
+            ($title, $time_start, $description) = ($2, utc_offset($1.'00', '+0100'), $3) ;
+	} or do {
+            warn 'skipping programme, error: ' . $@ ;
+            next ;
+        };
+   
         # Three mandatory fields: title, start, channel.
         if (not defined $title) {
             warn 'no title found, skipping programme';
@@ -2357,7 +2368,7 @@ sub raiit_fetch_data {
         next unless $start; 
         next unless $title;        
         my $start2=$start; $start2=~s/:/\./;
-        if ($start2 <=7 and $start2>=0) { #they can work as decimals, 0.32 < 23.44
+        if ($start2 <6 and $start2>=0) { #they can work as decimals, 0.32 < 23.44
 	         push @prog_to_check, [$title, $tomorrowdate." ".$start];
 	      }
 	      else {
@@ -2993,7 +3004,7 @@ sub k2_fetch_data {
 # _get_channels_list
 # since this site only has one channel this is a fake sub
 sub la7_get_channels_list {
-    my %chan_hash = ( 'la7' ,'www.la7.it');
+    my %chan_hash = ( 'La7' ,'www.la7.it', 'La7D', 'www.la7d.it');
 
     return %chan_hash;
 }
@@ -3006,8 +3017,16 @@ sub la7_fetch_data {
     my ($xmltv_id, $offset) = @_;
     my $content;
 
-    my $url = $backend_info{la7}{base_data}.$offset.'.html';  
+    # adds today date after url to avoid using today's data for tomorrow
+    my $cachestring = "?pippo=".UnixDate("today","%Y%m%d");
+
+    my $url = $backend_info{la7}{base_data}.$offset.'.html'.$cachestring;  
     $url=~ s/index_0/index/;
+
+
+    warn ($DEF_LANG eq 'eng' ?
+	      "VERBOSE: fetching $url\n" :
+	      "VERBOSE: scarico $url\n") if ($opt_verbose);
 
     eval { $content=get_nice($url) };
     if ($@) {   #get_nice has died
@@ -3018,17 +3037,26 @@ sub la7_fetch_data {
     my @programmes = ();
 
     my @lines = split /<li>\n<div class=\"sx\">\n/, $content;
+
+    my $got_la7d = 0;
     
     foreach my $line (@lines) {
 
-        # only la7, not la7d
-        last if ($line=~/switch_la7 la7d/); 
+        # Reach La7D
+        if( !$got_la7d && $xmltv_id eq 'www.la7d.it' ) {
+            next unless ($line =~ /<div id=\"palinsesto_la7d\"/);
+            $got_la7d = 1;
+            next;
+        }
+
+        # Reach begin of programs
         next unless $line=~/<p class=\"ora/;
 
         my %programme = ();
-        $line=~/<p class=\"ora\">(.*?)<\/p>\n<h5>\n(.*?)\n<\/h5>/;
-        $line=~/<p class=\"ora\">(.*?)<\/p>\n<h5>\n<a.*\">\n(.*?)\n<\/a>/;
-        my ($time_start, $title) = ($1,$2);
+        
+        $line=~/<p class=\"ora\">(.*?)<\/p>\n<h5>\n(.*?)\n<\/h5>.*?\n.*?\n.*?\n.*?\n(.*?)\n/m;
+        $line=~/<p class=\"ora\">(.*?)<\/p>\n<h5>\n<a.*\">\n(.*?)\n<\/a>.*?\n.*?\n.*?\n.*?\n.*?\n(.*?)\n/m;
+        my ($time_start, $title, $desc) = ($1,$2, $3);
 
         # Three mandatory fields: title, start, channel.
         if (not defined $title) {
@@ -3053,9 +3081,17 @@ sub la7_fetch_data {
     
         $programme{start}=$time_start;#xmltv_date($time_start, $offset + $past_midnight);
         $programme{channel}=$xmltv_id;
-
+	$programme{desc}=[[tidy($desc), $LANG ]] if (defined $desc and $desc ne '');
+	
         #put info in array
         push @programmes, {%programme};
+
+        # This check must be at the end of the cycle,
+        # otherwise we loose the last program of every day
+        if( $xmltv_id eq 'www.la7.it' ) {
+            # Stop at the end of La7
+            last if ($line =~ /<div id=\"palinsesto_la7d\"/);
+        }
     
     }
 
