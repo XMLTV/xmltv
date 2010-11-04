@@ -1,0 +1,601 @@
+#!/usr/bin/perl -w
+
+=pod
+
+=head1 NAME
+
+tv_grab_fi_sv - Grab TV listings for Finland in Swedish.
+
+=head1 SYNOPSIS
+
+tv_grab_fi_sv --help
+	
+tv_grab_fi_sv --version
+
+tv_grab_fi_sv --capabilities
+
+tv_grab_fi_sv --description
+
+tv_grab_fi_sv [--config-file FILE]
+              [--days N] [--offset N]
+              [--output FILE] [--quiet] [--debug]
+
+tv_grab_fi_sv --configure [--config-file FILE]
+
+tv_grab_fi_sv --configure-api [--stage NAME]
+              [--config-file FILE] [--output FILE]
+
+tv_grab_fi_sv --list-channels [--config-file FILE]
+              [--output FILE] [--quiet] [--debug]
+
+=head1 DESCRIPTION
+
+Retrieves and displays TV listings for the Finnish YLE channels plus some of
+the most popular commercial channels. The data comes from www.yle.fi and the
+Swedish listings are retrieved rather than the Finnish. Just like tv_grab_fi,
+this grabber relies on parsing HTML so it could very well stop working at any
+time. You have been warned.
+
+=head1 OPTIONS
+
+B<--help> Print a help message and exit.
+
+B<--version> Show the versions of the XMLTV libraries, the grabber and of
+key modules used for processing listings.
+
+B<--capabilities> Show which capabilities the grabber supports. For more
+information, see L<http://xmltv.org/wiki/xmltvcapabilities.html>
+
+B<--description> Show a brief description of the grabber.
+
+B<--config-file FILE> Specify the name of the configuration file to use. 
+If not specified, a default of B<~/.xmltv/tv_grab_fi_sv.conf> is used.  This 
+is the file written by B<--configure> and read when grabbing.
+
+B<--output FILE> When grabbing, write output to FILE rather than to standard
+output.
+
+B<--days N> When grabbing, grab N days of data instead of all available.
+Supported values are 1-14.
+
+B<--offset N> Start grabbing at today + N days. Supported values are 0-13.
+
+=head1 SEE ALSO
+
+L<xmltv(5)>.
+
+=head1 AUTHOR
+
+Per Lundberg, (perlun at gmail dot com). Inspired/based on other grabbers,
+like tv_grab_uk_rt, tv_grab_se_swedb and tv_grab_fi.
+
+=cut
+
+use strict;
+use 5.010; 	# We need this for the ~~ operator.
+
+use Date::Manip::Date;
+use IO::Scalar;
+use LWP::UserAgent;
+use XML::LibXML;
+use XMLTV::Ask qw/say/;
+use XMLTV::Configure::Writer;
+use XMLTV::DST;
+use XMLTV::Options qw/ParseOptions/;
+
+sub t;
+
+# Constants.
+my $DATA_SITE_ROOT  = 'http://svenska.yle.fi/programguide/';
+my $GRABBER_NAME    = 'tv_grab_fi_sv';
+my $GRABBER_VERSION = '0.99';
+my $XML_ENCODING    = 'iso-8859-1';
+my $LANGUAGE_CODE   = 'sv';
+
+# FIXME This is really crazy. I *should* be setting this to EET, since that's
+# the "correct" timezone for these listings. But the problem if I do so is that
+# the time offset becomes +0400 in the listings, which is very very wrong;
+# Finland (or EET rather) never has this offset. It has +0200 in the winter
+# and +0300 in summer (DST). So, I have to set this to an incorrect value to
+# get proper output data... which is really, really crazy.	
+# TODO consider switching to DateTime if no sensible solution is found
+my $TIMEZONE        = 'CET'; 	# This is not the timezone for the machine on
+				# which the grabber is being run, but rather
+				# the timezone in which all the grabbed data
+				# is being specified.
+
+# Attributes of the root element in output.
+my $xmltv_attributes =
+{
+     'source-info-url'     => 'http://www.yle.fi/',
+     'source-data-url'     => "$DATA_SITE_ROOT/",
+     'generator-info-name' => "XMLTV/$XMLTV::VERSION, $GRABBER_NAME $GRABBER_VERSION",
+     'generator-info-url'  => 'http://www.xmltv.org',
+};
+
+# Set up LWP::UserAgent
+my $ua = LWP::UserAgent->new;
+$ua->agent("xmltv/$XMLTV::VERSION");
+
+# The list of channels available from the Yle Program Guide. Their names are
+# deliberately specified in a manner which would be normal for people watching
+# e.g. TV channels from Sweden (so that "TV1" would not necessarily refer to
+# Yle's TV1 channel - thus, the need for the "Yle" prefixing here).
+#
+# The key in this hash is the name of the channel as given on the Yle program guide
+# web page.
+my $channels =
+{
+   'tv1.yle.fi' => {
+		    'id' => 'tv1.yle.fi',
+		    'group' => 2,
+		    'display-name' => [[ 'Yle TV1', $LANGUAGE_CODE ]]
+	    },
+   'tv2.yle.fi' => {
+		    'id' => 'tv2.yle.fi',
+		    'group' => 2,
+		    'display-name' => [[ 'Yle TV2', $LANGUAGE_CODE ]]
+	    },
+   'mtv3.yle.fi' => {
+		    'id' => 'mtv3.yle.fi',
+		    'group' => 3,
+		    'display-name' => [[ 'MTV3', $LANGUAGE_CODE ]]
+	     },
+   'nelonen.yle.fi' => {
+		    'id' => 'nelonen.yle.fi',
+		    'group' => 3,
+		    'display-name' => [[ 'Nelonen (Fyran)', $LANGUAGE_CODE ]]
+		},
+   'teema.yle.fi' => {
+                    'id' => 'teema.yle.fi',                    
+                    'group' => 2,
+                    'display-name' => [[ 'YLE Teema', $LANGUAGE_CODE ]]
+                   },
+   'fst5.yle.fi' => {
+                    'id' => 'fst5.yle.fi',
+                    'group' => 2,
+                    'display-name' => [[ 'FST5', $LANGUAGE_CODE ]]
+	     },
+   'subtv.yle.fi' => {
+                    'id' => 'subtv.yle.fi',
+                    'group' => 3,
+                    'display-name' => [[ 'Subtv', $LANGUAGE_CODE ]]
+	     },
+   'jim.yle.fi' => {
+                    'id' => 'jim.yle.fi',
+                    'group' => 3,
+                    'display-name' => [[ 'JIM', $LANGUAGE_CODE ]]
+	     },
+   
+   # The Swedish YLE web page is a bit outdated when it comes to this channel; it was
+   # renamed to Nelonen Sport (4 Sport) a while back... :-)
+   'nelonen.sport.yle.fi' => {
+                    'id' => 'nelonen.sport.yle.fi',
+                    'group' => 3,
+                    'display-name' => [[ 'JIM', $LANGUAGE_CODE ]]
+		      }
+};
+
+# Map between channel names (as presented by the YLE data) and channel IDs, as
+# create by us.
+my $channel_name_map =
+{
+   'TV1' => 'tv1.yle.fi',
+   'TV2' => 'tv2.yle.fi',
+   'MTV3' => 'mtv3.yle.fi',
+   'Nelonen' => 'nelonen.yle.fi',
+   'YLE Teema' => 'teema.yle.fi',
+   'FST5' => 'fst5.yle.fi',
+   'Subtv' => 'subtv.yle.fi',
+   'JIM' => 'jim.yle.fi',
+   
+   # See note above about this one.
+   'Urheilukanava' => 'nelonen.sport.yle.fi'
+};
+
+my @ARGUMENTS = @ARGV;
+
+# Parse the standard XMLTV grabber options, using the XMLTV module.
+my ($opt, $conf) = ParseOptions(
+{
+     grabber_name => "tv_grab_fi_sv",
+     capabilities => [qw/baseline manualconfig apiconfig/],
+     stage_sub => \&config_stage,
+     listchannels_sub => \&list_channels,
+     version => '$Id$',
+     description => "Finland (Swedish)",
+});
+
+t("Command line arguments: " . join(' ', @ARGUMENTS));
+
+# When we get here, we know that we are invoked in such a way that the channel
+# data should be grabbed.
+
+# Configure the output and write the XMLTV data - header, channels, listings,
+# and footer
+my $writer;
+setup_xmltv_writer();
+write_xmltv_header();
+write_channel_list(@{ $conf->{channel} });
+write_listings_data(@{ $conf->{channel} });
+write_xmltv_footer();
+
+# For the moment, we always claim that we've exited successfully...
+exit 0;
+
+sub t
+{
+    my $message = shift;
+    print STDERR $message . "\n" if $opt->{debug};
+}
+
+sub config_stage
+{
+     my($stage, $conf) = shift;
+
+     die "Unknown stage $stage" if $stage ne "start";
+
+     # This grabber doesn't need any configuration (except for possibly channel,
+     # selection), so this subroutine doesn't need to do very much at all.
+     my $result;
+     my $writer = new XMLTV::Configure::Writer(OUTPUT => \$result,
+                                               encoding => 'iso-8859-1');
+     $writer->start({ grabber => 'tv_grab_fi_sv' });
+     $writer->end('select-channels');
+
+     return $result;
+}
+
+# Returns a string containing an xml-document with <channel>-elements
+# for all available channels.
+sub list_channels
+{
+     my ($conf, $opt) = shift;
+
+     my $result = '';
+     my $fh = new IO::Scalar \$result;
+     my $oldfh = select($fh);
+
+     # Create an XMLTV::Writer object. The important part here is that the output
+     # should go to $fh (in other words, to the $result string), NOT to
+     # stdout...
+     my %writer_args = 
+     (
+          encoding => 'ISO-8859-1',
+          OUTPUT => $fh
+     );
+
+    my $writer = new XMLTV::Writer(%writer_args);
+    $writer->start($xmltv_attributes);  
+
+    # Loop over all channels and write them to this XMLTV::Writer.
+    foreach my $channel_id (keys %{ $channels }) 
+    {
+	# We must remove our proprietary hash key here, otherwise XMLTV will barf
+	# at us...
+	my $channel = $channels->{$channel_id};
+	delete($channel->{group});
+	
+        $writer->write_channel($channel);
+    }
+
+    $writer->end;
+
+    select($oldfh);
+    $fh->close();
+
+    return $result;
+}
+
+# Determine options for, and create XMLTV::Writer object
+
+sub setup_xmltv_writer
+{
+    # output options
+    my %g_args = ();
+    if (defined $opt->{output})
+    {
+        t("\nOpening XML output file '$opt->{output}'\n");
+        my $fh = new IO::File ">$opt->{output}";
+        die "Error: Cannot write to '$opt->{output}', exiting" if (!$fh);
+        %g_args = (OUTPUT => $fh);
+    }
+
+    # Determine how many days of listings are required and range-check, applying
+    # default values if impossible. If --days or --offset is specified we must
+    # ensure that the values for days, offset and cutoff are passed to
+    # XMLTV::Writer.
+    my %d_args = ();
+    if (defined $opt->{days} || defined $opt->{offset})
+    {
+        if (defined $opt->{days})
+        {
+            if ($opt->{days} < 1 || $opt->{days} > 14)
+            {
+                if (!$opt->{quiet})
+                {
+                    say("Specified --days option is not possible (1-14). " .
+                        "Retrieving all available listings.");
+                }
+                $opt->{days} = 14
+            }
+        }
+        else
+        {
+            # No --days parameter were given. Use the default.
+            $opt->{days} = 14;
+        }
+
+        if (defined $opt->{offset})
+        {
+            if ($opt->{offset} < 0 || $opt->{offset} > 13)
+            {
+                if (!$opt->{quiet})
+                {
+                    say("Specified --offset option is not possible (0-13). "
+                      . "Retrieving all available listings.");
+                }
+                $opt->{offset} = 0;
+            }
+        }
+        else
+        {
+            $opt->{offset} = 0;
+        }
+    }
+
+    t("Setting up XMLTV::Writer using \"" . $XML_ENCODING . "\" for output");
+    $writer = new XMLTV::Writer(%g_args, %d_args, encoding => $XML_ENCODING);
+}
+
+# Writes the XMLTV header.
+sub write_xmltv_header
+{
+    t("Writing XMLTV header");
+    $writer->start($xmltv_attributes);
+}
+
+# Writes the channel list (of all configured channels).
+sub write_channel_list
+{
+    my (@channels) = @_;
+    
+    t("Started writing <channel> elements");
+    foreach my $channel_id (@channels)
+    {
+	# We must remove our proprietary hash key here, otherwise XMLTV will barf
+	# at us...
+	my $channel = $channels->{$channel_id};
+	my $group = $channel->{group};
+	delete($channel->{group});
+	 
+        $writer->write_channel($channel);
+        
+        # Put it back, since we'll need it later.
+        $channel->{group} = $group;
+    }
+    t("Finished writing <channel> elements");
+}
+
+# Download listings data for all the configured channels
+sub write_listings_data
+{ 
+    my (@channels) = @_;
+    
+    if (!$opt->{quiet})
+    {
+        my $number_of_channels = scalar @channels;    
+        say("Will download listings for $number_of_channels configured channels\n");
+    }
+    
+    my $channel_groups = {};
+    
+    foreach my $channel (@channels)
+    {
+	# Get the channel group for this channel and check if the group has already
+	# been fetched.
+	my $channel_group = $channels->{$channel}->{group};
+	
+	if (defined($channel_groups->{channel_group}))
+	{
+	    # Group has been fetched already - ignoring it.
+	    next;
+	}
+
+	# Mark the group as fetched.
+	$channel_groups->{channel_group} = 1;
+
+	my $today = new Date::Manip::Date("today");
+     
+        if (!$opt->{quiet})
+        {
+          say("Downloading data for channel group $channel_group");
+        }
+                
+        for (my $i = $opt->{offset}; $i < $opt->{offset} + $opt->{days}; $i++)
+        {
+            # Create the URL for the schedules for this channel/month/day
+            # combination.
+            my $delta = $today->new_delta("$i days");            
+            my $date = $today->calc($delta);
+            
+            my $url = sprintf("%s?g=%s&d=%s", $DATA_SITE_ROOT,
+                              $channel_group, $date->printf('%Y%m%d'));
+	    
+            if ($opt->{debug})
+            {
+               say("Downloading $url");
+            }
+	    
+            # Get the HTML from the created URL.
+            my $response = $ua->get($url);
+            my $file_contents = $response->decoded_content;
+
+	    # Grab the table with program contents from the HTML.
+	    my ($program_contents) =
+		($file_contents =~ m%(<table id="programmes".+?>.+?</table>)%s);
+
+	    # We do the parsing with the XML::LibXML() library. I prefer doing it like
+	    # this, rather than setting up a bunch of pretty silly regexps.
+	    my $xml = new XML::LibXML();
+	    
+	    # We need to enable recovery, since the data is known to contain
+	    # standalone ampersands, for example (which is an atrocity in XML).
+	    my $doc = $xml->parse_html_string($program_contents, 
+		{ 
+		    'recover' => 1,
+		    'suppress_warnings' => 1,
+		    'suppress_errors' => 1
+		});
+
+	    my $programs = $doc->find('//div[starts-with(@class, "programme")]');
+	        
+	    foreach my $program ($programs->get_nodelist())
+	    {
+		# Get all the nodes for this program. Everything we need is found
+		# below the "description" div, so we use this as the foundation here.
+		my @programNodes = 
+		    $program->find('div[@class="description"]')->[0]->childNodes();
+		my $description = "";
+		my $title = "";
+		my $desc_time = "";
+		
+		# Loop over the program nodes and grab out the data from the
+		# relevant nodes.
+		foreach my $programNode (@programNodes)
+		{
+		    my $nodeType = ref($programNode);
+			
+		    if ($nodeType eq 'XML::LibXML::Text')
+		    {
+		       $description = $programNode->data;
+		    }
+		    else
+		    {
+			my $class = $programNode->getAttribute("class");
+			
+			if (defined($class))
+			{			
+			    if ($class eq 'desc_title')
+			    {
+				$title = $programNode->to_literal;
+			    }
+			    elsif ($class eq 'desc_time')
+			    {
+				# We don't call this variable just "time" since its
+				# format looks like this:
+				#
+				# MTV3 01.05 - 02.05
+				$desc_time = $programNode->to_literal;
+			    }
+			}
+		    }
+		}
+		
+		my ($channel_name, $start_time, $end_time) = 
+		    ($desc_time) =~ m/^(.+?) (\d{2}\.\d{2}) - (\d{2}\.\d{2})$/;
+		    
+		# Check if this program belongs to one of the configured channels.
+		# If it doesn't, ignore it. (Since the data is provided to us in
+		# channel groups, we cannot do it much better than this.)
+		my $channel_id = $channel_name_map->{$channel_name};		    
+                # TODO this could be done with a lookup to a hash
+		unless ($channel_id ~~ @channels)
+		{
+		    next;
+		}
+     
+		# Create the data structure for the program.
+		my $program = 
+		{
+		    'channel' => $channel_id,
+		    'title' => [[ $title, $LANGUAGE_CODE ]],
+		    'start' => utc_offset(xmltv_time($date, $start_time), $TIMEZONE),
+		    'stop' => utc_offset(xmltv_end_time($date, $start_time,
+					$end_time), $TIMEZONE)
+		};
+		
+		if ($description ne '')
+		{
+		    $program->{desc} = [[ $description, $LANGUAGE_CODE ]];
+		}		
+	
+	        # All data has been gathered. We can now write the program element to
+	        # the output. (This could be changed into a "two-pass" operation if
+	        # wanted, so that all the data is gathered first and written to the
+	        # output afterwards.)
+		$writer->write_programme($program);
+	    }
+        }
+    }
+}
+
+# Writes the XMLTV footer.
+sub write_xmltv_footer
+{
+    t("\nWriting XMLTV footer\n");
+    $writer->end;
+}
+
+# Trim function to remove whitespace from the start and end of the string
+sub trim ($)
+{
+    my $string = shift;
+    $string =~ s/^\s+//;
+    $string =~ s/\s+$//;
+    return $string;
+}
+
+# Left trim function to remove leading whitespace
+sub ltrim ($)
+{
+    my $string = shift;
+    $string =~ s/^\s+//;
+    return $string;
+}
+
+# Strips HTML tags from a string
+sub strip_tags ($)
+{
+    my $string = shift;
+    $string =~ s/<(?:[^>'"]*|(['"]).*?\1)*>//gs;
+    return $string;
+}
+
+# Converts a date + time of the form "09.45" to something suitable for XMLTV, i.e.
+# 201010270945
+sub xmltv_time ($$)
+{
+    my $date = shift;
+    my $time = shift;
+    
+    $time =~ s/\.//g;
+    
+    return $date->printf("%Y%m%d") . $time . "00";
+}
+
+# Converts a date + time of the form "09.45" to something suitable for XMLTV, i.e.
+# 201010270945, and handle special semantics for an "end time" (related to date
+# rollovers).
+sub xmltv_end_time ($$)
+{
+    my $date = shift;
+    my $start_time = shift;
+   my $end_time = shift;
+ 
+    # Get rid of the period character.
+    $start_time =~ s/\.//g;
+    $end_time =~ s/\.//g;
+    
+    # Now, the times should be straight numbers, and numbers can be arithmetically
+    # compared, can they not? :-)
+    if ($end_time < $start_time)
+    {	
+	# This program is spanning across a date boundary. We need to increase the
+	# date part so that the end time gets produced correctly.
+	my $delta = $date->new_delta("1 day");
+	$date = $date->calc($delta);
+    }
+    
+    return xmltv_time($date, $end_time);
+}

@@ -469,6 +469,16 @@ my @opt_components
        exes => [ 'grab/fi/tv_grab_fi' ],
        prereqs => { 'HTML::TreeBuilder' => 0 } },
 
+     { name     => 'tv_grab_fi_sv',
+       blurb    => 'Grabber for Finland (Swedish)',
+       exes     => [ 'grab/fi_sv/tv_grab_fi_sv' ],
+       prereqs  => {
+                     'Date::Manip' => 6.00,
+                     'IO::Stringy' => 0,
+                     'XML::LibXML' => 0,
+          },
+     },
+
 # 2009-03-08 removed due to breakage after source site changes
 #     { name => 'tv_grab_es',
 #       blurb => 'Grabber for Spain - Analogic Terrestrial/Cable',
