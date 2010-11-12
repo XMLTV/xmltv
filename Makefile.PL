@@ -363,7 +363,11 @@ my @opt_components
                         'grab/uk_rt/channels_platforms'
                            => 'tv_grab_uk_rt/channels_platforms',
                         'grab/uk_rt/utf8_fixups'
-                           => 'tv_grab_uk_rt/utf8_fixups', },
+                           => 'tv_grab_uk_rt/utf8_fixups',
+                        'grab/uk_rt/lineups/freeview.map'
+                           => 'tv_grab_uk_rt/lineups/freeview.map',
+                        'grab/uk_rt/lineups/freesat.map'
+                           => 'tv_grab_uk_rt/lineups/freesat.map', },
        to_clean => [ 'grab/uk_rt/tv_grab_uk_rt' ],
        deps => [ 'grab/uk_rt/tv_grab_uk_rt' 
                     => [ 'grab/uk_rt/tv_grab_uk_rt.in' ] ],
