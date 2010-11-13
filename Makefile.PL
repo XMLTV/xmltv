@@ -477,7 +477,7 @@ my @opt_components
        blurb    => 'Grabber for Finland (Swedish)',
        exes     => [ 'grab/fi_sv/tv_grab_fi_sv' ],
        prereqs  => {
-                     'Date::Manip' => 6.00,
+                     'DateTime'    => 0,
                      'IO::Stringy' => 0,
                      'XML::LibXML' => 0,
           },

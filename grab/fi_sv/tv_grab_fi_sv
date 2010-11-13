@@ -73,13 +73,12 @@ like tv_grab_uk_rt, tv_grab_se_swedb and tv_grab_fi.
 
 use strict;
 
-use Date::Manip::Date;
+use DateTime;
 use IO::Scalar;
 use LWP::UserAgent;
 use XML::LibXML;
 use XMLTV::Ask qw/say/;
 use XMLTV::Configure::Writer;
-use XMLTV::DST;
 use XMLTV::Options qw/ParseOptions/;
 
 sub t;
@@ -91,17 +90,10 @@ my $GRABBER_VERSION = '0.99';
 my $XML_ENCODING    = 'windows-1252';
 my $LANGUAGE_CODE   = 'sv';
 
-# FIXME This is really crazy. I *should* be setting this to EET, since that's
-# the "correct" timezone for these listings. But the problem if I do so is that
-# the time offset becomes +0400 in the listings, which is very very wrong;
-# Finland (or EET rather) never has this offset. It has +0200 in the winter
-# and +0300 in summer (DST). So, I have to set this to an incorrect value to
-# get proper output data... which is really, really crazy.	
-# TODO consider switching to DateTime if no sensible solution is found
-my $TIMEZONE        = 'CET'; 	# This is not the timezone for the machine on
-				# which the grabber is being run, but rather
-				# the timezone in which all the grabbed data
-				# is being specified.
+# This is not the timezone for the machine on which the grabber is being
+# run, but rather the timezone in which all the grabbed data is being
+# specified.
+my $TIMEZONE = 'Europe/Helsinki';
 
 # Attributes of the root element in output.
 my $xmltv_attributes =
@@ -407,7 +399,7 @@ sub write_listings_data
 	# Mark the group as fetched.
 	$channel_groups->{$channel_group} = 1;
 
-	my $today = new Date::Manip::Date("today");
+	my $today = DateTime->today( time_zone => $TIMEZONE );
      
         if (!$opt->{quiet})
         {
@@ -418,11 +410,10 @@ sub write_listings_data
         {
             # Create the URL for the schedules for this channel/month/day
             # combination.
-            my $delta = $today->new_delta("$i days");            
-            my $date = $today->calc($delta);
+            my $date = $today->clone->add( days => $i );
             
             my $url = sprintf("%s?g=%s&d=%s", $DATA_SITE_ROOT,
-                              $channel_group, $date->printf('%Y%m%d'));
+                              $channel_group, $date->strftime( '%Y%m%d' ));
 	    
             if ($opt->{debug})
             {
@@ -511,9 +502,9 @@ sub write_listings_data
 		{
 		    'channel' => $channel_id,
 		    'title' => [[ $title, $LANGUAGE_CODE ]],
-		    'start' => utc_offset(xmltv_time($date, $start_time), $TIMEZONE),
-		    'stop' => utc_offset(xmltv_end_time($date, $start_time,
-					$end_time), $TIMEZONE)
+		    'start' => xmltv_time($date, $start_time),
+		    'stop' => xmltv_end_time($date, $start_time,
+					$end_time)
 		};
 		
 		if ($description ne '')
@@ -563,16 +554,19 @@ sub strip_tags ($)
     return $string;
 }
 
-# Converts a date + time of the form "09.45" to something suitable for XMLTV, i.e.
-# 201010270945
+# Converts a DateTime + time of the form "09.45" to something suitable for XMLTV, i.e.
+# 201010270945 +0300
 sub xmltv_time ($$)
 {
     my $date = shift;
     my $time = shift;
+
+    my( $hour, $minute )=( $time =~ m|^(\d+)\.(\d+)$| );
+    my $dt=$date->clone();
+    $dt->set_hour( $hour );
+    $dt->set_minute( $minute );
     
-    $time =~ s/\.//g;
-    
-    return $date->printf("%Y%m%d") . $time . "00";
+    return $dt->strftime( '%Y%m%d%H%M%S %z' );
 }
 
 # Converts a date + time of the form "09.45" to something suitable for XMLTV, i.e.
@@ -582,21 +576,14 @@ sub xmltv_end_time ($$)
 {
     my $date = shift;
     my $start_time = shift;
-   my $end_time = shift;
+    my $end_time = shift;
  
-    # Get rid of the period character.
-    $start_time =~ s/\.//g;
-    $end_time =~ s/\.//g;
-    
-    # Now, the times should be straight numbers, and numbers can be arithmetically
-    # compared, can they not? :-)
-    if ($end_time < $start_time)
-    {	
+    if ($end_time lt $start_time) {	
 	# This program is spanning across a date boundary. We need to increase the
 	# date part so that the end time gets produced correctly.
-	my $delta = $date->new_delta("1 day");
-	$date = $date->calc($delta);
+        # Due to the call by value this adjustment is only for this timestamp!
+        $date->add( days => 1 );
     }
-    
-    return xmltv_time($date, $end_time);
+
+    return xmltv_time( $date, $end_time );
 }
