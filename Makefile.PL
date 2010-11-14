@@ -440,7 +440,7 @@ my @opt_components
        blurb => 'Grabber for India (zipazap.com)',
        exes     => [ 'grab/in/tv_grab_in' ],
        prereqs => { 'XML::LibXML' => 0,
-                    'IO::Stringy' => 0,
+                    'IO::Scalar' => 0,
                   },
      },
 
@@ -492,7 +492,7 @@ my @opt_components
      { name => 'tv_grab_il',
        blurb => 'Grabber for Israel',
        exes => [ 'grab/il/tv_grab_il' ],
-       prereqs => {'Text::Iconv' => 0 } },
+     },
 #
 #
 # tv_grab_es_digital no longer functioning due to site changes
