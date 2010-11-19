@@ -3284,11 +3284,14 @@ sub write_listings_data {
                 my $title_nopunc = lc $prog{'_title'};
                 $title_nopunc =~ s/^the\s+//;
                 $title_nopunc =~ s/(\s+and\s+|\s+&\s+)/ /g;
+                $title_nopunc =~ s/' //g;
+                $title_nopunc =~ s/'s/s/g;
                 $title_nopunc =~ s/\W//g;
                 # count number of each variant by genre and channel name
                 my $tmp_genre;
                 $tmp_genre = $prog{'_genre'}; $tmp_genre = "No Genre" if not defined $tmp_genre;
                 $case_insens_titles{$title_nopunc}{$prog{'_title'}}{$tmp_genre}{$rt_name}++;
+                $case_insens_titles{$title_nopunc}{$prog{'_title'}}{'count'}++;
             }
             
             # For non-films which may contain subtitle/episode information in
@@ -3798,10 +3801,40 @@ sub write_xmltv_footer {
 sub print_titles_with_colons {
     if (%prog_titles) {
         say("\nStart of list of titles containing colons");
+        my %precolon;  # store the title elements that appear before and
+        my %postcolon; # after the first colon with the full title
         foreach my $title (sort keys %prog_titles) {
-            if ($title =~ m/:/) {
+            if ($title =~ m/^([^:]+)\s*:\s*(.*)$/) {
+                push @{$precolon{$1}}, $title;
+                push @{$postcolon{$2}}, $title;
                 say("  $title");
             }
+        }
+
+        # now store the possible fixups if we see more than 1 title having 
+        # common pre/post colon text.
+        my @prefixups;
+        foreach my $text (sort keys %precolon) {
+            if (@{$precolon{$text}} > 1) {
+                push @prefixups, "2|" . $text
+            }
+        }
+        if (@prefixups) {
+            say("\nPossible fixups for title:episode :\n");
+            say($_) foreach sort @prefixups;
+            say("");
+        }
+
+        my @postfixups;
+        foreach my $text (sort keys %postcolon) {
+            if (@{$postcolon{$text}} > 1) {
+                push @postfixups, "3|" . $text
+            }
+        }
+        if (@postfixups) {
+            say("\nPossible fixups for episode:title :\n");
+            say($_) foreach sort @postfixups;
+            say("");
         }
         say("End of list of titles containing colons");
     }
@@ -3810,6 +3843,7 @@ sub print_titles_with_colons {
 sub print_titles_with_hyphens {
     if (%prog_titles) {
         say("\nStart of list of titles containing hyphens");
+        my @fixups;
         foreach my $title (sort keys %prog_titles) {
             if ($title =~ m/\s+-\s+/) {
                 say("  $title");
@@ -3819,9 +3853,14 @@ sub print_titles_with_hyphens {
                 if ($idx_colon == -1 || $idx_hyphen < $idx_colon) {
                     my $rec_title = $title;
                     $rec_title =~ s/\s+-\s+/: /;
-                    say("    => \"5|" . $title . "~" . $rec_title . "\" (suggested fixup)");
+                    push @fixups, "5|" . $title . "~" . $rec_title;
                 }
             }
+        }
+        if (@fixups) {
+            say("\nPossible fixups for hyphenated titles:\n");
+            say($_) foreach sort @fixups;
+            say("");
         }
         say("End of list of titles containing hyphens");
     }
@@ -4008,10 +4047,19 @@ sub print_title_variants {
     if (%prog_titles) {
         say("\nStart of possible title variations");
         # iterate over each unique "normalised" title
+        my @fixups;
         foreach my $unique_title (sort keys %case_insens_titles) {
             if (scalar keys %{$case_insens_titles{$unique_title}} > 1) {
+                my %variants;
+    
                 # iterate over each actual title seen in listings
                 foreach my $title (sort keys %{$case_insens_titles{$unique_title}}) {
+
+                    # need to remove 'count' key before genre processing later
+                    my $title_cnt = delete $case_insens_titles{$unique_title}{$title}{'count'};
+                    # hash lists of title variants keyed on frequency
+                    push @{$variants{$title_cnt}}, $title;
+                    
                     my $line = "  $title (";
                     # iterate over each title's genres
                     foreach my $genre (sort keys %{$case_insens_titles{$unique_title}{$title}}) {
@@ -4025,7 +4073,27 @@ sub print_title_variants {
                     say($line);
                 }
                 say("");
+
+                # now find list of titles with highest freq and check if it contains
+                # a single entry to use in suggested fixups
+                my @title_freqs = sort {$a <=> $b} keys %variants;
+                my $highest_freq = $title_freqs[-1];
+                my $best_title;
+                if (@{$variants{$highest_freq}} == 1) {
+                    # grab the title and remove key from $case_insens_titles{$unique_title}
+                    $best_title = shift @{$variants{$highest_freq}};
+                    delete $case_insens_titles{$unique_title}{$best_title};
+                    # now iterate over remaining variations of title and generate fixups
+                    foreach my $rem_title (keys %{$case_insens_titles{$unique_title}}) {
+                        push @fixups, "5|" . $rem_title . "~" . $best_title;
+                    }
+                }
             }
+        }
+        if (@fixups) {
+            say("\nPossible fixups for title variations:\n");
+            say($_) foreach sort @fixups;
+            say("");
         }
         say("End of possible title variations");
     }
@@ -4054,6 +4122,7 @@ sub print_uncategorised_progs {
 sub print_cats_per_prog {
     if (%cats_per_prog) {
         say("\nStart of programmes with multiple categories");
+        my @fixups;
         foreach my $title (sort keys %cats_per_prog) {
             if (scalar keys %{$cats_per_prog{$title}} > 1) {
                 say("  '" . $title . "' is categorised as:");
@@ -4066,12 +4135,16 @@ sub print_cats_per_prog {
                         $best_cat_cnt = $cats_per_prog{$title}{$cat};
                     }
                 }
-                if ($best_cat_cnt > 1) {
-                    say("");
-                    say("    => \"6|" . $title . "~" . $best_cat . "\" (suggested fixup)");
-                }
                 say("");
+                if ($best_cat_cnt > 1) {
+                   push @fixups, "6|" . $title . "~" . $best_cat;
+                }
             }
+        }
+        if (@fixups) {
+            say("\nPossible fixups for programme categories:\n");
+            say($_) foreach sort @fixups;
+            say("");
         }
         say("End of programmes with multiple categories");
     }
