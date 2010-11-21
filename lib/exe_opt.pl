@@ -22,10 +22,12 @@ print '-nologo
 -add="Class::MethodMaker::scalar"
 -add "DateTime::Locale::en_US"
 -add "DateTime::TimeZone::Europe::Copenhagen"
+-add "DateTime::TimeZone::Europe::Helsinki"
+-add "DateTime::TimeZone::Asia::Jerusalem"
+-add "DateTime::TimeZone::Asia::Kolkata"
 -add="Tk::ProgressBar"
 -trim="Net::FTP::A"
 -trim="B"
--bind=libxml2.dll[file=\perl\bin\libxml2.dll,extract]
 -trim="Apache::Const;Apache::RequestIO;DIME::Payload;MIME::Entity;Apache::RequestRec;DIME::Message;I18N::Langinfo"
 -trim="Apache2::RequestUtil;APR::Table;Apache2::Const;Apache2::RequestRec;Apache2::RequestIO"
 -trim=DateTime::Format
