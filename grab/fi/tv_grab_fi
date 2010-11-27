@@ -27,7 +27,7 @@ tv_grab_fi --version
 =head1 DESCRIPTION
 
 Output TV listings for several channels available in Finland.
-The data comes from www.telkku.com. The grabber relies on parsing HTML 
+The data comes from www.telkku.com. The grabber relies on parsing HTML
 so it might stop working at any time.
 
 First run B<tv_grab_fi --configure> to choose, which channels you want
@@ -89,6 +89,7 @@ use strict;
 use XMLTV::Version '$Id$ ';
 use XMLTV::Capabilities qw/baseline manualconfig cache/;
 use XMLTV::Description 'Finland';
+use Encode;
 use Getopt::Long;
 use Date::Manip;
 use HTML::Entities;
@@ -305,7 +306,7 @@ foreach my $ch_did (@channels) {
 # they could be separate stages.
 #
 my $bar = new XMLTV::ProgressBar( {
-   name => 'getting listings', 
+   name => 'getting listings',
    count => scalar @to_get,
  } ) if not $opt_quiet;
 foreach (@to_get) {
@@ -336,14 +337,23 @@ BEGIN {
 
 my $warned_bad_chars;
 sub tidy( $ ) {
-    for (my $tmp = shift) {
-	tr/\t\205/ /d;
-	if (s/([^\012\015\040-\176\240-\377]+)//g) {
-	    warn "removing bad characters: '$1'"
-	      unless ($warned_bad_chars++ or $opt_quiet);
-	}
-	return $_;
-    }
+  my($string) = @_;
+  $string = decode_utf8($string);
+
+  # Make contents ISO-8859-1 compatible
+  # TAB                                  => space
+  # U+2013 (EN DASH)                     => -
+  # U+2019 (RIGHT SINGLE QUOTATION MARK) => '
+  # U+201D (RIGHT DOUBLE QUOTATION MARK) => "
+  $string =~ tr/\t\N{U+2013}\N{U+2019}\N{U+201D}/ \-\'\"/;
+
+  # Warn about incomplete replacement
+  if ($string =~ s/([^\N{U+0000}-\N{U+00FF}])//g) {
+    warn "removing bad character: 0x" . sprintf("%04x", ord($1))
+      unless ($warned_bad_chars++ or $opt_quiet);
+  }
+
+  return $string;
 }
 
 ####
@@ -359,7 +369,7 @@ sub tidy( $ ) {
 sub process_table {
     my ($date, $ch_xmltv_id, $ch_their_id) = @_;
     my $today = UnixDate($date, '%Y%m%d');
-    my $url = "$SITE/telkku?tila=knvt&kan=$ch_their_id&p=$today";
+    my $url = "$SITE/channel/list/$ch_their_id/$today";
     t "getting URL: $url";
     my $tree = get_nice_tree $url, \&tidy;
     local $SIG{__WARN__} = sub {
@@ -423,28 +433,28 @@ sub make_programme_hash {
 	my ($stop_base, $stop_tz) = @{date_to_local($stop, $TZ)};
 	t 'converted back to Finnish: ' . d [ $stop_base, $stop_tz ];
 	$prog{stop}=UnixDate($stop_base, '%q') . " $stop_tz";
-    }	
+    }
 
     # Check for series.
     #
     # Check 1: episode name of series in title.
-    # If title contains a colon (:), check to see if the string on the 
-    # left-hand side of the colon has been defined as a series in the 
+    # If title contains a colon (:), check to see if the string on the
+    # left-hand side of the colon has been defined as a series in the
     # conf-file. If it has, assume that the string on the left-hand side
     # of the colon is the name of the series, and the string on the
-    # right-hand side is the name of the episode. For example, if the 
+    # right-hand side is the name of the episode. For example, if the
     # following line has been defined in the tv_grab_fi.conf-file:
-    # "series title Prisma", and the title of the program is 
-    # "Prisma: Totuus tappajadinosauruksista", then the script will assume 
-    # that the title of the program is actually "Prisma", and the episode 
+    # "series title Prisma", and the title of the program is
+    # "Prisma: Totuus tappajadinosauruksista", then the script will assume
+    # that the title of the program is actually "Prisma", and the episode
     # name/sub-title is "Totuus tappajadinosauruksista".
     if (($cur->{title} =~ m/([^:]+):\s*(.*)/) &&
 	(exists $title{$1})) {
 	my $new_title = $1;
 	my $episode = $2;
-	t "series $new_title, episode title $episode"; 
+	t "series $new_title, episode title $episode";
 	$prog{title}=[ [ $new_title, $LANG ] ];
-	$prog{'sub-title'} = [ [ $episode, $LANG ] ];	
+	$prog{'sub-title'} = [ [ $episode, $LANG ] ];
     }
     else {
 	$prog{title}=[ [ $cur->{title}, $LANG ] ];
@@ -459,14 +469,14 @@ sub make_programme_hash {
     # and the description of the program is "Pingviinin paluu. Amerikkalainen
     # animaatiosarja. Outojen ryˆstˆjen sarja johdattaa Batmanin Pingviinin
     # j‰ljille.", then the script will assume that the episode name/sub-title
-    # is "Pingviinin paluu", and that the description is actually 
-    # "Amerikkalainen animaatiosarja. Outojen ryˆstˆjen sarja johdattaa 
+    # is "Pingviinin paluu", and that the description is actually
+    # "Amerikkalainen animaatiosarja. Outojen ryˆstˆjen sarja johdattaa
     # Batmanin Pingviinin j‰ljille."
     if ((defined $cur->{desc}) &&
 	(exists $description{$cur->{title}})   &&
 	($cur->{desc} =~ s/^\s*([^.]+)\.\s*//)) {
 	my $episode = $1;
-	t "series $cur->{title}, episode title $episode"; 
+	t "series $cur->{title}, episode title $episode";
 	$prog{'sub-title'} = [ [ $episode, $LANG ] ];
 
 	# Make sure the description is not left empty
@@ -491,30 +501,17 @@ sub bump_start_day {
 }
 
 #####
-# All program info is contained within a table cell with the
-# following properties:
+# All program info is contained within a unsorted list with class "programList"
 #
-# <td style="height: 500px; padding:5px 15px 5px 15px;" valign="top">
-#
-# For each program there is a entry that looks as follows:
-#
-# <b>hh:mm Program Name</b><br />Description<br /><br />
-# 
-# After processing the html with get_nice_tree, the space and slash in the 
-# <br /> tags sometimes fall off (with TreeBuilder v. 3.21 and below).
-# Also, all special characters (e.g. Â‰ˆ≈ƒ÷) are replaced with their 
-# corresponding html special characters. This means that the following 
-# program element
-#
-# <b>12.10 T‰n‰‰n otsikoissa</b><br />Aamu-tv:n ajankohtaiset aiheet koosteena.<br /><br />
-# 
-# ends up looking like this (with TreeBuilder v. 3.21 and below):
-#
-# <b>12.10 T&auml;n&auml;&auml;n otsikoissa</b><br>Aamu-tv:n ajankohtaiset aiheet koosteena.<br><br>
-#
-# or with TreeBuilder v. 3.22 and above:
-#
-# <b>12.10 T&auml;n&auml;&auml;n otsikoissa</b><br />Aamu-tv:n ajankohtaiset aiheet koosteena.<br /><br />
+# </div>
+#  <ul class="programList">
+#   <li>
+#    <span class="programDate"><a href="http://www.telkku.com/program/show/2010112621451">23:45&nbsp;Uutisikkuna</a></span><br />
+#    <span class="programDescription"></span>
+#   </li>
+#   ...
+#  </ul>
+#  <div ...
 #
 sub get_program_data {
     my $tree = shift;
@@ -522,17 +519,18 @@ sub get_program_data {
     my @data;
     # Dump the html-tree to a string for matching
     my $html = $tree->as_HTML;
-    while ($html =~ m/popup\(this\.href\)">([0-9]{2})\.([0-9]{2}) (.+?)<\/a><br( \/)?>(.*?)<br( \/)?><br( \/)?>/g) {
-	# Use decode_entities() to convert html characters 
+    while ($html =~ m,<li><span class="programDate"><a href="$SITE/program/show/\d+">(\d{2}:\d{2})&nbsp;(.+?)</a></span><br(?: \/)?><span class="programDescription">(.*?)</span>,go) {
+	# Use decode_entities() to convert html characters
 	# to ascii (e.g &auml; to ‰)
-	my %keys = (time => $1 . ':' . $2,
-		    title => decode_entities($3),
-		    desc => decode_entities($5),
-		    );
+	my %keys = (
+		    time  => $1,
+		    title => decode_entities($2),
+		    desc  => decode_entities($3),
+		   );
 	my %h;
 	foreach my $k (keys %keys) {
 	    my $v = $keys{$k};
-	    # Only record entry if it isn't empty (actually time 
+	    # Only record entry if it isn't empty (actually time
 	    # and title are required, but we don't check that.)
 	    if (length ($v) > 0) {
 		t "got a result from sub for $k: $v";
@@ -549,16 +547,13 @@ sub get_program_data {
 # get channel listing
 sub get_channels {
     my $bar = new XMLTV::ProgressBar({
-       name => 'getting list of channels', 
+       name => 'getting list of channels',
        count => 1,
     } ) if not $opt_quiet;
-    my %channels;
 
-    # Channels are retrieved from the channel "Suosikkikanava" (149),
-    # to avoid listing it as a channel.
-
-    my $url="$SITE/telkku?tila=knvt&kan=149";
-    my $tree = get_nice_tree $url;
+    my $url="$SITE/channel";
+    t "getting URL: $url";
+    my $tree = get_nice_tree($url, \&decode_utf8);
 
     # FIXME commonize this
     local $SIG{__WARN__} = sub {
@@ -568,19 +563,36 @@ sub get_channels {
 	die "$url: $_[0]";
     };
 
-    # All channels are listed after the tag <h4>A-Z</h4> within <li>-tags
+    # All channels are listed in the left side bar within <li> tags
+    #
+    # <div id="channelContainer">
+    #  <div id="channelList">
+    #   <div id="channelListHeader">
+    #	 <div id="channelListHeaderRight"></div>
+    #    <div id="channelListHeaderLeft"></div>
+    #    Kaikki kanavat
+    #   </div>
+    #   <ul>
+    #    <li><a href="http://telkku.com/channel/list/1/20101127">TV1</a></li>
+    #    ...
+    #   </ul>
+    #  </div>
+    #  <div id="channelContent">
 
     my $html = $tree->as_HTML;
-    $html =~ /<h3>A-Z<\/h3>\s*<ul>(.*)<\/ul>/;
-    my $trunc_html = $1;
-    while ($trunc_html =~ m/<li><a href=\"telkku\?tila=knvt&amp;kan=([0-9]+)\">(.+?)<\/a>/g) {
-	my $channel_id = $1;
-	my $channel_name = $2;
-	$channels{$channel_id} = $channel_name;
-	push @ch_all, { 'display-name' => [ [ $channel_name, $LANG ] ],
-			'id' => $channel_id };    
-    }
+    my($trunc_html) = $html =~ m,<div id="channelContainer">.*</div><ul>(.*)</ul></div><div id="channelContent">,;
+    die "can't find channel information" unless defined $trunc_html;
+
+    my %channels = ($trunc_html =~ m,<li><a href="$SITE/channel/list/(\d+)/\d+">(.+?)</a>,g);
     die "no channels could be found" if not keys %channels;
+
+    @ch_all = map { {
+		      'display-name' => [ [ $channels{$_}, $LANG ] ],
+		      id             => $_,
+		    } }
+              sort { $a <=> $b }
+	      keys %channels;
+
     update $bar if not $opt_quiet;
     $bar->finish() if not $opt_quiet;
     return %channels;
