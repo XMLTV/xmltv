@@ -89,11 +89,12 @@ use strict;
 use XMLTV::Version '$Id$ ';
 use XMLTV::Capabilities qw/baseline manualconfig cache/;
 use XMLTV::Description 'Finland';
-use Encode qw(decode_utf8);
+use Encode;
 use Getopt::Long;
 use Date::Manip;
 use HTML::Entities;
 use HTML::TreeBuilder;
+use IO::File;
 
 use XMLTV;
 use XMLTV::Memoize;
@@ -228,15 +229,13 @@ if ($mode eq 'configure') {
 die if $mode ne 'grab' and $mode ne 'list-channels';
 
 # Options to be used for XMLTV::Writer.
-my %w_args = (
-	      encoding => 'UTF-8',
-	     );	      ;
+my %w_args;
 if (defined $opt_output) {
-    open($w_args{OUTPUT}, ">:utf8", $opt_output)
-      or die "cannot write to $opt_output: $!";
-} else {
-    binmode(STDOUT, ":utf8");
+    my $fh = new IO::File(">$opt_output");
+    die "cannot write to $opt_output: $!" if not defined $fh;
+    $w_args{OUTPUT} = $fh;
 }
+$w_args{encoding} = 'ISO-8859-1';
 my $writer = new XMLTV::Writer(%w_args);
 $writer->start($HEAD);
 
@@ -258,10 +257,6 @@ my $line_num = 1;
 foreach (@config_lines) {
     ++ $line_num;
     next if not defined;
-
-    # XMLTV::Config::read_lines doesn't allow us to set the encoding
-    $_ = decode_utf8($_);
-
     if (/^channel:?\s+(\S+)\s+([^\#]+)/) {
 	my $ch_did = $1;
 	my $ch_name = $2;
@@ -340,6 +335,27 @@ BEGIN {
     }
 }
 
+my $warned_bad_chars;
+sub tidy( $ ) {
+  my($string) = @_;
+  $string = decode_utf8($string);
+
+  # Make contents ISO-8859-1 compatible
+  # TAB                                  => space
+  # U+2013 (EN DASH)                     => -
+  # U+2019 (RIGHT SINGLE QUOTATION MARK) => '
+  # U+201D (RIGHT DOUBLE QUOTATION MARK) => "
+  $string =~ tr/\t\N{U+2013}\N{U+2019}\N{U+201D}/ \-\'\"/;
+
+  # Warn about incomplete replacement
+  if ($string =~ s/([^\N{U+0000}-\N{U+00FF}])//g) {
+    warn "removing bad character: 0x" . sprintf("%04x", ord($1))
+      unless ($warned_bad_chars++ or $opt_quiet);
+  }
+
+  return $string;
+}
+
 ####
 # process_table: fetch a URL and process it
 #
@@ -355,7 +371,7 @@ sub process_table {
     my $today = UnixDate($date, '%Y%m%d');
     my $url = "$SITE/channel/list/$ch_their_id/$today";
     t "getting URL: $url";
-    my $tree = get_nice_tree($url, \&decode_utf8);
+    my $tree = get_nice_tree $url, \&tidy;
     local $SIG{__WARN__} = sub {
 	warn "$url: $_[0]";
     };
@@ -524,11 +540,6 @@ sub get_program_data {
 	t 'after running all subs, got data: ' . d \%h;
 	push @data, \%h;
     }
-
-    # Drop the last entry of the day. The next day starts with the same
-    # program and we don't want to have duplicate entries
-    pop(@data) if @data;
-
     t 'get_program_data() RETURNING ' . d \@data;
     return @data;
 }
