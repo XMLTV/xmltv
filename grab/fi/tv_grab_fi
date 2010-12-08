@@ -69,7 +69,7 @@ L<xmltv(5)>.
 
 =head1 AUTHOR
 
-Ville Ahonen, (ville dot ahonen at iki dot fi). Based on previous version of tv_grab_fi by Matti Airas.
+Officially maintained by Ville Ahonen (ville dot ahonen at iki dot fi), but in practice all recent fixes have been written by Stefan Becker. Based on previous version of tv_grab_fi by Matti Airas. 
 
 =head1 BUGS
 
@@ -91,6 +91,7 @@ use Getopt::Long;
 use Date::Manip;
 use HTML::Entities;
 use HTML::TreeBuilder;
+use POSIX qw(tzset);
 use Time::Local qw(timelocal);
 
 use XMLTV;
@@ -282,6 +283,23 @@ foreach (@config_lines) {
 die "No channels specified, run me with --configure\n"
   if not keys %channels;
 
+# Each page on telkku.com contains the program information
+# for one channel for one whole day.
+#
+# Example (compiled from several pages for illustration):
+#
+#  /- start time             (day)
+#  |     /- program title
+#  |     |
+# [23:45 Uutisikkuna         (yesterday)]
+#  00:10 Uutisikkuna         (today    )
+#  ...
+#  23:31 Uusi pÃ¤ivÃ¤          (today    )
+#  00:00 Kova laki           (tomorrow )
+# [00:40 Piilosana           (tomorrow )]
+# [01:00 Tellus-tietovisa    (tomorrow )]
+#
+# The lines in [] don't appear on every page.
 {
   my @dates;
 
@@ -307,12 +325,116 @@ die "No channels specified, run me with --configure\n"
     return(@dates[$index, $index + 1, $index + 2]);
   }
 }
-
-my @to_get;
-
 init_date_data();
 
+# Time zone handling
+#
+# Now that we have setup the day list we switch to a fixed time zone in order
+# to interpret the program start times from telkku.com. In this case we of
+# course use
+#
+#      Europe/Helsinki
+#
+# which can mean
+#
+#      EET  = GMT+02:00 (East European Time)
+#      EEST = GMT+03:00 (East European Summer Time)
+#
+# depending on the day of the year. By using a fixed time zone this grabber
+# will always be able to correctly calculate the program start time in UTC,
+# no matter what the time zone of the local system is.
+#
+# Test program:
+# ---------------------- CUT HERE ---------------------------------------------
+# use Time::Local;
+# use POSIX qw(strftime tzset);
+#
+# # DST test days for Europe 2010
+# my @testdays = (
+# 		# hour, minute, mday, month
+# 		[    2,     00,    1,     1],
+# 		[    2,     59,   28,     3],
+# 		[    3,     00,   28,     3],
+# 		[    3,     01,   28,     3],
+# 		[    3,     00,    1,     7],
+# 		[    3,     59,   31,    10],
+# 		[    4,     00,   31,    10],
+# 		[    4,     01,   31,    10],
+# 		[    2,     00,    1,    12],
+# 	       );
+#
+# print strftime("System time zone is: %Z\n", localtime(time()));
+# if (@ARGV) {
+#   $ENV{TZ} = "Europe/Helsinki";
+#   tzset();
+# }
+# print strftime("Script time zone is: %Z\n", localtime(time()));
+#
+# sub time_to_str(@) {
+#   strftime("%d-%b-%Y %T %z", @_);
+# }
+# foreach my $date (@testdays) {
+#   my $time = timelocal(0, @{$date}[1, 0, 2], $date->[3] - 1, 2010);
+#   print
+#     "$time: ", strftime("%d-%b-%Y %T %z", localtime($time)),
+#     " -> ",    strftime("%d-%b-%Y %T +0000", gmtime($time)), "\n";
+# }
+# ---------------------- CUT HERE ---------------------------------------------
+#
+# Test runs:
+#
+# 1) system on Europe/Helsinki time zone [REFERENCE]
+#
+# $ perl test.pl
+# System time zone is: EET
+# Script time zone is: EET
+# 1262304000: 01-Jan-2010 02:00:00 +0200 -> 01-Jan-2010 00:00:00 +0000
+# 1269737940: 28-Mar-2010 02:59:00 +0200 -> 28-Mar-2010 00:59:00 +0000
+# 1269738000: 28-Mar-2010 04:00:00 +0300 -> 28-Mar-2010 01:00:00 +0000
+# 1269738060: 28-Mar-2010 04:01:00 +0300 -> 28-Mar-2010 01:01:00 +0000
+# 1277942400: 01-Jul-2010 03:00:00 +0300 -> 01-Jul-2010 00:00:00 +0000
+# 1288486740: 31-Oct-2010 03:59:00 +0300 -> 31-Oct-2010 00:59:00 +0000
+# 1288490400: 31-Oct-2010 04:00:00 +0200 -> 31-Oct-2010 02:00:00 +0000
+# 1288490460: 31-Oct-2010 04:01:00 +0200 -> 31-Oct-2010 02:01:00 +0000
+# 1291161600: 01-Dec-2010 02:00:00 +0200 -> 01-Dec-2010 00:00:00 +0000
+#
+# 2) system on America/New_York time zone
+#
+# $ TZ="America/New_York" perl test.pl
+# System time zone is: EST
+# Script time zone is: EST
+# 1262329200: 01-Jan-2010 02:00:00 -0500 -> 01-Jan-2010 07:00:00 +0000
+# 1269759540: 28-Mar-2010 02:59:00 -0400 -> 28-Mar-2010 06:59:00 +0000
+# 1269759600: 28-Mar-2010 03:00:00 -0400 -> 28-Mar-2010 07:00:00 +0000
+# 1269759660: 28-Mar-2010 03:01:00 -0400 -> 28-Mar-2010 07:01:00 +0000
+# 1277967600: 01-Jul-2010 03:00:00 -0400 -> 01-Jul-2010 07:00:00 +0000
+# 1288511940: 31-Oct-2010 03:59:00 -0400 -> 31-Oct-2010 07:59:00 +0000
+# 1288512000: 31-Oct-2010 04:00:00 -0400 -> 31-Oct-2010 08:00:00 +0000
+# 1288512060: 31-Oct-2010 04:01:00 -0400 -> 31-Oct-2010 08:01:00 +0000
+# 1291186800: 01-Dec-2010 02:00:00 -0500 -> 01-Dec-2010 07:00:00 +0000
+#
+# 3) system on America/New_York time zone, script on Europe/Helsinki time zone
+#    [compare to output from (1)]
+#
+# $ TZ="America/New_York" perl test.pl switch
+# System time zone is: EST
+# Script time zone is: EET
+# 1262304000: 01-Jan-2010 02:00:00 +0200 -> 01-Jan-2010 00:00:00 +0000
+# 1269737940: 28-Mar-2010 02:59:00 +0200 -> 28-Mar-2010 00:59:00 +0000
+# 1269738000: 28-Mar-2010 04:00:00 +0300 -> 28-Mar-2010 01:00:00 +0000
+# 1269738060: 28-Mar-2010 04:01:00 +0300 -> 28-Mar-2010 01:01:00 +0000
+# 1277942400: 01-Jul-2010 03:00:00 +0300 -> 01-Jul-2010 00:00:00 +0000
+# 1288486740: 31-Oct-2010 03:59:00 +0300 -> 31-Oct-2010 00:59:00 +0000
+# 1288490400: 31-Oct-2010 04:00:00 +0200 -> 31-Oct-2010 02:00:00 +0000
+# 1288490460: 31-Oct-2010 04:01:00 +0200 -> 31-Oct-2010 02:01:00 +0000
+# 1291161600: 01-Dec-2010 02:00:00 +0200 -> 01-Dec-2010 00:00:00 +0000
+#
+# Setup fixed time zone for program start time interpretation
+$ENV{TZ} = "Europe/Helsinki";
+tzset();
+
 # the order in which we fetch the channels matters
+my @to_get;
 foreach my $ch_did (@channels) {
     my $ch_name=$channels{$ch_did};
     my $ch_xid="$ch_did.$DOMAIN";
@@ -356,7 +478,9 @@ BEGIN {
     }
 }
 
-sub local_to_seconds($$) {
+# Take a day (day/month/year) and the program start time (hour/minute)
+# and convert it to seconds since Epoch in the current time zone (see above)
+sub program_time_to_epoch($$) {
   my($date, $program) = @_;
   return(timelocal(0, $program->{minute}, $program->{hour},
 		   $date->{day}, $date->{month} - 1, $date->{year}));
@@ -391,33 +515,34 @@ sub process_table {
     my @dates = ($today, $tomorrow);
     unshift(@dates, $yesterday)
       if ((@program_data > 1) &&
-	  ($program_data[0]->{seconds} > $program_data[1]->{seconds}));
+	  ($program_data[0]->{start} > $program_data[1]->{start}));
 
 
     my @r;
-    my $date            = shift(@dates);
-    my $current         = shift(@program_data);
-    my $current_seconds = $current->{seconds};
-    my $current_start   = local_to_seconds($date, $current);
+    my $date          = shift(@dates);
+    my $current       = shift(@program_data);
+    my $current_start = $current->{start};
+    my $current_epoch = program_time_to_epoch($date, $current);
     foreach my $next (@program_data) {
 
       # Start of next program might be on the next day
-      my $next_seconds = $next->{seconds};
-      $date            = shift(@dates)
-	if $current_seconds > $next_seconds;
-      my $next_start   = local_to_seconds($date, $next);
+      my $next_start = $next->{start};
+      $date          = shift(@dates)
+	if $current_start > $next_start;
+      my $next_epoch = program_time_to_epoch($date, $next);
 
       push(@r, make_programme_hash($ch_xmltv_id, $current,
-				   $current_start, $next_start));
+				   $current_epoch, $next_epoch));
 
-      $current         = $next;
-      $current_seconds = $next_seconds;
-      $current_start   = $next_start;
+      $current       = $next;
+      $current_start = $next_start;
+      $current_epoch = $next_epoch;
     }
     return @r ;
 }
 
-sub seconds_to_xmltv_time($) {
+# Convert seconds since Epoch to UTC then generate XMLTV time stamp
+sub epoch_to_xmltv_time($) {
   my($time) = @_;
   my(undef, $min, $hour, $mday, $mon, $year) = gmtime($time);
   return(sprintf("%04d%02d%02d%02d%02d00 +0000",
@@ -431,8 +556,8 @@ sub make_programme_hash {
     # XMLTV programme desciptor
     my %prog = (
 		channel => $ch_xmltv_id,
-		start   => seconds_to_xmltv_time($start),
-		stop    => seconds_to_xmltv_time($stop),
+		start   => epoch_to_xmltv_time($start),
+		stop    => epoch_to_xmltv_time($stop),
 	       );
 
     # Check for series.
@@ -467,11 +592,11 @@ sub make_programme_hash {
     # line has been defined in the tv_grab_fi.conf-file:
     # "series description Batman", the title of of the program is "Batman",
     # and the description of the program is "Pingviinin paluu. Amerikkalainen
-    # animaatiosarja. Outojen ryöstöjen sarja johdattaa Batmanin Pingviinin
-    # jäljille.", then the script will assume that the episode name/sub-title
+    # animaatiosarja. Outojen ryÃ¶stÃ¶jen sarja johdattaa Batmanin Pingviinin
+    # jÃ¤ljille.", then the script will assume that the episode name/sub-title
     # is "Pingviinin paluu", and that the description is actually
-    # "Amerikkalainen animaatiosarja. Outojen ryöstöjen sarja johdattaa
-    # Batmanin Pingviinin jäljille."
+    # "Amerikkalainen animaatiosarja. Outojen ryÃ¶stÃ¶jen sarja johdattaa
+    # Batmanin Pingviinin jÃ¤ljille."
     if ((defined $current->{description}) &&
 	(exists $description{$current->{title}})   &&
 	($current->{description} =~ s/^\s*([^.]+)\.\s*//)) {
@@ -511,23 +636,23 @@ sub get_program_data {
     my $html = $tree->as_HTML;
     while ($html =~ m,<li><span class="programDate"><a href="$SITE/program/show/\d+">(\d{2}):(\d{2})&nbsp;(.+?)</a></span><br(?: \/)?><span class="programDescription">(.*?)</span>,go) {
       # Use decode_entities() to convert html characters
-      # to ascii (e.g &auml; to ä)
+      # to ascii (e.g &auml; to Ã¤)
       my $hour        = $1;
       my $minute      = $2;
-      my $seconds     = ($hour * 60 + $minute) * 60;
+      my $start       = $hour * 60 + $minute; # minutes since midnight
       my $title       = decode_entities($3);
       my $description = decode_entities($4);
 
       # Only record entry if title isn't empty
       if (length($title) > 0) {
-	t "got programme starting at $seconds '$title'";
+	t "got programme starting at $start '$title'";
 
 	# mandatory fields
 	my %program = (
-		       hour    => $hour,
-		       minute  => $minute,
-		       seconds => $seconds,
-		       title   => $title,
+		       hour   => $hour,
+		       minute => $minute,
+		       start  => $start,
+		       title  => $title,
 		      );
 
 	# optional fields
