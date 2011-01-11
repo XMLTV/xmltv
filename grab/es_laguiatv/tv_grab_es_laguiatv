@@ -88,6 +88,8 @@ use HTML::TreeBuilder;
 use HTML::Entities; # parse entities
 use IO::File;
 
+use LWP::Simple;
+
 use XMLTV;
 use XMLTV::Memoize;
 use XMLTV::ProgressBar;
@@ -130,7 +132,7 @@ our @ch_all;
 sub debug_print
 {
 #	my ($str) = @_;
-#	print $str;
+#	print "$str";
 }
 
 # hard-coded list of TDT channels since laguia dont list them separately
@@ -215,24 +217,32 @@ my %icons;
 # write configuration
 
 if ($mode eq 'configure') {
-	%channels = get_channels();
+    %channels = get_channels();
     
-	open(CONF, ">$config_file") or die "cannot write to $config_file: $!";
+    open(CONF, ">$config_file") or die "cannot write to $config_file: $!";
 
-	# Ask about getting descs
-	my $getdescs = ask_boolean("Do you want to get descriptions (very slow)");
-	warn("cannot read input, using default")
-	  if not defined $getdescs;
+    # Ask about getting descs
+    my $getdescs = ask_boolean("Do you want to get descriptions (very slow)");
+    warn("cannot read input, using default")
+        if not defined $getdescs;
 
-	print CONF "getdescriptions ";
-	print CONF "yes\n" if $getdescs;
-	print CONF "no\n" if not $getdescs;
+    print CONF "getdescriptions ";
+    print CONF "yes\n" if $getdescs;
+    print CONF "no\n" if not $getdescs;
+
+    my $cacheicons = ask_boolean('Do you want to get and cache icons during configure', 'yes');
+    warn("cannot read input, using default")
+        if not defined $cacheicons;
 
     # Ask about each channel.
     my @chs = sort keys %channels;
     my @names = map { $channels{$_} } @chs;
     my @qs = map { "Add channel $_?" } @names;
     my @want = ask_many_boolean(1, @qs);
+
+    my $iconbar = new XMLTV::ProgressBar({name => 'getting icon urls', count => scalar @chs})
+    if ((not $opt_quiet) && $cacheicons);
+
     foreach (@chs) {
 	my $w = shift @want;
 	warn("cannot read input, stopping channel questions"), last
@@ -242,8 +252,18 @@ if ($mode eq 'configure') {
 	# Print a config line, but comment it out if channel not wanted.
 	print CONF '#' if not $w;
 	my $name = shift @names;
-	print CONF "channel $_ $name\n";
+        if ($cacheicons)
+        {
+            my $icon = get_icon($_);
+	    print CONF "channel $_ $name icon:$icon\n";
+        }
+        else
+        {
+            print CONF "channel $_ $name\n";
+        }
 	# TODO don't store display-name in config file.
+
+        update $iconbar if ((not $opt_quiet) && $cacheicons);
     }
 
     close CONF or warn "cannot close $config_file: $!";
@@ -291,13 +311,28 @@ foreach (@config_lines) {
 			$DO_SLOWER_DESC_GET = 1;
 		}
     }
-	elsif (/^channel:?\s+(\S+)\s+([^\#]+)/)
-	{
-		my $ch_did = $1;
-		my $ch_name = $2;
-		$ch_name =~ s/\s*$//;
-		push @channels, $ch_did;
-		$channels{$ch_did} = $ch_name;
+    elsif (/^channel:?\s+(\S+)\s+([^#]+)icon\:([^#]+)/)
+    {
+        my $ch_did = $1;
+        my $ch_name = $2;
+        my $ch_icon = $3;
+
+
+        #debug_print "Got channel $ch_name icon $ch_icon\n";
+        $ch_name =~ s/\s*$//;
+        push @channels, $ch_did;
+        $channels{$ch_did} = $ch_name;
+        $icons{$ch_did} = $ch_icon;
+    }
+    elsif (/^channel:?\s+(\S+)\s+([^#]+)/)
+    {
+        my $ch_did = $1;
+        my $ch_name = $2;
+
+        #debug_print "Got channel $ch_name icon $ch_icon\n";
+        $ch_name =~ s/\s*$//;
+        push @channels, $ch_did;
+        $channels{$ch_did} = $ch_name;
     }
     else {
 	warn "$config_file:$line_num: bad line\n";
@@ -319,7 +354,12 @@ my $iconbar = new XMLTV::ProgressBar({name => 'getting channel info', count => s
 foreach my $ch_did (@channels) {
     my $ch_name=$channels{$ch_did};
     my $ch_xid="$ch_did.laguiatv.com";
-    my $ch_icon=get_icon($ch_did);
+    my $ch_icon=$icons{$ch_did};
+    if (!$ch_icon)
+    {
+        $ch_icon = get_icon($ch_did);
+    }
+
     if(index($ch_icon, "shim.gif") < 0)
     {
 		$writer->write_channel({ id => $ch_xid,
@@ -589,9 +629,9 @@ sub get_program_data
 
 sub get_icon 
 {
-	my ($ch_did) = @_;
+    my ($ch_did) = @_;
 	
-	my $ch_xid = convert_id_to_laguiatvid($ch_did);
+    my $ch_xid = convert_id_to_laguiatvid($ch_did);
 	
     my $url = "http://www.laguiatv.com/programacion.php?vertical=1&cadena=$ch_xid";
 	debug_print "Getting $url\n";
@@ -601,55 +641,24 @@ sub get_icon
 		warn "$url: $_[0]";
 	};
 
-    # parse the page to a document object
-    my $tree = get_nice_tree $url;
-    my @data;
+    my $content = get $url;
+    my $pos = index($content, '<table class="grid cadena">');
+    if($pos > 0)
+    {
+        $pos = index($content, '<img src="', $pos);
+        if($pos > 0)
+        {
+            $pos += 10;
+            my $end = index($content, '"', $pos);
 
-	# find schedule table
-	my @tables = $tree->find_by_tag_name("_tag"=>"table");
+            my $icon = 'http://www.laguiatv.com/' . substr($content, $pos, $end - $pos);
 
-	foreach my $table (@tables)
-	{
-		my $class = $table->attr('class');
-		
-		if ($class && $class eq "grid cadena")
-		{
-			debug_print("Got correct class\n");
-			my @trs = $table->find_by_tag_name("_tag"=>"tr");
-			my $state = 1;
-			my $p_title = "";
-			my $p_stime = "";
-			my $p_category = "";
-			my $p_description = "";
+            debug_print "icon $icon\n";
+            return $icon;
+        }
+    }
 
-			foreach my $tr(@trs)
-			{
-				my @ths = $tr->find_by_tag_name("_tag"=>"th");
-				my $nths = @ths;
-				
-				debug_print("Got tr with $nths ths\n");
-				if($nths == 1)
-				{
-					my $class = $ths[0]->attr('scope');
-					if($class && $class eq "colgroup")
-					{
-						my @imgs = $ths[0]->find_by_tag_name("_tag"=>"img");
-						my $nimgs = @imgs;
-				
-						debug_print("Got ths with $nimgs imgs\n");
-						if($nimgs == 1)
-						{
-							my $icon = 'http://www.laguiatv.com/' . $imgs[0]->attr('src');
-							debug_print("Got icon $icon\n");
-							return $icon;
-						}
-					}
-					
-				}
-			}
-		}
-	}
-    return "";
+    return 'http://www.laguiatv.com/shim.gif';
 }
 
 
@@ -731,9 +740,9 @@ sub get_channels
     my $url="http://www.laguiatv.com/programacion.php";
     t $url;
 
-	my $channel_id;
-	my $channel_name;
-	my $elem;
+    my $channel_id;
+    my $channel_name;
+    my $elem;
 
     my $tree = get_nice_tree $url;
 
@@ -746,56 +755,57 @@ sub get_channels
     }
 
 # <input type="checkbox" name="nacionales1" value="TVE 1"
-	# find the channels that are in check boxes
+# find the channels that are in check boxes
     my @options = $tree->find_by_tag_name("_tag"=>"input");
 
     foreach $elem (@options) 
-	{
-		my $ename = $elem->attr('name');
-		my $val = $elem->attr('value');
+    {
+        my $ename = $elem->attr('name');
+        my $val = $elem->attr('value');
 		
-		if ($ename && $val)
-		{
-			if ($ename =~ m/^nacionales/)
-			{
-				$channel_id = convert_name_to_id($val);
-				$channel_name = $val;
+        if ($ename && $val)
+        {
+            if ($ename =~ m/^nacionales/)
+            {
+                $channel_id = convert_name_to_id($val);
+                $channel_name = $val;
 
-				debug_print "Channel $channel_name, id $channel_id\n";
-				$channels{$channel_id}=$channel_name;
-			}
-		}
-	}
+                debug_print "Channel $channel_name, id $channel_id\n";
+                $channels{$channel_id}=$channel_name;
+            }
+        }
+    }
 
-	# find the channels that are in drop down lists
-	@options = $tree->find_by_tag_name("_tag"=>"option");
+    # find the channels that are in drop down lists
+    @options = $tree->find_by_tag_name("_tag"=>"option");
 
-	foreach $elem (@options) 
-	{
-		my $val = $elem->attr('value');
-		my $parent = $elem->parent();
-		my $pname = $parent->attr('name');
+    foreach $elem (@options) 
+    {
+        my $val = $elem->attr('value');
+        my $parent = $elem->parent();
+        my $pname = $parent->attr('name');
 		
-		if ($pname && $val)
-		{
-			if ($pname =~ m/^locales/ ||
-				$pname =~ m/^digitales/ ||
-				$pname =~ m/^autonomicas/)
-			{
-				$channel_id = convert_name_to_id($val);
-				$channel_name = $val;
+        if ($pname && $val)
+        {
+            if ($pname =~ m/^locales/ ||
+                $pname =~ m/^digitales/ ||
+                $pname =~ m/^autonomicas/)
+           {
+               $channel_id = convert_name_to_id($val);
+               $channel_name = $val;
 
-				debug_print "Channel $channel_name, id $channel_id\n";
-				$channels{$channel_id}=$channel_name;
-			}
-		}
-	}
+               debug_print "Channel $channel_name, id $channel_id\n";
+               $channels{$channel_id}=$channel_name;
+           }
+        }
+    }
 
     # remove channels that should not be listed
     foreach $channel_name (@hide_channels)
     {
         $channel_id = convert_name_to_id($channel_name);
         delete $channels{$channel_id};
+        delete $icons{$channel_id};
     }
 
     die "no channels could be found" if not keys %channels;
