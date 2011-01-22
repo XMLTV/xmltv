@@ -16,7 +16,7 @@ tv_grab_ar --help
 tv_grab_ar [--config-file FILE] --configure [--gui OPTION]
 
 tv_grab_ar [--config-file FILE] [--output FILE] [--days N]
-           [--offset N] [--quiet]
+           [--offset N] [--quiet] [--GetDetails]
 
 tv_grab_ar --list-channels
 
@@ -70,8 +70,8 @@ B<--help> Print a help message and exit.
 L<xmltv(5)>.
 
 =head1 AUTHOR
-
-
+1.9 Mariano S. Cosentino, Mok@marianok.com.ar
+1.8 rmeden
 1.7 Mariano S. Cosentino, Mok@marianok.com.ar
 1.6 Mariano S. Cosentino, Mok@marianok.com.ar
 1.5 Christian A. Rodriguez, car@cespi.unlp.edu.ar, based on tv_grab_es, from Ramon Roca.
@@ -87,6 +87,22 @@ migth be a good idea to add a cache file the keeps the program description so th
 
 
 # Author's Updates
+#   1.9 	Mariano Cosentino
+#		* 	The source website changed, I've adapted the script to the new format
+#		*	Additional information is now handled directly here, no need for most of tv_extractinfo_ar
+#		*	Added support for locations. 
+#		*	*	Added parameter --zone for Zone ovewride w/o running full config
+#		*	*	TELECENTRO is handled as a zone.
+#		*	*	DirectTV is handled as a zone. *** in any case, if you have DTV, you should be using TV_GRAB_DTV_LA instead of this grabber :-) ***
+#		*	*	All other Zones are extracted automatically from the CV website and all this zones have Cablevision's programming (not Telecentro, no DTV)
+#		*	*	The "default" Zone is still Capital Federal / Gran Buenos Aires (Cablevision zone 3)
+#		*	*	This is still to be tested by people outside GBA to see if is acurate. 
+#		*	*	This is based on the work of Mauro Meloni and his Phyton version of TV_GRAB_AR http://mauromeloni.com.ar/files/tv_grab_ar.py.
+#		*	Added parameter --getdetails to allow the user to control if they want the full details (time consuming) *** I should probably put it in the config section ***
+#		* 	While it's working fine, this version still has a lot of room to improvements. I decided to release a quick-and-dirty version in order to have it up and running and then I wil work on the enhacements.
+#		*	Some additional error handling should avoid fatal failures when the Cablevision  website becomes unresponsive (far too often for my taste).
+#   1.8		rmeden
+#		apply dekarl's patch 3057655 to update lots of xmltv.org links
 #   1.7 	Mariano Cosentino
 #		* 	The source website changed, I've adapted the script to the new format
 #		*	Enhaced the handling of latin chars.
@@ -101,14 +117,14 @@ migth be a good idea to add a cache file the keeps the program description so th
 
 # Author's TODOs & thoughts
 #
-# Add channel logo support
+# Add channel logo support (download from $urlRoot/logos/lg_99.png where 99 is the channel id)
 # Add Support for Argentinean DST
-# add properties in the corresponding XMLTV fields without relying on the tv_extractinfo_ar
+# add properties in the corresponding XMLTV fields without relying on the tv_extractinfo_ar (partialy done)
 # migth be a good idea to add a cache file the keeps the program description so there is no need to fetch it.
 
 
-
 my $CableCompany = "cablevision"; #"multicanal";
+my $urlRoot="http://www.buscador" . $CableCompany . ".com.ar/";
 
 
 ######################################################################
@@ -123,6 +139,10 @@ use Date::Manip;
 use HTML::TreeBuilder;
 use HTML::Entities; # parse entities
 use IO::File;
+use Switch;
+
+use Encode qw(from_to is_utf8 _utf8_off encode);
+use utf8;
 
 use XMLTV;
 use XMLTV::Memoize;
@@ -143,7 +163,7 @@ use XMLTV::Usage <<END
 $0: get Argentinian television listings in XMLTV format
 To configure: $0 --configure [--config-file FILE]
 To grab listings: $0 [--config-file FILE] [--output FILE] [--days N]
-        [--offset N] [--quiet]
+        [--offset N] [--quiet] [--getdetails] [--zone N]
 To list channels: $0 --list-channels
 To show capabilities: $0 --capabilities
 To show version: $0 --version
@@ -153,14 +173,17 @@ END
 $XMLTV::Get_nice::Delay=0;
 
 # Attributes of the root element in output.
-my $HEAD = { 'source-info-url'     => 'http://www.buscador' . $CableCompany . '.com.ar/',
-	     'source-data-url'     => "http://www.buscador" . $CableCompany . ".com.ar/",
+my $HEAD = { 'source-info-url'     => $urlRoot,
+	     'source-data-url'     => $urlRoot,
 	     'generator-info-name' => 'XMLTV',
 	     'generator-info-url'  => 'http://xmltv.org/',
 	   };
 		   
 # default language
 my $LANG="es";
+
+# Selected location
+our %location;
 
 # Global channel_data
 our @ch_all;
@@ -170,6 +193,11 @@ my %Descriptions = ();
 
 # Overlaping time threshold allowed in seconds
 our $allowed_overlap_tresh=180;
+
+
+my %channels;
+my @channels;
+
 ######################################################################
 # get options
 
@@ -177,10 +205,13 @@ our $allowed_overlap_tresh=180;
 XMLTV::Memoize::check_argv('XMLTV::Get_nice::get_nice_aux');
 my ($opt_days, $opt_offset, $opt_help, $opt_output,
     $opt_configure, $opt_config_file, $opt_gui,
-    $opt_quiet, $opt_list_channels);
+    $opt_quiet, $opt_get_details, $opt_zone, $opt_list_channels);
 $opt_days  = 3; # default
 $opt_offset = 0; # default
 $opt_quiet  = 0; # default
+$opt_zone = 0; # default for 
+$opt_get_details = 0; # default
+
 GetOptions('days=i'        => \$opt_days,
 	   'offset=i'      => \$opt_offset,
 	   'help'          => \$opt_help,
@@ -189,6 +220,8 @@ GetOptions('days=i'        => \$opt_days,
        'gui:s'         => \$opt_gui,
 	   'output=s'      => \$opt_output,
 	   'quiet'         => \$opt_quiet,
+	   'getdetails'	   => \$opt_get_details,
+	   'zone=i'        => \$opt_zone,
 	   'list-channels' => \$opt_list_channels
 	  )
   or usage(0);
@@ -219,15 +252,25 @@ elsif ($mode eq 'list-channels') {
 }
 else { die }
 
-# Whatever we are doing, we need the channels data.
-my %channels = get_channels(); # sets @ch_all
-my @channels;
-
+if (($opt_zone != 0) && ($mode ne 'configure')) {
+	warn "Zone overwride by user, using zone $opt_zone\n";
+	%location = (
+		id => $opt_zone,
+		name => 'USER SELECTED LOCATION'
+			);
+}
 ######################################################################
 # write configurationDateCalc(
 
 if ($mode eq 'configure') {
     open(CONF, ">$config_file") or die "cannot write to $config_file: $!";
+
+	%location = select_Location();
+	print CONF "location $location{id} $location{name}\n";
+	
+	# Whatever we are doing, we need the channels data.
+	%channels = get_channels(); # sets @ch_all
+	
 
     # Ask about each channel.
     my @chs = sort keys %channels;
@@ -254,6 +297,7 @@ if ($mode eq 'configure') {
 }
 
 
+
 # Not configuration, we must be writing something, either full
 # listings or just channels.
 #
@@ -266,7 +310,7 @@ if (defined $opt_output) {
     die "cannot write to $opt_output: $!" if not defined $fh;
     $w_args{OUTPUT} = $fh;
 }
-$w_args{encoding} = 'ISO-8859-1';
+$w_args{encoding} = 'ISO-8859-15';
 my $writer = new XMLTV::Writer(%w_args);
 $writer->start($HEAD);
 
@@ -285,25 +329,49 @@ my $line_num = 1;
 foreach (@config_lines) {
     ++ $line_num;
     next if not defined;
-    if (/^channel:?\s+(\S+)\s+([^\#]+)/) {
-	my $ch_did = $1;
-	my $ch_name = $2;
-	$ch_name =~ s/\s*$//;
-	push @channels, $ch_did;
-	$channels{$ch_did} = $ch_name;
-    }
-    else {
-	warn "$config_file:$line_num: bad line\n";
-    }
+if (/^location:?\s+(\S+)\s+([^\#]+)/) {
+        %location=( id => $1, name=>$2 );      
+    }else{
+#	    if (/^channel:?\s+(\S+)\s+(\S+)\s+([^\#]+)/) {
+	# Whatever we are doing, we need the channels data.
+	%channels = get_channels() if not  %channels; # sets @ch_all
+
+
+ 	   if (/^channel:?\s+(\S+)\s+([^\#]+)/) {
+		my $ch_did = $1;
+#		my $ch_sourceid = $2;
+		my $ch_name = $2;
+		$ch_name =~ s/\s*$//;
+		push @channels, $ch_did;
+		$channels{$ch_did} = $ch_name;
+	    }
+	    else {
+		warn "$config_file:$line_num: bad line\n";
+	    }
+	}
 }
+
+
+# Whatever we are doing, we need the channels data.
+#%channels = get_channels(); # sets @ch_all
+
+
 
 ######################################################################
 # begin main program
 
-# Assume the listings source uses CET (see BUGS above).
+# Assume the listings source uses ARG TIME (see BUGS above).
 my $now = DateCalc(parse_date('now'), "$opt_offset days");
 die "No channels specified, run me with --configure\n"
   if not keys %channels;
+
+if (not keys %location) {
+	warn "No location specified, will use 'Capital Federal -GBA' by default. If you wish a diferent one run me with --configure\n" ;
+	%location = (
+			id => 3,
+			name => 'Capital Federal -GBA'
+		);
+}
 my @to_get;
 
 
@@ -354,6 +422,8 @@ BEGIN {
 	*d = sub { '' };
     }
     else {
+#	\&Log::TraceMessages::Logfile = 'tv_grab_ar.log';
+#	Log::TraceMessages::Logfile = 'tv_grab_ar.log';
 	*t = \&Log::TraceMessages::t;
 	*d = \&Log::TraceMessages::d;
 	Log::TraceMessages::check_argv();
@@ -376,21 +446,37 @@ sub process_table {
 #initial setting
 #    my $url = "http://www.buscador" . $CableCompany . ".com.ar/index.php?template=fgrilla_semanal.tpl&canal=$ch_xmltv_id&semana=$weekNr";
 
-    my $url_head = "http://www.buscador" . $CableCompany . ".com.ar/index.php?template=main_grilla_semanal.tpl&canal=$ch_xmltv_id&cantidadPasa=$weekNr";
+#    my $url_head = "http://www.buscador" . $CableCompany . ".com.ar/index.php?#template=main_grilla_semanal.tpl&canal=$ch_xmltv_id&cantidadPasa=$weekNr";
+
+    my $url_head = $urlRoot . "dinamicas/grilla_semanal/index.php?canal=$ch_xmltv_id&sintonia=$ch_ar_id&cantidadPasa=$weekNr";
+
 
 #updated config
 #    my $url = "http://www.buscador" . $CableCompany . ".com.ar/index.php?template=main_grilla_semanal.tpl&canal=$ch_xmltv_id&cantidadPasa=$weekNr";
 
-    my $tree_head = get_nice_tree $url_head;
+    my $tree_head;
 
+    eval {	
+	 $tree_head = get_nice_tree $url_head;
+	};
+		
+   if (not defined $tree_head) {
+	warn "Unable to retrieve '$url_head'. This listing will be incomplete.";
+	exit;
+    } 
     my $tree=$tree_head->look_down(
         '_tag', 'div',sub {
             defined $_[0]->attr('id') and $_[0]->attr('id')=~ /grillasemanal/i
         });
 
 
+
+
     t $url_head;
     local $SIG{__WARN__} = sub {
+#	my @timeData = localtime(time);
+#	print join(' ', @timeData);
+#        warn join(' ', @timeData) .  " $url_head: $_[0]";
         warn "$url_head: $_[0]";
     };
 
@@ -403,7 +489,37 @@ sub process_table {
     # parse the page to a document object
 
 
-    my @program_data = get_program_data($date,$tree,$tree_head,$ch_xmltv_id);
+# The new Page holds a grid where the days are in columns and the hours are the rows
+# The First days of the week is always Monday
+
+# Variable @WeekDays will hold all programs for the week
+	my @WeekDays;
+#	my @Divs = $tree_head->find_by_tag_name("_tag"=>"div");
+
+    my $tree2=$tree_head->look_down(
+        '_tag', 'div',sub {
+            defined $_[0]->attr('id') and $_[0]->attr('id')=~ /ContGrillaSemanal/i
+        });
+	my @Divs = $tree2->find_by_tag_name("_tag"=>"div");
+
+	foreach my $elem (@Divs) {
+	        my $cclass = $elem->attr('class');
+        	if ((defined($cclass) && $cclass ne "") && (($cclass eq "diaSemana") || ($cclass eq "diaSemana par"))) {
+        	  # @Programs =+ ($elem->find_by_tag_name("_tag"=>"a"));
+		push (@WeekDays, $elem);       	           	    
+		}
+	}
+
+
+# Variable @program_data will hold the programming for a single day
+#    my @program_data = get_program_data($date,$tree,$tree_head,$ch_xmltv_id);
+    my @program_data = get_program_data($date,@WeekDays);
+
+
+
+
+
+
     
     my @r;
     while (@program_data) {
@@ -468,6 +584,15 @@ sub make_programme_hash {
     	t "...Fixed as $prog{stop}\n";
     } 
     $prog{desc}=[ [ $cur->{desc}, $LANG ] ] if defined $cur->{desc};
+    $prog{credits}=$cur->{credits} if defined $cur->{credits};
+
+#    $prog{credits}=[ "actor","pepe badia" ];
+
+    $prog{category}=[ [ $cur->{category}, $LANG ] ] if defined $cur->{category};
+    $prog{length}=$cur->{length} if defined $cur->{length};
+    $prog{date}=[ [ $cur->{date}, $LANG ] ] if defined $cur->{date};
+    $prog{country}=[ [ $cur->{country}, $LANG ] ] if defined $cur->{country};
+    $prog{rating}=[ [ $cur->{rating}, $LANG ] ] if defined $cur->{rating};
     return \%prog;
 
 }
@@ -499,30 +624,24 @@ sub to_UTC {
 
 # Returns an array of programs for the specified day in the global variable now.
 # All work is done by private get_programs_for function
+
+
+
 sub get_program_data {
-    my ($date,$tree,$tree_head,$chan) = @_;
+    my ($date,@ProgramWeek) = @_;
     my @nowarr=(
         UnixDate($date,"%Y"),
         UnixDate($date,"%m"),
         UnixDate($date,"%d"));
     my $weekday=Date_DayOfWeek($nowarr[1],$nowarr[2],$nowarr[0])-1;
 
-    my $offset_left=get_grid_offset_left($tree);
-    my $offset_top=get_grid_offset_top($tree);
-    my $height=get_grid_row_height($tree);
-    my $width=get_grid_row_width($tree_head);
+#    return () if  $offset_left < 0 or $offset_top < 0 or $height < 0;
 
-    return () if  $offset_left < 0 or $offset_top < 0 or $height < 0;
-
-    # So we select a value that sould be inside the range 
-    #   [offset_left+(width*weekday), offset_left+(width*weekday)+width]
-    # The chossen value is: offset_left+(width*weekday)+(width/2)
-    my $middle_left_value= ($width*$weekday)+($width/2);
-    #print "Date is $date\n";
-    #print "\nWEEKDAY: $weekday\n\nLEFT: $offset_left\nTOP: $offset_top\nHEIGHT: $height\nWIDTH: $width\n";
-    #print "\nSEARCHING FOR: $middle_left_value\n";
-    return get_programs_for($tree,$offset_left,$middle_left_value,$offset_top,$height);
+    return get_programs_for($ProgramWeek[$weekday]);
 }
+
+
+
 
 
 # get channel listing
@@ -530,37 +649,33 @@ sub get_channels {
     my $bar = new XMLTV::ProgressBar('getting list of channels', 1)
 	if not $opt_quiet;
     my %channels;
-    my $url="http://www.buscador" . $CableCompany . ".com.ar/index.php?template=main_grilla_semanal.tpl";
+    my ($locationid) = ($location{id});
+    my $url=$urlRoot . "popUpGuiaCanales.php?companiaSeleccionada=" . $locationid;
     t $url;
     # Need to disable redirects to work
     $XMLTV::Get_nice::ua->max_redirect(0);
-    my $tree = get_nice_tree $url;
-    my @menus = $tree->find_by_tag_name("_tag"=>"select");
-    foreach my $elem (@menus) {
-        my $cname = $elem->attr('name');
-        if ($cname eq "canal") {
-            my @ocanals = $elem->find_by_tag_name("_tag"=>"option");
-            @ocanals = sort @ocanals;
-            foreach my $opt (@ocanals) {
-                if (not $opt->attr('value') eq "") {
-                    my @opt_txt_elem=get_txt_elems($opt);
-                    my @str;
-                    if ($#opt_txt_elem > 0){
-                        @str=@opt_txt_elem;
-                    }else{
-                        @str=split(/-/,$opt_txt_elem[0]);
-                    }
-                    my $channel_id = trim($opt->attr('value'));
-                    my $channel_name=trim($str[1]);
-                    my $channel_num = trim($str[0]);
-                    $channels{$channel_id}=$channel_name;
-                    push @ch_all, { 
-                                'display-name' => [[ $channel_name, $LANG ],[$channel_num]],
-                                'channel-num' => $channel_num  ,
-                                'id'=> "$channel_id.cablevision" };
-                    }
+    my $tree = get_nice_tree $url; #($url, \&decode_utf8);
+#    my @menus =  $tree->find("./div[\@class='grilla_tv']");
+    my @lista = $tree->find_by_tag_name("_tag"=>"li");
+    foreach my $elem (@lista) {
+	my $tempdiv= $elem->look_down("_tag"=>"div");
+        my $channel_name=trim($tempdiv->as_text);
+        if (defined($tempdiv) && $tempdiv ne "") {
+            my $opt = $elem->look_down("_tag"=>"a");
+            if (not $opt->attr('onclick') eq "") {
+		my ($channel_id) = ($opt->attr('onclick') =~ /.*canal=(\d+).*/i);
+                my ($channel_num) = ($opt->attr('onclick') =~ /.*sintonia=(\d+).*/i);
+                $channels{$channel_id}=$channel_name;
+		my $coded_chan_name=encode("UTF-8",$channel_name);
+#		print $coded_chan_name;
+                push @ch_all, { 
+                              'display-name' => [[ $coded_chan_name, $LANG ],[$channel_num]],
+                              'channel-num' => $channel_num  ,
+#			      'channel-id'  => $channel_id,
+                              'id'=> "$channel_id.cablevision" 
+				};
             }
-        }
+       }
     }
     die "no channels could be found" if not keys %channels;
     update $bar if not $opt_quiet;
@@ -686,10 +801,184 @@ sub get_grid_row_width {
     return $rowDia[int ($#rowDia/2)]->attr('width');
 }
 
+
+
+
+
+
+
+
+sub parse_program {
+		my ($celda) = @_; 
+#channel, station, startday, celda)
+
+# <a href="ficha.php?verFicha=224193" rel="#overlay_ficha" class="programaSemana" title="Parental Control" style="height:34px; top:-1px">
+
+	my $title= encode("UTF-8",trim($celda->attr('title')));
+	if (! (defined $title)) {
+		$title= encode("UTF-8",trim($celda->as_text));         
+	} 
+        my ($top)=($celda->attr('style') =~ /top:\s*(-{0,1}\d+)\s*(px|)/i);
+        my ($left)=($celda->attr('style') =~ /left:\s*(-{0,1}\d+)\s*(px|)/i);
+        my ($height)=($celda->attr('style') =~ /height:\s*(-{0,1}\d+)\s*(px|)/i);
+        my ($width)=($celda->attr('style') =~ /width:\s*(-{0,1}\d+)\s*(px|)/i);
+	my $start=int (($top + 1) * (3600 / 68));
+
+	my $mins=int($start/60);
+	if ( $mins % 5 !=0 ){#Adjust to a multiple of 5 
+        	$mins=($mins+5)-(($mins+5)%5); 
+	}
+	my $startT = UnixDate(DateCalc("00:00","+ $mins minutes"),"%H:%M");
+
+	my $length = int(($height) * (3600 / 68));
+	$mins=int($length/60);
+	if ( $mins % 5 !=0 ){#Adjust to a multiple of 5 
+        	$mins=($mins+5)-(($mins+5)%5); 
+	}
+	my $LengthT = UnixDate(DateCalc("00:00","+ $mins minutes"),"%H:%M");
+	my $endT = UnixDate(DateCalc($startT,"+ $mins minutes"),"%H:%M");
+
+        my %ret;
+
+           %ret = (
+                time =>         $startT,
+                stoptime =>     $endT,
+                title=>         $title
+		);
+	if ($opt_get_details) {
+		my %TempDesc;
+		my ($progindex)=($celda->attr('href') =~ /ficha\.php\?verFicha.(\d+)/i);
+		if (exists $Descriptions{$progindex}) {
+			#original format
+			#warn "\nfound index: $progindex with description [" . $Descriptions{$progindex} . "]\n\n";
+			my $tempref = ($Descriptions{$progindex}) ;
+			%TempDesc= %$tempref;
+			foreach my $keyvalue (sort keys %TempDesc) {
+				if (($keyvalue ne 'time') && ($keyvalue ne 'stoptime')) {
+					$ret{$keyvalue} = $TempDesc{$keyvalue}
+				}
+			}
+		}
+		else {
+			#original format
+			eval {
+				warn "\n" . $urlRoot . "ficha.php?verFicha=$progindex\n";
+				my $ficha_tree=get_nice_tree($urlRoot . "ficha.php?verFicha=$progindex");
+#			};
+#			eval {
+				my $Categoria = ($ficha_tree->look_down('_tag','h1'));
+				if (defined $Categoria) {
+					$Categoria = encode("UTF-8",trim($Categoria->as_text));
+				} else {
+					$Categoria = "";
+				}
+#			};
+#			eval {
+				my $FichaBox=$ficha_tree->look_down(
+			       		'_tag', 'div',sub {
+					    defined $_[0]->attr('id') and
+				            $_[0]->attr('id')=~ /ficha/i
+				        });
+#			};
+#			eval {
+				my $TituloEsp = ($ficha_tree->look_down('_tag','h2'));
+				if (defined $TituloEsp) {
+					$TituloEsp = encode("UTF-8",trim($TituloEsp->as_text));
+				} else {
+					$TituloEsp = $title;
+				}
+#			};
+#			eval {
+				my $SinopsisBox=$ficha_tree->look_down(
+			       		'_tag', 'div',sub {
+					    defined $_[0]->attr('class') and
+				            $_[0]->attr('class')=~ /sinopsis/i
+				        });
+				my $sinopsis= ($SinopsisBox->look_down('_tag','p')) if (defined $SinopsisBox); 
+				if (defined $sinopsis) {
+					$sinopsis=encode("UTF-8",trim($sinopsis->as_text));
+				} else {
+					$sinopsis = "";
+				}
+	        		$ret{desc} = $sinopsis;
+#			};
+#			eval {			
+	  		   	my %credits;
+  				my @FichaTecnica = ($ficha_tree->look_down('_tag','li'));
+				my $PropertyField;
+				foreach my $Propiedad (@FichaTecnica){				
+					if ((defined $Propiedad->attr('class')) and ($Propiedad->attr('class')=~ /itemf1/i)) {	
+						$PropertyField=trim($Propiedad->as_text);
+					} 
+					else {
+						my $valor;
+						$valor=encode("UTF-8",trim($Propiedad->as_text));
+						switch ($PropertyField) {
+							case (m/Protagonista((s)?)/i) {
+								$valor =~ s/, /,/g;
+								my @algo =split(',', $valor);
+								$credits{actor} = \@algo
+							}
+							case (m/Director((es)?)/i) { 
+								$valor =~ s/, /,/g;
+								my @algo =split(',', $valor);
+								$credits{director} = \@algo
+							}
+							case (m/Conductor((es)?)/i) { 
+								$valor =~ s/, /,/g;
+								my @algo =split(',', $valor);
+								$credits{presenter} = \@algo
+							}
+							case (m/G.nero/i) { 
+								$ret{category} = $valor;
+							}
+							case (['Duraci&oacute;n','Duración']) { 
+								$valor =~ /(\d*)\s(.*)(\n|\r)?/i;
+								my $TempLength=$1;
+								my $tempunit=$2;
+								$tempunit=~ s/^\s//;
+								$tempunit=~ s/\s$//;
+#								$tempunit=~ s/minutos?/minutes/;
+#								$tempunit=~ s/horas?/hours/;
+#								$tempunit=~ s/segundos?/seconds/;
+#								if ($tempunit=~ s/minutos?/i) { $TempLength = ($TempLength *60) }	
+#								if ($tempunit=~ s/horas?/i) { $TempLength = ($TempLength *60) }	
+								$ret{length} = ($TempLength *60);
+							}
+							case (m/Pa.s/i) { 
+								$ret{country} = $valor;
+							}
+							case (['A&ntilde;o','Ano']) { 
+								$ret{date} = $valor;
+							}
+							case ('Título original') { 
+								$ret{title2} = $valor;
+							}
+							case ([m/Clasificaci.n/i]) { 
+								$ret{rating} = $valor;
+							}
+							case "" { 
+#								print "ignoring useless data ... [$PropertyField]\n" ;;
+#								%ret->{''} = $valor;
+							}
+							else {}
+						}
+					$PropertyField ="";
+					}
+				}
+				$ret{credits} = \%credits if %credits;
+			};
+		}	
+		$Descriptions{$progindex}=\%ret;
+	}
+
+	return \%ret;
+
+}
+
+
 ################################################################################
 # 
-# Private function that recognizes which programs to return for specified time
-# and the coordinates received as parameters.
 # Returns a hash with:
 #   time
 #   title
@@ -697,67 +986,43 @@ sub get_grid_row_width {
 # 
 ################################################################################
 sub get_programs_for {
-    my ($tree,$top_most_left,$middle_left,$offset_top,$default_height)=@_;
+    my ($ProgramDay)=@_;
     my @data;
-    my @row=$tree->look_down(
-        '_tag', 'div',sub {
-            $_[0]->attr('id')=~ /layer\d{1,2}/i and
-            $_[0]->attr('class')=~ /layerPrograma/i and 
-            defined $_[0]->attr('style') 
-        });
+#    my @row=$tree->look_down(
+#        '_tag', 'div',sub {
+#            $_[0]->attr('id')=~ /layer\d{1,2}/i and
+#            $_[0]->attr('class')=~ /layerPrograma/i and 
+#            defined $_[0]->attr('style') 
+#        });
 
 
-    foreach my $elem (@row){
-        my %ret;
-        my ($top)=($elem->attr('style') =~ /top:\s*(-{0,1}\d+)\s*(px|)/i);
-        my ($left)=($elem->attr('style') =~ /left:\s*(-{0,1}\d+)\s*(px|)/i);
-        my ($height)=($elem->attr('style') =~ /height:\s*(-{0,1}\d+)\s*(px|)/i);
-        my ($width)=($elem->attr('style') =~ /width:\s*(-{0,1}\d+)\s*(px|)/i);
-        if (    $left >= $top_most_left and $top >= $offset_top and
-                $left-$top_most_left <= $middle_left and $left+$width >= $middle_left and length $elem->as_text > 0){
-        # We found a program!!!
-		my $TempDesc="";
-		if ( $elem->as_HTML =~ /index\.php\?verFicha.(\d+)/) {
-			my $progindex=$1;
-			if (exists $Descriptions{$progindex}) {
-#original format
-				#warn "\nfound index: $progindex with description [" . $Descriptions{$progindex} . "]\n\n";
-				$TempDesc=$Descriptions{$progindex}	;	
-			}
-			else {
-#original format
-#				my $ficha_tree=get_nice_tree("http://www.buscador" . $CableCompany . ".com.ar/index.php?verFicha=$progindex");
-				my $ficha_tree=get_nice_tree("http://www.buscador" . $CableCompany . ".com.ar/ficha.php?verFicha=$progindex");
-				my @ficha = $ficha_tree->look_down('_tag','table');
 
-				my $sinopsis= $ficha[0]->as_text;
-				my @Propiedades = $ficha[1]->look_down('_tag','tr');
-				$TempDesc = Clean_amp($sinopsis);
-				foreach my $Propiedad (@Propiedades){				
-					if ($Propiedad->as_HTML =~ /class="itemf1".*>(.*)<\/td>.*class="descf1".*>(.*)<\/td>/) {
-						$TempDesc .= Clean_amp("\n\t$1:\t$2");
-					}
-				}
-				$Descriptions{$progindex}=$TempDesc;
-				#warn "\nAdding index: $progindex [" . $Descriptions{$progindex} . "]\n\n";
-			}
-		}
-           %ret = (
-                time =>         get_start_time($top,$offset_top,$default_height),
-                stoptime =>     get_start_time($top+$height-1,$offset_top,$default_height),
-                title=>         Clean_amp($elem->as_text),
-                desc =>         $TempDesc #$sinopsis #$elem->as_text
-#		actor =>
-#		director =>
-		);
-#            print "\n*****Returned because $top <= $middle_top and ",($top+$height)," >= $middle_top and
-#                $left <= $middle_left and ",($left+$width), ">= $middle_left\n";
+	my @Programs = $ProgramDay->find_by_tag_name("_tag"=>"a");       	           	    
 
-            push @data, \%ret;
-        }
-    }
+#	print @Programs;
+	foreach my $programa (@Programs) {
+		push @data, parse_program ($programa)
+	}
+
+
     return sort { Date_Cmp(ParseDate($a->{time}),ParseDate($b->{time})) } @data;
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 # Returns the time based on coordinates
 sub get_start_time {
@@ -816,4 +1081,40 @@ sub adjust_stoptime {
     return $curstop;
 }
 
+
+
+# Select Location
+sub select_Location( ) {
+
+    my $bar = new XMLTV::ProgressBar('getting list of Locations', 1)
+	if not $opt_quiet;
+
+
+    my $tree = get_nice_tree($urlRoot . "/popUpSeleccionZona.php?paisSeleccionado=cd");
+    my @options=$tree->look_down(
+        '_tag'=>'a', sub {
+            defined $_[0]->attr('href') and
+            ($_[0]->attr('href') =~ /CambiarZona/i)
+        }
+    );
+    my %Locations;
+	# Hardcoding Values for other companies
+	$Locations{"* Telecentro *"} = 17;
+	$Locations{"* DirecTV *"} = 16;
+	$Locations{"* Capital Federal y GBA *"} = 3;
+
+    foreach (@options){
+	my $LocationID=$_->attr('href');
+	$LocationID=~ s/\?cambiarzona=//i;
+        $Locations{$_->as_text()}=$LocationID;
+	
+    }
+    update $bar if not $opt_quiet;
+    $bar->finish() if not $opt_quiet;
+
+    my @names= sort keys %Locations;
+    my $choice=ask_choice("Select your Locations:",$names[0],@names);
+    return ( id=> $Locations{$choice}, name=>$choice );
+
+}
 
