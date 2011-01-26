@@ -41,6 +41,7 @@ All these functions are exported on demand.
 use XMLTV::ValidateFile qw/ValidateFile/;
 
 use File::Slurp qw/read_file/;
+use File::Spec::Functions qw/devnull/;
 use List::Util qw(min);
 
 my $runfh;
@@ -196,23 +197,23 @@ sub ValidateGrabber {
     open( $runfh, ">${op}commands.log" )
 	or die "Failed to write to ${op}commands.log";
 
-    if (not run( "$exe --ahdmegkeja > /dev/null 2>&1" )) {
+    if (not run( "$exe --ahdmegkeja > " . devnull() . " 2>&1" )) {
       w "$shortname with --ahdmegkeja did not fail. The grabber seems to "
 	  . "accept any command-line parameter without returning an error.";
       push @errors, "noparamcheck";
     }
 
-    if (run( "$exe --version > /dev/null 2>&1" )) {
+    if (run( "$exe --version > " . devnull() . " 2>&1" )) {
       w "$shortname with --version failed: $?, $!";
       push @errors, "noversion";
     }
 
-    if (run( "$exe --description > /dev/null 2>&1" )) {
+    if (run( "$exe --description > " . devnull() . " 2>&1" )) {
       w "$shortname with --description failed: $?, $!";
       push @errors, "nodescription";
     }
 
-    my $cap = run_capture( "$exe --capabilities 2>/dev/null" );
+    my $cap = run_capture( "$exe --capabilities 2> " . devnull() );
     if (not defined $cap) {
       w "$shortname with --capabilities failed: $?, $!";
       push @errors, "nocapabilities";
@@ -280,7 +281,7 @@ sub ValidateGrabber {
 	
 	# Run through tv_cat, which makes sure the data looks like XMLTV.
 	# What kind of errors does this catch that ValidateFile misses?
-	if (not cat_file( "$output.xml", "/dev/null", "${op}6.log" )) {
+	if (not cat_file( "$output.xml", devnull(), "${op}6.log" )) {
 	    w "$output.xml makes tv_cat choke, see ${op}6.log";
 	    push @errors, "caterror";
 	    goto bailout;
@@ -476,7 +477,7 @@ sub run_capture {
 sub compare_files {
     my( $file1, $file2, $output ) = @_;
 
-    $output = "/dev/null" unless defined $output;
+    $output = devnull() unless defined $output;
     run("diff $file1 $file2 > $output");
     return $? ? 0 : 1;
 }
