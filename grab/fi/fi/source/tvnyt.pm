@@ -19,7 +19,7 @@ BEGIN {
 
 use Carp;
 use HTML::Entities qw(decode_entities);
-use JSON;
+use JSON qw(-support_by_pp); # enable allow_barekey() for JSON:XS
 
 # Import from internal modules
 fi::common->import();
