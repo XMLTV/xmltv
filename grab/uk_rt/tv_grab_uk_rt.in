@@ -203,10 +203,13 @@ my %reversed_title_subtitle;  # key = title, value = title
 my %replacement_titles;       # key = old title, value = replacement title
 my %replacement_episodes;     # key = title, value = hash (where key = old ep, value = new ep)
 my %replacement_cats;         # key = title, value = category
-my %replacement_title_eps;    # key = 'old_title . old_ep', value = (new_title, new_ep)
+my %replacement_title_eps;    # key = 'old_title . '|' . old_ep', value = (new_title, new_ep)
 my %flagged_title_eps;        # key = old_title from title fixup routine 8
+my %dotdotdot_titles;         # key = replacement title ending with '...' seen in title fixup routine 8
 my %replacement_ep_from_desc; # key = title, value = hash (where key = desc, value = new ep)
 my %uc_prog_titles;           # key = title, value = title
+my %title_in_subtitle_fixed;  # key = 'title . '|' . episode', value = hashref (keys are title and episode)
+my %title_in_subtitle_notfixed; # key = 'title . '|' . episode', value = hashref (keys are title and episode)
 
 # Create global hash to store the programme titles for all programmes on all
 # channels, as we will process this last after grabbing to determine any
@@ -294,6 +297,8 @@ if ($opt->{debug}) {
         print_title_variants();
         print_titles_inc_years();
         print_flagged_title_eps();
+        print_dotdotdot_titles();
+        print_title_in_subtitle();
 
         print_categories();
         print_uncategorised_progs();
@@ -1474,6 +1479,9 @@ sub load_prog_titles_to_process {
                     t("[8] Ignoring fixup '" . $process_text . "' as old/new title not given");
                     next PROG_TITLE_ENTRY;
                 }
+                if ($old_title eq $new_title) {
+                    t("[8]   Old/new title are the same - change to a type 7 title fixup: '" . $process_text . "'");
+                }
                 # remember old title so that we can output a debug list of
                 # programmes that may also need to be handled via this fixup
                 $flagged_title_eps{$old_title} = $old_title;
@@ -1482,6 +1490,13 @@ sub load_prog_titles_to_process {
                 $replacement_title_eps{$key} = [$new_title, $new_ep];
                 t("[8] Will update old title/subtitle '" . $old_title . ": " . $old_ep 
                     . "' to '" . $new_title . ": " . $new_ep . "'");
+
+                # store titles that are being corrected with an existing "some title..." fixup
+                # store the title without the "..." for later matching
+                if ($new_title =~ m/^(.*)\.\.\.$/) {
+                    $dotdotdot_titles{$1}++;
+                }
+                
                 $have_title_data = 1;
                 next PROG_TITLE_ENTRY;
             }
@@ -3229,6 +3244,37 @@ sub write_listings_data {
             if ($prog{'_title'} eq uc($prog{'_title'})) {
                 $uc_prog_titles{$prog{'_title'}} = $prog{'_title'};
             }
+
+            # Debug output before any title processing takes place
+            if (defined $prog{'_episode'}) {
+                t("  Pre-processing title/episode details '" 
+                        . $prog{'_title'} . " / " . $prog{'_episode'} . "'");
+            }
+            
+            # 2010-04-16
+            # Listings for a few programmes are being provided that contain the
+            # programme title duplicated in the episode field, followed by
+            # the 'real' episode in parentheses or following a colon.
+            if (defined $prog{'_episode'}) {
+                my $tmp_title = $prog{'_title'};
+                my $tmp_episode = $prog{'_episode'};
+                my $key = $tmp_title . "|" . $tmp_episode;
+
+                # Remove the duplicated title from episode field if we find it
+                if ($tmp_episode =~ m/^\Q$tmp_title\E\s+\((.+)\)$/ || $tmp_episode =~ m/^\Q$tmp_title\E:\s+(.+)$/) {
+                    $title_in_subtitle_fixed{$key} = { 'title'    => $tmp_title,
+                                                       'episode'  => $tmp_episode,
+                                                     };
+                    t("    Removing title details from episode field");
+                    $prog{'_episode'} = $1;
+                }
+                # Otherwise store the title/episode data for debug output
+                elsif ($tmp_episode =~ m/^\Q$tmp_title\E.*$/) {
+                    $title_in_subtitle_notfixed{$key} = { 'title'    => $tmp_title,
+                                                          'episode'  => $tmp_episode,
+                                                        };
+                }
+            }
             
             # First, remove non-title text found in programme title.
             #
@@ -3281,10 +3327,6 @@ sub write_listings_data {
             process_replacement_genres(\%prog);
 
             # Look for series/episode/part numbering in programme title/subtitle
-            if (defined $prog{'_episode'}) {
-                t("  Pre-processing title/episode details '" 
-                        . $prog{'_title'} . " / " . $prog{'_episode'} . "'");
-            }
             extract_numbering_from_episode(\%prog);
             extract_numbering_from_title(\%prog);
             extract_part_numbering_from_episode(\%prog);
@@ -3331,6 +3373,9 @@ sub write_listings_data {
                 my $title_nopunc = lc $prog{'_title'};
                 $title_nopunc =~ s/^the\s+//;
                 $title_nopunc =~ s/(\s+and\s+|\s+&\s+)/ /g;
+                $title_nopunc =~ s/\s+No 1s$//g;
+                $title_nopunc =~ s/\s+No 1's$//g;
+                $title_nopunc =~ s/\s+Number Ones$//g;
                 $title_nopunc =~ s/' //g;
                 $title_nopunc =~ s/'s/s/g;
                 $title_nopunc =~ s/\W//g;
@@ -3943,11 +3988,12 @@ sub print_new_titles {
         foreach my $title (sort keys %prog_titles) {
             push(@titles_new, $title) if ($title =~ m/^(All New|New)\b/i);
             push(@titles_premiere, $title) if ($title =~ m/Premiere\b/i);
+            push(@titles_finale, $title) if ($title =~ m/Final\b/i);
             push(@titles_finale, $title) if ($title =~ m/Finale/i);
             push(@titles_anniv, $title) if ($title =~ m/Anniversary/i);
         }
         if (@titles_new || @titles_premiere || @titles_finale || @titles_anniv) {
-            say("\nStart of list of titles containing \"New/Premiere/Finale...\"");
+            say("\nStart of list of titles containing \"New/Premiere/Finale/etc...\"");
             if (@titles_new) {
                 say("  " . $_) foreach @titles_new;
                 say("");
@@ -3964,7 +4010,7 @@ sub print_new_titles {
                 say("  " . $_) foreach @titles_anniv;
                 say("");
             }
-            say("End of list of titles containing \"New/Premiere/Finale...\"");
+            say("End of list of titles containing \"New/Premiere/Finale/etc...\"");
         }
         
         my @titles_day;
@@ -4012,17 +4058,23 @@ sub print_new_titles {
         }
         
         my @titles_bestof;
+        my @titles_highlights;
         my @titles_results;
         my @titles_top;
         foreach my $title (sort keys %prog_titles) {
             push(@titles_bestof, $title) if ($title =~ m/Best of\b/i);
+            push(@titles_highlights, $title) if ($title =~ m/Highlights/i);
             push(@titles_results, $title) if ($title =~ m/Results?/i);
             push(@titles_top, $title) if ($title =~ m/\bTop\b/i);
         }
         if (@titles_bestof || @titles_results || @titles_top) {
-            say("\nStart of list of titles containing \"Results/Best of/etc\"");
+            say("\nStart of list of titles containing \"Results/Best of/Highlights/etc...\"");
             if (@titles_bestof) {
                 say("  " . $_) foreach @titles_bestof;
+                say("");
+            }
+            if (@titles_highlights) {
+                say("  " . $_) foreach @titles_highlights;
                 say("");
             }
             if (@titles_results) {
@@ -4033,7 +4085,7 @@ sub print_new_titles {
                 say("  " . $_) foreach @titles_top;
                 say("");
             }
-            say("End of list of titles containing \"Results/Best of/etc\"");
+            say("End of list of titles containing \"Results/Best of/Highlights/etc...\"");
         }
     }
 }
@@ -4131,6 +4183,49 @@ sub print_flagged_title_eps {
             }
             say("End of list of titles that may need fixing individually");
         }
+    }
+}
+
+sub print_dotdotdot_titles {
+    if (%dotdotdot_titles && scalar keys %dotdotdot_titles > 0) {
+        my %titles_to_output; # temp hash to store matches
+        if (%prog_titles) {
+            DOTDOTDOT_TITLE:
+            foreach my $dotdotdot_title (sort keys %dotdotdot_titles) {
+                PROG_TITLE:
+                foreach my $title (sort keys %prog_titles) {
+                    next PROG_TITLE if $title =~ m/.*\.\.\.$/;
+                    if ($title =~ m/^\Q$dotdotdot_title\E.*/i) {
+                        $titles_to_output{$title} = $title;
+                    }
+                }
+            }
+        }
+        # only output something if at least 1 matching title
+        if (%titles_to_output && scalar keys %titles_to_output > 0) {
+            say("\nStart of list of potential \"...\" titles that may need fixing individually");
+            foreach my $title (sort keys %titles_to_output) {
+                say("  $title");
+            }
+            say("End of list of potential \"...\" titles that may need fixing individually");
+        }
+    }           
+}
+
+sub print_title_in_subtitle {
+    if (%title_in_subtitle_fixed && scalar keys %title_in_subtitle_fixed > 0) {
+        say("\nStart of list of programmes where title was removed from sub-title field");
+        foreach my $prog_ref (sort keys %title_in_subtitle_fixed) {
+            say("  $title_in_subtitle_fixed{$prog_ref}->{'title'} / $title_in_subtitle_fixed{$prog_ref}->{'episode'}");
+        }
+        say("\nEnd of list of programmes where title was removed from sub-title field");
+    }
+    if (%title_in_subtitle_notfixed && scalar keys %title_in_subtitle_notfixed > 0) {
+        say("\nStart of list of programmes where title is still present in sub-title field");
+        foreach my $prog_ref (sort keys %title_in_subtitle_notfixed) {
+            say("  $title_in_subtitle_notfixed{$prog_ref}->{'title'} / $title_in_subtitle_notfixed{$prog_ref}->{'episode'}");
+        }
+        say("\nEnd of list of programmes where title is still present in sub-title field");
     }
 }
 
