@@ -642,6 +642,11 @@ my @opt_components
 		    'HTML::TreeBuilder' => 0 },
      },
 
+     { name => 'tv_grab_fr_kazer',
+       blurb => 'Grabber for France (Kazer)',
+       exes => [ 'grab/fr_kazer/tv_grab_fr_kazer' ],
+     },
+
 #
 # depreciate tv_grab_no as it is no longer supported (per author, cwattengard@gmail.com)
 # has been replaced by tv_grab_no_gfeed
