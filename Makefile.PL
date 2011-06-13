@@ -721,32 +721,33 @@ my @opt_components
        exes => [ 'grab/ee/tv_grab_ee' ],
        prereqs => { 'LWP::Simple' => 0 } },
 
-    { name => 'tv_grab_re',
-       blurb => 'Grabber for Reunion Island (France)',
-       exes => [ 'grab/re/tv_grab_re' ],
-       prereqs => { 'HTML::TreeBuilder' => 0 ,
-                    'HTML::Entities'    => 0 } },
+# rmeden 2011-06-12 not working
+#    { name => 'tv_grab_re',
+#       blurb => 'Grabber for Reunion Island (France)',
+#       exes => [ 'grab/re/tv_grab_re' ],
+#       prereqs => { 'HTML::TreeBuilder' => 0 ,
+#                    'HTML::Entities'    => 0 } },
 
 # rmeden 2008-02-13
 # not working due to site changes
 # disabling
-#
 #    { name => 'tv_grab_nc',
 #      blurb => 'Grabber for Nouvelle Caledonie Island (France)',
 #      exes => [ 'grab/nc/tv_grab_nc' ],
 #      prereqs => { 'HTML::TreeBuilder' => 0 ,
 #                   'HTML::Entities'    => 0 } },
 
-     { name => 'tv_grab_na_dtv',
-       blurb => 'Grabber for DirecTV in North America',
-       exes => [ 'grab/na_dtv/tv_grab_na_dtv' ],
-       prereqs => {
-         'WWW::Mechanize' => 0,
-         'HTML::TokeParser' => 0,
-         'Date::Parse' => 0,
-         'Time::Local' => 0
-       },
-     },
+# rmeden 2011-06-12 not working
+#     { name => 'tv_grab_na_dtv',
+#       blurb => 'Grabber for DirecTV in North America',
+#       exes => [ 'grab/na_dtv/tv_grab_na_dtv' ],
+#       prereqs => {
+#         'WWW::Mechanize' => 0,
+#         'HTML::TokeParser' => 0,
+#         'Date::Parse' => 0,
+#         'Time::Local' => 0
+#       },
+#     },
 
     );
 
