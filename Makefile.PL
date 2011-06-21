@@ -645,7 +645,8 @@ my @opt_components
      { name => 'tv_grab_fr_kazer',
        blurb => 'Grabber for France (Kazer)',
        exes => [ 'grab/fr_kazer/tv_grab_fr_kazer' ],
-     },
+       prereqs => { 'IO::Uncompress::Unzip' => 0 },
+       },
 
 #
 # depreciate tv_grab_no as it is no longer supported (per author, cwattengard@gmail.com)
