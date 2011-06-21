@@ -136,7 +136,7 @@ sub GetSupplementFile {
   else {
     $filename = File::Spec->catfile( $supplement_root, $name );
   }
-
+  $filename =~ s/[:\?]/_/g;
   my $result;
 
   d( "Reading $filename" );
@@ -177,6 +177,7 @@ sub GetSupplementUrl {
   }
 
   d( "Going to fetch $url" );
+  $name =~ s/[:\?]/_/g;
 
   my $meta = read_meta( $directory, $name );
   my $cached = read_cache( $directory, $name );
