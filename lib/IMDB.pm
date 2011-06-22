@@ -1101,21 +1101,17 @@ sub applyFound($$$)
 	    }
 	}
 
-	# current xmltv 0.5 doens't support more than one star rating,
-	# so we deal with this slightly different
 	if ( $self->{updateStarRatings} && defined($details->{ratingRank}) ) {
 	    if ( $self->{replaceStarRatings} ) {
 		if ( defined($prog->{'star-rating'}) ) {
 		    $self->debug("replacing 'star-rating'");
 		    delete($prog->{'star-rating'});
 		}
-		$prog->{'star-rating'}=["$details->{ratingRank}/10", undef];
+		unshift( @{$prog->{'star-rating'}}, [ $details->{ratingRank} . "/10", 'IMDB User Rating' ] );
 	    }
 	    else {
-		# if a star rating exists, then we leave it in place
-		if ( !defined($prog->{'star-rating'}) ) {
-		    $prog->{'star-rating'}=["$details->{ratingRank}/10", undef];
-		}
+	        # add IMDB User Rating in front of all other star-ratings
+		unshift( @{$prog->{'star-rating'}}, [ $details->{ratingRank} . "/10", 'IMDB User Rating' ] );
 	    }
 	}
     }
