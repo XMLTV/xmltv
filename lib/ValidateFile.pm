@@ -370,7 +370,7 @@ sub verify_utf8 {
         my ($hintpre, $hint, $hintpost) = ( $file_str =~ m/(.{0,15})(\xEF\xBF\xBD)(.{0,15})/ );
         w( "file contains misencoded characters"
            . "\nlook here \"" . $hintpre . $hint . $hintpost . "\""
-           . sprintf( "\n%*s", 12+length( $hintpre ) , "^" )
+           . sprintf( "\n%*s", 11+length( $hintpre ) , "^^^" )
            , 'badutf8' );
     }
 
@@ -379,7 +379,7 @@ sub verify_utf8 {
         my ($hintpre, $hint, $hintpost) = ( $file_str =~ m/(.{0,15})(\xC3\xAF\xC2\xBF\xC2\xBD)(.{0,15})/ );
         w( "file contains misencoded characters"
            . "\nlook here \"" . $hintpre . $hint . $hintpost . "\""
-           . sprintf( "\n%*s", 12+length( $hintpre ) , "^" )
+           . sprintf( "\n%*s", 11+length( $hintpre ) , "^^^^^^" )
            , 'badutf8' );
     }
 
@@ -388,7 +388,52 @@ sub verify_utf8 {
         my ($hintpre, $hint, $hintpost) = ( $file_str =~ m/(.{0,15})(\xC2[\x80-\x9F])(.{0,15})/ );
         w( "file contains unexpected control characters, misencoded windows-1252?"
            . "\nlook here \"" . $hintpre . $hint . $hintpost . "\""
-           . sprintf( "\n%*s", 12+length( $hintpre ) , "^" )
+           . sprintf( "\n%*s", 11+length( $hintpre ) , "^^" )
+           , 'badutf8' );
+    }
+
+    # 4) The first two (C0 and C1) could only be used for overlong encoding of basic ASCII characters.
+    if( $file_str =~ m/[\xC0-\xC1]/ ) {
+        my ($hintpre, $hint, $hintpost) = ( $file_str =~ m/(.{0,15})([\xC0-\xC1])(.{0,15})/ );
+        w( "file contains bytes that should never appear in utf-8"
+           . "\nlook here \"" . $hintpre . $hint . $hintpost . "\""
+           . sprintf( "\n%*s", 11+length( $hintpre ) , "^" )
+           , 'badutf8' );
+    }
+
+    # 5) start bytes of sequences that could only encode numbers larger than the 0x10FFFF limit of Unicode.
+    if( $file_str =~ m/[\xF5-\xFF]/ ) {
+        my ($hintpre, $hint, $hintpost) = ( $file_str =~ m/(.{0,15})([\xF5-\xFF])(.{0,15})/ );
+        w( "file contains bytes that should never appear in utf-8"
+           . "\nlook here \"" . $hintpre . $hint . $hintpost . "\""
+           . sprintf( "\n%*s", 11+length( $hintpre ) , "^" )
+           , 'badutf8' );
+    }
+
+    # 6) first continuation byte missing after start of sequence
+    if( $file_str =~ m/[\xC2-\xF4][\x00-\x7F\xC0-\xFF]/ ) {
+        my ($hintpre, $hint, $hintpost) = ( $file_str =~ m/(.{0,15})([\xC2-\xF4][\x00-\x7F\xC0-\xFF])(.{0,15})/ );
+        w( "file contains an utf-8 sequence with missing continuation bytes"
+           . "\nlook here \"" . $hintpre . $hint . $hintpost . "\""
+           . sprintf( "\n%*s", 11+length( $hintpre )+1 , "^" )
+           , 'badutf8' );
+    }
+
+    # 7) second continuation byte missing after start of sequence
+    if( $file_str =~ m/[\xE0-\xF4][\x80-\xBF][\x00-\x7F\xC0-\xFF]/ ) {
+        my ($hintpre, $hint, $hintpost) = ( $file_str =~ m/(.{0,15})([\xE0-\xF4][\x80-\xBF][\x00-\x7F\xC0-\xFF])(.{0,15})/ );
+        w( "file contains an utf-8 sequence with missing continuation bytes"
+           . "\nlook here \"" . $hintpre . $hint . $hintpost . "\""
+           . sprintf( "\n%*s", 11+length( $hintpre )+2 , "^" )
+           , 'badutf8' );
+    }
+
+    # 8) third continuation byte missing after start of sequence
+    if( $file_str =~ m/[\xF0-\xF4][\x80-\xBF][\x80-\xBF][\x00-\x7F\xC0-\xFF]/ ) {
+        my ($hintpre, $hint, $hintpost) = ( $file_str =~ m/(.{0,15})([\xF0-\xF4][\x80-\xBF][\x80-\xBF][\x00-\x7F\xC0-\xFF])(.{0,15})/ );
+        w( "file contains an utf-8 sequence with missing continuation bytes"
+           . "\nlook here \"" . $hintpre . $hint . $hintpost . "\""
+           . sprintf( "\n%*s", 11+length( $hintpre )+3 , "^" )
            , 'badutf8' );
     }
 
