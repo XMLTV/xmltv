@@ -116,7 +116,7 @@ sub grab {
 	      $title = $title->as_text();
 	      if (my($hour, $minute) = ($start =~ /^(\d{2}):(\d{2})/)) {
 		my $desc  = $columns[1]->as_text(); # includes $title
-		$desc =~ s/^$title\s+//;
+		$desc =~ s/^\Q$title\E\s+//;
 		debug(3, "List entry $channel ($hour:$minute) $title");
 		debug(4, $desc);
 
