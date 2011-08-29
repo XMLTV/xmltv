@@ -635,6 +635,36 @@ my @opt_components
                   },
      },
 
+     { name => 'tv_grab_eu_egon',
+       blurb => 'Grabber for german speaking area (Egon zappt)',
+       exes => [ 'grab/eu_egon/tv_grab_eu_egon' ],
+       pl_files => { 'grab/eu_egon/tv_grab_eu_egon.PL'
+		     => 'grab/eu_egon/tv_grab_eu_egon' },
+       to_clean => [ 'grab/eu_egon/tv_grab_eu_egon' ],
+       deps => [ 'grab/eu_egon/tv_grab_eu_egon'
+		 => [ 'grab/se_swedb/tv_grab_se_swedb.in' ] ],
+       prereqs => { 'XML::LibXML' => 0,
+                    'Compress::Zlib' => 0,
+                    'IO::Stringy' => 0,
+		    'HTTP::Cache::Transparent' => 0,
+                  },
+     },
+
+     { name => 'tv_grab_se_tvzon',
+       blurb => 'Grabber for Sweden (tvzon.se)',
+       exes => [ 'grab/se_tvzon/tv_grab_se_tvzon' ],
+       pl_files => { 'grab/se_tvzon/tv_grab_se_tvzon.PL'
+		     => 'grab/se_tvzon/tv_grab_se_tvzon' },
+       to_clean => [ 'grab/se_tvzon/tv_grab_se_tvzon' ],
+       deps => [ 'grab/se_tvzon/tv_grab_se_tvzon'
+		 => [ 'grab/se_swedb/tv_grab_se_swedb.in' ] ],
+       prereqs => { 'XML::LibXML' => 0,
+                    'Compress::Zlib' => 0,
+                    'IO::Stringy' => 0,
+		    'HTTP::Cache::Transparent' => 0,
+                  },
+     },
+
      { name => 'tv_grab_fr',
        blurb => 'Grabber for France',
        exes => [ 'grab/fr/tv_grab_fr' ],
