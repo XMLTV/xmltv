@@ -23,6 +23,7 @@ print '-nologo
 -add "DateTime::Locale::en_US"
 -add "DateTime::TimeZone::Europe::Copenhagen"
 -add "DateTime::TimeZone::Europe::Helsinki"
+-add "DateTime::TimeZone::Europe::Lisbon"
 -add "DateTime::TimeZone::Asia::Jerusalem"
 -add "DateTime::TimeZone::Asia::Kolkata"
 -add="Tk::ProgressBar"
