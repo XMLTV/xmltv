@@ -74,9 +74,74 @@ sub channels {
   return;
 }
 
+#
+# http://www.telkku.com/movie contains information about (all?) movies for
+# today and the next 7 days, i.e. offsets 0 to 7. We extract the URL to the
+# detailed programme information (http://www.telkku.com/program/show/......)
+# that can then be used to identify movies when processing programme entries.
+#
+{
+  my %ids;
+
+  sub _getMovieIDsForOffset($) {
+    my($offset) = @_;
+
+    # There is only data for the next 7 days
+    return({}) if $offset > 7;
+
+    # Reuse cached data
+    return(\%ids) if %ids;
+
+    # In order to reduce website traffic, we only try this once
+    $ids{__DUMMY_ID_THAT_NEVER_MATCHES__}++;
+
+    # Fetch & parse HTML
+    # This is entirely optional, so please don't abort on failure...
+    my $root = fetchTree("http://www.telkku.com/movie", undef, 1);
+    if ($root) {
+      my $test;
+
+      #
+      # Document structure for movie entries:
+      #
+      # <div id="movieItems">
+      #   ...
+      #   <div class="movieItem">
+      #     <span class="heading">
+      #       <a href="http://www.telkku.fi/program/show/2011100211009">Aikuinen nainen</a>
+      #     </span>
+      #     ...
+      #   </div>
+      #   ...
+      # </div>
+      #
+      if (my @list = $root->look_down("class" => "movieItem")) {
+	debug(2, "Source telkku.com found " . scalar(@list) . " movies");
+	foreach my $list_entry (@list) {
+	  if (my $heading = $list_entry->look_down("class" => "heading")) {
+	    if (my $link = $heading->find("a")) {
+	      my $href = $link->attr("href");
+	      if (defined($href) && length($href)) {
+		debug(3, "movie ID: " . $href);
+		$ids{$href}++;
+	      }
+	    }
+	  }
+	}
+      }
+
+      # Done with the HTML tree
+      $root->delete();
+    }
+
+    debug(2, "Source telkku.com parsed " . (scalar(keys %ids) - 1) . " movies");
+    return(\%ids);
+  }
+}
+
 # Grab one day
 sub grab {
-  my($self, $id, $yesterday, $today, $tomorrow) = @_;
+  my($self, $id, $yesterday, $today, $tomorrow, $offset) = @_;
 
   # Get channel number from XMLTV id
   return unless my($channel) = ($id =~ /^(\d+)\.telkku\.com$/);
@@ -84,6 +149,7 @@ sub grab {
   # Fetch & parse HTML
   my $root = fetchTree("http://www.telkku.com/channel/list/$channel/$today");
   if ($root) {
+    my $movie_ids = _getMovieIDsForOffset($offset);
 
     #
     # All program info is contained within a unsorted list with class "programList"
@@ -103,21 +169,27 @@ sub grab {
 	  my $date = $list_entry->look_down("class", "programDate");
 	  my $desc = $list_entry->look_down("class", "programDescription");
 	  if ($date && $desc) {
-	    my $href = $date->find("a");
-	    if ($href) {
+	    my $link = $date->find("a");
+	    if ($link) {
 
 	      # Extract texts from HTML elements. Entities are already decoded.
-	      $date = $href->as_text();
+	      $date = $link->as_text();
 	      $desc = $desc->as_text();
 
 	      # Use "." to match &nbsp; character (it's not included in \s?)
 	      if (my($hour, $minute, , $title) =
 		  $date =~ /^(\d{2}):(\d{2}).(.+)/) {
+		my $href     = $link->attr("href");
+		my $category = (defined($href) && exists($movie_ids->{$href})) ?
+		    "elokuvat" : undef;
+
 		debug(3, "List entry $channel ($hour:$minute) $title");
 		debug(4, $desc);
+		debug(4, $category) if defined $category;
 
 		# Only record entry if title isn't empty
-		appendProgramme($opaque, $hour, $minute, $title, undef, $desc)
+		appendProgramme($opaque, $hour, $minute, $title, $category,
+				$desc)
 		  if length($title) > 0;
 	      }
 	    }

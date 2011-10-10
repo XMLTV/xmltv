@@ -80,7 +80,7 @@ my %category_map = (
 
 # Grab one day
 sub grab {
-  my($self, $id, $yesterday, $today, $tomorrow) = @_;
+  my($self, $id, $yesterday, $today, $tomorrow, $offset) = @_;
 
   # Get channel number from XMLTV id
   return unless my($channel) = ($id =~ /^(\d+)\.tvnyt\.fi$/);

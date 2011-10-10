@@ -55,19 +55,48 @@ use XMLTV::Get_nice;
 }
 
 # Fetch URL as UTF8 encoded string
-sub fetchRaw($;$) {
-  my($url, $encoding) = @_;
+sub fetchRaw($;$$) {
+  my($url, $encoding, $nofail) = @_;
   debug(2, "Fetching URL '$url'");
-  my $content = eval { decode($encoding || "utf8", get_nice($url)) };
-  croak "fetchRaw(): $@" if $@;
+  my $content;
+  my $retries = 5; # this seems to be enough?
+ RETRY:
+  while (1) {
+      eval {
+	  local $SIG{ALRM} = sub { die "Timeout" };
+
+	  # Default TCP timeouts are too long. If we don't get a response
+	  # within 20 seconds, then that's usually an indication that
+	  # something is really wrong on the server side.
+	  alarm(20);
+	  $content = get_nice($url);
+	  alarm(0);
+      };
+
+      unless ($@) {
+	  # Everything is OK
+	  $content = decode($encoding || "utf8", $content);
+	  last RETRY;
+      } elsif (($@ =~ /error: 500 Timeout/) && $retries--) {
+	  # Let's try this one more time
+	  carp "fetchRaw(): timeout. Retrying...";
+      } elsif ($nofail) {
+	  # Caller requested not to fail
+	  $content = "";
+	  last RETRY;
+      } else {
+	  # Fail on everything else
+	  croak "fetchRaw(): $@";
+      }
+  }
   debug(5, $content);
   return($content);
 }
 
 # Fetch URL as parsed HTML::TreeBuilder
-sub fetchTree($;$) {
-  my($url, $encoding) = @_;
-  my $content = fetchRaw($url, $encoding);
+sub fetchTree($;$$) {
+  my($url, $encoding, $nofail) = @_;
+  my $content = fetchRaw($url, $encoding, $nofail);
   my $tree = HTML::TreeBuilder->new();
   local $SIG{__WARN__} = sub { carp("fetchTree(): $_[0]") };
   $tree->parse($content) or croak("fetchTree() parse failure for '$url'");

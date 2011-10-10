@@ -352,7 +352,8 @@ sub doGrab() {
       debug(1, "Fetching day $dates->[$i]");
       foreach my $source (@sources) {
 	if (my $programmes = $source->grab($id,
-					   @{ $dates }[$i - 1..$i + 1])) {
+					   @{ $dates }[$i - 1..$i + 1],
+					   $Option{offset} + $i - 1)) {
 
 	  if (@{ $programmes }) {
 	    # Add channel ID & name (once)
