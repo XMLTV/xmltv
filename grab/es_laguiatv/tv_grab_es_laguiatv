@@ -121,6 +121,8 @@ my $HEAD = { 'source-info-url'     => 'http://www.laguiatv.com/programacion.php'
 # Whether zero-length programmes should be included in the output.
 my $WRITE_ZERO_LENGTH = 0;
 my $DO_SLOWER_DESC_GET = 0;
+my $CONFIG_VERSION = 1; # default to v1 (v1 doesnt have version info)
+my $EXPECTED_CONFIG_VERSION = 2;
 
 # default language
 my $LANG="es";
@@ -135,27 +137,8 @@ sub debug_print
 #	print "$str";
 }
 
-# hard-coded list of TDT channels since laguia dont list them separately
-my @tdt_channels = (
-    "La 10",
-    "Antena.neox",
-    "Antena.nova",
-    "Clan / TVE 50", # missing / in name
-    "Factor{icute}a de Ficci{ocute}n Telecinco",
-    "Boing",
-    "Gol TV",
-    "La Siete",
-    "Veo7",
-    "LaSexta2",
-    "LaSexta3",
-    "Nitro",
-    "Canal 24 horas",
-    "CNN+"
-);
-
-# hard-coded list of channels to hide from channel list
 my @hide_channels = (
-    "Clan  TVE 50", # missing / in name
+    "canal-bar.a", # currently gives 404 not found
 );
 
 
@@ -167,7 +150,7 @@ XMLTV::Memoize::check_argv('XMLTV::Get_nice::get_nice_aux');
 my ($opt_days, $opt_offset, $opt_help, $opt_output,
     $opt_configure, $opt_config_file, $opt_gui,
     $opt_quiet, $opt_list_channels);
-$opt_days  = 3; # default
+$opt_days  = 1; # default
 $opt_offset = 0; # default
 $opt_quiet  = 0; # default
 GetOptions('days=i'        => \$opt_days,
@@ -181,6 +164,9 @@ GetOptions('days=i'        => \$opt_days,
 	   'list-channels' => \$opt_list_channels
 	  )
   or usage(0);
+
+# Force days to be 1, since we get all days at once
+$opt_days = 1;
 die 'number of days must not be negative'
   if (defined $opt_days && $opt_days < 0);
 usage(1) if $opt_help;
@@ -213,6 +199,15 @@ my %channels; # sets @ch_all
 my @channels;
 
 my %icons;
+
+my %categories = (
+    "tag-a" => "Cine",
+    "tag-b" => "Deportes",
+    "tag-c" => "Programas",
+    "tag-d" => "Series",
+    "tag-e" => "Noticias"
+);
+
 ######################################################################
 # write configuration
 
@@ -221,6 +216,7 @@ if ($mode eq 'configure') {
     
     open(CONF, ">$config_file") or die "cannot write to $config_file: $!";
 
+    print CONF "configversion 2\n";
     # Ask about getting descs
     my $getdescs = ask_boolean("Do you want to get descriptions (very slow)");
     warn("cannot read input, using default")
@@ -230,9 +226,9 @@ if ($mode eq 'configure') {
     print CONF "yes\n" if $getdescs;
     print CONF "no\n" if not $getdescs;
 
-    my $cacheicons = ask_boolean('Do you want to get and cache icons during configure', 'yes');
-    warn("cannot read input, using default")
-        if not defined $cacheicons;
+    #my $cacheicons = ask_boolean('Do you want to get and cache icons during configure', 'yes');
+    #warn("cannot read input, using default")
+    #    if not defined $cacheicons;
 
     # Ask about each channel.
     my @chs = sort { $channels{$a} cmp $channels{$b} } keys %channels;
@@ -240,8 +236,8 @@ if ($mode eq 'configure') {
     my @qs = map { "Add channel $_?" } @names;
     my @want = ask_many_boolean(1, @qs);
 
-    my $iconbar = new XMLTV::ProgressBar({name => 'getting icon urls', count => scalar @chs})
-    if ((not $opt_quiet) && $cacheicons);
+    #my $iconbar = new XMLTV::ProgressBar({name => 'getting icon urls', count => scalar @chs})
+    #if ((not $opt_quiet) && $cacheicons);
 
     foreach (@chs) {
 	my $w = shift @want;
@@ -252,18 +248,18 @@ if ($mode eq 'configure') {
 	# Print a config line, but comment it out if channel not wanted.
 	print CONF '#' if not $w;
 	my $name = shift @names;
-        if ($cacheicons)
-        {
-            my $icon = get_icon($_);
-	    print CONF "channel $_ $name icon:$icon\n";
-        }
-        else
-        {
+#        if ($cacheicons)
+#        {
+#            my $icon = get_icon($_);
+#	    print CONF "channel $_ $name icon:$icon\n";
+#        }
+#        else
+#        {
             print CONF "channel $_ $name\n";
-        }
+#        }
 	# TODO don't store display-name in config file.
 
-        update $iconbar if ((not $opt_quiet) && $cacheicons);
+#        update $iconbar if ((not $opt_quiet) && $cacheicons);
     }
 
     close CONF or warn "cannot close $config_file: $!";
@@ -304,12 +300,21 @@ my $line_num = 1;
 foreach (@config_lines) {
     ++ $line_num;
     next if not defined;
-    if (/getdescriptions:?\s+(\S+)/)
-	{
-		if($1 eq "yes")
-		{
-			$DO_SLOWER_DESC_GET = 1;
-		}
+
+    if (/configversion:?\s+(\S+)/)
+    {
+        $CONFIG_VERSION = $1;
+    }
+    elsif (/getdescriptions:?\s+(\S+)/)
+    {
+        if("$CONFIG_VERSION" ne "$EXPECTED_CONFIG_VERSION")
+        {
+            die "Config file is out of date, please rerun with --configure\n";
+        }
+        if($1 eq "yes")
+        {
+            $DO_SLOWER_DESC_GET = 1;
+        }
     }
     elsif (/^channel:?\s+(\S+)\s+([^#]+)icon\:([^#]+)/)
     {
@@ -354,23 +359,23 @@ my $iconbar = new XMLTV::ProgressBar({name => 'getting channel info', count => s
 foreach my $ch_did (@channels) {
     my $ch_name=$channels{$ch_did};
     my $ch_xid="$ch_did.laguiatv.com";
-    my $ch_icon=$icons{$ch_did};
-    if (!$ch_icon)
-    {
-        $ch_icon = get_icon($ch_did);
-    }
-
-    if(index($ch_icon, "shim.gif") < 0)
-    {
-		$writer->write_channel({ id => $ch_xid,
-					 'display-name' => [ [ $ch_name ] ] ,
-					 'icon' => [ { 'src' => $ch_icon } ] });
-	}
-	else
-	{
+#    my $ch_icon=$icons{$ch_did};
+#    if (!$ch_icon)
+#    {
+#        $ch_icon = get_icon($ch_did);
+#    }
+#
+#    if(index($ch_icon, "shim.gif") < 0)
+#    {
+#		$writer->write_channel({ id => $ch_xid,
+#					 'display-name' => [ [ $ch_name ] ] ,
+#					 'icon' => [ { 'src' => $ch_icon } ] });
+#	}
+#	else
+#	{
 		$writer->write_channel({ id => $ch_xid,
 					 'display-name' => [ [ $ch_name ] ] });
-	}
+#	}
     my $day=UnixDate($now,'%Q');
     for (my $i=0;$i<$opt_days;$i++) {
         push @to_get, [ $day, $ch_xid, $ch_did ];
@@ -428,7 +433,7 @@ sub process_table {
 	my $ch_conv_id = convert_id_to_laguiatvid($ch_es_id);
     my $today = UnixDate($date, '%d/%m/%Y');
 
-    my $url = "http://www.laguiatv.com/programacion.php?vertical=1&fecha=$today&cadena=$ch_conv_id";
+    my $url = "http://www.laguiatv.com/programacion/$ch_es_id";
 	debug_print "Getting $url\n";
     t $url;
     local $SIG{__WARN__} = sub 
@@ -458,7 +463,7 @@ sub process_table {
 	}
 
 	if (!$bump_start_day && bump_start_day($cur,$next)) {
-	    $bump_start_day=1;
+	    #$bump_start_day=1;
 	    $date = UnixDate(DateCalc($date,"+ 1 day"),'%Q');
 	}
     }
@@ -509,134 +514,69 @@ sub get_program_data
     my ($tree) = @_;
     my @data;
 
-	# find schedule table
-	my @tables = $tree->find_by_tag_name("_tag"=>"table");
+    # find schedule table
 
-	foreach my $table (@tables)
-	{
-		my $class = $table->attr('class');
+    my @divs = $tree->find_by_tag_name("_tag"=>"div");
+
+    foreach my $div (@divs)
+    {
+        my $class = $div->attr('class');
 		
-		if ($class && $class eq "grid cadena")
-		{
-			debug_print("Got correct class\n");
-			my @trs = $table->find_by_tag_name("_tag"=>"tr");
-			my $state = 1;
-			my $p_title = "";
-			my $p_stime = "";
-			my $p_category = "";
-			my $p_description = "";
+        if ($class && $class eq "clip")
+        {
+            debug_print("Got clip\n");
+            my $p_category = "";
 
-			foreach my $tr(@trs)
-			{
-				my @ths = $tr->find_by_tag_name("_tag"=>"th");
-				my $nths = @ths;
-				
-				debug_print("Got tr with $nths ths\n");
-				if($nths == 1)
-				{
-					my $class = $ths[0]->attr('scope');
-					if($class && $class eq "row")
-					{
-						# time data
-						my @txts = $ths[0]->content_list;
-						$p_stime = $txts[0];
-						debug_print("Time: ".$p_stime."\n");
-					}
-					
-				}
+            my @litems = $div->find_by_tag_name("_tag"=>"li"); 
+            foreach my $litem (@litems)
+            {
+                $p_category = $litem->attr('class');
+            }
 
-				my @tds = $tr->find_by_tag_name("_tag"=>"td");
-				my $ntds = @tds;
-				
-				debug_print("Got tr with $ntds tds\n");
-				foreach my $td(@tds)
-				{
-					my $td_class = $td->attr('row');
-				
-					# title & link data
-					debug_print("Got td with parrilla\n");
+            my @links = $div->find_by_tag_name("_tag"=>"a");
 
-					my @as = $td->find_by_tag_name("_tag"=>"a");
-					my $size = @as;
-					if($size > 0)
-					{
-						my $a = $as[0];
-						if ($DO_SLOWER_DESC_GET)
-						{
-							($p_description, $p_category) = get_prog_info($a->attr('href'));
-						}
-						else
-						{
-							$p_category = $a->attr('href');
-							$p_category =~ s/^\///;
-							$p_category =~ s/\/.*//;
-						}
+            foreach my $link (@links)
+            {
+                my @txts = get_txt_elems($link);
+                my $p_title = $txts[0];
+                my ($p_stime, $ignore, $p_etime) = split(/\ /, $txts[1]);
+                my $p_description = "";
 
-						debug_print "Descript: -".$p_description."-\n";
-						if($p_description && $p_description ne '') { debug_print "D\n";}
-						debug_print "Category: ".$p_category."\n";
+                debug_print("title: $p_title start: $p_stime end: $p_etime cat: $p_category c2: " . $categories{$p_category} . "\n");
+                if($p_title && $p_title ne "" && $p_stime && $p_stime ne "")
+                {
+                    my %h = (time =>        $p_stime,
+                             title=>        $p_title);
 
-						my @atxts = $a->content_list;
-						$p_title = $atxts[0];
+                    if($p_category && $p_category ne "")
+                    {
+                        my $cat = $categories{$p_category};
+                        if($cat && $cat ne "")
+                        {
+                            $h{category} = $cat;
+                        }
+                    }
+                    $h{desc} = $p_description if $p_description ne "";
 
-						if($p_title)
-						{
-							debug_print("Title: ".$p_title."\n");
-						}
+                    push @data, \%h;
 
-						if($p_title && $p_title ne "" && $p_stime && $p_stime ne "")
-						{
-							my %h = (	time =>		$p_stime,
-										title=>		$p_title);
-
-							$h{desc} = $p_description if $p_description ne "";
-							$h{category} = $p_category if $p_category ne "";
-							push @data, \%h;
-
-							$p_title = "";
-							$p_stime = "";
-							$p_category = "";
-						}
-					}
-					else
-					{
-						my @atxts = get_txt_elems($td);
-						$p_title = $atxts[0];
-						
-						if($p_title)
-						{
-							debug_print("Title: ".$p_title."\n");
-						}
-
-						if($p_title && $p_title ne "" && $p_stime && $p_stime ne "")
-						{
-							my %h = (	time =>		$p_stime,
-										title=>		$p_title);
-
-							$h{desc} = $p_description if $p_description ne "";
-							$h{category} = $p_category if $p_category ne "";
-
-							push @data, \%h;
-
-							$p_title = "";
-							$p_stime = "";
-							$p_category = "";
-						}
-					}
-				}
-			}
-		}
-	}
+                    $p_title = "";
+                    $p_stime = "";
+                    $p_category = "";
+                }
+            }
+        }
+    }
     return @data;
 }
 
 sub get_icon 
 {
     my ($ch_did) = @_;
+
+    return "";
 	
-    my $ch_xid = convert_id_to_laguiatvid($ch_did);
-	
-    my $url = "http://www.laguiatv.com/programacion.php?vertical=1&cadena=$ch_xid";
+    my $url = "http://www.laguiatv.com/programacion/$ch_did";
 	debug_print "Getting $url\n";
     t $url;
     local $SIG{__WARN__} = sub 
@@ -731,7 +671,7 @@ sub get_channels
     my $bar = new XMLTV::ProgressBar({name => 'finding channels', count => 1})
 	if not $opt_quiet;
     my %channels;
-    my $url="http://www.laguiatv.com/programacion.php";
+    my $url="http://www.laguiatv.com/programacion";
     t $url;
 
     my $channel_id;
@@ -740,73 +680,43 @@ sub get_channels
 
     my $tree = get_nice_tree $url;
 
-    # Add hard-coded TDT channels (bad chris)
-    foreach $channel_name (@tdt_channels)
-    {
-        $channel_id = convert_laguiatvid_to_id($channel_name);
-        debug_print "Channel $channel_name, id $channel_id\n";
-        # "Factor{icute}a de Ficci{ocute}n Telecinco",
-        $channel_name =~ s/{icute}/\x{00ED}/g;
-        $channel_name =~ s/{ocute}/\x{00F3}/g;
-        $channels{$channel_id}=$channel_name;
-    }
+    my @uls = $tree->find_by_tag_name("_tag"=>"ul");
 
-# <input type="checkbox" name="nacionales1" value="TVE 1"
-# find the channels that are in check boxes
-    my @options = $tree->find_by_tag_name("_tag"=>"input");
-
-    foreach $elem (@options) 
+    foreach my $ul (@uls) 
     {
-        my $ename = $elem->attr('name');
-        my $val = $elem->attr('value');
-        $channel_name = $elem->parent->as_text();
-		
-        if ($ename && $val)
+        my $uclass = $ul->attr('class');
+        if ($uclass && $uclass eq 'channel-list')
         {
-            if ($ename =~ m/^nacionales/)
-            {
-                $channel_id = convert_laguiatvid_to_id($val);
+            my @links = $ul->find_by_tag_name("_tag"=>"a");
 
-                debug_print "Channel $channel_name, id $channel_id\n";
-                $channels{$channel_id}=$channel_name;
+            # <a href="/programacion/intereconomia" title="Intereconomía">
+            foreach my $link (@links) 
+            {
+                $channel_name = $link->attr('title');
+                $channel_id = $link->attr('href');
+
+                $channel_id =~ s/^\/programacion\///;
+
+                my $hide = 0;
+                foreach my $hide_id (@hide_channels)
+                {
+                    if($channel_id =~ m/$hide_id/)
+                    {
+                        $hide = 1;
+                    }
+                }
+
+                if($hide == 0)
+                { 
+                    $channels{$channel_id}=$channel_name;
+                    print("Got channel $channel_name with id $channel_id\n");
+                }
             }
         }
     }
 
-    # find the channels that are in drop down lists
-    @options = $tree->find_by_tag_name("_tag"=>"option");
-
-    foreach $elem (@options) 
-    {
-        my $laguiatv_id = $elem->attr('value');
-        $channel_name = $elem->as_text();
-        my $parent = $elem->parent();
-        my $pname = $parent->attr('name');
-		
-        if ($pname && $laguiatv_id)
-        {
-            if ($pname =~ m/^locales/ ||
-                $pname =~ m/^digitales/ ||
-                $pname =~ m/^autonomicas/)
-           {
-               $channel_id = convert_laguiatvid_to_id($laguiatv_id);
-               $channel_name =~ s/Canal \+/Canal+/;
-               $channel_name =~ s/Canal\+Toros/Canal+ Toros/;
-               $channel_name =~ s/Canal\+Xtra/Canal+ Xtra/;
-
-               debug_print "Channel $channel_name, id $channel_id\n";
-               $channels{$channel_id}=$channel_name;
-           }
-        }
-    }
-
     # remove channels that should not be listed
-    foreach $channel_name (@hide_channels)
-    {
-        $channel_id = convert_laguiatvid_to_id($channel_name);
-        delete $channels{$channel_id};
-        delete $icons{$channel_id};
-    }
+
 
     die "no channels could be found" if not keys %channels;
     update $bar if not $opt_quiet;
