@@ -76,17 +76,12 @@ files.  Default is "/tmp", so under Windows one of these is required.
 
 =head1 CREDITS
 
-Grabber written by Rod Roark (http://www.sunsetsystems.com/), lightly cloned
-from tv_grab_cz by Mattias Holmlund.  See that grabber for additional credits.
+Grabber written Rod Roark (http://www.sunsetsystems.com/), modified by 
+Adam Lewandowski (adam@alewando.com) in January 2011 to account for DirecTV site
+changes.
+
 
 =head1 BUGS
-
-DirecTV might want a county ID to show local channels for some zip codes.
-We do not support that.  If you encounter this problem, try entering a nearby
-zip code where your local channels appear by default.
-
-The XML generated for channel information is kludged for compatibility with
-MythTV and is not very pretty.
 
 Like any screen-scraping grabber, this one will break regularly as the web site
 changes, and you should try to fetch a new one from the project's repository.
@@ -100,8 +95,10 @@ use XMLTV::Configure::Writer;
 use XMLTV::Options qw/ParseOptions/;
 use WWW::Mechanize;
 use HTML::TokeParser;
-use Date::Parse;
-use Time::Local;
+use DateTime;
+use DateTime::Format::ISO8601;
+use DateTime::Format::XMLTV;
+use JSON;
 use Errno qw(EAGAIN);
 
 ######################################################################
@@ -113,85 +110,82 @@ use Errno qw(EAGAIN);
 my $MAX_PROCESSES = 8;
 
 my $VERBOSE = 1;
+my $DEBUG   = 0;
 
 my $TMP_FILEBASE = $ENV{TEMP} || $ENV{TMP} || '/tmp';
 $TMP_FILEBASE .= '/na_dtv_';
 
 my $queue_filename = "$TMP_FILEBASE" . "q";
 
-my $SITEBASE = "http://www.directv.com/DTVAPP";
+my $SITEBASE = "http://www.directv.com/entertainment";
 
-# This URL contains a form including time zone and zip code, but we'll use
-# GET parameters instead of submitting it.  It includes a list of programs
-# for each 2-hour period.  These lists will be fetched and scanned to get
-# the program IDs.
-#
-my $START_URL = "$SITEBASE/epg/theGuide.jsp";
+# URL for grabbing channel list
+my $CHANNEL_LIST_URL = "$SITEBASE/data/guideChannelList.json.jsp";
+
+# URL for schedule data
+my $SCHEDULE_URL = "$SITEBASE/data/guideScheduleSegment.json.jsp";
 
 # Each program ID will be appended to this URL to get its details.
-#
-my $DETAILS_URL = "$SITEBASE/listing/component/programDetailAjax.jsp?scheduleId=";
+my $DETAILS_URL = "$SITEBASE/program/details/";
 
 my $XML_PRELUDE =
-  '<?xml version="1.0" encoding="ISO-8859-1"?>' . "\n" .
-  '<!DOCTYPE tv SYSTEM "xmltv.dtd">' . "\n" .
-  '<tv source-info-url="http://www.directv.com/" source-info-name="DirecTV" ' .
-  'generator-info-name="XMLTV" generator-info-url="http://www.xmltv.org/">' . "\n";
+    '<?xml version="1.0" encoding="ISO-8859-1"?>' . "\n"
+  . '<!DOCTYPE tv SYSTEM "xmltv.dtd">' . "\n"
+  . '<tv source-info-url="http://www.directv.com/" source-info-name="DirecTV" '
+  . 'generator-info-name="XMLTV" generator-info-url="http://www.xmltv.org/">'
+  . "\n";
 
 my $XML_POSTLUDE = "</tv>\n";
 
-my %zones = (
-  'e' => -5,
-  'c' => -6,
-  'm' => -7,
-  'p' => -8,
-  'a' => -9,
-  'h' => -10,
-);
-
 # Global stuff shared by the parent and child processes.
-my $zonechar = 'h';
-my $timeoff = $zones{h};
-my $year = 2000; # prepare_queue fixes this
 my $browser;
 my $fhq;
 my $proc_number;
+
+# Default to EST, will read from config file later
+my $timeZone;
+
+# This hash will contain accumulated channel and program information.
+# Key is channel number, value is (a reference to) a hash of channel data
+# derived from JSON data returned by DirecTV. Useful keys include:
+# chNum, chCall, chName, chLogoUrl, chId
+my %ch = ();
 
 ######################################################################
 #                      Main logic starts here                        #
 ######################################################################
 
 # prepare_queue creates the "queue file" of tasks for the child
-# processes and returns the number of program IDs to process, which
-# may be zero.  It always writes channel XML to stdout.
-#
-my $total_programs = &prepare_queue();
-
-if ($total_programs) {
+# processes. It always writes channel XML to stdout.
+if ( &prepare_queue() ) {
 
   # Reopen the queue file so the child processes will share its handle.
   open $fhq, "< $queue_filename";
   binmode $fhq;
 
   # Create the children.
-  for ($proc_number = 0; $proc_number < $MAX_PROCESSES; ++$proc_number) {
+  for ( $proc_number = 0 ; $proc_number < $MAX_PROCESSES ; ++$proc_number ) {
     my $pid = fork;
     if ($pid) {
+
       # We are the parent.  Keep on trucking.
     }
-    elsif (defined $pid) {
+    elsif ( defined $pid ) {
+
       # We are a child.  Do juvenile stuff and then terminate.
       exit &child_logic();
     }
     else {
+      
       # We are the parent and something is wrong.  If we have at least one
       # child process already started, then go with what we have.
-      if ($proc_number > 0) {
+      if ( $proc_number > 0 ) {
         $MAX_PROCESSES = $proc_number;
         last;
       }
+
       # Otherwise retry if possible, or die if not.
-      if ($! == EAGAIN) {
+      if ( $! == EAGAIN ) {
         print STDERR "Temporary fork failure, will retry.\n" if ($VERBOSE);
         sleep 5;
         --$proc_number;
@@ -203,7 +197,7 @@ if ($total_programs) {
   }
 
   if ($VERBOSE) {
-    print STDERR "Started $MAX_PROCESSES processes to fetch and parse $total_programs web pages.\n";
+    print STDERR "Started $MAX_PROCESSES processes to fetch and parse schedule and program data.\n";
   }
 
   # This would be a good place to implement a progress bar.  Just enter a
@@ -211,7 +205,8 @@ if ($total_programs) {
   # and writes the corresponding percentage completion.
 
   # Wait for all the children to finish.
-  while (wait != -1) {
+  while ( wait != -1 ) {
+
     # Getting here means that a child finished.
   }
 
@@ -223,38 +218,41 @@ if ($total_programs) {
   my @cdata = ();
 
   # Open all data files and read the first program of each.
-  for (my $procno = 0; $procno < $MAX_PROCESSES; ++$procno) {
+  for ( my $procno = 0 ; $procno < $MAX_PROCESSES ; ++$procno ) {
     my $fname = "$TMP_FILEBASE" . $procno;
     my $fh;
     open $fh, "< $fname" or die "Cannot open $fname: $!\n";
     $cdata[$procno] = [];
     $cdata[$procno][0] = $fh;
-    &read_program(\@cdata, $procno);
+    &read_queue( \@cdata, $procno );
   }
 
   # Merge the files and print their XML program data.
   my $lastkey = "";
   while (1) {
     my $plow = 0;
+
     # Get the next program, ordering chronologically within channel.
-    for (my $procno = 0; $procno < $MAX_PROCESSES; ++$procno) {
-      $plow = $procno if ($cdata[$procno][1] lt $cdata[$plow][1]);
+    for ( my $procno = 0 ; $procno < $MAX_PROCESSES ; ++$procno ) {
+      $plow = $procno if ( $cdata[$procno][1] lt $cdata[$plow][1] );
     }
-    last if ($cdata[$plow][1] eq 'ZZZZ');
-    if ($lastkey eq $cdata[$plow][1]) {
+    last if ( $cdata[$plow][1] eq 'ZZZZ' );
+    if ( $lastkey eq $cdata[$plow][1] ) {
+
       # There seems to be some race condition in my test setup's OS that
       # allows two child processes to grab the same qfile entry.
       # This is an attempt to work around it. -- Rod
       print STDERR "Skipping duplicate: $lastkey" if ($VERBOSE);
-    } else {
+    }
+    else {
       print $cdata[$plow][2];
       $lastkey = $cdata[$plow][1];
     }
-    &read_program(\@cdata, $plow);
+    &read_queue( \@cdata, $plow );
   }
 
   # Close and delete the temporary files.
-  for (my $procno = 0; $procno < $MAX_PROCESSES; ++$procno) {
+  for ( my $procno = 0 ; $procno < $MAX_PROCESSES ; ++$procno ) {
     close $cdata[$procno][0];
     unlink "$TMP_FILEBASE" . $procno;
   }
@@ -268,48 +266,22 @@ exit 0;
 #                        General Subroutines                         #
 ######################################################################
 
-# Determine if Daylight Saving Time is in effect, given the non-DST
-# values for month, day of month, day of week and hour.  As of 2007
-# the transition days are the second Sunday in March and the first
-# Sunday in November.
-#
-sub isDST {
-  my ($month, $mday, $wday, $hour) = @_;
-  return 1 if ($month > 2 && $month < 10);
-  if ($month == 2) {
-    my $secsun = ($mday + 6 - $wday) % 7 + 8;
-    return 1 if ($mday > $secsun);
-    return 1 if ($mday == $secsun && $hour >= 2);
-  }
-  elsif ($month == 10) {
-    my $firsun = ($mday + 6 - $wday) % 7 + 1;
-    return 1 if ($mday < $firsun);
-    return 1 if ($mday == $firsun && $hour < 1);
-  }
-  return 0;
-}
-
-# Compute a time string for display given a time in non-DST local time.
-#
-sub localTimeString {
-  my @tmp = @_;
-  my $toff = $zones{$zonechar};
-  if ($zonechar ne 'h' && &isDST($tmp[4], $tmp[3], $tmp[6], $tmp[2])) {
-    @tmp = gmtime(timegm(@tmp) + 3600);
-    ++$toff;
-  }
-  return sprintf('%04u%02u%02u%02u%02u%02u %+03d00',
-    $tmp[5] + 1900, $tmp[4] + 1, $tmp[3], $tmp[2], $tmp[1], $tmp[0], $toff);
+sub getBrowser {
+  my ($conf) = @_;
+  my $browser = WWW::Mechanize->new();
+  $browser->proxy( [ 'http', 'https' ], $conf->{proxy}->[0] )
+    if $conf->{proxy}->[0];
+  $browser->agent_alias('Windows Mozilla');
+  return $browser;
 }
 
 # For escaping characters not valid in xml.  More needed here?
-#
 sub xmltr {
   my $txt = shift;
   $txt =~ s/&/&amp;/g;
   $txt =~ s/</&lt;/g;
   $txt =~ s/>/&gt;/g;
-  $txt =~ s/"/&quot;/g;
+  $txt =~ s/\"/&quot;/g;
   return $txt;
 }
 
@@ -317,20 +289,18 @@ sub xmltr {
 #                 Subroutines for the Parent Process                 #
 ######################################################################
 
-# Read information for one program from the file created by the
-# specified process.
-#
-sub read_program {
-  my ($cdata, $procno) = @_;
+# Read one queue entry from the file created by the specified process.
+sub read_queue {
+  my ( $cdata, $procno ) = @_;
   $cdata->[$procno][2] = '';
   my $line = readline $cdata->[$procno][0];
-  if (defined $line) {
+  if ( defined $line ) {
     $cdata->[$procno][1] = $line;
     while (1) {
       $line = readline $cdata->[$procno][0];
-      last unless (defined $line);
+      last unless ( defined $line );
       $cdata->[$procno][2] .= $line;
-      last if ($line =~ /<\/programme>/i);
+      last if ( $line =~ /<\/programme>/i );
     }
   }
   else {
@@ -340,349 +310,222 @@ sub read_program {
 }
 
 # For sorting %ch by its (channel number) key:
-#
-sub numerically { $a <=> $b }
-
-# Increment the listings URL to the next 2-hour time slot.
-#
-sub update_list_url {
-  my ($url, $day, $hour) = @_;
-  $$url =~ s/\?d=\d+/?d=$$day/;
-  $$url =~ s/&h=\d+/&h=$$hour/;
-  $$hour += 2;
-  if ($$hour >= 24) {
-    $$hour -= 24;
-    ++$$day;
-  }
-}
+sub numerically { $a cmp $b }
 
 # This is what the main process does first.  Variables in here will
 # go nicely out of scope before the child processes are started.
-#
 sub prepare_queue {
 
-  my ($opt, $conf) = ParseOptions( {
-    grabber_name => "tv_grab_na_dtv",
-    capabilities => [qw/baseline manualconfig tkconfig apiconfig/],
-    stage_sub => \&config_stage,
-    listchannels_sub => \&list_channels,
-    version => '$Id$',
-    description => "North America using www.directv.com",
-  } );
+  my ( $opt, $conf ) = ParseOptions(
+    {
+      grabber_name     => "tv_grab_na_dtv",
+      capabilities     => [qw/baseline manualconfig tkconfig apiconfig/],
+      stage_sub        => \&config_stage,
+      listchannels_sub => \&list_channels,
+      version =>
+        '$Id$',
+      description => "North America using www.directv.com",
+    }
+  );
 
   # If we get here, then we are generating data normally.
 
   $VERBOSE = !$opt->{quiet};
-  $zonechar = $conf->{zone}->[0];
+  $DEBUG   = $opt->{debug};
+  
+  $timeZone = $conf->{timezone}[0];
+  $timeZone = "America/New_York" if !$timeZone; # Default to EST
 
-  my @htime = gmtime($timeoff * 3600 + time);
-  $year = $htime[5] + 1900;
+  $browser = getBrowser($conf);
 
-  # This hash will contain accumulated channel and program information.
-  # Key is channel number, value is (a reference to) a 4-element array:
-  # channel name, array of "programID/timestamp" pairs, a continuation
-  # variable, the last "cell program ID".
-  #
-  my %ch = ();
-
-  $browser = WWW::Mechanize->new();
-
-  my $list_url = $START_URL . '?d=0&h=0&tz=h&z=' . $conf->{zip}->[0] . '&fl=_d&x=&y=';
-  my $url_day = $htime[7] + 1 + $opt->{offset};
-  my $url_hour = 0;
-
-  if ($opt->{days} > 0) {
-    # This scrapes all of the listing pages for the designated time period.
-    # The only things we save here are channel number and name, and the
-    # program ID/timestamp pairs.  Each page fetch gets us a 2-hour window
-    # for all channels.
-    for (my $day = 0; $day < $opt->{days}; ++$day) {
-      print STDERR "Getting IDs for day $day " if ($VERBOSE);
-      for (my $hour = 0; $hour < 24; $hour += 2) {
-        print STDERR "." if ($VERBOSE);
-        &update_list_url(\$list_url, \$url_day, \$url_hour);
-        &scrape_list($browser, $list_url, $conf->{channel}, \%ch, 0);
-      }
-      print STDERR "\n" if ($VERBOSE);
-    }
-
-    # Scrape one more time slot with the continuation flag set.
-    print STDERR "Getting one more ...\n" if ($VERBOSE);
-    &update_list_url(\$list_url, \$url_day, \$url_hour);
-    &scrape_list($browser, $list_url, $conf->{channel}, \%ch, 1);
-  }
-  else {
-    # days=0 is a special case requiring only one page fetch.
-    print STDERR "Getting $list_url ...\n" if ($VERBOSE);
-    &scrape_list($browser, $list_url, $conf->{channel}, \%ch, 0);
-  }
+  # Populate %ch hash
+  &scrape_channel_list( $browser, $conf->{zip}[0], $conf->{channel}, \%ch );
 
   print $XML_PRELUDE;
 
   # Write XML for channels, and total the number of program IDs.
-  my $total_programs = 0;
-  foreach my $channel_number (sort numerically keys %ch) {
-    print &channel_xml($channel_number, 0, \%ch);
-    $total_programs += scalar @{$ch{$channel_number}[1]};
+  foreach my $channel_number ( sort numerically keys %ch ) {
+    print &channel_xml( $channel_number, 0, \%ch );
   }
 
   # Write all of the program IDs with their channel IDs and start times
   # to a temporary file. This file will later be read by child processes.
-  if ($opt->{days} > 0) {
-    open $fhq, "> $queue_filename";
-    binmode $fhq;
-    foreach my $channel_number (sort numerically keys %ch) {
-      my $channel_name = $ch{$channel_number}[0];
-      my $channel_id = &rfc2838($channel_number, $channel_name);
-      my $program_count = scalar @{$ch{$channel_number}[1]};
-      foreach my $tmp (@{$ch{$channel_number}[1]}) {
-        my ($program_id, $startmins) = split /\//, $tmp;
-        # Fixed-length records make life easier.  See comments in child_logic.
-        printf $fhq "%-25s %-13s %9u\n", $channel_id, $program_id, $startmins;
-      }
-    }
-    close $fhq;
-    return $total_programs;
-  }
+  my $startDate = DateTime->now;
+  $startDate->set_time_zone($timeZone);
 
-  return 0;
+  # Add offset to start date
+  $startDate -> add(days => $opt->{offset});
+
+  open $fhq, "> $queue_filename";
+  binmode $fhq;
+  foreach my $channel_number ( sort numerically keys %ch ) {
+    my %channel_data = %{ $ch{$channel_number} };
+    my $channel_name = $channel_data{chName};
+    my $channel_id   = &rfc2838( $channel_number, $channel_name );
+
+    # Write queue entry for each channel and day
+    # Queue file contains two fields: channel_number day(yyyy-mm-dd)
+    for ( my $day = 0 ; $day < $opt->{days} ; $day++ ) {
+      my $queueDate = $startDate->clone();
+      $queueDate->add(days => $day);
+      my $date = $queueDate->ymd;
+
+      # Fixed-length records make life easier.  See comments in child_logic.
+      printf $fhq "%-6s %10s\n", $channel_number, $date;
+    }
+  }
+  close $fhq;
 }
 
 # Create a channel ID.
-#
 sub rfc2838 {
-  my ($cnum, $cname) = @_;
-
-  # $cname =~ s/&amp;//g;
-  # $cname =~ s/&//g; # mythtv does not like ampersands here
-  # return sprintf('%04d.%s.directv.com', $cnum, $cname);
-
-  # The above did not work out very well because directv was making
-  # random changes to the channel names.  So now we just use numbers.
-  return sprintf('%04d.directv.com', $cnum);
+  my ( $cnum, $cname ) = @_;
+  my $num = $cnum;
+  my $extra = "";
+  if($cnum =~ /^(\d+)(-.*)/) {
+    $num = $1;
+    $extra = $2;  
+  } 
+  my $id = sprintf('%04s%s.directv.com', $num, $extra );
+  return $id;
 }
 
 # This gets channels and program IDs for the one 2-hour time slot from
 # the designated URL.
-#
-sub scrape_list {
-  my ($browser, $list_url, $channels, $ch, $overtime) = @_;
+sub scrape_channel_list {
+  my ( $browser, $zip, $channels, $ch ) = @_;
 
-  # This computes a timestamp in minutes since the beginning of
-  # the current year (Hawaii time).
-  $list_url =~ /\?d=(\d+)&h=(\d+)/;
-  my $start_timestamp = 60 * (($1 - 1) * 24 + $2);
+  # Set zipcode (start session)
+  my $setZipUrl = "${SITEBASE}/lightbox/lightboxZipCode.jsp?_DARGS=/entertainment/lightbox/component/lightboxZipCodeComponent.jsp"; 
+  my %params = ( "/directv/eportal/formhandler/EportalProfileFormHandler.profileUpdateForm.zipCode" => "$zip" );
+  print STDERR "Setting zip code\n" if ($DEBUG);
+  $browser->post( $setZipUrl, Content => \%params );
 
-  $browser->get($list_url);
-  my $parser = HTML::TokeParser->new(\$browser->content());
-  my $previous_channel = '';
+  print STDERR "Getting channel list\n" if ($DEBUG);
+  my $listUrl = $CHANNEL_LIST_URL . "?hideDupes=true&view=ALL&zipcode=${zip}";
+  $browser->get($listUrl);
+  my $json = $browser->content();
+  my $data = decode_json $json;
 
-  # Loop by channel within this time slot.
-  while(my $tag = $parser->get_tag("span")) {
-    next if (!$tag->[1]{class});
-    next unless ($tag->[1]{class} eq 'ep-lcl' or $tag->[1]{class} eq 'listing-channel-logo');
-    my $channel_name = $parser->get_trimmed_text("/span");
-    $tag = $parser->get_tag("span");
-    next unless ($tag->[1]{class} eq 'ep-lcb' or $tag->[1]{class} eq 'listing-channel-bug');
-    my $channel_number = $parser->get_trimmed_text("/span");
+  # Check status code
+  if ( !$data->{success} ) {
+    print STDERR "Error getting channel list: " . $data->{errorMessage} . "\n";
+    exit 1;
+  }
 
-    # Skip channel numbers that are not all digits.  Seems that some HD
-    # channels were coming through with numbers like "229-1".
-    next unless ($channel_number =~ /^\d+$/);
+  # Populate %ch hash for selected channels
+  my @channels = @{ $data->{channels} };
+  for my $chanRef (@channels) {
+    my %chanData       = %{$chanRef};
+    my $channel_number = $chanData{chNum};
+    my $channel_name   = $chanData{chName};
 
-    # Check for duplicate rows.  Mostly from HD versions of channels.
-    next if ($channel_number eq $previous_channel);
-    $previous_channel = $channel_number;
+    # Handle channels with both HD and SD versions (ie: 0756-1.directv.com)
+    # Usually only seen on sports subscriptions where some games are not available in HD 
+    # (ie: NBA League Pass, MLS, etc)
+    my $dual;
+    if($channel_name =~ /${channel_number}-1/ && $chanData{chHd}) {
+      $dual=1;
+    }
 
-    my $channel_id = &rfc2838($channel_number, $channel_name);
-
+    my $channel_id     = &rfc2838( $channel_number, $channel_name );
     # If channels were passed, skip those not listed.
-    if ($channels) { next unless grep /^$channel_id$/, @$channels; }
-
-    # Create a new hash entry for this channel, but only if it does not
-    # already exist.  Its value is a reference to a 4-element array:
-    # channel name, array of "programID/timestamp" pairs, a continuation
-    # variable, the last "cell program ID".
-    if (!$ch->{$channel_number}) {
-      $ch->{$channel_number} = [$channel_name, [], 0, ''];
+    if ($channels) {
+      next unless grep /^$channel_id$/, @$channels;
     }
 
-    # Append to the array of program IDs and times for this channel.
-    # We scan the cells in two passes in order to get the total pixel
-    # width, which is then needed to compute each cell's duration.
-    # Curiously, this total width can vary a bit from row to row.
-
-    # Pass 1: Scrape listings for this time slot and channel, save their
-    # widths and program IDs, and total the widths.
-    my $totwidth = 0;
-    my @cells = ();
-    while($tag = $parser->get_tag("li", "/tr")) {
-      last unless ($tag->[0] eq "li");
-      die "Missing style for li!" unless ($tag->[1]{style});
-      die "Missing width for li!" unless ($tag->[1]{style} =~ /width:\s*([\d.]+)px/);
-      my $width = $1;
-      $totwidth += $width;
-      my $programid = "";
-      if ($tag->[1]{id} && $tag->[1]{id} =~ /(\d+)/) {
-        $programid = $1;
-      }
-      push @cells, [$width, $programid];
+    # Add to ch hash
+    $ch->{$channel_number} = $chanRef if !$ch->{$channel_number};
+    if($dual) { 
+      $ch->{$channel_number}->{dual} = 1;
     }
-
-    # Pass 2: Process the above into the %ch array.
-    my $lastendtime = $start_timestamp;
-    foreach my $tmp (@cells) {
-      my ($width, $programid) = @$tmp;
-      # Computing cell size in minutes from its width in pixels.
-      my $duration = int($width * 120 / $totwidth + .5);
-      # Grab and clear a previously saved start time, if present.
-      my $tmp_start = $ch->{$channel_number}[2];
-      $ch->{$channel_number}[2] = 0;
-
-      if ($programid ne "") {
-        if ($ch->{$channel_number}[3] ne "" and $programid ne $ch->{$channel_number}[3])
-        {
-          $tmp_start = $lastendtime if ($tmp_start == 0);
-          push @{$ch->{$channel_number}[1]}, "$programid/$tmp_start";
-        }
-        $ch->{$channel_number}[3] = $programid;
-      }
-      elsif ($ch->{$channel_number}[3] eq "") {
-        # If this program ID is missing and it is the first cell for
-        # the channel, then set it to a non-empty dummy value so that the
-        # next cell will create a new program entry.
-        $ch->{$channel_number}[3] = "0";
-      }
-      elsif (($lastendtime % 120) > 105) {
-        # A program ID near the end of the time slot is missing.  In this
-        # case it starts a new program whose ID we do not yet know, and
-        # we save its start time for the next iteration.
-        $ch->{$channel_number}[2] = $lastendtime;
-      }
-      # Otherwise if the program ID is missing, we assume it extends the
-      # previous one (i.e. we do not change it here).
-
-      # Keep track of the corresponding time as cells are processed.
-      $lastendtime += $duration;
-
-      # Look at the first cell only if this is the overtime slot.
-      last if ($overtime);
-    } # end foreach
-  } # end while
+  }
 }
 
 # Invoked by ParseOptions for configuration.
-#
-sub config_stage
-{
-    my ($stage, $conf) = @_;
+sub config_stage {
+  my ( $stage, $conf ) = @_;
 
-    die "Unknown stage $stage" if $stage ne "start";
+  die "Unknown stage $stage" if $stage ne "start";
 
-    my $result;
-    my $writer = new XMLTV::Configure::Writer(OUTPUT => \$result,
-      encoding => 'utf-8');
-    $writer->start( { grabber => 'tv_grab_na_dtv' } );
+  my $result;
+  my $writer = new XMLTV::Configure::Writer(
+    OUTPUT   => \$result,
+    encoding => 'utf-8'
+  );
+  $writer->start( { grabber => 'tv_grab_na_dtv' } );
 
-    # DirecTV wants a time zone.
-    #
-    $writer->start_selectone( {
-      id => 'zone',
-      title => [ [ 'Time Zone', 'en' ] ],
-      description => [ [ 'Which is your time zone?', 'en' ] ],
-    } );
-    $writer->write_option( {
-      value=>'e',
-      text=> => [ [ 'Eastern', 'en' ] ]
-      } );
-    $writer->write_option( {
-      value=>'c',
-      text=> => [ [ 'Central', 'en' ] ]
-      } );
-    $writer->write_option( {
-      value=>'m',
-      text=> => [ [ 'Mountain', 'en' ] ]
-      } );
-    $writer->write_option( {
-      value=>'p',
-      text=> => [ [ 'Pacific', 'en' ] ]
-      } );
-    $writer->write_option( {
-      value=>'a',
-      text=> => [ [ 'Alaska', 'en' ] ]
-      } );
-    $writer->write_option( {
-      value=>'h',
-      text=> => [ [ 'Hawaii', 'en' ] ]
-      } );
-    $writer->end_selectone();
-
-    # Entering a zip code will cause local channels to be included, if
-    # available.  In some cases a county ID will also be desirable, but we
-    # do not support that yet.  Sorry.
-    #
-    $writer->write_string( {
-      id => 'zip',
+  # Entering a zip code will cause local channels to be included, if
+  # available.
+  $writer->write_string(
+    {
+      id    => 'zip',
       title => [ [ 'Zip Code', 'en' ] ],
-      description => [ [ 'Enter your zip code to include local channels.', 'en' ] ],
-      } );
+      description =>
+        [ [ 'Enter your zip code to include local channels.', 'en' ] ],
+    }
+  );
+  
+  # Timezone is needed to adjust the UTC times provided by DirecTV to local time
+  my @timezones = DateTime::TimeZone->names_in_country("US");
+  $writer->start_selectone( {
+        id => 'timezone', 
+        title => [ [ 'Time Zone', 'en' ], ],
+        description => [ [ 'The timezone that you live in.', 'en' ], ],
+  } );
+  
+  foreach my $tz (@timezones) {
+        $writer->write_option( { 
+             value=>$tz,
+             text=> => [ [ $tz, 'en' ], ] 
+        } );
+  }
 
-    $writer->end('select-channels');
-    return $result;
+  $writer->end_selectone();
+
+  $writer->end('select-channels');
+  return $result;
 }
 
 # Invoked by ParseOptions when it wants the list of all channels.
-#
 sub list_channels {
-  my ($conf, $opt) = @_;
+  my ( $conf, $opt ) = @_;
 
   $VERBOSE = !$opt->{quiet};
-  $zonechar = $conf->{zone}->[0];
 
-  my @htime = gmtime($timeoff * 3600 + time);
-  $year = $htime[5] + 1900;
-
-  my $browser = WWW::Mechanize->new();
-
-  my $list_url = $START_URL . '?d=' . ($htime[7] + 1) . '&h=8&tz=h&z=' .
-    $conf->{zip}->[0] . '&fl=_d&x=&y=';
-
-  # see prepare_queue for a description of this hash.
-  my %ch = ();
-
-  # Scrape only one listings page to get the channels.
-  &scrape_list($browser, $list_url, 0, \%ch, 0);
+  my $browser = getBrowser($conf);
+  &scrape_channel_list( $browser, $conf->{zip}[0], $conf->{channel}, \%ch );
 
   my $xml = $XML_PRELUDE;
-  foreach my $channel_number (sort numerically keys %ch) {
-    $xml .= &channel_xml($channel_number, 1, \%ch);
+  foreach my $channel_number ( sort numerically keys %ch ) {
+    $xml .= &channel_xml( $channel_number, 1, \%ch );
   }
   $xml .= $XML_POSTLUDE;
 
   return $xml;
 }
 
-# Create XML for the designated channel.  Rules for this are slippery,
-# with mythfilldatabase containing grabber-specific code that expects
-# different output from different grabbers!  The arrangement below seems
-# to work compatibly with tv_grab_be_tvb or tv_grab_no.
-#
+# Create XML for the designated channel.
 sub channel_xml {
-  my ($channel_number, $setup, $ch) = @_;
-  my $channel_name = $ch->{$channel_number}[0];
-  my $channel_id = &rfc2838($channel_number, $channel_name);
-  my $xml = "  <channel id=\"$channel_id\">\n";
+  my ( $channel_number, $setup, $ch ) = @_;
+  my %channel_data = %{ $ch->{$channel_number} };
+
+  my $channel_name = $channel_data{chName};
+  my $channel_id   = &rfc2838( $channel_number, $channel_name );
+  my $xml          = "  <channel id=\"$channel_id\">\n";
   if ($setup) {
+
     # At --configure time the user will want to see channel numbers.
     $xml .=
-    "    <display-name>$channel_number " . &xmltr($channel_name) . "</display-name>\n";
-  }
-  else {
-    # Otherwise we go for compatibility with mythfilldatabase.
+        "    <display-name>$channel_number "
+      . &xmltr($channel_name)
+      . "</display-name>\n";
+  } else {
     $xml .=
-    "    <display-name>" . &xmltr($channel_name) . "</display-name>\n" .
-    "    <display-name>$channel_number</display-name>\n" .
-    "    <display-name>$channel_number</display-name>\n";
+        "    <display-name>"
+      . &xmltr($channel_name)
+      . "</display-name>\n"
+      . "    <display-name>$channel_number</display-name>\n";
   }
   $xml .= "  </channel>\n";
   return $xml;
@@ -693,7 +536,6 @@ sub channel_xml {
 ######################################################################
 
 # Top-level logic for child processes.
-#
 sub child_logic {
   my $fname = "$TMP_FILEBASE" . $proc_number;
   my $fh;
@@ -703,146 +545,247 @@ sub child_logic {
   # pointer sharing will work properly.  We expect the sysreads to be atomic.
   while (1) {
     my $line = '';
-    my $readlen = sysread $fhq, $line, 50;
+    my $readlen = sysread $fhq, $line, 18;
     last unless ($readlen);
-    if ($line =~ /^(\d\d\d\d\.\S+)\s+(\S+)\s+(\d+)\s*$/) {
-      print $fh &scrape_program($browser, $2, $1, $3);
+
+    #print STDERR "Process $proc_number Queue entry:$line\n" if ($VERBOSE);
+    # Queue line format (%-6s %10s)
+    if ( $line =~ /^([0-9-]+)\s+(.*)$/ ) {
+      my $channel_number = $1;
+      my $day            = $2;
+      print $fh &scrape_channel_day( $browser, $channel_number, $day );
     }
     else {
       # Errors here might mean that seek pointer sharing is broken.
       print STDERR "Process $proc_number: input syntax error: '$line'\n";
     }
   }
-
   close $fh;
   return 0;
 }
 
-# This generates XML for the designated program ID.  It retrieves and scrapes
-# the "program details" AJAX thingy, so a page fetch is required for each.
-#
-sub scrape_program {
-  my ($browser, $program_id, $channel_id, $startmins) = @_;
+# Check that the start date is on the requested day (after adjusting to the specified timezone) 
+sub checkStartDate {
+ my ($day, $startDate) = @_;
+ my $startDt = DateTime::Format::ISO8601->parse_datetime($startDate);
+ $startDt->set_time_zone($timeZone);
+ my $cmpDay = substr($startDt, 0, 10);
+ return $cmpDay eq $day;
+}
 
-  # Compute air time from $startmins and current year.
-  my $timeair = $startmins * 60 + timegm(0, 0, 0, 1, 0, $year - 1900);
-  my @stt = gmtime($timeair + 3600 * ($zones{$zonechar} - $zones{h}));
-  # We will also make use of this as a key string.
-  my $starttime = sprintf('%04u%02u%02u%02u%02u%02u',
-    $stt[5] + 1900, $stt[4] + 1, $stt[3], $stt[2], $stt[1], $stt[0]);
-  # Then produce a readable actual local date and time.
-  my $xml_start = 'start="' . &localTimeString(@stt) . '"';
+# This generates XML for the designated channel on the designated day
+sub scrape_channel_day {
+  my ( $browser, $channel_number, $day ) = @_;
 
-  $browser->get($DETAILS_URL . $program_id);
-  my $parser = HTML::TokeParser->new(\$browser->content());
+  print STDERR "Retrieving schedule info for channel $channel_number on $day\n"
+    if ($VERBOSE);
 
-  my $xml_title    = '(Unknown)';
-  my $xml_desc     = '';
-  my $xml_stop     = ''; # attribue of <programme>
-  my $xml_length   = '';
-  my $xml_category = '';
-  my $xml_actor    = ''; # within <credits>
-  my $xml_rating   = '';
-  my $xml_date     = '';
-  my $xml_director = ''; # within <credits>
-  my $xml_star_rating = '';
-  my $tag;
+  my $shortNum = $channel_number;
+  $shortNum =~ s/(\d+)-.*/$1/;
 
-  while($tag = $parser->get_tag("span", "div", "dt")) {
-    if ($tag->[0] eq "span") {
-      next unless ($tag->[1]{class});
-      if ($tag->[1]{class} eq 'detTitle') {
-        $xml_title = "    <title lang=\"en\">" .
-          &xmltr($parser->get_trimmed_text("/span")) . "</title>\n";
-      }
-      elsif ($tag->[1]{class} eq 'detRating') {
-        $xml_rating = "    <rating system=\"MPAA\"><value>" .
-          &xmltr($parser->get_trimmed_text("/span")) . "</value></rating>\n";
-      }
-      elsif ($tag->[1]{class} eq 'detStar') {
-        $tag = $parser->get_tag("img", "/span");
-        if ($tag->[0] eq "img") {
-          if ($tag->[1]{src} =~ /icon_stars_(\d+)/) {
-            $xml_star_rating = "    <star-rating><value>" .
-              $1 . '/4' . "</value></star-rating>\n";
-          }
-        }
-      }
-    } # end span
-    elsif ($tag->[0] eq "div") {
-      next unless ($tag->[1]{class});
-      if ($tag->[1]{class} eq 'detSummary') {
-        $xml_desc = &xmltr($parser->get_trimmed_text("/div"));
-        $xml_desc = "    <desc lang=\"en\">$xml_desc</desc>\n" if ($xml_desc);
-      }
-    } # end div
-    elsif ($tag->[0] eq "dt") {
-      my $attname = $parser->get_trimmed_text("/dt");
-      $attname =~ s/:$//;
-      $parser->get_tag("dd");
-      my $attval = $parser->get_trimmed_text("/dd");
+  #Get channel schedule data for the specified day from the DirecTV JSON URL
+  my %params = (
+    scheduleType   => 'custom',
+    starttime      => "$day 00:00",
+    channelnumbers => "$shortNum",
+    blockduration  => 24
+  );
+  $browser->post( $SCHEDULE_URL, Content => \%params );
+  my $json = $browser->content();
 
-      if ($attname eq 'Duration') {
-        if ($attval =~ /^(\d+).+minutes/i) {
-          if (@stt) {
-            # Compute stop time as start time + duration.
-            my @tmp = gmtime($1 * 60 + timegm(@stt[0..5]));
-            $xml_stop = 'stop="' . &localTimeString(@tmp) . '"';
-          }
-          else {
-            print STDERR "Cannot process Duration without Air Time.\n";
-          }
-          # $xml_length = "    <length units=\"minutes\">$1</length>\n";
-        } else {
-          print STDERR "Unable to parse Duration \"$attval\".\n";
-        }
-      }
-      elsif ($attname eq 'Categories') {
-        while ($attval =~ s/^([^,]+)[, ]*(.*)$/$2/) {
-          # A bit of translation for Myth compatibility:
-          my $tmp = $1;
-          $tmp = 'Special' if ($tmp eq 'Specials');
-          $xml_category .= "    <category lang=\"en\">" . &xmltr($tmp) . "</category>\n";
-        }
-      }
-      elsif ($attname eq 'Actors') {
-        while ($attval =~ s/^([^,]+)[, ]*(.*)$/$2/) {
-          $xml_actor .= "      <actor>" . &xmltr($1) . "</actor>\n";
-        }
-      }
-      elsif ($attname eq 'Other Credits') {
-        # Ignored.
-      }
-      elsif ($attname eq 'Release Year') {
-        $xml_date = "    <date>$attval</date>\n";
-      }
-      elsif ($attname eq 'Director') {
-        while ($attval =~ s/^([^,]+)[, ]*(.*)$/$2/) {
-          $xml_director .= "      <director>" . &xmltr($1) . "</director>\n";
-        }
-      }
-    } # end dt
-  } # end while
+  # Parse JSON
+  my $data = decode_json $json;
 
-  my $xml_credits = '';
-  if ($xml_actor || $xml_director) {
-    $xml_credits = "    <credits>\n$xml_director$xml_actor    </credits>\n";
+  # Check status code
+  if ( !$data->{success} ) {
+    print STDERR
+      "Error getting schedule data for channel $channel_number on $day: "
+      . $data->{errorMessage} . "\n";
+    exit 1;
   }
 
-  print STDERR "$channel_id: Title missing!\n" if (!$xml_title);
+  my $output    = "";
+  if( @{ $data->{channels} }[0]->{schedules} ) {
+    my @schedules = @{ @{ $data->{channels} }[0]->{schedules} };
+    foreach my $prog (@schedules) {
+	    # Skip if program does not start on the target date (ie: started the previous day)
+	    if (!checkStartDate($day, $prog->{prAir})) {
+	      print STDERR "Skipping program $prog->{prId} because it doesn't start on $day: $prog->{prAir}\n" if ($DEBUG);
+	      next;
+	    }  
+	    
+      # Get program details
+      $output .= &scrape_program_details( $browser, $channel_number, $prog );
+    }
+  }
+  return $output;
+}
 
-  my $xml = "  <programme $xml_start $xml_stop channel=\"$channel_id\">\n";
-  $xml .= $xml_title       if ($xml_title);
-  $xml .= $xml_desc        if ($xml_desc);
-  $xml .= $xml_credits     if ($xml_credits);
-  $xml .= $xml_date        if ($xml_date);
-  $xml .= $xml_category    if ($xml_category);
-  $xml .= $xml_length      if ($xml_length);
-  $xml .= $xml_rating      if ($xml_rating);
-  $xml .= $xml_star_rating if ($xml_star_rating);
-  $xml .= "  </programme>\n";
+sub scrape_program_details {
+  my ( $browser, $channel_number, $program_data ) = @_;
+
+  # Get what we can from the JSON structure
+  my $program_id = $program_data->{prId};
+  my $title      = xmltr( $program_data->{prTitle} );
+  my $subtitle   = xmltr( $program_data->{episodeTitle} );
+  my $start      = xmltr( $program_data->{prAir} );
+  my $length     = $program_data->{prLen};
+  my $hd         = $program_data->{prHd};
+
+  # Append '-1' to channel number if this is an HD broadcast on a dual-numbered channel
+  # This is how the channel is entered mannualy on the receiver
+  if($ch{$channel_number}->{dual} && $hd) {
+    $channel_number .= "-1";
+  }
+  
+  my $channel_id = &rfc2838($channel_number);
+
+  # Calculate stop time
+  my $startDate = DateTime::Format::ISO8601->parse_datetime($start);
+  $startDate->set_formatter(DateTime::Format::XMLTV->new());
+  $startDate->set_time_zone($timeZone); # Output times with local timezone
+  my $stopDate = $startDate->clone();
+  $stopDate->add(minutes => $length);
+
+  # Get program details page
+  my $programDetailsUrl = $DETAILS_URL . $program_id;
+  print STDERR "Retrieving details for program id $program_id: $programDetailsUrl\n" if ($DEBUG);
+  my $resp = $browser->get( $programDetailsUrl );
+  if(! $resp->is_success()) {
+    print STDERR "Error getting program details for $program_id: " . $resp->status_line() . "\n";
+  }
+
+  my $detailContent = $browser->content();
+  my $parser = HTML::TokeParser->new( \$detailContent );
+
+  # Extract program details
+  my $xml_desc        = '';
+  my $xml_language    = '';
+  my $xml_rating      = '';
+  my $xml_date        = '';
+  my $xml_star_rating = '';
+  my @directors;
+  my @actors;
+  my @categories;
+
+# Description is in (xpath): //li[@id="details_tab_content"]/h4/following-sibling::p
+# Details are in (xpath): //li[@id="details_tab_content"]/h4[@id="additional_details"]
+OUTER: while ( my $tag = $parser->get_tag( "li", "span" ) ) {
+    if ( $tag->[0] eq "li" ) {
+      my $li_id = $tag->[1]{id};
+      next unless ($li_id);
+      if ( $li_id eq 'details_tab_content' ) {
+
+        # Skip ahead to h4 tags (description and details)
+        while ( my $h4Tag = $parser->get_tag("h4") ) {
+          my $h4Text = $parser->get_trimmed_text("/h4");
+          my $h4Id   = $h4Tag->[1]{id};
+          if ( $h4Text && $h4Text eq "Summary" ) {
+
+            # Skip to <p> tag
+            my $pTag = $parser->get_tag("p");
+            $xml_desc = &xmltr( $parser->get_trimmed_text("/p") );
+          }
+          elsif ( $h4Id && $h4Id eq "additional_details" ) {
+
+            # Additional details (release date, rating, language)
+            # Skip to <span> tags (with </li> indicating the end)
+            while ( my $detailTag = $parser->get_tag( "span", "/li" ) ) {
+              if ( $detailTag->[0] eq "span" ) {
+                my $detailType = $parser->get_trimmed_text("/span");
+                my $detailText = $parser->get_trimmed_text("/p");
+                if ( $detailType eq "Released:" ) {
+                  $xml_date = $detailText;
+                }
+                elsif ( $detailType eq "Rated:" ) {
+                  $xml_rating = $detailText;
+                }
+                elsif ( $detailType eq "Language:" ) {
+                  $xml_language = $detailText;
+                }
+              }
+              else {
+                next OUTER;
+              }
+            }
+          }    # additional details
+        }    # end h4 iteration
+      }    # end details tab
+      elsif ( $li_id eq "cast_crew_tab_content" ) {
+        while ( my $castTag = $parser->get_tag( "span", "/li" ) ) {
+          if ( $castTag->[0] eq "span" ) {
+            my $castType   = $parser->get_trimmed_text("/span");
+            my $castDetail = $parser->get_trimmed_text("/p");
+            if ( $castType eq "Director:" ) {
+              push @directors, $castDetail;
+            }
+            elsif ( $castType eq "Cast:" ) {
+              push @actors, split( /,/, $castDetail );
+            }
+          }
+          else {
+            next OUTER;
+          }
+        }
+      }    # end cast/crew tab
+    }    # end li
+    elsif ( $tag->[0] eq "span" ) {
+      my $span_id = $tag->[1]{id};
+      my $class = $tag->[1]{class};
+      if($span_id && $span_id eq "star_rating") {
+        if ( $class && $class =~ /star-rating-.*(\d+)$/ ) {
+          $xml_star_rating = "$1 / 5";
+        }
+      } elsif ( !$span_id && $class && $class eq "details-sub" ) {
+          my $text = $parser->get_trimmed_text("/span");
+          if ($text eq "Genre:") {
+            @categories = split(/,/,$parser->get_trimmed_text("/p"));
+          }
+      } else {
+        next;
+      }
+    }
+  }    # end li/span iteration
+
+  # Generate program XML
+  my $xml = "";
 
   # A "header" line is written before each program's XML for sorting
   # when the files from the children are merged.
-  return "$channel_id $starttime\n" . $xml;
+  $xml .= "$channel_number $startDate\n";
+
+  # Program XML
+  $xml .= "<programme start=\"${startDate}\" ";
+  $xml .= "stop=\"${stopDate}\" channel=\"" . $channel_id . "\">\n";
+  $xml .= "  <title lang=\"en\">$title</title>\n" if $title;
+  $xml .= "  <sub-title lang=\"en\">$subtitle</sub-title>\n" if $subtitle;
+  $xml .= "  <desc lang=\"en\">" . xmltr($xml_desc) . "</desc>\n" if $xml_desc;
+  if ( @directors || @actors ) {
+    $xml .= "  <credits>\n";
+    foreach my $director (@directors) {
+      $xml .= "    <director>" . &xmltr($director) . "</director>\n";
+    }
+    foreach my $actor (@actors) {
+      $actor =~ s/^\s*//;    # Strip leading space
+      $xml .= "    <actor>" . &xmltr($actor) . "</actor>\n";
+    }
+    $xml .= "  </credits>\n";
+  }
+  $xml .= "  <date>" . xmltr($xml_date) . "</date>\n" if $xml_date;
+  if ( @categories ) {
+    foreach my $category (@categories) {
+      $xml .= "  <category>" . xmltr($category) . "</category>\n"
+    }
+  }
+  $xml .= "  <language>" . xmltr($xml_language) . "</language>\n"
+    if $xml_language;
+  $xml .= "  <video><quality>HDTV</quality></video>\n" if $hd;
+  $xml .= "  <rating system=\"MPAA\"><value>" . xmltr($xml_rating) . "</value></rating>\n"
+    if $xml_rating;
+  $xml .= "  <star-rating><value>" . xmltr($xml_star_rating) . "</value></star-rating>\n"
+    if $xml_star_rating;
+
+  $xml .= "</programme>\n";
+
+  return $xml;
 }
