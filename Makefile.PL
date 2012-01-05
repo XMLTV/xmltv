@@ -768,16 +768,18 @@ my @opt_components
 #                   'HTML::Entities'    => 0 } },
 
 # rmeden 2011-06-12 not working
-#     { name => 'tv_grab_na_dtv',
-#       blurb => 'Grabber for DirecTV in North America',
-#       exes => [ 'grab/na_dtv/tv_grab_na_dtv' ],
-#       prereqs => {
-#         'WWW::Mechanize' => 0,
-#         'HTML::TokeParser' => 0,
-#         'Date::Parse' => 0,
-#         'Time::Local' => 0
-#       },
-#     },
+# dekarl 2012-01-05 fixed by #3163183
+     { name => 'tv_grab_na_dtv',
+       blurb => 'Grabber for DirecTV in North America',
+       exes => [ 'grab/na_dtv/tv_grab_na_dtv' ],
+       prereqs => {
+         'DateTime'                  => 0,
+         'DateTime::Format::ISO8601' => 0,
+         'JSON'                      => 0,
+         'HTML::TokeParser'          => 0,
+         'WWW::Mechanize'            => 0,
+       },
+     },
 
     );
 
