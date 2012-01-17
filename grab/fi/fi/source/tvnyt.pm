@@ -1,6 +1,6 @@
 # -*- mode: perl; coding: utf-8 -*- ###########################################
 #
-# tv_grab_fi: source specific grabber code for http://www.tvnyt.fi
+# tv_grab_fi: source specific grabber code for http://tv.nyt.fi
 #
 ###############################################################################
 #
@@ -18,162 +18,186 @@ BEGIN {
 }
 
 use Carp;
-use HTML::Entities qw(decode_entities);
-use JSON qw(-support_by_pp); # enable allow_barekey() for JSON:XS
 
 # Import from internal modules
 fi::common->import();
 
 # Description
-sub description { 'tvnyt.fi' }
-
-# Copied from Javascript code. No idea why we should do this...
-sub _timestamp() {
-  # This obviously breaks caching. Use constant value instead
-  #return("timestamp=" . int(rand(10000)));
-  return("timestamp=0");
-}
+sub description { 'tv.nyt.fi' }
 
 # Grab channel list
 sub channels {
+  my %channels;
+  my @groups = ( "free_air_fi" );
+  my $added;
 
-  # Fetch JavaScript code as raw file
-  my $content = fetchRaw("http://www.tvnyt.fi/ohjelmaopas/wp_channels.js?" . _timestamp());
-  if (length($content)) {
-    my $count = 0;
-    # 1) pattern match JS arrays (example: ["1","TV1","tv1.gif"] -> 1, "TV1")
-    # 2) even entries in the list are converted to XMLTV ID
-    # 3) fill hash from list (even -> key [id], odd -> value [name])
-    my %channels = (
-		    map { ($count++ % 2) == 0 ? "$_.tvnyt.fi" : "fi $_" }
-		      $content =~ /\["(\d+)","([^\"]+)","[^\"]+"\]/g
-		   );
-    debug(2, "Source tvnyt.fi parsed " . scalar(keys %channels) . " channels");
-    return(\%channels);
+  # Next group
+  while (defined(my $group = shift(@groups))) {
+
+    # Fetch & parse HTML
+    my $root = fetchTree("http://tv.nyt.fi/home/tvnyt_grid/?group=$group");
+    if ($root) {
+
+      #
+      # Group list can be found in dropdown
+      #
+      #  <select id="group_select" ...>
+      #   <option value="tvnyt*today*free_air_fi" selected>...</option>
+      #   <option value="tvnyt*today*sanoma_fi">...</option>
+      #   ...
+      #  </select>
+      #
+      unless ($added) {
+	if (my $container = $root->look_down("id" => "group_select")) {
+	  if (my @options = $container->find("option")) {
+	    debug(2, "Source tv.nyt.fi found " . scalar(@options) . " groups");
+            foreach my $option (@options) {
+	      unless ($option->attr("selected")) {
+		my $value = $option->attr("value");
+
+		if (defined($value) &&
+		    (my($tag) = ($value =~ /^tvnyt\*today\*(\w+)$/))) {
+		  debug(3, "group '$tag'");
+		  push(@groups, $tag);
+		}
+	      }
+	    }
+	  }
+	}
+	$added++;
+      }
+
+      #
+      # Channel list can be found in table headers
+      #
+      #  <table class="grid_table" cellspacing="0px">
+      #   <thead>
+      #    <tr>
+      #     <th class="yle_tv1">...</th>
+      #     <th class="yle_tv2">...</th>
+      #     ...
+      #    </tr>
+      #   </thead>
+      #   ...
+      #  </table>
+      #
+      if (my $container = $root->look_down("class" => "grid_table")) {
+	my $head = $container->find("thead");
+	if ($head && (my @headers = $head->find("th"))) {
+	  debug(2, "Source tv.nyt.fi found " . scalar(@headers) . " channels in group '$group'");
+	  foreach my $header (@headers) {
+	      if (my $image = $header->find("img")) {
+		my $name = $image->attr("alt");
+		my $channel_id = $header->attr("class");
+
+		if (defined($channel_id) && length($channel_id) &&
+		    defined($name)       && length($name)) {
+		  debug(3, "channel '$name' ($channel_id)");
+		  $channels{"${channel_id}.${group}.tv.nyt.fi"} = "fi $name";
+		}
+	      }
+	    }
+	}
+      }
+
+      # Done with the HTML tree
+      $root->delete();
+    }
+
   }
 
-  return;
+  debug(2, "Source tv.nyt.fi parsed " . scalar(keys %channels) . " channels");
+  return(\%channels);
 }
 
-# Parse time stamp and convert to Epoch using local time zone
-#
-# Example time stamp: 20101218040000
-#
-sub _toEpoch($) {
-  my($string) = @_;
-  return unless defined($string);
-  return unless my($year, $month, $day, $hour, $minute) =
-    ($string =~ /^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})\d{2}$/);
-  return(fullTimeToEpoch($year, $month, $day, $hour, $minute));
+# Parse time and convert to seconds since midnight
+sub _toEpoch($$$$) {
+  my($today, $tomorrow, $time, $switch) = @_;
+  my($hour, $minute) = ($time =~ /^(\d{2})(\d{2})$/);
+  return(timeToEpoch($switch ? $tomorrow : $today, $hour, $minute));
 }
-
-# Category number to name map
-my %category_map = (
-		    0 => undef,
-		    1 => "dokumentit",
-		    2 => "draama",
-		    3 => "lapset",
-		    4 => "uutiset",
-		    5 => "urheilu",
-		    6 => "vapaa aika",
-		   );
 
 # Grab one day
 sub grab {
   my($self, $id, $yesterday, $today, $tomorrow, $offset) = @_;
 
   # Get channel number from XMLTV id
-  return unless my($channel) = ($id =~ /^(\d+)\.tvnyt\.fi$/);
+  return unless my($channel, $group) = ($id =~ /^(\w+)\.(\w+)\.tv\.nyt\.fi$/);
 
-  # Fetch JavaScript code as raw file
-  my $content = fetchRaw("http://www.tvnyt.fi/ohjelmaopas/getChannelPrograms.aspx?channel=$channel&start=${today}0000&" . _timestamp());
-  if (length($content)) {
-    # Accept "x:.." instead of the correct "'x':..."
-    my $parser = JSON->new()->allow_barekey();
-
-    # Fixup data
-    $content =~ s/\\/\\\\/g; # some string contain illegal escapes
-
-    # Parse data
-    my $data   = eval {
-      $parser->decode($content)
-    };
-    croak "JSON parse error: $@" if $@;
-    undef $parser;
+  # Fetch & parse HTML
+  my $root = fetchTree("http://tv.nyt.fi/home/tvnyt_grid/?group=$group&date=" .
+		       sprintf("%04d-%02d-%02d",
+			       $today->year(), $today->month(), $today->day()));
+  if ($root) {
+    my @objects;
 
     #
-    # Program information is encoded in JSON:
+    # Programme data is contained inside a table cells with class="<channel>"
     #
-    # {
-    #  1: [
-    #      {
-    #       id:       "17111541",
-    #       desc:     "&#x20;",
-    #       title:    "Uutisikkuna",
-    #       category: "0",
-    #       start:    "20101218040000",
-    #       stop:     "20101218080000"
-    #      },
-    #      ...
-    #     ]
-    # }
+    #  <td class="yle_tv1">
+    #   <table class="be_list_table">
+    #    <tr class="s1210 e1230"> (start/end time, "+" for tomorrow)
+    #     <td class="be_time">12:10</td>
+    #     <td class="be_entry">
+    #      <span class="thb1916041"></span>
+    #      <span class="flw6390"></span>
+    #      <a href="/programs/show/1916041" class="program_link colorbox tip">
+    #       Hercules... (title)
+    #      </a>
+    #      <span class="tooltip">
+    #       <span class="wl_actions">...</span>
+    #       <span class="wl_synopsis">
+    #        Dokumenttielokuva bulgarialaisen perheen... (long description)
+    #       </span>
+    #      </span>
+    #      <span class="syn">
+    #       Dokumenttielokuva bulgarialaisen... (short description)
+    #      </span>
+    #     </td>
+    #    </tr>
+    #   ...
+    #   </table>
+    #  </td>
     #
-    # - the first entry always starts on $today.
-    # - the last entry is a duplicate of the first entry on $tomorrow. We drop
-    #   it to avoid duplicate programme entries.
-    #
-    # Category types:
-    #
-    #   0 - unknown
-    #   1 - dokumentit (documentary)
-    #   2 - draama     (drama)
-    #   3 - lapset     (children)
-    #   4 - uutiset    (news)
-    #   5 - urheilu    (sports)
-    #   6 - vapaa aika (recreational)
-    #
-    # Verify top-level of data structure
-    if ((ref($data) eq "HASH") &&
-	(exists $data->{1})    &&
-	(ref($data->{1}) eq "ARRAY")) {
+    if (my @cells = $root->look_down("class" => $channel,
+				     "_tag"  => "td")) {
+      foreach my $cell (@cells) {
+	foreach my $row ($cell->find("tr")) {
+	  my $start_stop = $row->attr("class");
+	  my $entry      = $row->look_down("class" => "be_entry");
+          if (defined($start_stop) && $entry &&
+	      (my($start, $stomorrow, $end, $etomorrow) =
+	       ($start_stop =~ /^s(\d{4})(\+?)\s+e(\d{4})(\+?)$/))) {
+	    my $title = $entry->look_down("class" => qr/program_link/);
+            my $desc  = $entry->look_down("class" => "wl_synopsis");
+	    if ($title) {
+	      $title = $title->as_text();
+              if (length($title)) {
+		$start = _toEpoch($today, $tomorrow, $start, $stomorrow);
+		$end   = _toEpoch($today, $tomorrow, $end,   $etomorrow);
+		$desc  = $desc->as_text() if $desc;
 
-      my @objects;
-      foreach my $array_entry (@{ $data->{1} }) {
-	my $start = $array_entry->{start};
-	my $stop  = $array_entry->{stop};
-	my $title = decode_entities($array_entry->{title});
-	my $desc  = decode_entities($array_entry->{desc});
+		debug(3, "List entry ${channel}.${group} ($start -> $end) $title");
+		debug(4, $desc);
 
-	# Sanity check
-	# Drop "no programm" entries
-	if (($start = _toEpoch($start)) &&
-	    ($stop  = _toEpoch($stop))  &&
-	    length($title)              &&
-	    ($title ne "Ei ohjelmaa.")) {
-	  my $category = $array_entry->{category};
-
-	  debug(3, "List entry $channel ($start -> $stop) $title");
-	  debug(4, $desc);
-
-	  # Map category number to name
-	  $category = $category_map{$category} if defined($category);
-
-	  # Create program object
-	  my $object = fi::programme->new($id, "fi", $title, $start, $stop);
-	  $object->category($category);
-	  $object->description($desc);
-	  push(@objects, $object);
+		# Create program object
+		my $object = fi::programme->new($id, "fi", $title, $start, $end);
+		$object->description($desc);
+		push(@objects, $object);
+	      }
+	    }
+	  }
 	}
       }
-
-      # Drop last entry
-      pop(@objects);
-
-      # Fix overlapping programmes
-      fi::programme->fixOverlaps(\@objects);
-
-      return(\@objects);
     }
+
+    # Done with the HTML tree
+    $root->delete();
+
+    # Fix overlapping programmes
+    fi::programme->fixOverlaps(\@objects);
+
+    return(\@objects);
   }
 
   return;

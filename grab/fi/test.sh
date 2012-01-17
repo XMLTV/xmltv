@@ -38,7 +38,7 @@ for arg in $*; do
 	reuse)
 	    preserve_directory=1
 	    ;;
-	
+
 	*)
 	    echo 1>&2 "unknown option '$arg"
 	    exit 1
@@ -86,7 +86,7 @@ check_log t_fi__1_2.diff
 #
 # Modified test run with 9 days and modified test.conf
 #
-perl -pe 's/^#(channel\s+(?:4|5|6|7|8|9|10|11|12|.+\.yle|.+\.telvis|.+\.mtv3)\..+)/$1/' <${script_dir}/test.conf >${test_dir}/test.conf
+perl -pe 's/^#(channel\s+(?:4|5|6|7|8|9|10|11|12|.+\.yle|.+\.telvis|.+\.tv\.nyt|.+\.mtv3)\..+)/$1/' <${script_dir}/test.conf >${test_dir}/test.conf
 perl -I ${xmltv_lib} ${script_file} --config-file ${test_dir}/test.conf --offset 1 --days 9 --cache  t_fi_cache  >t_fi_full_10.xml --quiet 2>t_fi_full.log
 for d in $(seq 1 9); do
     perl -I ${xmltv_lib} ${script_file} --config-file ${test_dir}/test.conf --offset $d --days 1 --cache  t_fi_cache  >t_fi_single_$d.xml --quiet 2>>t_fi_single.log
