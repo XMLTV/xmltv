@@ -35,15 +35,15 @@ sub channels {
   while (defined(my $group = shift(@groups))) {
 
     # Fetch & parse HTML
-    my $root = fetchTree("http://tv.nyt.fi/home/tvnyt_grid/?group=$group");
+    my $root = fetchTree("http://tv.nyt.fi/grid?service=tvnyt&grid_type=list&layout=false&group=$group");
     if ($root) {
 
       #
       # Group list can be found in dropdown
       #
       #  <select id="group_select" ...>
-      #   <option value="tvnyt*today*free_air_fi" selected>...</option>
-      #   <option value="tvnyt*today*sanoma_fi">...</option>
+      #   <option value="tvnyt*today*free_air_fi*list" selected>...</option>
+      #   <option value="tvnyt*today*sanoma_fi*list">...</option>
       #   ...
       #  </select>
       #
@@ -56,7 +56,7 @@ sub channels {
 		my $value = $option->attr("value");
 
 		if (defined($value) &&
-		    (my($tag) = ($value =~ /^tvnyt\*today\*(\w+)$/))) {
+		    (my($tag) = ($value =~ /^tvnyt\*today\*(\w+)\*/))) {
 		  debug(3, "group '$tag'");
 		  push(@groups, $tag);
 		}
@@ -125,7 +125,7 @@ sub grab {
   return unless my($channel, $group) = ($id =~ /^(\w+)\.(\w+)\.tv\.nyt\.fi$/);
 
   # Fetch & parse HTML
-  my $root = fetchTree("http://tv.nyt.fi/home/tvnyt_grid/?group=$group&date=" .
+  my $root = fetchTree("http://tv.nyt.fi/grid?service=tvnyt&grid_type=list&layout=false&group=$group&date=" .
 		       sprintf("%04d-%02d-%02d",
 			       $today->year(), $today->month(), $today->day()));
   if ($root) {
