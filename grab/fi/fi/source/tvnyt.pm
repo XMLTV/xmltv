@@ -93,7 +93,11 @@ sub channels {
 		if (defined($channel_id) && length($channel_id) &&
 		    defined($name)       && length($name)) {
 		  debug(3, "channel '$name' ($channel_id)");
-		  $channels{"${channel_id}.${group}.tv.nyt.fi"} = "fi $name";
+
+		  # Underscore is not a valid XMLTV channel ID character
+		  ($channel_id = "${channel_id}.${group}.tv.nyt.fi") =~ s/_/-/g;
+
+		  $channels{$channel_id} = "fi $name";
 		}
 	      }
 	    }
@@ -123,6 +127,10 @@ sub grab {
 
   # Get channel number from XMLTV id
   return unless my($channel, $group) = ($id =~ /^(\w+)\.(\w+)\.tv\.nyt\.fi$/);
+
+  # Replace Dash with Underscore for URL
+  $channel =~ s/-/_/g;
+  $group   =~ s/-/_/g;
 
   # Fetch & parse HTML
   my $root = fetchTree("http://tv.nyt.fi/grid?service=tvnyt&grid_type=list&layout=false&group=$group&date=" .
