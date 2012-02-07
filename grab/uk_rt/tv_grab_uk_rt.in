@@ -204,6 +204,7 @@ my %replacement_titles;       # key = old title, value = replacement title
 my %replacement_episodes;     # key = title, value = hash (where key = old ep, value = new ep)
 my %replacement_cats;         # key = title, value = category
 my %replacement_title_eps;    # key = 'old_title . '|' . old_ep', value = (new_title, new_ep)
+my %replacement_title_desc;   # key = 'old_title . '|' . old_ep' . '|' . 'old_desc', value = (new_title, new_ep)
 my %flagged_title_eps;        # key = old_title from title fixup routine 8
 my %dotdotdot_titles;         # key = replacement title ending with '...' seen in title fixup routine 8
 my %replacement_ep_from_desc; # key = title, value = hash (where key = desc, value = new ep)
@@ -1516,6 +1517,35 @@ sub load_prog_titles_to_process {
                 $have_title_data = 1;
                 next PROG_TITLE_ENTRY;
             }
+            elsif ($code eq '10') {
+                my @fields = split( /~/, $process_text, 5);
+                if (scalar @fields != 5) {
+                    t("[10] Invalid number of fields (need 5) in processing text: '" . $process_text . "'");
+                    next PROG_TITLE_ENTRY;
+                }
+                foreach my $field (@fields) {
+                    $field = "" if !defined $field;
+                }
+                my( $old_title, $old_ep, $new_title, $new_ep, $desc ) = @fields;
+                if ($old_title eq '' or $new_title eq '' or $desc eq '') {
+                    t("[10] Ignoring fixup '" . $process_text . "' as titles/desc not given");
+                    next PROG_TITLE_ENTRY;
+                }
+                
+                my $key = ("" . $old_title . "|" . $old_ep . "|" . $desc);
+                $replacement_title_desc{$key} = [$new_title, $new_ep];
+                t("[10] Will update old title/subtitle/desc '" . $old_title . ": " . $old_ep 
+                    . "' to '" . $new_title . ": " . $new_ep . "'");
+
+                # store titles that are being corrected with an existing "some title..." fixup
+                # store the title without a leading "The" or "A" or the trailing "..." for later matching
+                if ($new_title =~ m/^(?:The\s+|A\s+)?(.*)\.\.\.$/) {
+                    $dotdotdot_titles{$1} = $new_title;
+                }
+                
+                $have_title_data = 1;
+                next PROG_TITLE_ENTRY;
+            }
             else {
                 t("Unknown code seen in prog_titles_to_process file," 
                   . " skipping entry '" . $line . "'");
@@ -2292,6 +2322,72 @@ sub process_replacement_genres($) {
         if (defined $replacement_cats{$prog->{'_title'}}) {
             $prog->{'_genre'} = $replacement_cats{$prog->{'_title'}};
             t("  Assigned title '" . $prog->{'_title'} . "' to category '" . $prog->{'_genre'} . "'");
+        }
+    }
+}
+
+# Allow arbitrary replacement of one title/episode pair with another, based
+# on a given description.
+#
+# Intended to be used where previous title/episode replacement routines
+# do not allow a specific enough correction to the listings data (i.e. for 
+# one-off changes).
+#
+# *** THIS MUST BE USED WITH CARE! ***
+#
+sub process_replacement_titles_desc($) {
+    my $prog = shift;
+
+    if ($have_title_data && %replacement_title_desc && defined $prog->{'_desc'} ) {
+        my $tmp_ep;
+        my $tmp_ep_num;
+        my $tmp_ep_num_text = '';
+        # Handle potential undef episode value, as the empty string
+        # was used in place of an undef episode during concatenation
+        # in the replacement hash
+        if (not defined $prog->{'_episode'}) {
+            $tmp_ep = '';
+        }
+        # Also handle an episode number that may be present in source
+        # data but not in replacement text
+        elsif ($prog->{'_episode'} =~ m/^\d+\s*(?:&\d+)?\s*\/\s*\d+\s*(?:\.|\/|,|;|:)?\s*-?\s*(?:series\s*(\w+)\s*(?:;|\.)?)?\s*$/) {
+            $tmp_ep = '';
+            $tmp_ep_num = $prog->{'_episode'};
+            $tmp_ep_num_text = " (Preserving existing numbering)";
+        }
+        else {
+            $tmp_ep = $prog->{'_episode'};
+        }
+        my $key = "" . $prog->{'_title'} . "|" . $tmp_ep . "|" . $prog->{'_desc'};
+        # Check whether we have matched the old programme title/episode/desc combo
+        if (defined $replacement_title_desc{$key}) {
+            # Now replace the old title/ep values with new ones
+            my ($old_title, $old_ep) = ($prog->{'_title'}, $tmp_ep);
+            my ($new_title, $new_ep) = @{$replacement_title_desc{$key}};
+            # update the title
+            $prog->{'_title'} = $new_title;
+            # if new episode value is empty string, replace with undef;
+            # otherwise use new value
+            if ($new_ep eq '') {
+                if (defined $tmp_ep_num) {
+                    $prog->{'_episode'} = $tmp_ep_num;
+                }
+                else {
+                    $prog->{'_episode'} = undef;
+                }
+            }
+            else {
+                if (defined $tmp_ep_num) {
+                    $prog->{'_episode'} = $tmp_ep_num . ": " . $new_ep;
+                }
+                else {
+                    $prog->{'_episode'} = $new_ep;
+                }
+            }
+            t("  Replaced old title/ep '" . $old_title . ": " . $old_ep
+                . "' with new title/ep '" . $new_title . ": " . $new_ep
+                . "' using desc for consistency" . $tmp_ep_num_text);
+            $prog->{'_titles_processed'} = 1;
         }
     }
 }
@@ -3358,6 +3454,10 @@ sub write_listings_data {
            
             # Next, process titles to make them consistent
             #
+            # One-off title and episode replacements (type = 10)
+            if (!$prog{'_titles_processed'}) {
+                process_replacement_titles_desc(\%prog);
+            }
             # One-off title and episode replacements (type = 8)
             if (!$prog{'_titles_processed'}) {
                 process_replacement_titles_episodes(\%prog);
