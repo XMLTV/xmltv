@@ -4,7 +4,6 @@ use warnings;
 use strict;
 use XMLTV::ProgressBar;
 use XMLTV::Memoize; XMLTV::Memoize::check_argv('get_octets');
-use XMLTV::DST;
 use XMLTV::Supplement qw/GetSupplement SetSupplementRoot/;
 use XMLTV::Options qw/ParseOptions/;
 use XMLTV::Configure::Writer;
@@ -15,7 +14,9 @@ use File::Basename;
 use LWP::UserAgent;
 use HTTP::Cache::Transparent;
 use Encode qw/decode encode/;
-use Date::Manip;
+use DateTime;
+use DateTime::Duration;
+use DateTime::TimeZone;
 use HTML::Entities;
 use IO::Scalar; # used for configuration to write channels to string
 
@@ -23,11 +24,6 @@ use IO::Scalar; # used for configuration to write channels to string
 #################### TODO ####################
 ##############################################
 
-# - revisit handling of DST changeovers to ensure
-#   both changeovers are handled appropriately
-#   and that attempts are made to handle incorrectly
-#   flagged programmes
-#
 # - include actor role data where available
 #
 # - include review details where available
@@ -130,9 +126,6 @@ my ( $opt, $conf ) = ParseOptions( {
 # At this point, grabbing routines take over from ParseOptions #
 ################################################################
 
-# UTC required for XMLTV::DST
-Date_Init('TZ=UTC');
-
 die "Error: You cannot specify --quiet with --debug, exiting"
     if ($opt->{quiet} && $opt->{debug});
 
@@ -193,6 +186,9 @@ HTTP::Cache::Transparent::init( {
     }
 );
 
+# A reusable 1 day duration object
+my $day_dur = DateTime::Duration->new( days => 1 );
+
 # Variables for programme title manipulation
 my $have_title_data = 0;
 my %non_title_info;           # key = title, value = title
@@ -219,9 +215,6 @@ my %prog_titles;
 my %film_titles;
 # hash to store case/punctuation-insensitive variants of titles
 my %case_insens_titles;
-
-# Array to store any overlapping programmes that are detected
-my @overlapping_progs;
 
 # Hash to store bad character strings and their replacments that are used when
 # processing the source data to remove mis-encoded UTF-8 characters
@@ -261,7 +254,6 @@ if (!$opt->{quiet}) {
     say("XMLTV library version: $XMLTV::VERSION");
     say("$grabber_name version: $grabber_version");
     say("  libwww-perl version: $LWP::VERSION");
-    say("  Date::Manip version: " . DateManipVersion(1) . "\n");
 }
 
 # Determine the modification time of the source data on the RT servers
@@ -309,7 +301,6 @@ if ($opt->{debug}) {
     }
     
     print_possible_prog_numbering();
-    print_overlapping_progs();
     
     print_misencoded_utf8_data();
     print_empty_listings();
@@ -3188,21 +3179,15 @@ sub write_listings_data {
             say("Processing listings for '$rt_name' ($xmltv_id)");
         }
         t("");
+
+        my $ts_dt;
         if (defined $channel_offset{$xmltv_id}) {
             t("  Detected a channel offset of '$channel_offset{$xmltv_id}'" 
               . " for '$rt_name'");
-        }
 
-        # If the Radio Times name for the channel contains timezone information,
-        # use it, otherwise set the timezone to default of UTC
-        my $base_tz;
-        if ($rt_name =~ m/\((UTC|GMT|CET)\)\s*$/) {
-            $base_tz = $1;
-            t("  Base timezone for utc_offset set to '$base_tz' (via channel name)\n");
-        }
-        else {
-            $base_tz = 'UTC';
-            t("  Base timezone for utc_offset set to 'UTC' (default)\n");
+            # Setup a reusable Duration object for this channel's timeshift
+            $channel_offset{$xmltv_id} =~ m/[+](\d+)hours?/;
+            $ts_dt = DateTime::Duration->new( hours => $1 );
         }
 
         # detect/correct UTF-8 errors in source data
@@ -3230,11 +3215,6 @@ sub write_listings_data {
 
         # Track number of programmes per channel
         my $num_titles = 0;
-
-        # Keep a reference to the previous programme that was processed. Set it
-        # to undef initially as programmes are processed in transmission order.
-        # We update it whenever a programme is successfully processed below.
-        my $prev_prog = undef;
 
         PROGRAMME:
         foreach my $prog (split /\n/, $page) {
@@ -3344,7 +3324,7 @@ sub write_listings_data {
             # Check for any DST-related information the RT may include in the title
             # for a programme. If we find any explicit DST information we store it 
             # for use later and remove it from the title.
-            if ($prog{'_title'} =~ s/^\((GMT|UTC|BST|UTC\+1)\)\s*//) {
+            if ($prog{'_title'} =~ s/^\((GMT|BST)\)\s*//) {
                 $prog{'_explicit_tz'} = $1;
             }
 
@@ -3843,94 +3823,89 @@ sub write_listings_data {
             # The Radio Times sometimes explicitly flags a programme's start/stop
             # times as being in a specific timezone (GMT or BST). We parse this
             # information out when processing the programme's title and apply it
-            # to the start time of any such programmes ($explicit_tz). Flagged
-            # programmes are usually seen in the data in March and October, when
-            # British Summer Times begins and ends.
+            # to the start time of any such programmes. Flagged programmes are 
+            # seen in the data in March and October, when British Summer Times 
+            # begins and ends.
             #
-            # For the majority of programmes where the timezone is not flagged 
-            # explicitly, we determine the UTC offset of the programme's start time
-            # via XMLTV::DST::utc_offset().
-            #
-            # We then calculate the programme's stop time using the 
+            # We calculate the programme's stop time using the 
             # UTC-offset-corrected start time and its stated length. This allows 
             # us to handle occasions when programmes having mixed GMT/BST 
             # timings are not flagged.
-            #
-            # On the day of the  GMT->BST transition, any unflagged programme 
-            # starting before 0100 +0000 generally has both start/stop times 
-            # given in GMT (+0000) in the RT data (although this is not always 
-            # the case).
             #
             # The Summer Time Order of 2002 defines British Summer Time as 
             # "...the period beginning at one o'clock, Greenwich mean time, in 
             # the morning of the last Sunday in March and ending at one o'clock, 
             # Greenwich mean time, in the morning of the last Sunday in October."
-            #
-            # utc_offset() will only provide the correct stop time if we ensure 
-            # dates have the correct UTC offset applied. DateCalc will always use
-            # TZ=+0000 when processing/displaying dates ( Date_Init('TZ=+0000') ) 
-            # so we must also allow for this when adjusting dates and using this 
-            # output with utc_offset (we employ UnixDate() to help).
-            #
-            my ($yyyy, $mm, $dd);
-            my ($implicit_tz, $tz);
             
-            # Check for valid date format
-            if ($prog{'_date'} !~ m{(\d\d)/(\d\d)/(\d{4})$}) {
-                t("  A bad date '" . $prog{'_date'} . "' was seen for '" . $prog{'_title'} . "', skipping");
+            # Ignore programmes with zero length duration
+            if ($prog{'_duration_mins'} == 0) {
+                t("  Zero duration detected for '" . $prog{'_title'} . "', skipping\n");
                 next PROGRAMME;
             }
-            ($dd, $mm, $yyyy) = ($1, $2, $3);
+            # Check for valid date format
+            if ($prog{'_date'} !~ m{(\d\d)/(\d\d)/(\d{4})$}) {
+                t("  Bad date '" . $prog{'_date'} . "' detected for '" . $prog{'_title'} . "', skipping\n");
+                next PROGRAMME;
+            }
+            my ($dd, $mm, $yyyy) = ($1, $2, $3);
             t("  Start time given as '" . $yyyy . "/" . $mm . "/" . $dd . " " . $prog{'_start'} 
                     . "', duration " . $prog{'_duration_mins'} . " mins");
 
-            # Use BST information found in title, otherwise calculate it ourselves
+            # Check for valid start time format
+            if ($prog{'_start'} !~ m/(\d\d):(\d\d)/) {
+                t("  Bad start time '" . $prog{'_start'} . "' detected for '" . $prog{'_title'} . "', skipping\n");
+                next PROGRAMME;
+            }
+            my ($start_hr, $start_mn) = ($1, $2);
+
+            # Use explicit GMT/BST information if found in title
+            my $tz = 'Europe/London';
             if (defined $prog{'_explicit_tz'}) {
                 t("  Explicit timezone '" . $prog{'_explicit_tz'} . "' detected in title");
-                $tz = $prog{'_explicit_tz'};
-            }
-            else {
-                $prog{start} = utc_offset( "" . $yyyy . $mm . $dd . $prog{'_start'} . "", $base_tz );
-                if ($prog{start} !~ m/([+-]\d{4})$/) {
-                    t("  Bad UTC offset '" . $1 . "' detected for '" . $prog{'_title'} . "', skipping");
-                    next PROGRAMME;
+                if ($prog{'_explicit_tz'} eq 'GMT') {
+                    t("  Forcing timezone to GMT/+0000");
+                    $tz = '+0000';
                 }
-                $implicit_tz = $1;
-                t("  Implicit timezone calculated to be '" . $implicit_tz . "'");
-                $tz = $implicit_tz;
+                elsif ($prog{'_explicit_tz'} eq 'BST') {
+                    t("  Forcing timezone to BST/+0100");
+                    $tz = '+0100';
+                }
             }
 
-            # Calculate start time with correct UTC offset
-            $prog{start} = utc_offset("" . $yyyy . $mm . $dd . $prog{'_start'} . " " . $tz . "", $base_tz);
+            # Determine start time with correct UTC offset
+            my $start_dt = DateTime->new(
+                year       => $yyyy,
+                month      => $mm,
+                day        => $dd,
+                hour       => $start_hr,
+                minute     => $start_mn,
+                second     => 0,
+                time_zone  => $tz,
+            );
 
-#FIXME - need to work around stupid programme lengths e.g. 1500 minutes
-            # Calculate stop time by adding length of programme to start time
-            my $datecalc_stop
-                = DateCalc(ParseDate("" . $yyyy . $mm . $dd . $prog{'_start'} . " " . $tz . ""),
-                           ParseDateDelta($prog{'_duration_mins'} . "minutes")
-                           );
-            #t("  Stop time calculated as '$datecalc_stop' via DateCalc()");
-            my $unixdate_stop
-                = UnixDate($datecalc_stop, "%Y%m%d%H%M %z");
-            #t("  Stop time formatted as  '$unixdate_stop' via UnixDate()");
-
-            $prog{stop} = utc_offset($unixdate_stop, $base_tz);
-
+            $prog{start} = "" . $start_dt->ymd('') . $start_dt->hms('') . ' ' . DateTime::TimeZone->offset_as_string($start_dt->offset);
             t("  " . $prog{start} . " - Start time");
-            t("  " . $prog{stop} . " - Stop time");
+
+            # Determine stop time with correct UTC offset by adding duration of
+            # programme to start time
+            my $dur = DateTime::Duration->new( minutes => $prog{'_duration_mins'} );
+            my $stop_dt = $start_dt + $dur;
+            $prog{stop}  = "" . $stop_dt->ymd('') . $stop_dt->hms('') . ' ' . DateTime::TimeZone->offset_as_string($stop_dt->offset);
+            t("  " . $prog{stop}  . " - Stop time");
 
             # Now we have determined the correct start/stop times for the programme
             # add any required timeshift defined in channel_ids and preserve the
             # correct timezone information
             #
             if (defined $channel_offset{$xmltv_id}) {
-                my $timeshift = $channel_offset{$xmltv_id};
-                my $start_ts = DateCalc( ParseDateString( $prog{start} ), $timeshift );
-                my $stop_ts = DateCalc( ParseDateString( $prog{stop} ), $timeshift );
-                $prog{start} = utc_offset( UnixDate( $start_ts, "%Y%m%d%H%M %z" ), $base_tz );
-                $prog{stop} = utc_offset( UnixDate( $stop_ts, "%Y%m%d%H%M %z" ), $base_tz );
-                t("  " . $prog{start} . " - Start time after applying '" . $timeshift . "' timeshift");
-                t("  " . $prog{stop} . " - Stop time after applying '" . $timeshift . "' timeshift");
+                $start_dt = $start_dt + $ts_dt;
+                $stop_dt  = $stop_dt + $ts_dt;
+
+                $prog{start} = "" . $start_dt->ymd('') . $start_dt->hms('') . ' ' . DateTime::TimeZone->offset_as_string($start_dt->offset);
+                $prog{stop}  = "" . $stop_dt->ymd('')  . $stop_dt->hms('')  . ' ' . DateTime::TimeZone->offset_as_string($stop_dt->offset);
+
+                t("  " . $prog{start} . " - Start time after applying '" . $channel_offset{$xmltv_id} . "' timeshift");
+                t("  " . $prog{stop}  . " - Stop time after applying '"  . $channel_offset{$xmltv_id} . "' timeshift");
             }
 
             # Now check to see whether the channel broadcasting the programme is a
@@ -3940,79 +3915,81 @@ sub write_listings_data {
             # broadcast times.
             #
             if (defined $broadcast_hours{$xmltv_id}) {
-                $broadcast_hours{$xmltv_id} =~ m/(\d{4})-(\d{4})/;
-                my ($chan_start, $chan_stop) = ($1, $2);
-                $chan_start = utc_offset( "" . $yyyy . $mm . $dd . $chan_start . "", $base_tz );
-                $chan_stop  = utc_offset( "" . $yyyy . $mm . $dd . $chan_stop. "", $base_tz );
+                $broadcast_hours{$xmltv_id} =~ m/(\d\d)(\d\d)-(\d\d)(\d\d)/;
+                my ($chan_start_hr, $chan_start_mn, $chan_stop_hr, $chan_stop_mn) = ($1, $2, $3, $4);
+
+                my $chan_start_dt = DateTime->new(
+                    year       => $yyyy,
+                    month      => $mm,
+                    day        => $dd,
+                    hour       => $chan_start_hr,
+                    minute     => $chan_start_mn,
+                    second     => 0,
+                    time_zone  => 'Europe/London',
+                );
+                my $chan_start  = "" . $chan_start_dt->ymd('') . $chan_start_dt->hms('') . ' ' . DateTime::TimeZone->offset_as_string($chan_start_dt->offset);
+
+                my $chan_stop_dt = DateTime->new(
+                    year       => $yyyy,
+                    month      => $mm,
+                    day        => $dd,
+                    hour       => $chan_stop_hr,
+                    minute     => $chan_stop_mn,
+                    second     => 0,
+                    time_zone  => 'Europe/London',
+                );
+
                 # Correct the stop time if it is earlier than the start time
                 my $chan_stop_next_day = 0;
-                if (Date_Cmp( $chan_start, $chan_stop ) > 0) {
+                if ($chan_start_dt >= $chan_stop_dt) {
+                    $chan_stop_dt = $chan_stop_dt + $day_dur;
                     $chan_stop_next_day = 1;
-                    $chan_stop =  utc_offset( 
-                                      UnixDate( 
-                                          DateCalc( 
-                                              ParseDateString($chan_stop), 
-                                              ParseDateDelta("+ 1 day")
-                                          ), 
-                                          "%Y%m%d%H%M %z"),
-                                      $base_tz
-                                  );
                 }
+                my $chan_stop  = "" . $chan_stop_dt->ymd('') . $chan_stop_dt->hms('') . ' ' . DateTime::TimeZone->offset_as_string($chan_stop_dt->offset);
+
+                t("  " . $chan_start . " - Start time of channel (current day)");
+                t("  " . $chan_stop  . " - Stop time of channel (current day)");
 
                 # Include the current programme if its timeslot lies inside the
                 # channel's broadcast window
-                if (Date_Cmp($prog{start}, $chan_start) >= 0
-                  && Date_Cmp($prog{stop}, $chan_stop) <= 0) {
-                    t("  " . $chan_start . " - Start time of channel");
-                    t("  " . $chan_stop . " - Stop time of channel");
+                if ($start_dt >= $chan_start_dt && $stop_dt <= $chan_stop_dt) {
                     t("  '" . $prog{'_title'} . "' shown whilst channel is on-air, adding");
                 }
                 # If the channel starts and stops broadcasting on the same 
                 # calendar day and the programme's timeslot is outside the 
                 # broadcast window, skip it
-                elsif (( Date_Cmp( $prog{start}, $chan_start) < 0 
-                                  || Date_Cmp($prog{stop}, $chan_stop) > 0 ) 
-                            && $chan_stop_next_day == 0 ) {
-                    t("  " . $chan_start . " - Start time of channel");
-                    t("  " . $chan_stop . " - Stop time of channel");
+                elsif (( $start_dt < $chan_start_dt || $stop_dt > $chan_stop_dt)
+                        && $chan_stop_next_day == 0 ) {
                     t("  '" . $prog{'_title'} . "' shown whilst channel is off-air, skipping\n");
                     next PROGRAMME;
                 }
                 else {
                     # If the channel broadcasts through the night, and the channel
-                    # start time is later than the stop time, it is possible for a
-                    # program shown at or after midnight to result in the generation
-                    # of incorrect channel start/stop times (shifted +1day forward).
-                    # We therefore generate another pair of channel start/stop 
-                    # times for the previous day to match against
+                    # start time is later than the stop time (i.e. 2300-0600), it is 
+                    # possible for a program shown at or after midnight to result in 
+                    # the generation of incorrect channel start/stop times (shifted 
+                    # +1day forward). We therefore generate another pair of channel 
+                    # start/stop times for the previous day to match against.
                     #
-                    $chan_start = utc_offset(
-                                      UnixDate(
-                                          DateCalc(
-                                              ParseDateString($chan_start),
-                                              ParseDateDelta("- 1 day")
-                                          ),
-                                          "%Y%m%d%H%M %z"),
-                                      $base_tz
-                                  );
+                    # Example: consider a 30min programme broadcast on 20120101 at 00:30
+                    # and we're comparing it to a channel that broadcasts between 
+                    # 2300 and 0600. We generate start/stop times of 201201012300 and
+                    # 201201020600 for the channel, but the programme starts/stops
+                    # at 201201010030 and 201201010100. These times occur whilst the
+                    # channel is on-air the _previous_ day.
+                    #
+                    $chan_start_dt = $chan_start_dt - $day_dur;
+                    $chan_stop_dt  = $chan_stop_dt - $day_dur;
 
-                    $chan_stop  = utc_offset(
-                                      UnixDate(
-                                          DateCalc(
-                                              ParseDateString($chan_stop),
-                                              ParseDateDelta("- 1 day")
-                                          ),
-                                          "%Y%m%d%H%M %z"),
-                                      $base_tz
-                                  );
+                    my $chan_start = "" . $chan_start_dt->ymd('') . $chan_start_dt->hms('') . ' ' . DateTime::TimeZone->offset_as_string($chan_start_dt->offset);
+                    my $chan_stop  = "" . $chan_stop_dt->ymd('')  . $chan_stop_dt->hms('')  . ' ' . DateTime::TimeZone->offset_as_string($chan_stop_dt->offset);
 
-                    t("  " . $chan_start . " - Start time of channel");
-                    t("  " . $chan_stop . " - Stop time of channel");
+                    t("  " . $chan_start . " - Start time of channel (previous day)");
+                    t("  " . $chan_stop  . " - Stop time of channel (previous day)");
 
                     # Test again to see if the programme falls between the adjusted
                     # channel broadcast times
-                    if (Date_Cmp($prog{start}, $chan_start) >= 0
-                      && Date_Cmp($prog{stop}, $chan_stop) <= 0 ) {
+                    if ($start_dt >= $chan_start_dt && $stop_dt <= $chan_stop_dt) {
                         t("  '" . $prog{'_title'} . "' shown whilst channel is on-air, adding");
                     } else {
                         t("  '" . $prog{'_title'} . "' shown whilst channel is off-air, skipping\n");
@@ -4021,81 +3998,8 @@ sub write_listings_data {
                 }
             }
 
-            # Compare the stated and calculated durations of the programme. Since
-            # we use the given programme length to determine the stop time, any
-            # problems here need investigating
-            my $rt_prog_length = ParseDateDelta( $prog{'_duration_mins'} . " minutes" );
-            my $real_prog_length = DateCalc( ParseDate( $prog{start} ),
-                                             ParseDate( $prog{stop} ) );
-            if ($rt_prog_length ne $real_prog_length) {
-                t("  Calculated/stated programme durations do not agree for '" . $prog{'_title'} . "':");
-                t("    Start time: '" . $prog{start} . "'\t\tCalculated:  '" . $real_prog_length . "'");
-                t("    Stop time:  '" . $prog{stop} . "'\t\tRadio Times: '" . $rt_prog_length . "'");
-            }
-
-            # Check for a programme having zero length and skip it
-            my $zero_prog_length = ParseDateDelta( "0 minutes" );
-            if (($rt_prog_length eq $zero_prog_length) ||
-                            ($real_prog_length eq $zero_prog_length)) {
-                t("  Programme '" . $prog{'_title'} . "' has zero length, skipping");
-                t("");
-                next PROGRAMME;
-            }
-
-            # Check that this programme's start time is not earlier than the
-            # previous programme's stop time. This is seen very infrequently
-            # in the data, and might be due to last minute schedule changes
-            # where the overlapping timings have not been noticed/corrected.
-            #
-            # If an overlap is detected, move the start time of the second 
-            # programme to be the same as the stop time for the first programme. 
-            # This has been chosen to try to ensure that the first programme 
-            # does not lose its ending, which is almost always more important 
-            # than the start of a programme.
-            #
-            # FIXME
-            # However, examination of a recent occurence of an overlap showed 
-            # that the start time of the second programme was correct, and that
-            # the end time and duration of the previous programme was incorrect
-            # so this behaviour may need to be reversed/altered if start times
-            # are found to be consistently correct
-            #
-            if (defined $prev_prog && Date_Cmp($prog{start}, $prev_prog->{stop}) < 0) {
-                # ignore programmes that are listed as starting before the 
-                # previous programe has finished *and* finishing before or 
-                # at the same time the previous programme has finished 
-                # (seen with news/weather bulletins)
-                if (Date_Cmp($prog{stop}, $prev_prog->{stop}) <= 0) {
-                    t("  Programme '" . $prog{'_title'} . "' starts/stops during previous programme, ignoring");
-                    t("");
-                    push @overlapping_progs,
-                            $prog{start} . " (" . $rt_name . "): " . $prog{'_title'}
-                            . " starts/stops during previous programme, IGNORING";
-                    next PROGRAMME;
-                }
-                # determine overlap
-                my $delta = DateCalc( ParseDate( $prog{start} ),
-                                      ParseDate( $prev_prog->{stop} ) );
-                # get the overlap in minutes
-                my $overlap = Delta_Format($delta, 1, "%mv");
-                t("  Scheduling overlap detected (" . $overlap . " mins) with " 
-                        . "previous programme '" . $prev_prog->{'_title'} . "'");
-                # Record the overlap for debug output
-                push @overlapping_progs, 
-                        $prog{start} . " (" . $rt_name . "): Start of '" . $prog{'_title'}
-                        . "' overlaps end of '" . $prev_prog->{'_title'}
-                        . "' by " . $overlap . " minutes, ADJUSTING";
-                $prog{start} = $prev_prog->{stop};
-                t("  Adjusting start time of '" . $prog{'_title'} . "' to remove overlap");
-                t("  " . $prog{start} . " - Start time after overlap adjustment");
-                t("  " . $prog{stop} . " - Stop time after overlap adjustment");
-            }
-
             # Finally, write the programme's XML data to programme list
             push @programmes, \%prog;
-            # Update reference to previous programme
-            $prev_prog = \%prog;
-            
             $num_titles++;
             t("");
         }
@@ -4391,16 +4295,6 @@ sub print_possible_prog_numbering {
             say("  $t");
         }
         say("End of list of titles containing \"Season\"");
-    }
-}
-
-sub print_overlapping_progs {
-    if (@overlapping_progs) {
-        say("\nStart of list of overlapping programmes seen in listings");
-        foreach my $overlap (@overlapping_progs) {
-            say("  " . $overlap);
-        }
-        say("End of list of overlapping programmes seen in listings");
     }
 }
 
