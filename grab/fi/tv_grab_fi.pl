@@ -579,6 +579,15 @@ processing.
 
 =back
 
+=item B<title strip parental level>
+
+At the beginning of 2012 some programme descriptions started to include
+parental levels at the end of the title, e.g. C<(S)>. With this command all
+parental levels will be removed from the titles automatically. This removal
+occurs before the title mapping.
+
+=back
+
 =head1 SEE ALSO
 
 L<xmltv>.

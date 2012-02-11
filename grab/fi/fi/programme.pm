@@ -90,6 +90,7 @@ sub _epoch_to_xmltv_time($) {
 my %series_description;
 my %series_title;
 my @title_map;
+my $title_strip_parental;
 
 sub dump {
   my($self, $writer) = @_;
@@ -101,6 +102,10 @@ sub dump {
 
   #
   # Programme post-processing
+  #
+  # Parental level removal (catch also the duplicates)
+  $title =~ s/(?:\s+\((?:S|T|7|9|12|16|18)\))+\s*$//
+      if $title_strip_parental;
   #
   # Title mapping
   #
@@ -216,14 +221,22 @@ sub parseConfigLine {
       # Unknown series configuration
       return;
     }
-  } elsif (($command eq "title") &&
-	   ($keyword eq "map")   &&
-	   # Accept "title" and 'title' for each parameter
-	   (my(undef, $from, undef, $to) =
-	    ($param =~ /^([\'\"])([^\1]+)\1\s+([\'\"])([^\3]+)\3/))) {
-    debug(3, "title mapping from '$from' to '$to'");
-    $from = qr/^\Q$from\E/;
-    push(@title_map, sub { $_[0] =~ s/$from/$to/ });
+  } elsif ($command eq "title") {
+      if (($keyword eq "map") &&
+	  # Accept "title" and 'title' for each parameter
+	  (my(undef, $from, undef, $to) =
+	   ($param =~ /^([\'\"])([^\1]+)\1\s+([\'\"])([^\3]+)\3/))) {
+	  debug(3, "title mapping from '$from' to '$to'");
+	  $from = qr/^\Q$from\E/;
+	  push(@title_map, sub { $_[0] =~ s/$from/$to/ });
+      } elsif (($keyword eq "strip") &&
+	       ($param   =~ /parental\s+level/)) {
+	  debug(3, "stripping parental level from titles");
+	  $title_strip_parental++;
+      } else {
+	  # Unknown title configuration
+	  return;
+      }
   } else {
     # Unknown command
     return;
