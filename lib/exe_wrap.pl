@@ -76,18 +76,6 @@ if (index('--version', $cmd) == 0 and length $cmd >= 3) {
 }
 
 #
-# some grabbers aren't included
-#
-if ($cmd =~ /^tv_grab_(eu_epgdata)$/) {
-    die <<END
-Sorry, $cmd is not available in this Windows binary release, although
-it is included in xmltv source releases.
-
-END
-  ;
-};
-
-#
 # some programs use a "share" directory
 #
 if ($cmd eq 'tv_grab_na_dd',
@@ -136,8 +124,7 @@ foreach my $exe (split(/ /,$files))
 {
     next unless length($exe)>3; #ignore trash
     $_=$exe;
-    s!^.+/!!g;
-    next if /epgdata/;
+    s!^.+/!!g;   
     $cmds{$_}=1;  # build command list (just in case)
 
     next unless $cmd eq $_;
