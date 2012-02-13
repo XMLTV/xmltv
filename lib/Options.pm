@@ -68,10 +68,10 @@ my %cap_options = (
 		   preferredmethod => [qw/
 				       preferredmethod
 				       /],
-                   lineups => [qw/
-                               lineup=s
-                               list-lineups
-                               /],
+           lineups => [qw/
+                 lineup=s
+                 list-lineups
+                 /],
 		   );
 
 my %cap_defaults = (
@@ -107,10 +107,10 @@ my %cap_defaults = (
 		    preferredmethod => {
 			preferredmethod => 0,
 		    },
-                    lineups => {
-                        lineup => undef,
-                        'list-lineups' => 0,
-                    }
+            lineups => {
+            lineup => undef,
+            'list-lineups' => 0,
+            }
 		   );
 
 =head1 USAGE
@@ -497,7 +497,6 @@ sub ParseOptions
     if( $opt->{"list-lineups"} )
     {
         print &{$p->{list_lineups_sub}}($conf,$opt);
-
         exit 0;
     }
 
@@ -508,8 +507,7 @@ sub ParseOptions
 	    print STDERR "You need to provide a valid lineup ID.\n";
 	    exit 1;
 	}
-        print &{$p->{get_lineup_sub}}($opt);
-
+        print &{$p->{get_lineup_sub}}($conf,$opt);
         exit 0;
     }
 
