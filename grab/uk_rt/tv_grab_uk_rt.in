@@ -281,7 +281,7 @@ write_channel_list($available_channels, $wanted_chs);
 write_listings_data($conf, $opt, $available_channels, $wanted_chs);
 write_xmltv_footer();
 
-# Print out debug info for titles, categories, bad utf-8 chars
+# Print debug info for titles, categories, bad utf-8 chars
 if ($opt->{debug}) {
     print_titles_with_colons();
     print_titles_with_hyphens();
@@ -293,23 +293,16 @@ if ($opt->{debug}) {
     print_flagged_title_eps();
     print_dotdotdot_titles();
     print_title_in_subtitle();
-
     print_categories();
     print_uncategorised_progs();
     print_cats_per_prog();
-
     print_possible_prog_numbering();
-
     print_misencoded_utf8_data();
-}
-
-# Warn users of any empty listings
-if (!$opt->{quiet}) {
-    print_empty_listings();
 }
 
 # Give a useful exit status if data for some channels was not downloaded
 if (!$opt->{quiet}) {
+    print_empty_listings();
     if ($warnings) {
         say("\nFinished, but listings for some channels/programmes are missing. Check log.\n");
         exit(1);
@@ -2059,6 +2052,731 @@ sub process_utf8_fixups($$$) {
     return $page;
 }
 
+# Validate the key %prog fields (title/date/time) for a programme
+sub validate_key_fields {
+    my $prog = shift;
+
+    if (!defined $prog->{'_title'}) {
+        t("  Missing title in entry, skipping");
+        return undef;
+    }
+    if (!defined $prog->{'_date'}) {
+        t("  Missing date in entry, skipping");
+        return undef;
+    }
+    if (!defined $prog->{'_start'}) {
+        t("  Missing start time in entry, skipping");
+        return undef;
+    }
+    if (!defined $prog->{'_duration_mins'}) {
+        t("  Missing duration in entry, skipping");
+        return undef;
+    }
+    if ($prog->{'_date'} !~ m{^\d\d/\d\d/\d{4}$}) {
+        t("  Bad date '" . $prog->{'_date'} . "' detected for '" . $prog->{'_title'} . "', skipping\n");
+        return undef;
+    }
+    if ($prog->{'_start'} !~ m/\d\d:\d\d/) {
+        t("  Bad start time '" . $prog->{'_start'} . "' detected for '" . $prog->{'_title'} . "', skipping\n");
+        return undef;
+    }
+    if ($prog->{'_duration_mins'} !~ m/\d+/) {
+        t("  Bad duration '" . $prog->{'_duration'} . "' detected for '" . $prog->{'_title'} . "', skipping\n");
+        return undef;
+    }
+    if ($prog->{'_duration_mins'} == 0) {
+        t("  Zero duration detected for '" . $prog->{'_title'} . "', skipping\n");
+        return undef;
+    }
+    return $prog;
+}
+
+# Check boolean fields for valid data. Update 'true'/'false'
+# strings to '1'/'0' values
+sub validate_boolean_field {
+    my $prog = shift;
+    my $field = shift;
+
+    if (!defined $prog->{$field}) {
+        t("  A required true/false value was undefined for '" 
+                . $prog->{'_title'} . "', skipping");
+        return undef;
+    }
+    if ($prog->{$field} !~ m/(true|false)/i) {
+        t("  A bad true/false value '$prog->{$field}' was seen for '" 
+                . $prog->{'_title'} . "', skipping");
+        return undef;
+    }
+
+    $prog->{$field} = 1 if $prog->{$field} eq 'true';
+    $prog->{$field} = 0 if $prog->{$field} eq 'false';
+
+    return $prog;
+}
+
+# Check for any DST-related information the RT may include in the title
+# for a programme. If we find any explicit DST information we store it 
+# for use later and remove it from the title.
+sub check_explicit_tz_in_title {
+    my $prog = shift;
+
+    if ($prog->{'_title'} =~ s/^\((GMT|BST)\)\s*//) {
+        $prog->{'_explicit_tz'} = $1;
+    }
+}
+
+# Remove any last-minute scheduling info inserted into regular 
+# description that will affect later regexes.
+sub remove_updated_listing_desc {
+    my $prog = shift;
+
+    if (defined $prog->{'_desc'}) {
+        $prog->{'_desc'} =~ s/\s+/ /g;
+        if ($prog->{'_desc'} =~ s/\s?(?:UPDATED|UPADTED)\s+LISTING\s?(?:-|:|@)\s?(.*)$//i) {
+            $prog->{'_updated_listing_info'} = $1;
+            t("  Removed updated listing information:\n" . "    '" . $1 . "'");
+        }
+    }
+}
+
+# Episode/series numbering is provided in the sub_title field in the source 
+# data, which is parsed out if seen. Retain episode $sub_title data if 
+# $episode contains only episode numbering.
+sub check_numbering_in_subtitle {
+    my $prog = shift;
+
+    if (defined $prog->{'_sub_title'}) {
+        extract_numbering_from_sub_title($prog);
+
+        # sub_title should be empty after successful parsing
+        if ($prog->{'_sub_title'} eq '') {
+            $prog->{'_sub_title'} = undef;
+        }
+        # text left in sub_title is most likely _episode info, so move it to _episode
+        else {
+            if (!defined $prog->{'_episode'}) {
+                t("  Using sub-title '" . $prog->{'_sub_title'} . "' as episode not given");
+                $prog->{'_episode'} = $prog->{'_sub_title'};
+                $prog->{'_sub_title'} = undef;
+            }
+            else {
+                t("  Merging episode '" . $prog->{'_episode'} . "' with sub_title '" . $prog->{'_sub_title'} . "'");
+                $prog->{'_episode'} = $prog->{'_episode'} . ": " . $prog->{'_sub_title'};
+                $prog->{'_sub_title'} = undef;
+            }
+        }
+    }
+}
+
+# Check for null or invalid release year
+sub validate_year_field {
+    my $prog = shift;
+
+    if (defined $prog->{'_year'}) {
+        if ($prog->{'_year'} =~ m/null/i) {
+            t("  Null release year given for this programme.");
+            $prog->{'_year'} = undef;
+        }
+        elsif ($prog->{'_year'} !~ m/\d{4}/) {
+            t("  Invalid release year given for this programme.");
+            $prog->{'_year'} = undef;
+        }
+    }
+}
+
+# Remove production year from $episode for films only
+# If we do not already have a valid prod year, use the year
+# detected
+sub remove_year_from_episode {
+    my $prog = shift;
+
+    if (defined $prog->{'_episode'}) {
+        if ($prog->{'_film'} && $prog->{'_episode'} =~ s/Prod Year (\d{4})//i) {
+            t("  Removed production year info from episode details");
+            $prog->{'_episode'} = undef;
+            if (!defined $prog->{'_year'}) {
+                $prog->{'_year'} = $1;
+            }
+        }
+    }
+}
+
+# Remove bad chars from $title text before further processing
+sub tidy_title_text {
+    my $prog = shift;
+
+    # remove vertical bar/colon
+    if ($prog->{'_title'} =~ s/([|:])$//) {
+        t("  Removed '" . $1 . "' from end of title");
+    }
+}
+
+# Some listings appear to be added without being processed upstream 
+# to provide subtitle (episode) information. The titles of these
+# programmes are uppercase and may contain season numbering. Here
+# we monitor these before further title processing is carried out.
+sub check_uppercase_titles {
+    my $prog = shift;
+
+    if ($opt->{debug} && ($prog->{'_title'} eq uc($prog->{'_title'}))) {
+        $uc_prog_titles{$prog->{'_title'}} = $prog->{'_title'};
+    }
+}
+
+# Process programme against supplemental title fixups
+sub process_title_fixups {
+    my $prog = shift;
+
+    # Remove non-title text found in programme title.
+    #
+    # Applied to all titles in the source data (type = 1)
+    process_non_title_info($prog);
+
+    # Track when titles/subtitles have been updated to allow 
+    # short-circuiting of title processing
+    $prog->{'_titles_processed'} = 0;
+    $prog->{'_subtitles_processed'} = 0;
+    
+    # Next, process titles to make them consistent
+    #
+    # One-off title and episode replacements (type = 10)
+    if (!$prog->{'_titles_processed'}) {
+        process_replacement_titles_desc($prog);
+    }
+    # One-off title and episode replacements (type = 8)
+    if (!$prog->{'_titles_processed'}) {
+        process_replacement_titles_episodes($prog);
+    }
+    # Look for $title:$episode in source title (type = 2)
+    if (!$prog->{'_titles_processed'}) {
+        process_mixed_title_subtitle($prog);
+    }
+    # Look for $episode:$title in source title (type = 3)
+    if (!$prog->{'_titles_processed'}) {
+        process_mixed_subtitle_title($prog);
+    }
+    # Look for reversed title and subtitle information (type = 4)
+    if (!$prog->{'_titles_processed'}) {
+        process_reversed_title_subtitle($prog);
+    }
+    # Look for inconsistent programme titles (type = 5)
+    #
+    # This fixup is applied to all titles (processed or not) to handle
+    # titles split out in fixups of types 2-4 above
+    process_replacement_titles($prog);
+
+    # Next, process subtitles to make them consistent
+    #
+    # Look for inconsistent programme subtitles (type = 7)
+    if (!$prog->{'_subtitles_processed'}) {
+        process_replacement_episodes($prog);
+    }
+    # Replace subtitle based on description (type = 9)
+    if (!$prog->{'_subtitles_processed'}) {
+        process_replacement_ep_from_desc($prog);
+    }
+
+    # Last, provide/update a programme's category based on 'corrected' title
+    # (type = 6)
+    process_replacement_genres($prog);
+}
+
+# Check for potential episode numbering that still remains in the title
+# or episode fields
+sub check_potential_numbering_in_text {
+    my $prog = shift;
+
+    extract_numbering_from_episode($prog);
+    extract_numbering_from_title($prog);
+    extract_part_numbering_from_episode($prog);
+
+    # after processing see if $title contains "season" text that should
+    # probably be removed
+    if ($opt->{debug} && $prog->{'_title'} =~ m/season/i) {
+        t("      Title text contains \"Season\":  " . $prog->{'_title'});
+        $title_text_to_remove{$prog->{'_title'}} = $prog->{'_title'};
+    }
+
+    # after processing see if $episode contains "series" text
+    if ($opt->{debug} && defined $prog->{'_episode'} && $prog->{'_episode'} =~ m/series/i) {
+        t("      Possible series numbering still seen:  " . $prog->{'_episode'});
+        $possible_series_nums{$prog->{'_episode'}} = $prog->{'_episode'};
+    }
+
+    # check for potential episode numbering left unprocessed
+    if ($opt->{debug} && defined $prog->{'_episode'}
+            && ($prog->{'_episode'} =~ m/^\d{1,2}\D/ || $prog->{'_episode'} =~ m/\D\d{1,2}$/) 
+            && $prog->{'_episode'} !~ m/(Part|Pt(\.)?)(\d+|\s+\w+)/) {
+        t("      Possible episode numbering still seen: " . $prog->{'_episode'});
+        $possible_episode_nums{$prog->{'_episode'}} = $prog->{'_episode'};
+    }
+}
+
+# Set $episode to undefined if empty/whitespace
+sub tidy_episode_text {
+    my $prog = shift;
+
+    if (defined $prog->{'_episode'} && $prog->{'_episode'} =~ m/^\s*$/) {
+        $prog->{'_episode'} = undef;
+    }
+}
+
+# Store a variety of title debugging information for later analysis
+# and debug output
+sub store_title_debug_info {
+    my $prog = shift;
+
+    if ($opt->{debug}) {
+        # Monitor for case/punctuation-insensitive title variations
+        my $title_nopunc = lc $prog->{'_title'};
+        $title_nopunc =~ s/^the\s+//;
+        $title_nopunc =~ s/(\s+and\s+|\s+&\s+)/ /g;
+        $title_nopunc =~ s/\s+No 1s$//g;
+        $title_nopunc =~ s/\s+No 1's$//g;
+        $title_nopunc =~ s/\s+Number Ones$//g;
+        $title_nopunc =~ s/' //g;
+        $title_nopunc =~ s/'s/s/g;
+        $title_nopunc =~ s/\W//g;
+        # count number of each variant by genre and channel name
+        my $tmp_genre;
+        $tmp_genre = $prog->{'_genre'}; $tmp_genre = "No Genre" if not defined $tmp_genre;
+        $case_insens_titles{$title_nopunc}{ $prog->{'_title'} }{$tmp_genre}{ $prog->{'_rt_name'} }++;
+        $case_insens_titles{$title_nopunc}{ $prog->{'_title'} }{'count'}++;
+    
+        # Check for title text still present in episode details
+        if (defined $prog->{'_episode'} && $prog->{'_episode'} =~ m/^\Q$prog->{'_title'}\E.*$/) {
+            my $key = $prog->{'_title'} . "|" . $prog->{'_episode'};
+            $title_in_subtitle_notfixed{$key} = { 'title'    => $prog->{'_title'},
+                                                  'episode'  => $prog->{'_episode'},
+                                                };
+        }
+
+        # Check for episode details that contain a colon/hyphen - these may indicate
+        # a title in the episode field that needs to be moved into the title field
+        if (defined $prog->{'_episode'} && $prog->{'_episode'} =~ m/(:|\s+-\s+)/) {
+            my $key = $prog->{'_title'} . "|" . $prog->{'_episode'};
+            $colon_in_subtitle{$key} = { 'title'    => $prog->{'_title'},
+                                         'episode'  => $prog->{'_episode'},
+                                        };
+        }
+
+        # Add title to the list of programme titles for later debugging. 
+        # Likewise for films, but store in separate hash.
+        if (!$prog->{'_film'}) {
+            $prog_titles{$prog->{'_title'}} = $prog->{'_title'};
+        }
+        else {
+            $film_titles{$prog->{'_title'}} = $prog->{'_title'};
+        }
+    }
+}
+
+# Occasionally film listings contain the title duplicated in the 
+# $episode field, so we remove it here
+sub check_duplicated_film_title {
+    my $prog = shift;
+
+    if ($prog->{'_film'} && defined $prog->{'_episode'} 
+                         && (uc $prog->{'_title'} eq uc $prog->{'_episode'})) {
+        $prog->{'_episode'} = undef;
+    }
+}
+
+# Check for films without a valid release year (absent or null string
+# seen in source data)
+sub check_missing_film_year {
+    my $prog = shift;
+
+    if ($prog->{'_film'} && !defined $prog->{'_year'}) {
+        t("  No release year given for this film.");
+    }
+}
+
+# Tidy description text
+sub tidy_desc_text {
+    my $prog = shift;
+    if (defined $prog->{'_desc'}) {
+        $prog->{'_desc'} =~ s/\s+/ /g;
+    }
+}
+
+# Update the premiere/repeat flags based on contents of programme desc
+sub update_premiere_repeat_flags_from_desc {
+    my $prog = shift;
+
+    if (defined $prog->{'_desc'}) {
+        # Check if desc start with "Premiere.". Remove if found and set flag
+        if ($prog->{'_desc'} =~ s/^Premiere\.\s*//) {
+            t("  Setting premiere flag based on description.");
+            $prog->{'_premiere'} = 1;
+        }
+
+        # Flag showings described as repeats
+        elsif ($prog->{'_desc'} =~ m/^Another chance/) {
+            t("  Setting repeat flag based on description.");
+            $prog->{'_repeat'} = 1;
+        }
+            
+        # Check if desc starts with "New series..."
+        elsif ($prog->{'_desc'} =~ m/^New series/) {
+            t("  Setting premiere flag based on description.");
+            $prog->{'_premiere'} = 1;
+            
+            # Now check if desc starts with "New series [(x/y)]. "
+            # Remove text and preserve numbering for processing below
+            if ($prog->{'_desc'} =~ m/^New series(\s*\d+\/\d+\s*)?\.\s*/i) {
+                $prog->{'_desc'} =~ s/^New series\s*//i;
+                $prog->{'_desc'} =~ s/^\s*\.\s*//i;
+            }
+        }
+    }
+}
+
+# Check for potential season/episode numbering in description. Only
+# use numbering found in the desc if we have not already found it
+# elsewhere (i.e. prefer data provided in the subtitle field of the 
+# raw data).
+#
+sub extract_numbering_from_desc {
+    my $prog = shift;
+   
+    if (defined $prog->{'_desc'}) {
+        # Extract episode and series info from start of description
+        # "1/6. ..."
+        # "1/6; series one. ..."
+        if ($prog->{'_desc'} =~
+            s{
+            ^                    # start at beginning of episode details
+            (\d+)                # CAPTURE the first number(s) found ($episode_num)
+            \s*                  # ignore any whitespace
+            (?:&\d+)?            # check for "&2" details relating to following episode
+            \s*                  # ignore any whitespace
+            \/                   # forward slash
+            \s*                  # ignore any whitespace
+            (\d+)                # CAPTURE the second number(s) found ($num_episodes)
+            \s*                  # ignore any whitespace
+            (?:\.|;)?            # check for punctuation characters
+            \s*                  # ignore any whitespace
+            (?:series\s+(\w+)\s*\.)? 
+                                # check for series number information ($series_num)
+            \s*                  # ignore any whitespace
+            }
+            {}ix ) {
+                my $updated_from_desc = 0;
+                if ( !defined $prog->{'_episode_num'} && !defined $prog->{'_num_episodes'} ) {
+                    $prog->{'_episode_num'} = $1 - 1;
+                    $prog->{'_num_episodes'} = $2;
+                    t("    Episode number found: episode $1 of $2 (desc)");
+                    $updated_from_desc++;
+                }
+                else {
+                    t("    Ignoring episode numbering seen in desc (episode $1 of $2)");
+                }
+                if ( defined $3 ) {
+                    my $series_digits = word_to_digit($3);
+                    
+                    if ( !defined $prog->{'_series_num'} ) {
+                        if (defined $series_digits and $series_digits > 0) {
+                            $prog->{'_series_num'} = $series_digits - 1;
+                            t("    Series number found: series $series_digits (parsed as $3 from desc)");
+                            $updated_from_desc++;
+                        }
+                    }
+                    else {
+                        t("    Ignoring series numbering seen in desc (series $series_digits)");
+                    }
+                }
+                $prog->{'_processed'} = 1 if $updated_from_desc;
+        }
+    }
+}
+
+# Create episode numbering based on information extracted from $episode 
+# and $desc fields.
+sub generate_episode_numbering {
+    my $prog = shift;
+
+    # series number is zero-indexed
+    if (!defined $prog->{'_series_num'} || $prog->{'_series_num'} < 0) {
+        $prog->{'_series_num'} = '';
+    }
+    # episode number is zero-indexed
+    if (!defined $prog->{'_episode_num'} || $prog->{'_episode_num'} < 0) {
+        $prog->{'_episode_num'} = '';
+    }
+    # episode total is one-indexed and should always be greater than the
+    # max episode number (which is zero-indexed)
+    if (defined $prog->{'_num_episodes'} 
+                && $prog->{'_num_episodes'} > 0 
+                && $prog->{'_num_episodes'} > $prog->{'_episode_num'} ) {
+        $prog->{'_num_episodes'} = "/" . $prog->{'_num_episodes'};
+    }
+    else {
+        $prog->{'_num_episodes'} = '';
+    }
+    # Create details if we have the series and/or episode numbers
+    if ($prog->{'_series_num'} ne '' || $prog->{'_episode_num'} ne '') {
+        return "" . $prog->{'_series_num'}   . "." . $prog->{'_episode_num'} 
+                  . $prog->{'_num_episodes'} . "." . "";
+    }
+    return undef;
+}
+
+# Create cast list based on various cast formats seen in source data
+sub generate_cast_list {
+    my $prog = shift;
+
+    # The Radio Times data includes cast information in 2 formats:
+    #
+    # a) pairings of 'character*actor' with subsequent pairings 
+    #    separated by '|' - '*' does not appear in any text
+    # b) a comma separated list of actors with no character details
+    #
+    # If 'Director' appears in the character entry, this is to be used 
+    # as a regular cast member, not the programme's director
+    if (defined $prog->{'_cast'}) {
+        my @cast;
+        $prog->{'_cast'} =~ s/\s+/ /g;   # remove extra spaces
+        $prog->{'_cast'} =~ s/\|\|/\|/g; # remove empty pipe-separated fields
+        $prog->{'_cast'} =~ s/,,/,/g;    # remove empty comma-separated fields
+        
+        # First we check for 'character*actor' entries
+        if ($prog->{'_cast'} =~ tr/*//) {
+            # Multiple 'character*actor'entries
+            if ($prog->{'_cast'} =~ tr/|//) {
+                @cast = split /\|/, $prog->{'_cast'};
+            }
+            # Single 'character*actor' entry
+            else {
+                push @cast, $prog->{'_cast'};
+            }
+            
+            # Now process the list of cast entries
+            foreach my $cast (@cast) {
+                # Replace any actor given as Himself/Herself with the
+                # character name given
+                if ($cast =~ m/^(.*)[*](Himself|Herself)$/) {
+                    $cast = "$1*$1";
+                }
+                # Remove the 'character*' portion of the entry
+                if ($cast !~ s/^.*[*]//) {
+                    t("  Bad cast entry for '" . $prog->{'_title'} . "': " . $cast);
+                }
+            }
+        }
+        # Next we check for CSV-style actor entries
+        elsif ($prog->{'_cast'} =~ tr/,//) {
+            @cast = split /,/, $prog->{'_cast'};
+        }
+        # Finally assume a single name that contains neither '*' nor ','
+        else {
+            push @cast, $prog->{'_cast'};
+        }
+
+        # Trim whitespace from beginning/end of actor names
+        foreach my $cast (@cast) {
+            $cast =~ s/^\s+//;
+            $cast =~ s/\s+$//;
+        }
+
+        return \@cast if scalar @cast > 0;
+    }
+    return undef;
+}
+
+# Store details of uncategorised programmes and programmes having different
+# genres throughout the listings for alter analysis
+sub store_genre_debug_info {
+    my $prog = shift;
+
+    if ($opt->{debug}) {
+        if (defined $prog->{'_genre'} && !$prog->{'_film'}) {
+            $categories{$prog->{'_genre'}} = $prog->{'_genre'};
+            if ($prog->{'_genre'} =~ m/^(No Genre)$/ 
+                    && $prog->{'_title'} !~ m/^(To Be Announced|TBA|Close)$/) {
+                $uncategorised_progs{$prog->{'_title'}} = $prog->{'_title'};
+            }
+            $cats_per_prog{$prog->{'_title'}}{$prog->{'_genre'}}++;
+        }
+        elsif (!defined $prog->{'_genre'} && $prog->{'_title'} !~ m/^(To Be Announced|TBA|Close)$/) {
+            $uncategorised_progs{$prog->{'_title'}} = $prog->{'_title'};
+        }
+    }
+}
+
+
+# Broadcast date, start/stop times, and timezone adjustments.
+#
+# For each programme entry, the Radio Times data includes the 
+# date at start of broadcast, the start time and the stop time.
+#
+# The Radio Times sometimes explicitly flags a programme's start/stop
+# times as being in a specific timezone (GMT or BST). We parse this
+# information out when processing the programme's title and apply it
+# to the start time of any such programmes. Flagged programmes are 
+# seen in the data in March and October, when British Summer Times 
+# begins and ends.
+#
+# We calculate the programme's stop time using the 
+# UTC-offset-corrected start time and its stated length. This allows 
+# us to handle occasions when programmes having mixed GMT/BST 
+# timings are not flagged.
+#
+# The Summer Time Order of 2002 defines British Summer Time as 
+# "...the period beginning at one o'clock, Greenwich mean time, in 
+# the morning of the last Sunday in March and ending at one o'clock, 
+# Greenwich mean time, in the morning of the last Sunday in October."
+sub generate_start_stop_times {
+    my $prog = shift;
+    my $ts_dt = shift;
+
+    my ($dd, $mm, $yyyy)      = ($prog->{'_date'}  =~ m{(\d\d)/(\d\d)/(\d{4})});
+    my ($start_hr, $start_mn) = ($prog->{'_start'} =~ m/(\d\d):(\d\d)/);
+    t("  Start time given as '" . $yyyy . "/" . $mm . "/" . $dd . " " 
+            . $start_hr . ":" . $start_mn . "', duration " . $prog->{'_duration_mins'} . " mins");
+
+    # Use explicit GMT/BST information if found in title
+    my $tz = 'Europe/London';
+    if (defined $prog->{'_explicit_tz'}) {
+        t("  Explicit timezone '" . $prog->{'_explicit_tz'} . "' detected in title");
+        if ($prog->{'_explicit_tz'} eq 'GMT') {
+            t("  Forcing timezone to GMT/+0000");
+            $tz = '+0000';
+        }
+        elsif ($prog->{'_explicit_tz'} eq 'BST') {
+            t("  Forcing timezone to BST/+0100");
+            $tz = '+0100';
+        }
+    }
+
+    # Determine start time with correct UTC offset
+    my $start_dt = DateTime->new(
+        year       => $yyyy,
+        month      => $mm,
+        day        => $dd,
+        hour       => $start_hr,
+        minute     => $start_mn,
+        second     => 0,
+        time_zone  => $tz,
+    );
+
+    $prog->{start} = "" . $start_dt->ymd('') . $start_dt->hms('') . ' ' . DateTime::TimeZone->offset_as_string($start_dt->offset);
+    t("  " . $prog->{start} . " - Start time");
+
+    # Determine stop time with correct UTC offset by adding duration of
+    # programme to start time
+    my $dur = DateTime::Duration->new( minutes => $prog->{'_duration_mins'} );
+    my $stop_dt = $start_dt + $dur;
+    $prog->{stop}  = "" . $stop_dt->ymd('') . $stop_dt->hms('') . ' ' . DateTime::TimeZone->offset_as_string($stop_dt->offset);
+    t("  " . $prog->{stop}  . " - Stop time");
+
+    # Now we have determined the correct start/stop times for the programme
+    # add any required timeshift defined in channel_ids and preserve the
+    # correct timezone information
+    #
+    if (defined $channel_offset{ $prog->{channel} }) {
+        $start_dt = $start_dt + $ts_dt;
+        $stop_dt  = $stop_dt + $ts_dt;
+
+        $prog->{start} = "" . $start_dt->ymd('') . $start_dt->hms('') . ' ' . DateTime::TimeZone->offset_as_string($start_dt->offset);
+        $prog->{stop}  = "" . $stop_dt->ymd('')  . $stop_dt->hms('')  . ' ' . DateTime::TimeZone->offset_as_string($stop_dt->offset);
+
+        t("  " . $prog->{start} . " - Start time after applying '" . $channel_offset{ $prog->{channel} } . "' timeshift");
+        t("  " . $prog->{stop}  . " - Stop time after applying '"  . $channel_offset{ $prog->{channel} } . "' timeshift");
+    }
+
+    # Now check to see whether the channel broadcasting the programme is a
+    # part-time channel, and if so, see whether this programme's timeslot 
+    # times fall within the broadcast window. If a channel broadcasts
+    # through the night, we also need to test against the next day's
+    # broadcast times.
+    #
+    if (defined $broadcast_hours{ $prog->{channel} }) {
+        $broadcast_hours{ $prog->{channel} } =~ m/(\d\d)(\d\d)-(\d\d)(\d\d)/;
+        my ($chan_start_hr, $chan_start_mn, $chan_stop_hr, $chan_stop_mn) = ($1, $2, $3, $4);
+
+        my $chan_start_dt = DateTime->new(
+            year       => $yyyy,
+            month      => $mm,
+            day        => $dd,
+            hour       => $chan_start_hr,
+            minute     => $chan_start_mn,
+            second     => 0,
+            time_zone  => 'Europe/London',
+        );
+        my $chan_start  = "" . $chan_start_dt->ymd('') . $chan_start_dt->hms('') . ' ' . DateTime::TimeZone->offset_as_string($chan_start_dt->offset);
+
+        my $chan_stop_dt = DateTime->new(
+            year       => $yyyy,
+            month      => $mm,
+            day        => $dd,
+            hour       => $chan_stop_hr,
+            minute     => $chan_stop_mn,
+            second     => 0,
+            time_zone  => 'Europe/London',
+        );
+
+        # Correct the stop time if it is earlier than the start time
+        my $chan_stop_next_day = 0;
+        if ($chan_start_dt >= $chan_stop_dt) {
+            $chan_stop_dt = $chan_stop_dt + $day_dur;
+            $chan_stop_next_day = 1;
+        }
+        my $chan_stop  = "" . $chan_stop_dt->ymd('') . $chan_stop_dt->hms('') . ' ' . DateTime::TimeZone->offset_as_string($chan_stop_dt->offset);
+
+        t("  " . $chan_start . " - Start time of channel (current day)");
+        t("  " . $chan_stop  . " - Stop time of channel (current day)");
+
+        # Include the current programme if its timeslot lies inside the
+        # channel's broadcast window
+        if ($start_dt >= $chan_start_dt && $stop_dt <= $chan_stop_dt) {
+            t("  '" . $prog->{'_title'} . "' shown whilst channel is on-air, adding");
+        }
+        # If the channel starts and stops broadcasting on the same 
+        # calendar day and the programme's timeslot is outside the 
+        # broadcast window, skip it
+        elsif (( $start_dt < $chan_start_dt || $stop_dt > $chan_stop_dt)
+                && $chan_stop_next_day == 0 ) {
+            t("  '" . $prog->{'_title'} . "' shown whilst channel is off-air, skipping\n");
+            return undef;
+        }
+        else {
+            # If the channel broadcasts through the night, and the channel
+            # start time is later than the stop time (i.e. 2300-0600), it is 
+            # possible for a program shown at or after midnight to result in 
+            # the generation of incorrect channel start/stop times (shifted 
+            # +1day forward). We therefore generate another pair of channel 
+            # start/stop times for the previous day to match against.
+            #
+            # Example: consider a 30min programme broadcast on 20120101 at 00:30
+            # and we're comparing it to a channel that broadcasts between 
+            # 2300 and 0600. We generate start/stop times of 201201012300 and
+            # 201201020600 for the channel, but the programme starts/stops
+            # at 201201010030 and 201201010100. These times occur whilst the
+            # channel is on-air the _previous_ day.
+            #
+            $chan_start_dt = $chan_start_dt - $day_dur;
+            $chan_stop_dt  = $chan_stop_dt - $day_dur;
+
+            my $chan_start = "" . $chan_start_dt->ymd('') . $chan_start_dt->hms('') . ' ' . DateTime::TimeZone->offset_as_string($chan_start_dt->offset);
+            my $chan_stop  = "" . $chan_stop_dt->ymd('')  . $chan_stop_dt->hms('')  . ' ' . DateTime::TimeZone->offset_as_string($chan_stop_dt->offset);
+
+            t("  " . $chan_start . " - Start time of channel (previous day)");
+            t("  " . $chan_stop  . " - Stop time of channel (previous day)");
+
+            # Test again to see if the programme falls between the adjusted
+            # channel broadcast times
+            if ($start_dt >= $chan_start_dt && $stop_dt <= $chan_stop_dt) {
+                t("  '" . $prog->{'_title'} . "' shown whilst channel is on-air, adding");
+            } else {
+                t("  '" . $prog->{'_title'} . "' shown whilst channel is off-air, skipping\n");
+                return undef;
+            }
+        }
+    }
+    return [ $prog->{start}, $prog->{stop} ];
+}
+
 # Remove duplicated programme title from episode field
 #
 # Listings for programmes may be provided that contain the
@@ -2067,7 +2785,7 @@ sub process_utf8_fixups($$$) {
 # ii) at the start separated from the episode by a colon/hyphen; or
 # iii) at the end separated from the episode by a colon/hyphen
 #
-sub remove_duplicated_title_in_ep($) {
+sub remove_duplicated_title_in_ep {
     my $prog = shift;
 
     if (defined $prog->{'_episode'}) {
@@ -2078,7 +2796,7 @@ sub remove_duplicated_title_in_ep($) {
         # Remove the duplicated title from episode field if we find it
         if ($tmp_episode =~ m/^\Q$tmp_title\E(?::\s|\s-\s)(.+)$/ || $tmp_episode =~ m/^\Q$tmp_title\E\s+\((.+)\)$/) {
             $prog->{'_episode'} = $1;
-            t("    Removing title text from beginning of episode field");
+            t("      Removing title text from beginning of episode field");
             if ($opt->{debug}) {
                 $title_in_subtitle_fixed{$key} = { 'title'    => $tmp_title,
                                                    'episode'  => $tmp_episode,
@@ -2088,7 +2806,7 @@ sub remove_duplicated_title_in_ep($) {
         # Look for title appearing at end of episode field
         elsif ($tmp_episode =~ m/^(.+)(?::\s|\s-\s)\Q$tmp_title\E$/) {
             $prog->{'_episode'} = $1;
-            t("    Removing title text from end of episode field");
+            t("      Removing title text from end of episode field");
             if ($opt->{debug}) {
                 $title_in_subtitle_fixed{$key} = { 'title'    => $tmp_title,
                                                    'episode'  => $tmp_episode,
@@ -2110,7 +2828,7 @@ sub remove_duplicated_title_in_ep($) {
 # be used. NOTE: the method is used for several of the title consistency
 # routines in order to speed up processing.
 # 
-sub process_non_title_info($) {
+sub process_non_title_info {
     my $prog = shift;
     
     if ($have_title_data && %non_title_info && $prog->{'_title'} =~ m/:/) {
@@ -2131,7 +2849,7 @@ sub process_non_title_info($) {
 # Here we reassign the episode to the $episode element, leaving only the 
 # programme's title in the $title element
 #
-sub process_mixed_title_subtitle($) {
+sub process_mixed_title_subtitle {
     my $prog = shift;
     
     if ($have_title_data && %mixed_title_subtitle && $prog->{'_title'} =~ m/:|-/) {
@@ -2184,7 +2902,7 @@ sub process_mixed_title_subtitle($) {
 # Here we reassign the episode to the $episode element, leaving only the 
 # programme's title in the $title element
 #
-sub process_mixed_subtitle_title($) {
+sub process_mixed_subtitle_title {
     my $prog = shift;
     
     if ($have_title_data && @mixed_subtitle_title && $prog->{'_title'} =~ m/:|-/) {
@@ -2236,7 +2954,7 @@ sub process_mixed_subtitle_title($) {
 # consistent data, we check for flagged programme titles and reverse the given 
 # title and sub-title when found.
 #
-sub process_reversed_title_subtitle($) {
+sub process_reversed_title_subtitle {
     my $prog = shift;
     
     if ($have_title_data && %reversed_title_subtitle && defined $prog->{'_episode'}) {
@@ -2260,7 +2978,7 @@ sub process_reversed_title_subtitle($) {
 # Process inconsistent titles, replacing any flagged bad titles with good 
 # titles. A straightforward hash lookup against the programme title is used.
 #
-sub process_replacement_titles($) {
+sub process_replacement_titles {
     my $prog = shift;
     if ($have_title_data && %replacement_titles) {
         my $bad_title = $prog->{'_title'};
@@ -2276,7 +2994,7 @@ sub process_replacement_titles($) {
 # Process inconsistent episodes. The %replacement_episodes data structure 
 # is a hash of hashes.
 #
-sub process_replacement_episodes($) {
+sub process_replacement_episodes {
     my $prog = shift;
     
     if ($have_title_data && %replacement_episodes && defined $prog->{'_episode'}) {
@@ -2300,7 +3018,7 @@ sub process_replacement_episodes($) {
 #
 # *** THIS MUST BE USED WITH CARE! ***
 #
-sub process_replacement_titles_episodes($) {
+sub process_replacement_titles_episodes {
     my $prog = shift;
 
     if ($have_title_data && %replacement_title_eps) {
@@ -2361,7 +3079,7 @@ sub process_replacement_titles_episodes($) {
 # The description should therefore be unique for each episode of the programme.
 # The %replacement_ep_from_desc data structure is a hash of hashes.
 #
-sub process_replacement_ep_from_desc($) {
+sub process_replacement_ep_from_desc {
     my $prog = shift;
     
     if ($have_title_data && %replacement_ep_from_desc && defined $prog->{'_desc'}) {
@@ -2388,7 +3106,7 @@ sub process_replacement_ep_from_desc($) {
 # be replaced using this routine as it may cause such programmes to be given 
 # inaccurate genres.
 #
-sub process_replacement_genres($) {
+sub process_replacement_genres {
     my $prog = shift;
 
     if ($have_title_data && %replacement_cats && $prog->{'_title'} !~ m/^(To Be Announced|TBA)/i && !$prog->{'_film'}) {
@@ -2408,7 +3126,7 @@ sub process_replacement_genres($) {
 #
 # *** THIS MUST BE USED WITH CARE! ***
 #
-sub process_replacement_titles_desc($) {
+sub process_replacement_titles_desc {
     my $prog = shift;
 
     if ($have_title_data && %replacement_title_desc && defined $prog->{'_desc'} ) {
@@ -2470,7 +3188,7 @@ sub process_replacement_titles_desc($) {
 # available in the <episode-num> element, being stored in intermediary
 # variables during processing.
 #
-sub extract_numbering_from_sub_title($) {
+sub extract_numbering_from_sub_title {
     my $prog = shift;
 
     if (defined $prog->{'_sub_title'}
@@ -2676,7 +3394,7 @@ sub extract_numbering_from_sub_title($) {
 # from the source data, this routine will extract most numbering inserted
 # through the title/episode update/consistency routines.
 #
-sub extract_numbering_from_episode($) {
+sub extract_numbering_from_episode {
     my $prog = shift;
 
     if (defined $prog->{'_episode'}
@@ -2763,7 +3481,7 @@ sub extract_numbering_from_episode($) {
 # FIXME should we export part number in <episode-num> and remove
 # it from the text?
 #
-sub extract_part_numbering_from_episode($) {
+sub extract_part_numbering_from_episode {
     my $prog = shift;
     
     if (defined $prog->{'_episode'} 
@@ -3021,7 +3739,7 @@ sub extract_part_numbering_from_episode($) {
 
 # Check for potential season numbering in title
 #
-sub extract_numbering_from_title($) {
+sub extract_numbering_from_title {
     my $prog = shift;
 
     if ($prog->{'_title'} =~ m/Series|Season/i) {
@@ -3100,63 +3818,6 @@ sub extract_numbering_from_title($) {
     }
 }
 
-# Check for potential season/episode numbering in description. Only
-# use numbering found in the desc if we have not already found it
-# elsewhere (i.e. prefer data provided in the subtitle field of the 
-# raw data).
-#
-sub extract_numbering_from_desc($) {
-    my $prog = shift;
-    
-    # Extract episode and series info from start of description
-    # "1/6. ..."
-    # "1/6; series one. ..."
-    if ($prog->{'_desc'} =~
-        s{
-          ^                    # start at beginning of episode details
-          (\d+)                # CAPTURE the first number(s) found ($episode_num)
-          \s*                  # ignore any whitespace
-          (?:&\d+)?            # check for "&2" details relating to following episode
-          \s*                  # ignore any whitespace
-          \/                   # forward slash
-          \s*                  # ignore any whitespace
-          (\d+)                # CAPTURE the second number(s) found ($num_episodes)
-          \s*                  # ignore any whitespace
-          (?:\.|;)?            # check for punctuation characters
-          \s*                  # ignore any whitespace
-          (?:series\s+(\w+)\s*\.)? 
-                               # check for series number information ($series_num)
-          \s*                  # ignore any whitespace
-        }
-        {}ix ) {
-            my $updated_from_desc = 0;
-            if ( !defined $prog->{'_episode_num'} && !defined $prog->{'_num_episodes'} ) {
-                $prog->{'_episode_num'} = $1 - 1;
-                $prog->{'_num_episodes'} = $2;
-                t("    Episode number found: episode $1 of $2 (desc)");
-                $updated_from_desc++;
-            }
-            else {
-                t("    Ignoring episode numbering seen in desc (episode $1 of $2)");
-            }
-            if ( defined $3 ) {
-                my $series_digits = word_to_digit($3);
-                
-                if ( !defined $prog->{'_series_num'} ) {
-                    if (defined $series_digits and $series_digits > 0) {
-                        $prog->{'_series_num'} = $series_digits - 1;
-                        t("    Series number found: series $series_digits (parsed as $3 from desc)");
-                        $updated_from_desc++;
-                    }
-                }
-                else {
-                    t("    Ignoring series numbering seen in desc (series $series_digits)");
-                }
-            }
-            $prog->{'_processed'} = 1 if $updated_from_desc;
-    }
-}
-
 # Download listings data for configured channels that are available
 sub write_listings_data {
     my ( $conf, $opt, $available_channels, $wanted_chs ) = @_;
@@ -3208,10 +3869,10 @@ sub write_listings_data {
     # Process all of the channels we want listings for
     WANTED_CH:
     foreach my $ch (@{$wanted_chs}) {
-        my $c = ${$available_channels}{$ch};
+        my $c = $available_channels->{$ch};
         my $xmltv_id = $c->{id};
         my $rt_id = $c->{rt_id};
-        my $rt_name = $c->{'display-name'}->[0]->[0];
+        my $rt_name = $c->{'display-name'}[0][0];
         if (!defined $rt_id) {
             t("No Radio Times ID for channel '$rt_name', skipping");
             next WANTED_CH;
@@ -3285,7 +3946,7 @@ sub write_listings_data {
 
             my @fields = split /\~/, $prog;
             if (scalar @fields < 23) {
-                if ($warned_wrong_num_fields{$ch}++) {
+                if ($warned_wrong_num_fields{$xmltv_id}++) {
                     t("  Too few data fields (need at least 23) in line:\n  $prog\n");
                 }
                 $warnings++;
@@ -3330,8 +3991,8 @@ sub write_listings_data {
             #
 
             # Hash to store all programme-specific variables. Initially store
-            # the channel ID.
-            my %prog = (channel => $ch);
+            # the channel's XMLTV ID and name.
+            my %prog = (channel => $xmltv_id, '_rt_name' => $rt_name);
 
             # Store fields against temp keys. We will assign values to the XMLTV
             # specific keys during processing. Key names starting with "_" are
@@ -3346,457 +4007,124 @@ sub write_listings_data {
               $prog{'_stop'},        $prog{'_duration_mins'},
             ) = @fields;
 
-            if (!defined $prog{'_title'}) {
-                t("  Missing title in entry '$prog', skipping");
+            # Validate key fields (title/date/time) before processing
+            if (! validate_key_fields(\%prog)) {
                 $warnings++;
                 next PROGRAMME;
             }
+            # Check true/false fields for valid data
+            foreach my $field ('_premiere',   '_film',            '_repeat',
+                               '_subtitles',  '_widescreen',      '_new_series',
+                               '_deaf_signed','_black_and_white', '_choice',   ) {
+                if (! validate_boolean_field(\%prog, $field) ) {
+                    $warnings++;
+                    next PROGRAMME;
+                }
+            }
+
             t("  Processing programme title '" . $prog{'_title'} . "'");
 
-            if (!defined $prog{'_date'}) {
-                t("  Missing date in entry '$prog', skipping");
-                $warnings++;
-                next PROGRAMME;
-            }
+            # Check for DST-related information in title
+            check_explicit_tz_in_title(\%prog);
+            # Remove any last-minute scheduling messages from desc
+            remove_updated_listing_desc(\%prog);
+            # Check for episode numbering in sub_title field
+            check_numbering_in_subtitle(\%prog);
 
-            # Check the true/false fields for valid data
-            foreach my $field ($prog{'_premiere'},    $prog{'_film'},            $prog{'_repeat'},
-                               $prog{'_subtitles'},   $prog{'_widescreen'},      $prog{'_new_series'},
-                               $prog{'_deaf_signed'}, $prog{'_black_and_white'}, $prog{'_choice'},) {
-
-                if (!defined $field) {
-                    t("  A required true/false value was undefined for '" . $prog{'_title'} . "', skipping");
-                    $warnings++;
-                    next PROGRAMME;
-                }
-                elsif ($field eq 'true') {
-                    $field = 1;
-                }
-                elsif ($field eq 'false') {
-                    $field = 0;
-                }
-                else {
-                    t("  A bad true/false value '$field' was seen for '" . $prog{'_title'} . "', skipping");
-                    $warnings++;
-                    next PROGRAMME;
-                }
-            }
-
-            # Check for any DST-related information the RT may include in the title
-            # for a programme. If we find any explicit DST information we store it 
-            # for use later and remove it from the title.
-            if ($prog{'_title'} =~ s/^\((GMT|BST)\)\s*//) {
-                $prog{'_explicit_tz'} = $1;
-            }
-
-            # Remove any last-minute scheduling info inserted into regular 
-            # description that will affect later regexes.
-            if (defined $prog{'_desc'}) {
-                $prog{'_desc'} =~ s/\s+/ /g;
-                if ($prog{'_desc'} =~ s/\s?(?:UPDATED|UPADTED)\s+LISTING\s?(?:-|:|@)\s?(.*)$//i) {
-                    $prog{'_updated_listing_info'} = $1;
-                    t("  Removed updated listing information:\n"
-                      . "    '" . $1 . "'");
-                }
-            }
-            
-            # Episode/series numbering is provided in the sub_title field in
-            # the source data, which is parsed out if seen.
-            # Retain episode $sub_title data if $episode contains only episode
-            # numbering.
-            if (defined $prog{'_sub_title'}) {
-                extract_numbering_from_sub_title(\%prog);
-
-                # sub_title should be empty after successful parsing
-                if ($prog{'_sub_title'} eq '') {
-                    $prog{'_sub_title'} = undef;
-                }
-                # text left in sub_title is most likely _episode info, so
-                # move it to _episode
-                else {
-                    if (!defined $prog{'_episode'}) {
-                        t("  Using sub-title '" . $prog{'_sub_title'} . "' as episode not given");
-                        $prog{'_episode'} = $prog{'_sub_title'};
-                        $prog{'_sub_title'} = undef;
-                    }
-                    else {
-                        t("  Merging episode '" . $prog{'_episode'} . "' with sub_title '" . $prog{'_sub_title'} . "'");
-                        $prog{'_episode'} = $prog{'_episode'} . ": " . $prog{'_sub_title'};
-                        $prog{'_sub_title'} = undef;
-                    }
-                }
-
-                # at this point, $prog{'_sub_title'} should be undefined with all 
-                # text either parsed out or moved into $prog{'_episode'}
-            }
+            # At this point, $prog{'_sub_title'} should be undefined with all 
+            # text either parsed out or moved into $prog{'_episode'}
 
             # Check for null or invalid release year
-            if (defined $prog{'_year'}) {
-                if ($prog{'_year'} =~ m/null/i) {
-                    t("  Null release year given for this programme.");
-                    $prog{'_year'} = undef;
-                }
-                elsif ($prog{'_year'} !~ m/\d{4}/) {
-                    t("  Invalid release year given for this programme.");
-                    $prog{'_year'} = undef;
-                }
-            }
-
+            validate_year_field(\%prog);
             # Remove production year information from $episode for films
-            if (defined $prog{'_episode'}) {
-                if ($prog{'_film'} && $prog{'_episode'} =~ s/Prod Year (\d{4})//i) {
-                    t("  Removed production year info from episode details");
-                    $prog{'_episode'} = undef;
-                    if (!defined $prog{'_year'}) {
-                        $prog{'_year'} = $1;
-                    }
-                }
-            }
-
-            # Remove vertical bar/colon from end of title string. The v-bar
-            # can interfere with title fixups (fixup file uses the v-bar as
-            # as delimiter
-            if ($prog{'_title'} =~ s/([|:])$//) {
-                t("  Removed '" . $1 . "' from end of title");
-            }
-
-            # Title and episode processing. We process titles if the user has 
-            # not explicitly disabled title processing during configuration
-            # and we have supplement data to process programmes against.
-            #
-            # We run a series of search and replace routines to clean up 
-            # the title/episode information. Leaving non-title information in 
-            # the title, or having inconsistent title/episode formatting  will 
-            # result in PVR applications being unable to consistently match 
-            # programme titles and episode information.
-            #
-            # Some listings appear to be added without being processed upstream 
-            # to provide subtitle (episode) information. The titles of these
-            # programmes are uppercase and may contain season numbering. Here
-            # we monitor these before further title processing is carried out.
-            if ($opt->{debug} && ($prog{'_title'} eq uc($prog{'_title'}))) {
-                $uc_prog_titles{$prog{'_title'}} = $prog{'_title'};
-            }
+            remove_year_from_episode(\%prog);
+            # Tidy $title text before title processing
+            tidy_title_text(\%prog);
+            # Store uppercase titles for late analysis
+            check_uppercase_titles(\%prog);
 
             # Debug output before any title processing takes place
+            my $ep_in = "<UNDEF>";
             if (defined $prog{'_episode'}) {
-                t("  Pre-processing title/episode details '" 
-                        . $prog{'_title'} . " / " . $prog{'_episode'} . "'");
+                $prog{'_episode'} =~ s/\s+/ /g;  # tidy whitespace
+                $ep_in = $prog{'_episode'};
             }
+            t("\n    Pre- processing title/episode details '" 
+                    . $prog{'_title'} . " / " . $ep_in . "'");
 
             # Remove a duplicated programme title if seen in episode field
             remove_duplicated_title_in_ep(\%prog);
 
-            # Remove non-title text found in programme title.
-            #
-            # Applied to all titles in the source data (type = 1)
-            process_non_title_info(\%prog);
-            
-            # Track when titles/subtitles have been updated to allow 
-            # short-circuiting of title processing
-            $prog{'_titles_processed'} = 0;
-            $prog{'_subtitles_processed'} = 0;
-           
-            # Next, process titles to make them consistent
-            #
-            # One-off title and episode replacements (type = 10)
-            if (!$prog{'_titles_processed'}) {
-                process_replacement_titles_desc(\%prog);
-            }
-            # One-off title and episode replacements (type = 8)
-            if (!$prog{'_titles_processed'}) {
-                process_replacement_titles_episodes(\%prog);
-            }
-            # Look for $title:$episode in source title (type = 2)
-            if (!$prog{'_titles_processed'}) {
-                process_mixed_title_subtitle(\%prog);
-            }
-            # Look for $episode:$title in source title (type = 3)
-            if (!$prog{'_titles_processed'}) {
-                process_mixed_subtitle_title(\%prog);
-            }
-            # Look for reversed title and subtitle information (type = 4)
-            if (!$prog{'_titles_processed'}) {
-                process_reversed_title_subtitle(\%prog);
-            }
-            # Look for inconsistent programme titles (type = 5)
-            #
-            # This fixup is applied to all titles (processed or not) to handle
-            # titles split out in fixups of types 2-4 above
-            process_replacement_titles(\%prog);
-
-            # Next, process subtitles to make them consistent
-            #
-            # Look for inconsistent programme subtitles (type = 7)
-            if (!$prog{'_subtitles_processed'}) {
-                process_replacement_episodes(\%prog);
-            }
-            # Replace subtitle based on description (type = 9)
-            if (!$prog{'_subtitles_processed'}) {
-                process_replacement_ep_from_desc(\%prog);
-            }
-
-            # Last, provide/update a programme's category based on 'corrected' title
-            #
-            # Applied to all 'corrected' titles (type = 6)
-            process_replacement_genres(\%prog);
-
+            # Title and episode processing. We process titles if the user has 
+            # not explicitly disabled title processing during configuration
+            # and we have supplement data to process programmes against.
+            process_title_fixups(\%prog);
             # Look for series/episode/part numbering in programme title/subtitle
-            extract_numbering_from_episode(\%prog);
-            extract_numbering_from_title(\%prog);
-            extract_part_numbering_from_episode(\%prog);
+            check_potential_numbering_in_text(\%prog);
+            # Tidy $episode text after title processing
+            tidy_episode_text(\%prog);
 
-            # after processing see if $title contains "season" text that should
-            # probably be removed
-            if ($opt->{debug} && $prog{'_title'} =~ m/season/i) {
-                t("    Title text contains \"Season\":  " . $prog{'_title'});
-                $title_text_to_remove{$prog{'_title'}} = $prog{'_title'};
-            }
-
-            # after processing see if $episode contains "series" text
-            if ($opt->{debug} && defined $prog{'_episode'} && $prog{'_episode'} =~ m/series/i) {
-                t("    Possible series numbering still seen:  " . $prog{'_episode'});
-                $possible_series_nums{$prog{'_episode'}} = $prog{'_episode'};
-            }
-
-            # check for potential episode numbering left unprocessed
-            if ($opt->{debug} && defined $prog{'_episode'}
-                    && ($prog{'_episode'} =~ m/^\d{1,2}\D/ || $prog{'_episode'} =~ m/\D\d{1,2}$/) 
-                    && $prog{'_episode'} !~ m/(Part|Pt(\.)?)(\d+|\s+\w+)/) {
-                t("    Possible episode numbering still seen: " . $prog{'_episode'});
-                $possible_episode_nums{$prog{'_episode'}} = $prog{'_episode'};
-            }
-
-            # Set $episode to undefined if empty/whitespace
-            if (defined $prog{'_episode'} && $prog{'_episode'} =~ m/^\s*$/) {
-                $prog{'_episode'} = undef;
-            }
-
-            # output updated title/episode information after processing
+            # Output updated title/episode information after processing
             my $ep_out = "<UNDEF>";
             if (defined $prog{'_episode'}) {
                 $prog{'_episode'} =~ s/\s+/ /g;  # tidy whitespace
                 $ep_out = $prog{'_episode'};
             }
-            t("  Post-processing title/episode details '" 
+            t("    Post-processing title/episode details '" 
                     . $prog{'_title'} . " / " . $ep_out . "'");
 
-            # Monitor for case/punctuation-insensitive title variations
-            if ($opt->{debug}) {
-                my $title_nopunc = lc $prog{'_title'};
-                $title_nopunc =~ s/^the\s+//;
-                $title_nopunc =~ s/(\s+and\s+|\s+&\s+)/ /g;
-                $title_nopunc =~ s/\s+No 1s$//g;
-                $title_nopunc =~ s/\s+No 1's$//g;
-                $title_nopunc =~ s/\s+Number Ones$//g;
-                $title_nopunc =~ s/' //g;
-                $title_nopunc =~ s/'s/s/g;
-                $title_nopunc =~ s/\W//g;
-                # count number of each variant by genre and channel name
-                my $tmp_genre;
-                $tmp_genre = $prog{'_genre'}; $tmp_genre = "No Genre" if not defined $tmp_genre;
-                $case_insens_titles{$title_nopunc}{$prog{'_title'}}{$tmp_genre}{$rt_name}++;
-                $case_insens_titles{$title_nopunc}{$prog{'_title'}}{'count'}++;
-            }
-            
-            # Check for title text still present in episode details
-            if ($opt->{debug} && defined $prog{'_episode'} && $prog{'_episode'} =~ m/^\Q$prog{'_title'}\E.*$/) {
-                my $key = $prog{'_title'} . "|" . $prog{'_episode'};
-                $title_in_subtitle_notfixed{$key} = { 'title'    => $prog{'_title'},
-                                                      'episode'  => $prog{'_episode'},
-                                                    };
+            # Store title debug info for later analysis
+            store_title_debug_info(\%prog);
+            # Remove film title duplicated in $episode field
+            check_duplicated_film_title(\%prog);
+            # Check for film without a valid release year
+            check_missing_film_year(\%prog);
+            # Tidy $desc text after title processing
+            tidy_desc_text(\%prog);
+            # Check description for possible premiere/repeat hints
+            update_premiere_repeat_flags_from_desc(\%prog);
+            # Look for series/episode numbering in programme description
+            extract_numbering_from_desc(\%prog);
+            # Create episode numbering
+            my $ep_num = generate_episode_numbering(\%prog);
+            # Create cast list
+            my $cast_ref = generate_cast_list(\%prog);
+            # Store genre debug info for later analysis
+            store_genre_debug_info(\%prog);
+            # Create start/stop timings
+            if (! generate_start_stop_times(\%prog, $ts_dt)) {
+                $warnings++;
+                next PROGRAMME;
             }
 
-            # Check for episode details that contain a colon/hyphen - these may indicate
-            # a title in the episode field that needs to be moved into the title field
-            if ($opt->{debug} && defined $prog{'_episode'} && $prog{'_episode'} =~ m/(:|\s+-\s+)/) {
-                my $key = $prog{'_title'} . "|" . $prog{'_episode'};
-                $colon_in_subtitle{$key} = { 'title'    => $prog{'_title'},
-                                             'episode'  => $prog{'_episode'},
-                                           };
-            }
+            # After processing is finished, create the %prog keys
+            # that will be written out by XMLTV::Writer
 
-            # For non-films which may contain subtitle/episode information in
-            # the title, add the title to the list of programme titles for
-            # later debugging. Likewise for films, but store in separate hash.
-            if (!$prog{'_film'}) {
-                $prog_titles{$prog{'_title'}} = $prog{'_title'};
-            }
-            else {
-                $film_titles{$prog{'_title'}} = $prog{'_title'};
-            }
-
-            # Occasionally film listings contain the title duplicated in the 
-            # $episode field, so we remove it here
-            if ($prog{'_film'} && defined $prog{'_episode'} 
-                               && (uc $prog{'_title'} eq uc $prog{'_episode'})) {
-                $prog{'_episode'} = undef;
-            }
-
-            # Check for films without a valid release year (absent or null string)
-            if ($prog{'_film'}) {
-                if (!defined $prog{'_year'}) {
-                    t("  No release year given for this film.");
-                }
-            }
-
-            # Write out the programme's post-processed title 
             $prog{title} = [ [ $prog{'_title'} ] ];
             
-            # Write out the programme's episode title ($episode) if present
             if (defined $prog{'_episode'} && $prog{'_episode'} !~ m/^\s*$/) {
                 $prog{'sub-title'} = [ [ $prog{'_episode'} ] ];
             }
-
-            # Check episode description if present
-            if (defined $prog{'_desc'}) {
-                $prog{'_desc'} =~ s/\s+/ /g;
-
-                # Check if desc start with "Premiere.". Remove text if found and set flag
-                if ($prog{'_desc'} =~ s/^Premiere\.\s*//) {
-                    t("  Setting premiere flag based on description.");
-                    $prog{'_premiere'} = 1;
-                }
-
-                # Flag showings described as repeats
-                elsif ($prog{'_desc'} =~ m/^Another chance/) {
-                    t("  Setting repeat flag based on description.");
-                    $prog{'_repeat'} = 1;
-                }
-                    
-                # Check if desc starts with "New series..."
-                elsif ($prog{'_desc'} =~ m/^New series/) {
-                    t("  Setting premiere flag based on description.");
-                    $prog{'_premiere'} = 1;
-                    
-                    # Now check if desc starts with "New series [(x/y)]. "
-                    # Remove text and preserve numbering for processing below
-                    if ($prog{'_desc'} =~ m/^New series(\s*\d+\/\d+\s*)?\.\s*/i) {
-                        $prog{'_desc'} =~ s/^New series\s*//i;
-                        $prog{'_desc'} =~ s/^\s*\.\s*//i;
-                    }
-                }
-                
-                # Look for series/episode numbering in programme description
-                extract_numbering_from_desc(\%prog);
-
-                # Finally write out the non-empty description
-                if ($prog{'_desc'} !~ m/^\s*$/) {
-                    $prog{desc} = [ [ $prog{'_desc'}, 'en' ] ];
-                }
+            if (defined $prog{'_desc'} && $prog{'_desc'} !~ m/^\s*$/) {
+                $prog{desc} = [ [ $prog{'_desc'}, 'en' ] ];
             }
-
-            # Write out episode numbering information extracted from $episode 
-            # and $desc fields. At this stage, numbering has been corrected
-            # for zero-indexed counts but needs to be validated before output.
-            #
-            # series number is zero-indexed
-            if (!defined $prog{'_series_num'} || $prog{'_series_num'} < 0) {
-                $prog{'_series_num'} = '';
+            if (defined $ep_num) {
+                $prog{'episode-num'} = [ [ $ep_num, "xmltv_ns" ] ];
             }
-            # episode number is zero-indexed
-            if (!defined $prog{'_episode_num'} || $prog{'_episode_num'} < 0) {
-                $prog{'_episode_num'} = '';
-            }
-            # episode total is one-indexed and should always be greater than the
-            # max episode number (which is zero-indexed)
-            if (defined $prog{'_num_episodes'} 
-                        && $prog{'_num_episodes'} > 0 
-                        && $prog{'_num_episodes'} > $prog{'_episode_num'} ) {
-                $prog{'_num_episodes'} = "/" . $prog{'_num_episodes'};
-            }
-            else {
-                $prog{'_num_episodes'} = '';
-            }
-            # Write out the details if we have the series and/or episode numbers
-            if ($prog{'_series_num'} ne '' || $prog{'_episode_num'} ne '') {
-                $prog{'episode-num'} = [ [ "" . $prog{'_series_num'} . "."
-                                              . $prog{'_episode_num'} 
-                                              . $prog{'_num_episodes'} . "."
-                                              . "", "xmltv_ns" ] ];
-            }
-
             if (defined $prog{'_director'} && $prog{'_director'} !~ m/^\s*$/) {
                 $prog{credits}{director} = [ $prog{'_director'} ];
             }
-
-            # The Radio Times data includes cast information in 2 formats:
-            #
-            # a) pairings of 'character*actor' with subsequent pairings 
-            #    separated by '|' - '*' does not appear in any text
-            # b) a comma separated list of actors with no character details
-            #
-            # If 'Director' appears in the character entry, this is to be used 
-            # as a regular cast member, not the programme's director
-            if (defined $prog{'_cast'}) {
-                my @cast;
-                $prog{'_cast'} =~ s/\s+/ /g; # remove extra spaces
-                $prog{'_cast'} =~ s/\|\|/\|/g;  # remove empty pipe-separated fields
-                $prog{'_cast'} =~ s/,,/,/g;  # remove empty comma-separated fields
-                
-                # First we check for 'character*actor' entries
-                if ($prog{'_cast'} =~ tr/*//) {
-                    # Multiple 'character*actor'entries
-                    if ($prog{'_cast'} =~ tr/|//) {
-                        @cast = split /\|/, $prog{'_cast'};
-                    }
-                    # Single 'character*actor' entry
-                    else {
-                        push @cast, $prog{'_cast'};
-                    }
-                    
-                    # Now process the list of cast entries
-                    foreach my $cast (@cast) {
-                        # Replace any actor given as Himself/Herself with the
-                        # character name given
-                        if ($cast =~ m/^(.*)[*](Himself|Herself)$/) {
-                            $cast = "$1*$1";
-                        }
-                        # Remove the 'character*' portion of the entry
-                        if ($cast !~ s/^.*[*]//) {
-                            t("  Bad cast entry for '" . $prog{'_title'} . "': " . $cast);
-                        }
-                    }
-                }
-                # Next we check for CSV-style actor entries
-                elsif ($prog{'_cast'} =~ tr/,//) {
-                    @cast = split /,/, $prog{'_cast'};
-                }
-                # Finally we assume a single actor's name that contains neither 
-                # '*' nor ','
-                else {
-                    push @cast, $prog{'_cast'};
-                }
-                # Trim whitespace from beginning/end of actor names
-                foreach my $cast (@cast) {
-                    $cast =~ s/^\s+//;
-                    $cast =~ s/\s+$//;
-                }
-                $prog{credits}{actor} = \@cast;
+            if (defined $cast_ref) {
+                $prog{credits}{actor} = $cast_ref;
             }
-
             if (defined $prog{'_year'}) {
                 $prog{date} = $prog{'_year'};
             }
-            
-            if ($prog{'_film'}) {
-                push @{$prog{category}}, [ 'Film', 'en' ];
-            }
             if (defined $prog{'_genre'} && !$prog{'_film'}) {
                 push @{$prog{category}}, [ $prog{'_genre'}, 'en' ];
-                # check for unhelpful/duplicated categories
-                if ($opt->{debug}) {
-                    $categories{$prog{'_genre'}} = $prog{'_genre'};
-                    if ($prog{'_genre'} =~ m/^(No Genre)$/ 
-                            && $prog{'_title'} !~ m/^(To Be Announced|TBA|Close)$/) {
-                        $uncategorised_progs{$prog{'_title'}} = $prog{'_title'};
-                    }
-                    $cats_per_prog{$prog{'_title'}}{$prog{'_genre'}}++;
-                }
             }
-            # check for missing categories
-            if ($opt->{debug} && !defined $prog{'_genre'} && $prog{'_title'} !~ m/^(To Be Announced|TBA|Close)$/) {
-                $uncategorised_progs{$prog{'_title'}} = $prog{'_title'};
+            elsif ($prog{'_film'}) {
+                push @{$prog{category}}, [ 'Film', 'en' ];
             }
             if ($prog{'_widescreen'}) {
                 $prog{video}{aspect} = '16:9';
@@ -3804,7 +4132,6 @@ sub write_listings_data {
             if ($prog{'_black_and_white'}) {
                 $prog{video}{colour} = 0;
             }
-            # override aspect if channel is flagged as HDTV
             if (defined $video_quality{$xmltv_id}) {
                 if ($video_quality{$xmltv_id} =~ m/HDTV/) {
                     $prog{video}{quality} = 'HDTV';
@@ -3816,8 +4143,6 @@ sub write_listings_data {
             }
             if ($prog{'_premiere'}) {
                 if (defined $channel_offset{$xmltv_id}) {
-                    # any programmes flagged as premieres on timeshifted channels
-                    # are repeats of the showing on the regular channel
                     $prog{'_repeat'} = 1;
                     t("  Ignoring premiere flag on timeshifted channel");
                 }
@@ -3846,191 +4171,6 @@ sub write_listings_data {
             }
             if ($prog{'_choice'}) {
                 push @{$prog{'star-rating'}}, [ '1/1', 'Radio Times Recommendation' ];
-            }
-
-            # Broadcast date, start/stop times, and timezone adjustments.
-            #
-            # For each programme entry, the Radio Times data includes the 
-            # date at start of broadcast, the start time and the stop time.
-            #
-            # The Radio Times sometimes explicitly flags a programme's start/stop
-            # times as being in a specific timezone (GMT or BST). We parse this
-            # information out when processing the programme's title and apply it
-            # to the start time of any such programmes. Flagged programmes are 
-            # seen in the data in March and October, when British Summer Times 
-            # begins and ends.
-            #
-            # We calculate the programme's stop time using the 
-            # UTC-offset-corrected start time and its stated length. This allows 
-            # us to handle occasions when programmes having mixed GMT/BST 
-            # timings are not flagged.
-            #
-            # The Summer Time Order of 2002 defines British Summer Time as 
-            # "...the period beginning at one o'clock, Greenwich mean time, in 
-            # the morning of the last Sunday in March and ending at one o'clock, 
-            # Greenwich mean time, in the morning of the last Sunday in October."
-            
-            # Ignore programmes with zero length duration
-            if ($prog{'_duration_mins'} == 0) {
-                t("  Zero duration detected for '" . $prog{'_title'} . "', skipping\n");
-                next PROGRAMME;
-            }
-            # Check for valid date format
-            if ($prog{'_date'} !~ m{(\d\d)/(\d\d)/(\d{4})$}) {
-                t("  Bad date '" . $prog{'_date'} . "' detected for '" . $prog{'_title'} . "', skipping\n");
-                $warnings++;
-                next PROGRAMME;
-            }
-            my ($dd, $mm, $yyyy) = ($1, $2, $3);
-            t("  Start time given as '" . $yyyy . "/" . $mm . "/" . $dd . " " . $prog{'_start'} 
-                    . "', duration " . $prog{'_duration_mins'} . " mins");
-
-            # Check for valid start time format
-            if ($prog{'_start'} !~ m/(\d\d):(\d\d)/) {
-                t("  Bad start time '" . $prog{'_start'} . "' detected for '" . $prog{'_title'} . "', skipping\n");
-                $warnings++;
-                next PROGRAMME;
-            }
-            my ($start_hr, $start_mn) = ($1, $2);
-
-            # Use explicit GMT/BST information if found in title
-            my $tz = 'Europe/London';
-            if (defined $prog{'_explicit_tz'}) {
-                t("  Explicit timezone '" . $prog{'_explicit_tz'} . "' detected in title");
-                if ($prog{'_explicit_tz'} eq 'GMT') {
-                    t("  Forcing timezone to GMT/+0000");
-                    $tz = '+0000';
-                }
-                elsif ($prog{'_explicit_tz'} eq 'BST') {
-                    t("  Forcing timezone to BST/+0100");
-                    $tz = '+0100';
-                }
-            }
-
-            # Determine start time with correct UTC offset
-            my $start_dt = DateTime->new(
-                year       => $yyyy,
-                month      => $mm,
-                day        => $dd,
-                hour       => $start_hr,
-                minute     => $start_mn,
-                second     => 0,
-                time_zone  => $tz,
-            );
-
-            $prog{start} = "" . $start_dt->ymd('') . $start_dt->hms('') . ' ' . DateTime::TimeZone->offset_as_string($start_dt->offset);
-            t("  " . $prog{start} . " - Start time");
-
-            # Determine stop time with correct UTC offset by adding duration of
-            # programme to start time
-            my $dur = DateTime::Duration->new( minutes => $prog{'_duration_mins'} );
-            my $stop_dt = $start_dt + $dur;
-            $prog{stop}  = "" . $stop_dt->ymd('') . $stop_dt->hms('') . ' ' . DateTime::TimeZone->offset_as_string($stop_dt->offset);
-            t("  " . $prog{stop}  . " - Stop time");
-
-            # Now we have determined the correct start/stop times for the programme
-            # add any required timeshift defined in channel_ids and preserve the
-            # correct timezone information
-            #
-            if (defined $channel_offset{$xmltv_id}) {
-                $start_dt = $start_dt + $ts_dt;
-                $stop_dt  = $stop_dt + $ts_dt;
-
-                $prog{start} = "" . $start_dt->ymd('') . $start_dt->hms('') . ' ' . DateTime::TimeZone->offset_as_string($start_dt->offset);
-                $prog{stop}  = "" . $stop_dt->ymd('')  . $stop_dt->hms('')  . ' ' . DateTime::TimeZone->offset_as_string($stop_dt->offset);
-
-                t("  " . $prog{start} . " - Start time after applying '" . $channel_offset{$xmltv_id} . "' timeshift");
-                t("  " . $prog{stop}  . " - Stop time after applying '"  . $channel_offset{$xmltv_id} . "' timeshift");
-            }
-
-            # Now check to see whether the channel broadcasting the programme is a
-            # part-time channel, and if so, see whether this programme's timeslot 
-            # times fall within the broadcast window. If a channel broadcasts
-            # through the night, we also need to test against the next day's
-            # broadcast times.
-            #
-            if (defined $broadcast_hours{$xmltv_id}) {
-                $broadcast_hours{$xmltv_id} =~ m/(\d\d)(\d\d)-(\d\d)(\d\d)/;
-                my ($chan_start_hr, $chan_start_mn, $chan_stop_hr, $chan_stop_mn) = ($1, $2, $3, $4);
-
-                my $chan_start_dt = DateTime->new(
-                    year       => $yyyy,
-                    month      => $mm,
-                    day        => $dd,
-                    hour       => $chan_start_hr,
-                    minute     => $chan_start_mn,
-                    second     => 0,
-                    time_zone  => 'Europe/London',
-                );
-                my $chan_start  = "" . $chan_start_dt->ymd('') . $chan_start_dt->hms('') . ' ' . DateTime::TimeZone->offset_as_string($chan_start_dt->offset);
-
-                my $chan_stop_dt = DateTime->new(
-                    year       => $yyyy,
-                    month      => $mm,
-                    day        => $dd,
-                    hour       => $chan_stop_hr,
-                    minute     => $chan_stop_mn,
-                    second     => 0,
-                    time_zone  => 'Europe/London',
-                );
-
-                # Correct the stop time if it is earlier than the start time
-                my $chan_stop_next_day = 0;
-                if ($chan_start_dt >= $chan_stop_dt) {
-                    $chan_stop_dt = $chan_stop_dt + $day_dur;
-                    $chan_stop_next_day = 1;
-                }
-                my $chan_stop  = "" . $chan_stop_dt->ymd('') . $chan_stop_dt->hms('') . ' ' . DateTime::TimeZone->offset_as_string($chan_stop_dt->offset);
-
-                t("  " . $chan_start . " - Start time of channel (current day)");
-                t("  " . $chan_stop  . " - Stop time of channel (current day)");
-
-                # Include the current programme if its timeslot lies inside the
-                # channel's broadcast window
-                if ($start_dt >= $chan_start_dt && $stop_dt <= $chan_stop_dt) {
-                    t("  '" . $prog{'_title'} . "' shown whilst channel is on-air, adding");
-                }
-                # If the channel starts and stops broadcasting on the same 
-                # calendar day and the programme's timeslot is outside the 
-                # broadcast window, skip it
-                elsif (( $start_dt < $chan_start_dt || $stop_dt > $chan_stop_dt)
-                        && $chan_stop_next_day == 0 ) {
-                    t("  '" . $prog{'_title'} . "' shown whilst channel is off-air, skipping\n");
-                    next PROGRAMME;
-                }
-                else {
-                    # If the channel broadcasts through the night, and the channel
-                    # start time is later than the stop time (i.e. 2300-0600), it is 
-                    # possible for a program shown at or after midnight to result in 
-                    # the generation of incorrect channel start/stop times (shifted 
-                    # +1day forward). We therefore generate another pair of channel 
-                    # start/stop times for the previous day to match against.
-                    #
-                    # Example: consider a 30min programme broadcast on 20120101 at 00:30
-                    # and we're comparing it to a channel that broadcasts between 
-                    # 2300 and 0600. We generate start/stop times of 201201012300 and
-                    # 201201020600 for the channel, but the programme starts/stops
-                    # at 201201010030 and 201201010100. These times occur whilst the
-                    # channel is on-air the _previous_ day.
-                    #
-                    $chan_start_dt = $chan_start_dt - $day_dur;
-                    $chan_stop_dt  = $chan_stop_dt - $day_dur;
-
-                    my $chan_start = "" . $chan_start_dt->ymd('') . $chan_start_dt->hms('') . ' ' . DateTime::TimeZone->offset_as_string($chan_start_dt->offset);
-                    my $chan_stop  = "" . $chan_stop_dt->ymd('')  . $chan_stop_dt->hms('')  . ' ' . DateTime::TimeZone->offset_as_string($chan_stop_dt->offset);
-
-                    t("  " . $chan_start . " - Start time of channel (previous day)");
-                    t("  " . $chan_stop  . " - Stop time of channel (previous day)");
-
-                    # Test again to see if the programme falls between the adjusted
-                    # channel broadcast times
-                    if ($start_dt >= $chan_start_dt && $stop_dt <= $chan_stop_dt) {
-                        t("  '" . $prog{'_title'} . "' shown whilst channel is on-air, adding");
-                    } else {
-                        t("  '" . $prog{'_title'} . "' shown whilst channel is off-air, skipping\n");
-                        next PROGRAMME;
-                    }
-                }
             }
 
             # Finally, write the programme's XML data to programme list
