@@ -497,15 +497,17 @@ my @opt_components
 		   },
      },
 
-     { name     => 'tv_grab_fi_sv',
-       blurb    => 'Grabber for Finland (Swedish)',
-       exes     => [ 'grab/fi_sv/tv_grab_fi_sv' ],
-       prereqs  => {
-                     'DateTime'    => 0,
-                     'IO::Stringy' => 0,
-                     'XML::LibXML' => 0,
-          },
-     },
+# 2012-03-16 no longer works and maintainer suggests to use _fi now which was extended to
+# provide the swedish guide earlier
+#     { name     => 'tv_grab_fi_sv',
+#       blurb    => 'Grabber for Finland (Swedish)',
+#       exes     => [ 'grab/fi_sv/tv_grab_fi_sv' ],
+#       prereqs  => {
+#                     'DateTime'    => 0,
+#                     'IO::Stringy' => 0,
+#                     'XML::LibXML' => 0,
+#          },
+#     },
 
 # 2009-03-08 removed due to breakage after source site changes
 #     { name => 'tv_grab_es',
