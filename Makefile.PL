@@ -197,7 +197,7 @@ my @need_share = ( 'tools/tv_validate_file',
 
 # Files to be installed in the system-wide share/ directory.
 my %share_files = ('xmltv.dtd' => 'xmltv.dtd',
-                   'xmltv-lineup.dtd' => 'xmltv-lineup.dtd');
+                   'xmltv-lineups.xsd' => 'xmltv-lineups.xsd');
 
 # Files which 'make clean' should remove, but doesn't by default, so
 # we have to patch it.
@@ -365,6 +365,28 @@ my @opt_components
                            => 'tv_grab_uk_rt/utf8_fixups',
                         'grab/uk_rt/lineups/lineups.map'
                            => 'tv_grab_uk_rt/lineups/lineups.map',
+
+                        'grab/uk_rt/lineups/freesat.xml'
+                           => 'tv_grab_uk_rt/lineups/freesat.xml',
+                        #'grab/uk_rt/lineups/freesathd.xml'
+                           #=> 'tv_grab_uk_rt/lineups/freesathd.xml',
+                        'grab/uk_rt/lineups/freeview.xml'
+                           => 'tv_grab_uk_rt/lineups/freeview.xml',
+                        #'grab/uk_rt/lineups/freeviewhd.xml'
+                           #=> 'tv_grab_uk_rt/lineups/freeviewhd.xml',
+                        'grab/uk_rt/lineups/sky.xml'
+                           => 'tv_grab_uk_rt/lineups/sky.xml',
+                        #'grab/uk_rt/lineups/skyhd.xml'
+                           #=> 'tv_grab_uk_rt/lineups/skyhd.xml',
+                        #'grab/uk_rt/lineups/upcireland.xml'
+                           #=> 'tv_grab_uk_rt/lineups/upcireland.xml',
+                        #'grab/uk_rt/lineups/upcirelandhd.xml'
+                           #=> 'tv_grab_uk_rt/lineups/upcirelandhd.xml',
+                        #'grab/uk_rt/lineups/virgin.xml'
+                           #=> 'tv_grab_uk_rt/lineups/virgin.xml',
+                        #'grab/uk_rt/lineups/virginhd.xml'
+                           #=> 'tv_grab_uk_rt/lineups/virginhd.xml',
+
                         'grab/uk_rt/lineups/freeview.map'
                            => 'tv_grab_uk_rt/lineups/freeview.map',
                         'grab/uk_rt/lineups/freesat.map'
@@ -379,7 +401,8 @@ my @opt_components
                     'DateTime'       => 0,
                     'DateTime::Duration' => 0,
                     'DateTime::TimeZone' => 0,
-                    'HTML::Entities' => 1.27 } ,
+                    'HTML::Entities' => 1.27,
+                    'XML::LibXML' => 0, },
      },
 
      { name => 'tv_grab_uk_bleb',
@@ -1185,7 +1208,7 @@ windows_dist ::
         #
 	perl -MExtUtils::Command -e rm_rf $location/bin/ $location/lib/ $(INSTMANDIR) $(INSTALLMAN3DIR)
 	perl -MExtUtils::Command -e cp xmltv.dtd $location
-	perl -MExtUtils::Command -e cp xmltv-lineup.dtd $location
+	perl -MExtUtils::Command -e cp xmltv-lineups.xsd $location
 	perl -MExtUtils::Command -e cp ChangeLog $location/ChangeLog.txt
 	# The following command will not be necessary when the source
 	# tree was checked out on a DOSish system.  It may not even
