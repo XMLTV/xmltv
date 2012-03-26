@@ -363,19 +363,22 @@ my @opt_components
                            => 'tv_grab_uk_rt/channels_platforms',
                         'grab/uk_rt/utf8_fixups'
                            => 'tv_grab_uk_rt/utf8_fixups',
-                        'grab/uk_rt/lineups/lineups.map'
-                           => 'tv_grab_uk_rt/lineups/lineups.map',
 
-                        'grab/uk_rt/lineups/freesat.xml'
-                           => 'tv_grab_uk_rt/lineups/freesat.xml',
+                        'grab/uk_rt/lineups/lineups.xml'
+                           => 'tv_grab_uk_rt/lineups/lineups.xml',
+
+                        #'grab/uk_rt/lineups/freesat.xml'
+                           #=> 'tv_grab_uk_rt/lineups/freesat.xml',
+                        #'grab/uk_rt/lineups/freesatfromsky.xml'
+                           #=> 'tv_grab_uk_rt/lineups/freesatfromsky.xml',
                         #'grab/uk_rt/lineups/freesathd.xml'
                            #=> 'tv_grab_uk_rt/lineups/freesathd.xml',
-                        'grab/uk_rt/lineups/freeview.xml'
-                           => 'tv_grab_uk_rt/lineups/freeview.xml',
+                        #'grab/uk_rt/lineups/freeview.xml'
+                           #=> 'tv_grab_uk_rt/lineups/freeview.xml',
                         #'grab/uk_rt/lineups/freeviewhd.xml'
                            #=> 'tv_grab_uk_rt/lineups/freeviewhd.xml',
-                        'grab/uk_rt/lineups/sky.xml'
-                           => 'tv_grab_uk_rt/lineups/sky.xml',
+                        #'grab/uk_rt/lineups/sky.xml'
+                           #=> 'tv_grab_uk_rt/lineups/sky.xml',
                         #'grab/uk_rt/lineups/skyhd.xml'
                            #=> 'tv_grab_uk_rt/lineups/skyhd.xml',
                         #'grab/uk_rt/lineups/upcireland.xml'
