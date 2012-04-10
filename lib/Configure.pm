@@ -116,13 +116,17 @@ sub SaveConfig
     foreach my $key (keys %{$conf})
     {
 	next if $key eq "channel";
+    next if $key eq "lineup";
 	foreach my $value (@{$conf->{$key}})
 	{
 	    print OUT "$key=$value\n";
 	}
     }
 
-    if( exists( $conf->{channel} ) )
+    if (exists $conf->{lineup}) {
+        print OUT "lineup=$conf->{lineup}[0]\n";
+    }
+    elsif( exists( $conf->{channel} ) )
     {
 	foreach my $value (@{$conf->{channel}})
 	{
@@ -173,9 +177,14 @@ sub Configure
 	$nextstage = configure_stage( $stage, $conffile, $lang );
     } while ($nextstage ne "select-channels" );
 
-    # No more nextstage. Let the user select channels.
-    my $channels = &$listsub( LoadConfig( $conffile ), $opt );
-    select_channels( $channels, $conffile, $lang )
+    # No more nextstage. Let the user select channels. Do not present
+    # channel selection if the configuration is using lineups where
+    # channels are determined automatically
+    my $conf = LoadConfig( $conffile );
+    if (! exists $conf->{lineup}) {
+        my $channels = &$listsub( $conf, $opt );
+        select_channels( $channels, $conffile, $lang );
+    }
 }
 
 sub configure_stage

@@ -69,7 +69,7 @@ my %cap_options = (
 				       preferredmethod
 				       /],
            lineups => [qw/
-                 lineup=s
+                 get-lineup
                  list-lineups
                  /],
 		   );
@@ -108,7 +108,7 @@ my %cap_defaults = (
 			preferredmethod => 0,
 		    },
             lineups => {
-            lineup => undef,
+            'get-lineup' => 0,
             'list-lineups' => 0,
             }
 		   );
@@ -187,7 +187,7 @@ supplied by the grabber:
 
 =item --list-lineups
 
-=item --lineup
+=item --get-lineup
 
 =back
 
@@ -453,6 +453,13 @@ sub ParseOptions
 	exit 0;
     }
 
+    # no config needed to list lineups supported by grabber
+    if( $opt->{"list-lineups"} )
+    {
+        print &{$p->{list_lineups_sub}}($opt);
+        exit 0;
+    }
+
     my $conf = LoadConfig( $opt->{'config-file'} );
     if( not defined( $conf ) and defined( $p->{load_old_config_sub} ) )
     {
@@ -494,19 +501,15 @@ sub ParseOptions
 	exit 0;
     }
 
-    if( $opt->{"list-lineups"} )
+    if( $opt->{"get-lineup"} )
     {
-        print &{$p->{list_lineups_sub}}($conf,$opt);
-        exit 0;
-    }
-
-    if( $opt->{"lineup"} )
-    {
-        if ( (not defined $opt->{lineup}) or ($opt->{lineup} eq '') )
+        if( not defined( $conf ) )
         {
-	    print STDERR "You need to provide a valid lineup ID.\n";
-	    exit 1;
-	}
+            print STDERR "You need to configure the grabber before you can output " .
+            "your chosen lineup.\n";
+            exit 1;
+        }
+
         print &{$p->{get_lineup_sub}}($conf,$opt);
         exit 0;
     }
@@ -569,9 +572,9 @@ $en [--output FILE] [--quiet] [--debug]
     if( supports( "lineups", $p ) )
     {
         print qq/
-$gn --list-lineups
+$gn --list-lineups [--output FILE]
 
-$gn --lineup LINEUP_ID [--output FILE]
+$gn --get-lineup [--output FILE]
 /;
     }
 }
