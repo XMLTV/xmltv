@@ -8,7 +8,6 @@ use XMLTV::Supplement qw/GetSupplement SetSupplementRoot/;
 use XMLTV::Options qw/ParseOptions/;
 use XMLTV::Configure::Writer;
 use XMLTV::Ask;
-use XMLTV::Lineup;
 use File::Path;
 use File::Basename;
 use LWP::UserAgent;
@@ -18,15 +17,31 @@ use DateTime;
 use DateTime::Duration;
 use DateTime::TimeZone;
 use HTML::Entities;
-use IO::Scalar; # used for configuration to write channels to string
+use IO::Scalar;  # used for configuration to write channels to string
+use XML::LibXML; # used for lineups parsing/modification
+
+#FIXME remove before release
+use Data::Dumper;
 
 ##############################################
 #################### TODO ####################
 ##############################################
 
+# - mark channels_platform and regional_channels supplemental
+#   files as deprecated sine move to lineup based config
+#
+# - split out utf8 fixups into these which should always be applied
+#   and those which are optional (like misencoded chars)
+#
+# - wrap date/file tests in evals if there is a risk of failure
+#
+# - tidy up references (arrows/no rereferencing)
+#
+# - audio tag for audio described channels
+#
 # - remove fixups from prog_titles_to_process that are now handled automatically
 #   e.g. duplicated title and/or episode in episode field
-
+#
 # - include actor role data where available
 
 ###############################################
@@ -114,11 +129,13 @@ my ( $opt, $conf ) = ParseOptions( {
     version => "$grabber_cvs_id",
     description => "@@desc",
     capabilities => [qw/baseline manualconfig cache preferredmethod tkconfig apiconfig lineups/],
+    defaults => { days => 15, offset => 0, quiet => 0, debug => 0 },
+    preferredmethod => 'allatonce',
+    load_old_config_sub => \&load_old_config,
+
     stage_sub => \&config_stage,
     listchannels_sub => \&list_channels,
-    load_old_config_sub => \&load_old_config,
-    preferredmethod => 'allatonce',
-    defaults => { days => 15, offset => 0, quiet => 0, debug => 0 },
+
     list_lineups_sub => \&list_lineups,
     get_lineup_sub => \&get_lineup,
 } );
@@ -134,17 +151,21 @@ my ( $opt, $conf ) = ParseOptions( {
 die "Error: You cannot specify --quiet with --debug, exiting"
     if ($opt->{quiet} && $opt->{debug});
 
-if (not defined( $conf->{channel} )) {
-    print STDERR "No channels selected in configfile " .
-                 $opt->{'config-file'} . "\n" .
+if (defined $conf->{lineup}) {
+    say("Channel selection: Lineup\n") if (! $opt->{quiet});
+}
+elsif (defined $conf->{channel}) {
+    say("Channel selection: Config file\n") if (! $opt->{quiet});
+}
+else {
+    print STDERR "No configured channels in config file ($opt->{'config-file'})\n" .
                  "Please run the grabber with --configure.\n";
     exit 1;
 }
 
 # New-style config files must include a cachedir entry
 if (not defined( $conf->{cachedir} )) {
-    print STDERR "No cachedir defined in configfile " .
-                 $opt->{'config-file'} . "\n" .
+    print STDERR "No cachedir defined in configfile ($opt->{'config-file'})\n" .
                  "Please run the grabber with --configure.\n";
     exit 1;
 }
@@ -273,14 +294,14 @@ if ($rt_mod_time) {
 # Retrieve list of all channels currently available
 my $available_channels = load_available_channels($conf, $opt);
 # Now ensure configured channels are still available to download
-my $wanted_chs = check_configured_channels($available_channels);
+my $wanted_chs = get_wanted_channels_aref($conf, $opt, $available_channels);
 
 # Configure output and write XMLTV data - header, channels, listings, and footer
 my $writer;
 setup_xmltv_writer($conf, $opt);
 write_xmltv_header();
-write_channel_list($available_channels, $wanted_chs);
-write_listings_data($conf, $opt, $available_channels, $wanted_chs);
+write_channel_list($wanted_chs);
+write_listings_data($conf, $opt, $wanted_chs);
 write_xmltv_footer();
 
 # Print debug info for titles, categories, bad utf-8 chars
@@ -329,269 +350,6 @@ sub get_default_cachedir {
     my $dir = "$home/.xmltv/cache";
     t("Using '$dir' as cache-directory for XMLTV listings");
     return $dir;
-}
-
-sub config_stage {
-    my ( $stage, $conf ) = @_;
-
-    # Update encoding if seen in new-style config file
-    if (defined( $conf->{encoding} )) {
-        $xml_encoding = $conf->{encoding}->[0];
-    }
-
-    my $result;
-    my $writer = new XMLTV::Configure::Writer( OUTPUT => \$result,
-                                               encoding => $xml_encoding );
-
-    $writer->start( { grabber => "$grabber_name" } );
-    
-    if ($stage eq 'start') {
-
-        $writer->start_selectone( {
-            id => 'encoding',
-            title => [ [ 'Encoding', 'en' ] ],
-            description => [
-                [ "Select which output format to use",
-                'en' ] ],
-        } );
-        $writer->write_option( {
-            value => 'utf-8',
-            text => [ [ 'UTF-8 (Unicode)', 'en' ] ],
-        } );
-        $writer->write_option( {
-            value => 'iso-8859-1',
-            text => [ [ 'ISO-8859-1 (Latin-1)', 'en' ] ],
-        } );
-        $writer->end_selectone();
-
-        $writer->end('select-cachedir');
-    }
-    elsif ($stage eq 'select-cachedir') {
-        $writer->write_string( {
-            id => 'cachedir',
-            title => [ [ 'Enter the directory to store the listings cache in', 'en' ] ],
-            description => [
-                [ "$grabber_name uses a cache with files that it has already " .
-                'downloaded. Please specify where the cache shall be stored.',
-                'en' ] ],
-            default => $default_cachedir,
-        } );
-        $writer->end('select-title-processing');
-    }
-    elsif ($stage eq 'select-title-processing') {
-
-        $writer->start_selectone( {
-            id => 'title-processing',
-            title => [ [ 'Enable title processing?', 'en' ] ],
-            description => [
-                [ "In a bid to provide more consistent listings data, $grabber_name " .
-                'can further process programme and episode titles.',
-                'en' ] ],
-        } );
-        $writer->write_option( {
-            value => 'enabled',
-            text => [ [ 'Enable title processing', 'en' ] ],
-        } );
-        $writer->write_option( {
-            value => 'disabled',
-            text => [ [ 'Disable title processing', 'en' ] ],
-        } );
-        $writer->end_selectone();
-
-        $writer->end('select-utf8-fixups');
-    }
-    elsif ($stage eq 'select-utf8-fixups') {
-
-        $writer->start_selectone( {
-            id => 'utf8-fixups',
-            title => [ [ 'Enable UTF-8 fixups?', 'en' ] ],
-            description => [
-                [ 'The source data can be processed to detect and correct any mis-encoded' .
-                'UTF-8 characters. This should not normally be necessary but can be ' .
-                'enabled here if required.',
-                'en' ] ],
-        } );
-        $writer->write_option( {
-            value => 'disabled',
-            text => [ [ 'Disable UTF-8 fixups', 'en' ] ],
-        } );
-        $writer->write_option( {
-            value => 'enabled',
-            text => [ [ 'Enable UTF-8 fixups', 'en' ] ],
-        } );
-        $writer->end_selectone();
-
-        $writer->end('select-postcode');
-    }
-    elsif ($stage eq 'select-postcode') {
-
-        $writer->write_string( {
-            id => 'postcode',
-            title => [ [ 'Enter the first part of your postcode', 'en' ] ],
-            description => [
-                [ "$grabber_name can use the first part of your postcode in " .
-                'order to determine which regional channels to display ' .
-                'during configuration. Republic of Ireland users should enter ' .
-                'the pseudo-postcode "EIRE". Entering "none" will disable this ' .
-                'feature.',
-                'en' ] ],
-            default => 'none',
-        } );
-        $writer->end('select-platform');
-    }
-    elsif ($stage eq 'select-platform') {
-        $writer->start_selectone( {
-            id => 'platform',
-            title => [ [ 'Select which TV platform you use', 'en' ] ],
-            description => [
-                [ "When choosing which channels to download listings for, $grabber_name " .
-                'can show only those channels available on your TV platform.',
-                'en' ] ],
-        } );
-        $writer->write_option( {
-            value => 'none',
-            text => [ [ 'None of these, I\'ll choose channels manually', 'en' ] ],
-        } );
-        $writer->write_option( {
-            value => 'freeview',
-            text => [ [ 'Freeview', 'en' ] ],
-        } );
-        $writer->write_option( {
-            value => 'skydigital',
-            text => [ [ 'Sky Digital', 'en' ] ],
-        } );
-        $writer->write_option( {
-            value => 'virgintv',
-            text => [ [ 'VirginMedia TV', 'en' ] ],
-        } );
-        $writer->write_option( {
-            value => 'freesat',
-            text => [ [ 'Freesat', 'en' ] ],
-        } );
-        $writer->write_option( {
-            value => 'freesatfromsky',
-            text => [ [ 'Freesat from Sky', 'en' ] ],
-        } );
-        $writer->write_option( {
-            value => 'analogue',
-            text => [ [ 'Analogue', 'en' ] ],
-        } );
-        $writer->end_selectone();
-
-        # The select-channels stage must be the last stage called
-        $writer->end( 'select-channels' );
-    }
-    else {
-        die "Unknown stage $stage";
-    }
-    
-    return $result;
-}
-
-sub list_channels {
-    my ( $conf, $opt ) = @_;
-
-    # Update encoding if seen in new-style config file
-    if (defined( $conf->{encoding} )) {
-        $xml_encoding = $conf->{encoding}->[0];
-    }
-
-    my $channels = load_available_channels($conf, $opt);
-    my $platform = $conf->{platform}->[0];
-    my $postcode = $conf->{postcode}->[0];
-
-    # During configuration or listing available channels, we can also filter
-    # those channels which are available on the user's TV platform.
-    #
-    # If we find a usable platform identifier, we retrieve details on which 
-    # channels are available on that platform, and remove those which are not 
-    # available from the list of available channels
-    if (defined $platform && lc $platform ne 'none') {
-        # Retrieve hash of matched/unmatched channels 
-        my $platform_chans = get_channels_by_platform($platform);
-
-        # Have we matched any channels?
-        if (defined $platform_chans->{matched} 
-                && scalar @{ $platform_chans->{matched} } >= 1) {
-            # Flag the matched channels as being available
-            foreach my $matched_chan (@{ $platform_chans->{matched} } ) {
-                $channels->{$matched_chan}{available} = 1;
-            }
-            # Remove channels not flagged as available from %channels hash
-            foreach my $chan (keys %{$channels}) {
-                if (defined $channels->{$chan}{available} 
-                                && $channels->{$chan}{available} == 1) {
-                    delete $channels->{$chan}{available};
-                }
-                else {
-                    delete $channels->{$chan};
-                }
-            }
-        }
-    }
-
-    # During configuration or listing available channels, we can only include
-    # regional channels which are available in the configured postcode area.
-    #
-    # If we find a configured postcode, we retrieve details on which channels
-    # are available, and remove those which are not available from the list of
-    # available channels
-    if (defined $postcode && lc $postcode ne 'none') {
-        # Retrieve hash of matched/unmatched channels 
-        my $reg_chans = get_channels_by_postcode($postcode);
-
-        # Have we matched any channels?
-        if (defined $reg_chans->{matched} 
-                && scalar @{ $reg_chans->{matched} } >= 1) {
-            # Remove the ummatched regional channels from the %channels hash
-            foreach my $unmatched_chan (@{ $reg_chans->{unmatched} } ) {
-                delete $channels->{$unmatched_chan};
-            }
-        }
-    }
-
-    my $result="";
-    my $fh = new IO::Scalar \$result;
-    my $oldfh = select( $fh );
-
-    my %g_args = (OUTPUT => $fh);
-
-    # Write XMLTV to $result, rather than STDOUT
-    my $writer = new XMLTV::Writer(%g_args, encoding => $xml_encoding);
-    $writer->start(\%tv_attributes);
-
-    # It is perhaps better to sort the list of available channels by
-    # display-name, rather than xmltv_id. First create a hash to store the
-    # id->name mapping
-    my %chan_id_to_name;
-
-    # Only add the non-RT sourced timeshifted channels during configuration,
-    # otherwise the configuration could include both Radio Times-sourced
-    # timeshifted data, and the timeshifted data we create internally from a
-    #regular +0 channel
-    my $chan_name;
-    foreach my $chan_id (keys % {$channels}) {
-        $chan_name = $channels->{$chan_id}->{'display-name'}->[0]->[0];
-        if ($chan_name !~ m/\(RT\)$/) {
-            $chan_id_to_name{$chan_id} = $chan_name;
-        }
-    }
-
-    # Create a sorted list of xmltv_ids in ascending order of the
-    # corresponding display name (case-insensitive)
-    my @chan_ids = sort {uc($chan_id_to_name{$a}) cmp uc($chan_id_to_name{$b})}
-                        keys %chan_id_to_name;
-
-    foreach my $channel (@chan_ids) {
-        delete $channels->{$channel}{'rt_id'};
-        $writer->write_channel( $channels->{$channel} );
-    }
-    
-    $writer->end;
-    select( $oldfh );
-    $fh->close();
-
-    return $result;
 }
 
 sub load_old_config {
@@ -1078,36 +836,6 @@ sub load_available_channels {
     return \%channels;
 }
 
-# Check that the requested channels are available from the Radio Times
-#
-sub check_configured_channels {
-    my ( $available_channels ) = @_;
-    
-    # List of channel IDs that we can download listings for after checking
-    # $opt->{channel} against the current RT/XMLTV channel list.
-    my @wanted_chs;
-
-    t("Reading config file channel entries");
-
-    WANTED_CHAN:
-    foreach my $chan_id (@{$conf->{channel}}) {
-        t("  Read channel '$chan_id'");
-        if (! exists ${$available_channels}{$chan_id}) {
-            if (! $opt->{quiet}) {
-                say("  Configured channel '$chan_id' is unavailable");
-            }
-            next WANTED_CHAN;
-        }
-        push @wanted_chs, $chan_id;
-    }
-    my $num_req_chans = scalar @wanted_chs;
-    die "Error: No configured channels are available, exiting"
-        if (! defined $num_req_chans || $num_req_chans < 1);
-    t("Finished reading $num_req_chans configured channels");
-
-    return \@wanted_chs;
-}
-
 # Determine options for, and create XMLTV::Writer object
 sub setup_xmltv_writer {
     my ( $conf, $opt ) = @_;
@@ -1172,12 +900,12 @@ sub write_xmltv_header {
 }
 
 sub write_channel_list {
-    my ( $available_channels, $wanted_chs ) = @_;
+    my $wanted_chs = shift;
     
     t("Started writing <channel> elements...");
-    foreach my $chan_id (@{$wanted_chs}) {
-        my %h = %{ ${$available_channels}{$chan_id} };
-        delete $h{rt_id};
+    foreach my $chan_href (@{ $wanted_chs }) {
+        my %h = %$chan_href;
+        delete $h{'rt_id'};
         $writer->write_channel(\%h);
     }
     t("Finished writing <channel> elements");
@@ -1185,7 +913,7 @@ sub write_channel_list {
 
 # Download listings data for configured channels that are available
 sub write_listings_data {
-    my ( $conf, $opt, $available_channels, $wanted_chs ) = @_;
+    my ( $conf, $opt, $wanted_chs ) = @_;
     
     # Update encoding if seen in new-style config file
     if (defined( $conf->{encoding} )) {
@@ -1233,11 +961,10 @@ sub write_listings_data {
 
     # Process all of the channels we want listings for
     WANTED_CH:
-    foreach my $ch (@{$wanted_chs}) {
-        my $c = $available_channels->{$ch};
-        my $xmltv_id = $c->{id};
-        my $rt_id = $c->{rt_id};
-        my $rt_name = $c->{'display-name'}[0][0];
+    foreach my $chan_href (@{ $wanted_chs }) {
+        my $xmltv_id = $chan_href->{'id'};
+        my $rt_id    = $chan_href->{'rt_id'};
+        my $rt_name  = $chan_href->{'display-name'}[0][0];
         if (! defined $rt_id) {
             t("No Radio Times ID for channel '$rt_name', skipping");
             next WANTED_CH;
@@ -1646,143 +1373,6 @@ sub word_to_digit {
         # return undef if input unhandled
         else                  { return undef }
     }
-}
-
-# Retrieve and process mappings on channel ID to TV platforms.
-#
-# Takes a platform ID as an argument and returns i) a list of matching XMLTV IDs
-# and ii) a list of the remaining regional XMLTV IDs that were not matched
-#
-sub get_channels_by_platform {
-    my $conf_platform = shift;
-
-    my $xmltvids_platforms = GetSupplement("$grabber_name", 'channels_platforms');
-
-    die "Error: XMLTV channels_platforms data is missing, exiting" 
-        if (! defined $xmltvids_platforms || $xmltvids_platforms eq '');
-
-    my @lines = split /[\n\r]+/, $xmltvids_platforms;
-
-    # Hash to hold matched and unmatched XMLTV IDs
-    my %platform_chans;
-
-    XMLTV_PLATFORM_ENTRY:
-    foreach my $line (@lines) {
-        # Skip blank lines. Comments are allowed if they are at the start 
-        # of the line.
-        next XMLTV_PLATFORM_ENTRY if ($line =~ m/^#/ || $line =~ m/^$/);
-        my @fields = split /\|/, $line;
-        # We need 2 fields (xmltv_id,platform(s)).
-        if (scalar @fields != 2) {
-            t("Wrong number of fields in XMLTV channels_platforms entry:\n"
-                    . "\t" . $line);
-            next XMLTV_PLATFORM_ENTRY;
-        }
-        my ( $xmltv_id, $platforms ) = @fields;
-
-        # Check for required XMLTV ID and platform fields, skip if missing
-        if (! defined $xmltv_id  || $xmltv_id eq '') {
-            t("Undefined XMLTV ID seen in channels_platforms, skipping");
-            next XMLTV_PLATFORM_ENTRY;
-        }
-        if ($xmltv_id !~ m/\w+\.\w+.*/) {
-            t("Invalid XMLTV ID seen in channels_platforms, skipping");
-            next XMLTV_PLATFORM_ENTRY;
-        }
-        if (! defined $platforms || $platforms eq '') {
-            t("Undefined platform entry seen in channels_platforms, skipping");
-            next XMLTV_PLATFORM_ENTRY;
-        }
-        if (defined $xmltv_to_rt{$xmltv_id}) {
-            t("Channel '$xmltv_id' has platform information available");
-        }
-        else {
-            t("Channel '$xmltv_id' is not available, skipping ");
-            next XMLTV_PLATFORM_ENTRY;
-        }
-
-        my @platforms = split /,/, $platforms;
-        foreach my $platform (@platforms) {
-            if (uc $platform eq uc $conf_platform) {
-                push @{$platform_chans{matched}}, $xmltv_id;
-                # match made, process next channel
-                next XMLTV_PLATFORM_ENTRY;
-            }
-        }
-        # No match made, so add to unmatched list
-        push @{ $platform_chans{unmatched} }, $xmltv_id;
-    }
-
-    return \%platform_chans;
-}
-
-# Retrieve and process mappings on channel ID to postcodes for regional 
-# channels.
-#
-# Takes a postcode as an argument and returns i) a list of matching XMLTV IDs
-# and ii) a list of the remaining regional XMLTV IDs that were not matched
-#
-sub get_channels_by_postcode {
-    my $conf_postcode = shift;
-
-    my $xmltvids_postcodes = GetSupplement("$grabber_name", 'regional_channels_by_postcode');
-
-    die "Error: XMLTV regional_channels_by_postcode data is missing, exiting" 
-        if (! defined $xmltvids_postcodes || $xmltvids_postcodes eq '');
-
-    my @lines = split /[\n\r]+/, $xmltvids_postcodes;
-
-    # Hash to hold matched and unmatched XMLTV IDs
-    my %reg_chans;
-
-    XMLTV_POSTCODE_ENTRY:
-    foreach my $line (@lines) {
-        # Skip blank lines. Comments are allowed if they are at the start 
-        # of the line.
-        next XMLTV_POSTCODE_ENTRY if ($line =~ m/^#/ || $line =~ m/^$/);
-        my @fields = split /\|/, $line;
-        # We need 2 fields (xmltv_id,postcodes).
-        if (scalar @fields != 2) {
-            t("Wrong number of fields in XMLTV regional_channels_by_postcode entry:\n"
-                    . "\t" . $line);
-            next XMLTV_POSTCODE_ENTRY;
-        }
-        my ( $xmltv_id, $postcodes ) = @fields;
-
-        # Check for required XMLTV ID and postcode fields, skip if missing
-        if (! defined $xmltv_id  || $xmltv_id eq '') {
-            t("Undefined XMLTV ID seen in regional_channels_by_postcode, skipping");
-            next XMLTV_POSTCODE_ENTRY;
-        }
-        if ($xmltv_id !~ m/\w+\.\w+.*/) {
-            t("Invalid XMLTV ID seen in regional_channels_by_postcode, skipping");
-            next XMLTV_POSTCODE_ENTRY;
-        }
-        if (! defined $postcodes || $postcodes eq '') {
-            t("Undefined postcode entry seen in regional_channels_by_postcode, skipping");
-            next XMLTV_POSTCODE_ENTRY;
-        }
-        if (defined $xmltv_to_rt{$xmltv_id}) {
-            t("Channel '$xmltv_id' has region-specific information available");
-        }
-        else {
-            t("Channel '$xmltv_id' is not available, skipping ");
-            next XMLTV_POSTCODE_ENTRY;
-        }
-
-        my @postcodes = split /,/, $postcodes;
-        foreach my $postcode (@postcodes) {
-            if (uc $postcode eq uc $conf_postcode) {
-                push @{$reg_chans{matched}}, $xmltv_id;
-                # match made, process next channel
-                next XMLTV_POSTCODE_ENTRY;
-            }
-        }
-        # No match made, so add to unmatched list
-        push @{ $reg_chans{unmatched} }, $xmltv_id;
-    }
-
-    return \%reg_chans;
 }
 
 # Display required copyright message from Radio Times
@@ -4304,96 +3894,814 @@ sub extract_numbering_from_sub_title {
     }
 }
 
-#FIXME
-#
-# The following subs are subject to change and are currently proof of concept
-
-sub list_lineups {
-    say("test.freeview.co.uk|DVB-T|FreeView");
-    say("test.freesat.co.uk|DVB-S|Freesat");
-}
-
-sub get_lineup {
-
-    my ($conf, $opt) = @_;
-
-    # get the lineup_id we're passed
-    # my $lineup_id = shift;
-    # say("Lineup provided was: " . $lineup_id);
- 
-    # Configure output and write XMLTV lineup data - header, name, channels 
-    # and footer
-    #
-    #my $lineup_writer;
-    setup_xmltv_lineup_writer($conf, $opt);
-    write_xmltv_lineup_header();
-
-    write_lineup_name();
-    write_lineup_icon();
-    write_lineup_channels();
-
-    write_xmltv_lineup_footer();
-}
-
-# Determine options for, and create XMLTV::Lineup::Writer object
-sub setup_xmltv_lineup_writer {
-
-    my ($conf, $opt) = @_;
+sub config_stage {
+    my ( $stage, $conf ) = @_;
 
     # Update encoding if seen in new-style config file
     if (defined( $conf->{encoding} )) {
         $xml_encoding = $conf->{encoding}->[0];
     }
 
-    # output options
-    my %g_args = ();
-    if (defined $opt->{output}) {
-#        t("\nOpening XML output file '$opt->{output}'\n");
-        my $fh = new IO::File ">$opt->{output}";
-        die "Error: Cannot write to '$opt->{output}', exiting" if (! $fh);
-        %g_args = (OUTPUT => $fh);
+    my $result;
+    my $writer = new XMLTV::Configure::Writer( OUTPUT => \$result,
+                                               encoding => $xml_encoding );
+
+    $writer->start( { grabber => "$grabber_name" } );
+    
+    if ($stage eq 'start') {
+
+        $writer->start_selectone( {
+            id => 'encoding',
+            title => [ [ 'Encoding', 'en' ] ],
+            description => [
+                [ "Select which output format to use",
+                'en' ] ],
+        } );
+        $writer->write_option( {
+            value => 'utf-8',
+            text => [ [ 'UTF-8 (Unicode)', 'en' ] ],
+        } );
+        $writer->write_option( {
+            value => 'iso-8859-1',
+            text => [ [ 'ISO-8859-1 (Latin-1)', 'en' ] ],
+        } );
+        $writer->end_selectone();
+
+        $writer->end('select-cachedir');
+    }
+    elsif ($stage eq 'select-cachedir') {
+        $writer->write_string( {
+            id => 'cachedir',
+            title => [ [ 'Enter the directory to store the listings cache in', 'en' ] ],
+            description => [
+                [ "$grabber_name uses a cache with files that it has already " .
+                "downloaded. Please specify where the cache shall be stored.",
+                'en' ] ],
+            default => $default_cachedir,
+        } );
+        $writer->end('select-title-processing');
+    }
+    elsif ($stage eq 'select-title-processing') {
+
+        $writer->start_selectone( {
+            id => 'title-processing',
+            title => [ [ 'Enable title processing?', 'en' ] ],
+            description => [
+                [ "In a bid to provide more consistent listings data, $grabber_name " .
+                "can further process programme and episode titles.",
+                'en' ] ],
+        } );
+        $writer->write_option( {
+            value => 'enabled',
+            text => [ [ 'Enable title processing', 'en' ] ],
+        } );
+        $writer->write_option( {
+            value => 'disabled',
+            text => [ [ 'Disable title processing', 'en' ] ],
+        } );
+        $writer->end_selectone();
+
+        $writer->end('select-utf8-fixups');
+    }
+    elsif ($stage eq 'select-utf8-fixups') {
+
+        $writer->start_selectone( {
+            id => 'utf8-fixups',
+            title => [ [ 'Enable UTF-8 fixups?', 'en' ] ],
+            description => [
+                [ "The source data can be processed to detect and correct any mis-encoded " .
+                "UTF-8 characters. This should not normally be necessary but can be " .
+                "enabled here if required.",
+                'en' ] ],
+        } );
+        $writer->write_option( {
+            value => 'disabled',
+            text => [ [ 'Disable UTF-8 fixups', 'en' ] ],
+        } );
+        $writer->write_option( {
+            value => 'enabled',
+            text => [ [ 'Enable UTF-8 fixups', 'en' ] ],
+        } );
+        $writer->end_selectone();
+
+        $writer->end('ask-autoconfig');
+    }
+    elsif ($stage eq 'ask-autoconfig') {
+
+        my $use_lineups = ask_boolean('Do you want channels auto-configured based on your chosen platform?', 1);
+        if ($use_lineups) {
+            $writer->end('select-country');
+        }
+        else {
+            $writer->end('select-channels');
+        }
+    }
+    elsif ($stage eq 'select-country') {
+
+        $writer->start_selectone( {
+            id => 'country',
+            title => [ [ 'Choose your location', 'en' ] ],
+            description => [
+                [ "$grabber_name can use your location in " .
+                "order to determine which national channels to " .
+                "receive listings for.",
+                'en' ] ],
+        } );
+        $writer->write_option( {
+            value => 'England',
+            text => [ [ 'England', 'en' ] ],
+        } );
+        $writer->write_option( {
+            value => 'Scotland',
+            text => [ [ 'Scotland', 'en' ] ],
+        } );
+        $writer->write_option( {
+            value => 'Wales',
+            text => [ [ 'Wales', 'en' ] ],
+        } );
+        $writer->write_option( {
+            value => 'Northern Ireland',
+            text => [ [ 'Northern Ireland', 'en' ] ],
+        } );
+        $writer->write_option( {
+            value => 'Ireland',
+            text => [ [ 'Republic of Ireland', 'en' ] ],
+        } );
+        $writer->end_selectone();
+
+        $writer->end('select-postcode');
+    }
+    elsif ($stage eq 'select-postcode') {
+
+        my $country = $conf->{'country'}[0];
+        if ($country =~ m/^Ireland$/i) {
+            $writer->end('select-lineup');
+        }
+        else {
+            $writer->write_string( {
+                id => 'postcode',
+                title => [ [ 'Enter the first part of your postcode', 'en' ] ],
+                description => [
+                    [ "$grabber_name can use the first part of your postcode in " .
+                    "order to determine which regional channels to receive listings for",
+                    'en' ] ],
+                default => 'W12',
+            } );
+            $writer->end('select-lineup');
+        }
+    }
+    elsif ($stage eq 'select-lineup') {
+
+        my $lineups_doc = parse_lineup_xml_doc( 'lineups.xml' );
+        my $ns = $lineups_doc->find( "//xmltv-lineup" );
+
+        LINEUP:
+        foreach my $lineup ($ns->get_nodelist) {
+
+            # filter available lineups by country
+            if ($lineup->findnodes( "availability[\@area='country']" )) {
+                my $country = $conf->{'country'}[0];
+                my $path = "availability[\@area='country'][.='$country']";
+                if (! $lineup->findnodes( $path ) ) {
+                    remove_node($lineup);
+                    next LINEUP;
+                }
+            }
+            else {
+                # include the lineup if no specific availability given
+            }
+        }
+
+        # refresh list
+        $ns = $lineups_doc->find( "//xmltv-lineup" );
+
+        $writer->start_selectone( {
+            id => 'lineup',
+            title => [ [ 'Select which TV platform you use', 'en' ] ],
+            description => [
+                [ "When choosing which channels to download listings for, $grabber_name " .
+                "can show only those channels available on your TV platform.",
+                'en' ] ],
+        } );
+
+        LINEUP:
+        foreach my $lineup ($ns->get_nodelist) {
+
+            my $id   = $lineup->findvalue( '@id' );
+            my $dn   = $lineup->findvalue( 'display-name' );
+            my $type = $lineup->findvalue( 'type' );
+
+            $writer->write_option( {
+                value => $id,
+                text  => [ [ "$dn ($type)", 'en' ] ],
+            } );
+        }
+
+        $writer->end_selectone();
+
+        $writer->end( 'select-packages' );
+    }
+    #FIXME
+    #filter by country/postcode before determining available packages
+    elsif ($stage eq 'select-packages') {
+
+        my $lineup = $conf->{lineup}->[0];
+        my $lineup_doc = parse_lineup_xml_doc("$lineup.xml");
+
+        # First check for any basic packages that should be chosen first.
+        # These can be FTA/FTV channels for channels available on a platform
+        # without a subscription, or the basic package requried for a 
+        # subscription platform like Virgin TV.
+        my $basic_nodes = $lineup_doc->find( "//lineup-entry/package[\@type='basic']" );
+
+        # We include FTA/FTV channels by default and only ask a
+        # user to choose a basic subscription package
+        my %basic_subs_pkgs;
+        foreach my $package_node ($basic_nodes->get_nodelist) {
+
+            my $id = $package_node->textContent;
+            if ($id =~ m/Free-to-air/i) {
+            }
+            elsif ($id =~ m/Free-to-view/i) {
+            }
+            else {
+                $basic_subs_pkgs{$id} = $id;
+            }
+        }
+        if (%basic_subs_pkgs) {
+            $writer->start_selectone( {
+                id => 'basic-package',
+                title => [ [ 'Select which basic subscription package you have', 'en' ] ],
+                description => [
+                    [ "Please choose from one of the following basic subscription packages",
+                    'en' ] ],
+            } );
+
+            foreach my $package (keys %basic_subs_pkgs) {
+                $writer->write_option( {
+                    value => $package,
+                    text  => [ [ "$package", 'en' ] ],
+                } );
+            }
+
+            $writer->end_selectone();
+        }
+
+        # Check for any available premium subscription packages
+        my $premium_sub_nodes = $lineup_doc->find( "//lineup-entry/package[\@type='subscription'][. != 'Premium']" );
+        my %premium_subs_pkgs;
+        foreach my $package_node ($premium_sub_nodes->get_nodelist) {
+            my $id = $package_node->textContent;
+            if ($id =~ m/Pay-per-view/i) { # Ignore PPV channels
+            }
+            else {
+                $premium_subs_pkgs{$id} = $id;
+            }
+        }
+        if (%premium_subs_pkgs) {
+            $writer->start_selectmany( {
+                id => 'subscription-package',
+                title => [ [ 'Select which packages you subscribe to', 'en' ] ],
+                description => [
+                    [ "Please choose from the following subscription packagess",
+                    'en' ] ],
+            } );
+
+            foreach my $package (sort keys %premium_subs_pkgs) {
+                $writer->write_option( {
+                    value => $package,
+                    text  => [ [ "$package", 'en' ] ],
+                } );
+            }
+
+            $writer->end_selectmany();
+        }
+
+
+        # Check for any individual premium channels
+        my $premium_chan_name_nodes = $lineup_doc->find( "//lineup-entry/package[\@type='subscription'][.='Premium']/../station/name" );
+        my %premium_channels;
+        foreach my $name_node ($premium_chan_name_nodes->get_nodelist) {
+            my $name = $name_node->textContent;
+            $premium_channels{$name} = $name;
+        }
+        if (%premium_channels) {
+            $writer->start_selectmany( {
+                id => 'premium-channel',
+                title => [ [ 'Select which premium channels you subscribe to', 'en' ] ],
+                description => [
+                    [ "Please choose from the following premium channels",
+                    'en' ] ],
+            } );
+
+            foreach my $channel (sort keys %premium_channels) {
+                $writer->write_option( {
+                    value => $channel,
+                    text  => [ [ "$channel", 'en' ] ],
+                } );
+            }
+
+            $writer->end_selectmany();
+        }
+
+        #FIXME
+        # currently we ignore PPV channels during config as listings for these
+        # are not available. We can still output them during get-lineup though.
+
+        $writer->end( 'select-full-lineups' );
+    }
+    elsif ($stage eq 'select-full-lineups') {
+
+        $writer->start_selectone( {
+            id => 'full-lineups',
+            title => [ [ 'Include unsupported channels in lineup?', 'en' ] ],
+            description => [
+                [ "When generating a lineup you " .
+                "can choose to include channels which are not currently " .
+                "supported with listings. You should choose this option " .
+                "if you can receive listings for these channels from elsewhere " .
+                "(e.g. EIT) and/or want the full channel lineup available.",
+                'en' ] ],
+        } );
+        $writer->write_option( {
+            value => 'enabled',
+            text => [ [ 'Include unsupported channels', 'en' ] ],
+        } );
+        $writer->write_option( {
+            value => 'disabled',
+            text => [ [ 'Exclude unsupported channels', 'en' ] ],
+        } );
+        $writer->end_selectone();
+
+        # The select-channels stage must be the last stage called
+        $writer->end('select-channels');
+    }
+    else {
+        die "Unknown stage $stage";
+    }
+    
+    return $result;
+}
+
+sub list_channels {
+    my ( $conf, $opt ) = @_;
+
+    # Update encoding if seen in new-style config file
+    if (exists $conf->{encoding}) {
+        $xml_encoding = $conf->{encoding}->[0];
     }
 
-#    t("Started writing XMLTV output using " . $xml_encoding . " encoding");
-    $lineup_writer = new XMLTV::Lineup::Writer(%g_args, encoding => $xml_encoding);
+    my $channels = load_available_channels($conf, $opt);
+
+    # only filter available channels if we see a lineup entry
+    if (exists $conf->{lineup})  {
+        my $lineup = $conf->{lineup}->[0];
+        my $doc = parse_lineup_xml_doc("$lineup.xml");
+        $channels = get_supported_lineup_channels($conf, $opt, $doc, $channels);
+    }
+
+    my $result = "";
+    my $fh = new IO::Scalar \$result;
+    my $oldfh = select( $fh );
+
+    my %g_args = (OUTPUT => $fh);
+
+    # Write XMLTV to $result, rather than STDOUT
+    my $writer = new XMLTV::Writer(%g_args, encoding => $xml_encoding);
+    $writer->start(\%tv_attributes);
+
+    my $sorted_channels = sort_wanted_channels_by_name($channels);
+
+    foreach my $channel (@{$sorted_channels}) {
+        delete $channel->{'rt_id'};
+        $writer->write_channel($channel);
+    }
+
+    $writer->end;
+    select( $oldfh );
+    $fh->close();
+
+    return $result;
 }
 
-sub write_xmltv_lineup_header {
+sub list_lineups {
 
-#    t("Writing XMLTV lineup header");
-    $lineup_writer->start(\%xmltv_lineup_attributes);
+    my $doc = parse_lineup_xml_doc( 'lineups.xml' );
+    return $doc->toString();
 }
 
-sub write_lineup_name {
+#FIXME - option to include all channels inc supported
+sub get_lineup {
 
-    my @values = ( 'Freeview (UK)', 'en' );
-    $lineup_writer->write_display_name(\@values);
+    my $conf = shift;
+    my $opt = shift;
+
+    if (! exists $conf->{'lineup'}) {
+        die "Error: No lineup is configured";
+    }
+
+    my $lineup = $conf->{'lineup'}[0];
+    my $unfiltered_lineup_doc = parse_lineup_xml_doc( "$lineup.xml" );
+    my $filtered_lineup_doc = filter_channels($conf, $opt, $unfiltered_lineup_doc);
+
+    return pretty_print_xml($filtered_lineup_doc);
 }
 
-sub write_lineup_icon {
+# Retrieve a given lineup XML file via XMLTV::Supplement and return
+# a reference to the parsed XML document
+#
+sub parse_lineup_xml_doc {
 
-    my %icon_url = ( 'src' => 'http://www.freeview.co.uk/logo.jpg' );
-    $lineup_writer->write_lineup_icon(\%icon_url);
+    my $file = shift;
+    my $string = GetSupplement("$grabber_name", "lineups/$file");
+    die "Error: XML lineup document 'lineups/$file' is missing or empty, cannot continue" 
+            if (! defined $string || $string eq '');
+
+    my $xml = XML::LibXML->new;
+    my $doc;
+    eval { $doc = $xml->parse_string( $string ) };
+    die "Error: Could not parse XML lineup document 'lineups/$file'" if ($@);
+
+    return $doc;
 }
 
-sub write_lineup_channels {
-    
-    my %ch = ( 'id' => 'bbc1.bbc.co.uk',
-               'old-id' => [ 'old.bbc1.bbc.co.uk', 'evenolder.bbc1.bbc.co.uk' ],
-               'display-name' => [ [ 'BBC ONE', 'en' ] ],
-               'preferred-preset' => '1',
-               'service-id' => '4165',
-               'transport-id' => '4101',
-               'network-id' => '9018',
-               'icon' => [ { 'src' => 'http://www.bbc.co.uk/bbcone.jpg' } ],
-               'homepage-url' => "http://www.bbc.co.uk/bbcone", );
+sub get_wanted_channels_aref {
 
-    $lineup_writer->write_channel(\%ch);
+    my $conf = shift;
+    my $opt = shift;
+    my $available_channels = shift;
+
+    my $lineup;
+    if (exists $conf->{lineup}) {
+        $lineup = $conf->{lineup}->[0];
+        my $doc = parse_lineup_xml_doc("$lineup.xml");
+        $available_channels = get_supported_lineup_channels($conf, $opt, $doc, $available_channels);
+    }
+    else {
+        $available_channels = get_supported_config_channels($conf, $opt, $available_channels);
+    }
+
+    return sort_wanted_channels_by_name($available_channels);
 }
 
-sub write_xmltv_lineup_footer {
-#    t("Writing XMLTV lineup footer\n");
-    $lineup_writer->end;
+# Parse an XML lineup document and extract a list of channels supported by the 
+# grabber. Return a hashref of the available channels.
+sub get_supported_lineup_channels {
+
+    my $conf = shift;
+    my $opt = shift;
+    my $unfiltered_lineup_doc = shift;
+    my $xmltv_channels_href = shift;
+
+    my $filtered_lineup_doc = filter_channels($conf, $opt, $unfiltered_lineup_doc);
+    my @stations = $filtered_lineup_doc->findnodes( "//station" );
+
+    LINEUP_STATION:
+    foreach my $station (@stations) {
+        my $id = $station->findvalue( '@rfc2838' );
+        if (exists $xmltv_channels_href->{$id}) {
+            if ($opt->{'debug'}) {
+                say("    Channel '$id' is available in the grabber");
+            }
+            $xmltv_channels_href->{$id}{'_matched'} = 1;
+            next LINEUP_STATION;
+        }
+    }
+
+    # remove any channels not flagged
+    foreach my $id (keys %{$xmltv_channels_href}) {
+        unless (exists $xmltv_channels_href->{$id}{'_matched'}) {
+            delete $xmltv_channels_href->{$id};
+        }
+    }
+
+    if ($opt->{'debug'}) {
+        say("  A total of " . scalar (keys %{$xmltv_channels_href}) 
+                . " lineup entries are supported by the grabber");
+    }
+    return $xmltv_channels_href;
+}
+
+# Iterate over the lineup document and remove any channels that are unavailable
+# in the configured country and postcode, or unsupported by the grabber (i.e. no
+# associated XMLTV ID). Return the document containing the remaining lineup entries.
+sub filter_channels {
+
+    my $conf = shift;
+    my $opt = shift;
+    my $lineup_doc = shift;
+
+    $lineup_doc = filter_channels_by_location($conf, $opt, $lineup_doc);
+    $lineup_doc = filter_channels_by_package($conf, $opt, $lineup_doc);
+
+    # By default, generate a full lineup including unsupported channels. Only
+    # remove unsupported channels if explicitly configured
+    if (exists $conf->{'full-lineups'} && $conf->{'full-lineups'}[0] eq 'disabled') {
+        $lineup_doc = filter_channels_by_xmltv_support($conf, $opt, $lineup_doc);
+    }
+
+    # remove nodes used for filtering purposes above from final lineup
+    $lineup_doc = remove_filter_ndoes_from_lineup($conf, $opt, $lineup_doc);
+
+    return $lineup_doc;
+}
+
+sub filter_channels_by_location {
+
+    my $conf = shift;
+    my $opt = shift;
+    my $lineup_doc = shift;
+
+    my @entries = $lineup_doc->findnodes( "//lineup-entry" );
+
+    LINEUP_ENTRY:
+    foreach my $entry (@entries) {
+        # keep channels that do not have availability information
+        if (! $entry->exists( "availability" )) {
+            next LINEUP_ENTRY;
+        }
+
+        my $matched; # have we matched this channel against our configured location?
+
+        # keep channels matched by configured postcode
+        my $user_postcode = $conf->{'postcode'}[0];
+        if (defined $user_postcode && lc $user_postcode ne 'none') {
+            my @area_postcodes = $entry->findnodes( "availability[\@area='postcode']" );
+            foreach my $postcode_node (@area_postcodes) {
+
+                my $value = $postcode_node->textContent;
+                my @postcodes = split /,/, $value;
+                foreach my $chan_postcode (@postcodes) {
+                    if (lc $chan_postcode eq lc $user_postcode) {
+                        $matched++;
+                    }
+                }
+            }
+        }
+
+        # keep channels that are matched by country
+        my $user_country = $conf->{'country'}[0];
+        if (defined $user_country && lc $user_country ne 'none') {
+            my @area_countries = $entry->findnodes( "availability[\@area='country']" );
+            foreach my $country_node (@area_countries) {
+
+                my $value = $country_node->textContent;
+                my @countries = split /,/, $value;
+                foreach my $chan_country (@countries) {
+                    if (lc $chan_country eq lc $user_country) {
+                        $matched++;
+                    }
+                }
+            }
+        }
+
+        # remove this channel if we haven't matched it
+        remove_node($entry) unless $matched;
+    }
+
+    return $lineup_doc;
+}
+
+sub filter_channels_by_package {
+
+    my $conf = shift;
+    my $opt = shift;
+    my $lineup_doc = shift;
+
+    my @entries = $lineup_doc->findnodes( "//lineup-entry" );
+    my $conf_basic_pkg = $conf->{'basic-package'}[0];
+
+    LINEUP_ENTRY:
+    foreach my $entry (@entries) {
+
+        my $matched; # have we matched this channel against our configured packages?
+
+        # FTA/FTV and basic packages
+        my @basic_pkg_nodes = $entry->findnodes( "package[\@type='basic']" );
+        PACKAGE:
+        foreach my $pkg_node (@basic_pkg_nodes) {
+            my $pkg = $pkg_node->textContent;
+            if ($pkg =~ m/Free-to-air/i) {
+                $matched = 1;
+                last PACKAGE;
+            }
+            elsif ($pkg =~ m/Free-to-view/i) {
+                $matched = 1;
+                last PACKAGE;
+            }
+            # not a FTA/FTV basic package, first look for Virgin TV basic pkgs
+            elsif ($pkg =~ m/^(M|M\+|L|XL)$/i) {
+                if ($conf_basic_pkg eq 'XL') {
+                    $matched = 1;
+                    last PACKAGE;
+                }
+                if ($conf_basic_pkg eq 'L'  && $pkg =~ m/^(M|M\+|L)$/i) {
+                    $matched = 1;
+                    last PACKAGE;
+                }
+                if ($conf_basic_pkg eq 'M+' && $pkg =~ m/^(M|M\+)$/i) {
+                    $matched = 1;
+                    last PACKAGE;
+                }
+                if ($conf_basic_pkg eq 'M'  && $pkg =~ m/^M$/i) {
+                    $matched = 1;
+                    last PACKAGE;
+                }
+            }
+            # next look for UPC Ireland basic pkgs
+            elsif ($pkg =~ m/^(Value|Select|Select Extra|Max)$/i) {
+                if ($conf_basic_pkg eq 'Max') {
+                    $matched = 1;
+                    last PACKAGE;
+                }
+                if ($conf_basic_pkg eq 'Select Extra' && $pkg =~ m/^(Value|Select|Select Extra)$/i) {
+                    $matched = 1;
+                    last PACKAGE;
+                }
+                if ($conf_basic_pkg eq 'Select' && $pkg =~ m/^(Value|Select)$/i) {
+                    $matched = 1;
+                    last PACKAGE;
+                }
+                if ($conf_basic_pkg eq 'Value' && $pkg =~ m/^Value$/i) {
+                    $matched = 1;
+                    last PACKAGE;
+                }
+            }
+            else {
+                foreach my $conf_pkg (@{$conf->{'basic-package'}}) {
+                    if ($pkg eq $conf_pkg) {
+                        $matched = 1;
+                        last PACKAGE;
+                    }
+                }
+            }
+        }
+
+        # Subscription packages
+        my @subs_pkg_nodes = $entry->findnodes( "package[\@type='subscription'][. != 'Premium']" );
+        PACKAGE:
+        foreach my $pkg_node (@subs_pkg_nodes) {
+            my $pkg = $pkg_node->textContent;
+            foreach my $conf_pkg (@{$conf->{'subscription-package'}}) {
+                if ($pkg eq $conf_pkg) {
+                    $matched = 1;
+                    last PACKAGE;
+                }
+            }
+        }
+
+        # Premium channels
+        my @prem_chan_name_nodes = $entry->findnodes( "package[\@type='subscription'][.='Premium']/../station/name" );
+        CHANNEL:
+        foreach my $name_node (@prem_chan_name_nodes) {
+            my $name = $name_node->textContent;
+            foreach my $conf_name (@{$conf->{'premium-channel'}}) {
+                if ($name eq $conf_name) {
+                    $matched = 1;
+                    last CHANNEL;
+                }
+            }
+        }
+
+        # remove this channel if we haven't matched it
+        remove_node($entry) unless $matched;
+    }
+
+    return $lineup_doc;
+}
+
+sub filter_channels_by_xmltv_support {
+
+    my $conf = shift;
+    my $opt = shift;
+    my $lineup_doc = shift;
+
+    my @entries = $lineup_doc->findnodes( "//lineup-entry" );
+
+    LINEUP_ENTRY:
+    foreach my $entry (@entries) {
+        my $dn = $entry->findvalue( 'station/name' );
+
+        if (! $entry->exists( "station[\@rfc2838]" ) ) {
+            remove_node($entry);
+            next LINEUP_ENTRY;
+        }
+        if ($entry->exists( "station[\@rfc2838='unknown']" ) ) {
+            remove_node($entry);
+            next LINEUP_ENTRY;
+        }
+    }
+
+    return $lineup_doc;
+}
+
+sub remove_filter_ndoes_from_lineup {
+
+    my $conf = shift;
+    my $opt = shift;
+    my $lineup_doc = shift;
+
+    my @availability_nodes = $lineup_doc->findnodes( "//availability" );
+    foreach my $node (@availability_nodes) {
+        remove_node($node);
+    }
+    my @package_nodes = $lineup_doc->findnodes( "//package" );
+    foreach my $node (@package_nodes) {
+        remove_node($node);
+    }
+
+    return $lineup_doc;
+}
+
+sub get_supported_config_channels {
+
+    my $conf = shift;
+    my $opt = shift;
+    my $xmltv_channels_href = shift;
+
+    CONFIG_CHANNEL:
+    foreach my $chan_id (@{ $conf->{'channel'} }) {
+        t("  Read channel '$chan_id'");
+        if (! exists $xmltv_channels_href->{$chan_id}) {
+            if (! $opt->{'quiet'}) {
+                say("  Configured channel '$chan_id' is unavailable");
+            }
+            next CONFIG_CHANNEL;
+        }
+        if ($opt->{'debug'}) {
+            say("    Channel '$chan_id' is available in the grabber");
+        }
+        $xmltv_channels_href->{$chan_id}{'_matched'} = 1;
+        next CONFIG_CHANNEL;
+    }
+
+    # remove any channels not flagged
+    foreach my $id (keys %{$xmltv_channels_href}) {
+        unless (exists $xmltv_channels_href->{$id}{'_matched'}) {
+            delete $xmltv_channels_href->{$id};
+        }
+    }
+
+    if ($opt->{'debug'}) {
+        say("  A total of " . scalar (keys %{$xmltv_channels_href}) 
+                . " config file channels are supported by the grabber");
+    }
+    return $xmltv_channels_href;
+}
+
+# Take a hashref of configured channel hashes and return a listref of channel
+# hashes sorted in ascending display name order
+sub sort_wanted_channels_by_name {
+
+    my $channels = shift;
+    my $sorted_channels = [];
+    my %chan_id_to_name;
+
+    # Only add the non-RT sourced timeshifted channels during configuration,
+    # otherwise the configuration could include both Radio Times-sourced
+    # timeshifted data, and the timeshifted data we create internally from a
+    #regular +0 channel
+    foreach my $chan_id (keys %{$channels}) {
+        my $chan_name = $channels->{$chan_id}{'display-name'}[0][0];
+        if ($chan_name !~ m/\(RT\)$/) {
+            $chan_id_to_name{$chan_id} = $chan_name;
+        }
+    }
+
+    # Create a sorted list of xmltv_ids in ascending order of the
+    # corresponding display name (case-insensitive)
+    my @sorted_chan_ids = sort {uc($chan_id_to_name{$a}) cmp uc($chan_id_to_name{$b})}
+                               keys %chan_id_to_name;
+
+    foreach my $chan_id (@sorted_chan_ids) {
+        push @{$sorted_channels}, $channels->{$chan_id};
+    }
+
+    return $sorted_channels;
+}
+
+# Remove the given node object from an XML document
+sub remove_node {
+
+    my $node = shift;
+    my $parent = $node->parentNode;
+    $parent->removeChild($node);
+}
+
+# Prettify XML output. Required when the XML document structure has been 
+# modified, as removing elements from a parsed XML file will leave line breaks
+# in the toString output
+sub pretty_print_xml {
+
+    my $doc = shift;
+    my $doc_string = $doc->toString();
+    $doc_string =~ s/>\s+</></g;
+
+    my $xml = XML::LibXML->new;
+    eval { $doc = $xml->parse_string( $doc_string ) };
+    die "Error: Could not parse XML string" if ($@);
+
+    return $doc->toString(1);
 }
 
 ###############################################
