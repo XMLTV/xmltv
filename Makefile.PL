@@ -353,47 +353,58 @@ my @opt_components
        exes => [ 'grab/uk_rt/tv_grab_uk_rt' ],
        pl_files => { 'grab/uk_rt/tv_grab_uk_rt.PL' 
                         => 'grab/uk_rt/tv_grab_uk_rt' },
-       share_files => { 'grab/uk_rt/channel_ids' 
-                           => 'tv_grab_uk_rt/channel_ids',
-                        'grab/uk_rt/prog_titles_to_process' 
-                           => 'tv_grab_uk_rt/prog_titles_to_process',
-                        'grab/uk_rt/regional_channels_by_postcode' 
-                           => 'tv_grab_uk_rt/regional_channels_by_postcode',
-                        'grab/uk_rt/channels_platforms'
-                           => 'tv_grab_uk_rt/channels_platforms',
-                        'grab/uk_rt/utf8_fixups'
-                           => 'tv_grab_uk_rt/utf8_fixups',
+       share_files => { 
+            'grab/uk_rt/channel_ids' 
+                => 'tv_grab_uk_rt/channel_ids',
+            'grab/uk_rt/prog_titles_to_process' 
+                => 'tv_grab_uk_rt/prog_titles_to_process',
+            'grab/uk_rt/regional_channels_by_postcode' 
+                => 'tv_grab_uk_rt/regional_channels_by_postcode',
+            'grab/uk_rt/channels_platforms'
+                => 'tv_grab_uk_rt/channels_platforms',
+            'grab/uk_rt/utf8_fixups'
+                => 'tv_grab_uk_rt/utf8_fixups',
+            'grab/uk_rt/channel_icons'
+                => 'tv_grab_uk_rt/channel_icons',
 
-                        'grab/uk_rt/lineups/lineups.xml'
-                           => 'tv_grab_uk_rt/lineups/lineups.xml',
+            'grab/uk_rt/lineups/xmltv-lineups.xsl'
+                => 'tv_grab_uk_rt/lineups/xmltv-lineups.xsl',
 
-                        #'grab/uk_rt/lineups/freesat.xml'
-                           #=> 'tv_grab_uk_rt/lineups/freesat.xml',
-                        #'grab/uk_rt/lineups/freesatfromsky.xml'
-                           #=> 'tv_grab_uk_rt/lineups/freesatfromsky.xml',
-                        #'grab/uk_rt/lineups/freesathd.xml'
-                           #=> 'tv_grab_uk_rt/lineups/freesathd.xml',
-                        #'grab/uk_rt/lineups/freeview.xml'
-                           #=> 'tv_grab_uk_rt/lineups/freeview.xml',
-                        #'grab/uk_rt/lineups/freeviewhd.xml'
-                           #=> 'tv_grab_uk_rt/lineups/freeviewhd.xml',
-                        #'grab/uk_rt/lineups/sky.xml'
-                           #=> 'tv_grab_uk_rt/lineups/sky.xml',
-                        #'grab/uk_rt/lineups/skyhd.xml'
-                           #=> 'tv_grab_uk_rt/lineups/skyhd.xml',
-                        #'grab/uk_rt/lineups/upcireland.xml'
-                           #=> 'tv_grab_uk_rt/lineups/upcireland.xml',
-                        #'grab/uk_rt/lineups/upcirelandhd.xml'
-                           #=> 'tv_grab_uk_rt/lineups/upcirelandhd.xml',
-                        #'grab/uk_rt/lineups/virgin.xml'
-                           #=> 'tv_grab_uk_rt/lineups/virgin.xml',
-                        #'grab/uk_rt/lineups/virginhd.xml'
-                           #=> 'tv_grab_uk_rt/lineups/virginhd.xml',
+            'grab/uk_rt/lineups/lineups.xml'
+                => 'tv_grab_uk_rt/lineups/lineups.xml',
 
-                        'grab/uk_rt/lineups/freeview.map'
-                           => 'tv_grab_uk_rt/lineups/freeview.map',
-                        'grab/uk_rt/lineups/freesat.map'
-                           => 'tv_grab_uk_rt/lineups/freesat.map', },
+            'grab/uk_rt/lineups/freesatfromsky.xml'
+                => 'tv_grab_uk_rt/lineups/freesatfromsky.xml',
+            'grab/uk_rt/lineups/freesathd.xml'
+                => 'tv_grab_uk_rt/lineups/freesathd.xml',
+            'grab/uk_rt/lineups/freesat.xml'
+                => 'tv_grab_uk_rt/lineups/freesat.xml',
+            'grab/uk_rt/lineups/freeviewhd.xml'
+                => 'tv_grab_uk_rt/lineups/freeviewhd.xml',
+            'grab/uk_rt/lineups/freeview.xml'
+                => 'tv_grab_uk_rt/lineups/freeview.xml',
+            'grab/uk_rt/lineups/saorview.xml'
+                => 'tv_grab_uk_rt/lineups/saorview.xml',
+            'grab/uk_rt/lineups/skyhd.xml'
+                => 'tv_grab_uk_rt/lineups/skyhd.xml',
+            'grab/uk_rt/lineups/sky.xml'
+                => 'tv_grab_uk_rt/lineups/sky.xml',
+            'grab/uk_rt/lineups/upcirelandhd.xml'
+                => 'tv_grab_uk_rt/lineups/upcirelandhd.xml',
+            'grab/uk_rt/lineups/upcireland.xml'
+                => 'tv_grab_uk_rt/lineups/upcireland.xml',
+            'grab/uk_rt/lineups/virginhd.xml'
+                => 'tv_grab_uk_rt/lineups/virginhd.xml',
+            'grab/uk_rt/lineups/virgin.xml'
+                => 'tv_grab_uk_rt/lineups/virgin.xml',
+
+            'grab/uk_rt/lineups/freeview.map'
+                => 'tv_grab_uk_rt/lineups/freeview.map',
+            'grab/uk_rt/lineups/freesat.map'
+                => 'tv_grab_uk_rt/lineups/freesat.map',
+            'grab/uk_rt/lineups/saorview.map'
+                => 'tv_grab_uk_rt/lineups/saorview.map',
+       },
        to_clean => [ 'grab/uk_rt/tv_grab_uk_rt' ],
        deps => [ 'grab/uk_rt/tv_grab_uk_rt' 
                     => [ 'grab/uk_rt/tv_grab_uk_rt.in' ] ],
