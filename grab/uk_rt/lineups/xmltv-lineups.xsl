@@ -5,7 +5,7 @@
 <xsl:template match="/">
 <html>
     <body>
-        <h2>Master Linuep for <xsl:value-of select="xmltv-lineups/xmltv-lineup/display-name"/></h2>
+        <h2>Master Lineup for <xsl:value-of select="xmltv-lineups/xmltv-lineup/display-name"/></h2>
             <table border="1">
                 <tr bgcolor="#9acd32">
                     <th>Preset</th>
