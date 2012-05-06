@@ -127,7 +127,7 @@ sub grab {
 	foreach my $cell (@cells) {
 	  if (my @programmes = $cell->look_down("class" => qr/^ohjelma/)) {
 	    foreach my $programme (@programmes) {
-	      my $title = $programme->look_down("class" => "nimi");
+	      my $title = $programme->look_down("class" => qr/^nimi/);
 	      my $time  = $programme->look_down("class" => "tvsel_aika");
 
 	      if ($title && $time &&
