@@ -349,8 +349,6 @@ my @opt_components
      { name => 'tv_grab_uk_rt',
        blurb => 'Grabber for UK and Ireland (Radio Times)',
        exes => [ 'grab/uk_rt/tv_grab_uk_rt' ],
-       pl_files => { 'grab/uk_rt/tv_grab_uk_rt.PL' 
-                        => 'grab/uk_rt/tv_grab_uk_rt' },
        share_files => { 
             'grab/uk_rt/channel_ids' 
                 => 'tv_grab_uk_rt/channel_ids',
@@ -403,10 +401,6 @@ my @opt_components
             'grab/uk_rt/lineups/saorview.map'
                 => 'tv_grab_uk_rt/lineups/saorview.map',
        },
-       to_clean => [ 'grab/uk_rt/tv_grab_uk_rt' ],
-       deps => [ 'grab/uk_rt/tv_grab_uk_rt' 
-                    => [ 'grab/uk_rt/tv_grab_uk_rt.in' ] ],
-       grab_need_share => [ 'uk_rt' ],
        prereqs => { 'HTTP::Cache::Transparent' => 1.0, 
                     'IO::Stringy'    => 0,
                     'LWP::UserAgent' => 0,
