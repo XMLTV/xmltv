@@ -16,9 +16,9 @@ use Getopt::Long; Getopt::Long::Configure('pass_through');
 #
 $SIG{__WARN__} = sub {
     for (my $msg = shift) {
-	$_ = "warning: something's wrong" if not defined;
-	warn $_
-	  unless /Argument .+ isn.t numeric in numeric lt .+MakeMaker.pm/;
+        $_ = "warning: something's wrong" if not defined;
+        warn $_
+          unless /Argument .+ isn.t numeric in numeric lt .+MakeMaker.pm/;
     }
 };
 
@@ -28,7 +28,7 @@ $SIG{__WARN__} = sub {
 #
 unless ($ExtUtils::MakeMaker::VERSION ge 6.21) {
     if (not grep /^PREFIX=/, @ARGV) {
-	warn "You may want to explicitly give PREFIX to work around MakeMaker bugs.\n";
+        warn "You may want to explicitly give PREFIX to work around MakeMaker bugs.\n";
     }
 }
 
@@ -60,12 +60,12 @@ my $opt_yes = 0;
 my $opt_default = 0;
 my $opt_components;
 my $opt_exclude;
-GetOptions('strict-deps'  => \$opt_strictdeps,	# be strict about dependencies
-	   yes            => \$opt_yes,		# answer yes to all questions
-   	   default        => \$opt_default,	# answer default to all questions
-	   'components=s' => \$opt_components,
-	   'exclude=s'	  => \$opt_exclude,
-	  );
+GetOptions('strict-deps'  => \$opt_strictdeps,  # be strict about dependencies
+           yes            => \$opt_yes,         # answer yes to all questions
+           default        => \$opt_default,     # answer default to all questions
+           'components=s' => \$opt_components,
+           'exclude=s'    => \$opt_exclude,
+          );
 
 our $VERSION;
 $VERSION = '0.5.61';
@@ -134,7 +134,7 @@ my %pm
      'lib/Ask.pm'                 => '$(INST_LIBDIR)/XMLTV/Ask.pm',
      'lib/Ask/Tk.pm'              => '$(INST_LIBDIR)/XMLTV/Ask/Tk.pm',
      'lib/Ask/Term.pm'            => '$(INST_LIBDIR)/XMLTV/Ask/Term.pm',
-     'lib/GUI.pm'                 => '$(INST_LIBDIR)/XMLTV/GUI.pm',     
+     'lib/GUI.pm'                 => '$(INST_LIBDIR)/XMLTV/GUI.pm',
      'lib/ProgressBar.pm'         => '$(INST_LIBDIR)/XMLTV/ProgressBar.pm',
      'lib/ProgressBar/None.pm'    => '$(INST_LIBDIR)/XMLTV/ProgressBar/None.pm',
      'lib/ProgressBar/Term.pm'    => '$(INST_LIBDIR)/XMLTV/ProgressBar/Term.pm',
@@ -178,12 +178,12 @@ my %prereqs
     );
 
 # Files which are run to generate source code.
-my %pl_files = ('filter/tv_grep.PL'     => 'filter/tv_grep',
-                'tools/tv_validate_file.PL'     => 'tools/tv_validate_file',
-                'tools/tv_validate_grabber.PL'     => 'tools/tv_validate_grabber',
-		'lib/XMLTV.pm.PL'       => 'lib/XMLTV.pm',
-		'lib/Supplement.pm.PL'     => 'lib/Supplement.pm',
-	       );
+my %pl_files = ('filter/tv_grep.PL' => 'filter/tv_grep',
+                'tools/tv_validate_file.PL' => 'tools/tv_validate_file',
+                'tools/tv_validate_grabber.PL' => 'tools/tv_validate_grabber',
+                'lib/XMLTV.pm.PL' => 'lib/XMLTV.pm',
+                'lib/Supplement.pm.PL' => 'lib/Supplement.pm',
+               );
 
 # Some tools which are generated from .PL files need the share/
 # directory passed as an extra argument.
@@ -203,14 +203,14 @@ my %share_files = ('xmltv.dtd' => 'xmltv.dtd',
 my @to_clean = ('filter/tv_grep',
                 'tools/tv_validate_file',
                 'tools/tv_validate_grabber',
-		'lib/XMLTV.pm', 'lib/Supplement.pm');
+                'lib/XMLTV.pm', 'lib/Supplement.pm');
 
 # Extra dependencies to add to the Makefile.
 my @deps = ('filter/tv_grep' => [ qw(filter/tv_grep.in pm_to_blib) ],
             'tools/tv_validate_file' => [ qw(tools/tv_validate_file.in) ],
             'tools/tv_validate_grabber' => [ qw(tools/tv_validate_grabber.in) ],
-	    'lib/XMLTV.pm' => [ 'lib/XMLTV.pm.in' ],
-	    'lib/Supplement.pm' => [ 'lib/Supplement.pm.in' ],
+            'lib/XMLTV.pm' => [ 'lib/XMLTV.pm.in' ],
+            'lib/Supplement.pm' => [ 'lib/Supplement.pm.in' ],
             );
 
 # Some grabbers which are generated from .PL files need the share/
@@ -295,7 +295,7 @@ my @opt_components
 #       blurb => 'Grabber for Brazil NET Cable',
 #       exes => [ 'grab/br_net/tv_grab_br_net' ],
 #       prereqs => { 'WWW::Mechanize' => 1.16 ,
-#		    'HTTP::Cookies' => 1.39 , }
+#                   'HTTP::Cookies' => 1.39 , }
 #     },
 
 # disabled since blocked by www.fernsehen.ch guys
@@ -313,31 +313,31 @@ my @opt_components
 #     { name     => 'tv_grab_ch_bluewin',
 #       blurb    => 'Grabber for Switzerland',
 #       exes     => [ 'grab/ch_bluewin/tv_grab_ch_bluewin' ],
-#       deps     => [ 'grab/ch_bluewin/tv_grab_ch_bluewin' 
-#       			=> [ 'grab/ch_bluewin/tv_grab_ch_bluewin.in' ] ],
-#       pl_files => { 'grab/ch_bluewin/tv_grab_ch_bluewin.PL' 
-#       			=> 'grab/ch_bluewin/tv_grab_ch_bluewin' },
+#       deps     => [ 'grab/ch_bluewin/tv_grab_ch_bluewin'
+#                               => [ 'grab/ch_bluewin/tv_grab_ch_bluewin.in' ] ],
+#       pl_files => { 'grab/ch_bluewin/tv_grab_ch_bluewin.PL'
+#                               => 'grab/ch_bluewin/tv_grab_ch_bluewin' },
 #       to_clean => [ 'grab/ch_bluewin/tv_grab_ch_bluewin' ],
-#       share_files => { 'grab/ch_bluewin/channel_ids' 
-#       			=> 'tv_grab_ch_bluewin/channel_ids' },
+#       share_files => { 'grab/ch_bluewin/channel_ids'
+#                               => 'tv_grab_ch_bluewin/channel_ids' },
 #       grab_need_share => [ 'ch_bluewin' ],
 #       prereqs => { 'HTML::Entities' => 1.27,
-#		    'HTML::TreeBuilder' => 0 },
+#                   'HTML::TreeBuilder' => 0 },
 #     },
-     
+
      { name     => 'tv_grab_ch_search',
-	   blurb    => 'Grabber for Switzerland',
-	   exes     => [ 'grab/ch_search/tv_grab_ch_search' ],
-	   deps     => [ 'grab/ch_search/tv_grab_ch_search' 
-	   	        => [ 'grab/ch_search/tv_grab_ch_search.in' ] ],
-	   pl_files => { 'grab/ch_search/tv_grab_ch_search.PL' 
-	   		    => 'grab/ch_search/tv_grab_ch_search' },
-	   to_clean => [ 'grab/ch_search/tv_grab_ch_search' ],
-#	   share_files => { 'grab/ch_search/channel_ids' 
-#	    	    => 'tv_grab_ch_search/channel_ids' },
-	   grab_need_share => [ 'ch_search' ],
-	   prereqs  => { 'HTML::Entities' => 1.27,
-	        'HTML::TreeBuilder' => 0 },
+           blurb    => 'Grabber for Switzerland',
+           exes     => [ 'grab/ch_search/tv_grab_ch_search' ],
+           deps     => [ 'grab/ch_search/tv_grab_ch_search'
+                        => [ 'grab/ch_search/tv_grab_ch_search.in' ] ],
+           pl_files => { 'grab/ch_search/tv_grab_ch_search.PL'
+                            => 'grab/ch_search/tv_grab_ch_search' },
+           to_clean => [ 'grab/ch_search/tv_grab_ch_search' ],
+#          share_files => { 'grab/ch_search/channel_ids'
+#                   => 'tv_grab_ch_search/channel_ids' },
+           grab_need_share => [ 'ch_search' ],
+           prereqs  => { 'HTML::Entities' => 1.27,
+                'HTML::TreeBuilder' => 0 },
      },
 
      { name => 'tv_grab_dtv_la',
@@ -349,12 +349,12 @@ my @opt_components
      { name => 'tv_grab_uk_rt',
        blurb => 'Grabber for UK and Ireland (Radio Times)',
        exes => [ 'grab/uk_rt/tv_grab_uk_rt' ],
-       share_files => { 
-            'grab/uk_rt/channel_ids' 
+       share_files => {
+            'grab/uk_rt/channel_ids'
                 => 'tv_grab_uk_rt/channel_ids',
-            'grab/uk_rt/prog_titles_to_process' 
+            'grab/uk_rt/prog_titles_to_process'
                 => 'tv_grab_uk_rt/prog_titles_to_process',
-            'grab/uk_rt/regional_channels_by_postcode' 
+            'grab/uk_rt/regional_channels_by_postcode'
                 => 'tv_grab_uk_rt/regional_channels_by_postcode',
             'grab/uk_rt/channels_platforms'
                 => 'tv_grab_uk_rt/channels_platforms',
@@ -401,7 +401,7 @@ my @opt_components
             'grab/uk_rt/lineups/saorview.map'
                 => 'tv_grab_uk_rt/lineups/saorview.map',
        },
-       prereqs => { 'HTTP::Cache::Transparent' => 1.0, 
+       prereqs => { 'HTTP::Cache::Transparent' => 1.0,
                     'IO::Stringy'    => 0,
                     'LWP::UserAgent' => 0,
                     'DateTime'       => 0,
@@ -457,7 +457,7 @@ my @opt_components
        exes => [ 'grab/it_dvb/tv_grab_it_dvb' ],
        pl_files => { 'grab/it_dvb/tv_grab_it_dvb.PL' => 'grab/it_dvb/tv_grab_it_dvb' },
        share_files => { 'grab/it_dvb/channel_ids' => 'tv_grab_it_dvb/channel_ids',
-		                'grab/it_dvb/sky_it.dict' => 'tv_grab_it_dvb/sky_it.dict',
+                        'grab/it_dvb/sky_it.dict' => 'tv_grab_it_dvb/sky_it.dict',
                         'grab/it_dvb/sky_it.themes' => 'tv_grab_it_dvb/sky_it.themes',
                    },
        to_clean => [ 'grab/it_dvb/tv_grab_it_dvb' ],
@@ -465,7 +465,7 @@ my @opt_components
        grab_need_share => [ 'it_dvb' ],
        prereqs => { 'Data::Dump' => 0,
                     'IO::Select' => 0,
-                    'Linux::DVB' => 0, 
+                    'Linux::DVB' => 0,
                     'Time::HiRes' => 0 } ,
      },
 
@@ -484,8 +484,8 @@ my @opt_components
        deps     => [ 'grab/na_dd/tv_grab_na_dd' => [ 'grab/na_dd/tv_grab_na_dd.in' ] ],
        to_clean => [ 'grab/na_dd/tv_grab_na_dd' ],
        prereqs => { 'SOAP::Lite' => 0.67,
-           		    'Term::ReadKey' => 0,
-                     'XML::Twig' => 3.28,		            },
+                            'Term::ReadKey' => 0,
+                     'XML::Twig' => 3.28,                           },
        grab_need_share => [ 'na_dd' ],
      },
 
@@ -505,25 +505,25 @@ my @opt_components
        blurb    => 'Grabber for Finland',
        exes     => [ 'grab/fi/tv_grab_fi' ],
        deps     => [
-		     'grab/fi/tv_grab_fi' => [
-					       'grab/fi/tv_grab_fi.pl',
-					       'grab/fi/fi/common.pm',
-					       'grab/fi/fi/day.pm',
-					       'grab/fi/fi/programme.pm',
-					       'grab/fi/fi/programmeStartOnly.pm',
-					       'grab/fi/fi/source/mtv3.pm',
-					       'grab/fi/fi/source/telkku.pm',
-					       'grab/fi/fi/source/telvis.pm',
-					       'grab/fi/fi/source/tvnyt.pm',
-					       'grab/fi/fi/source/yle.pm',
-					     ],
-		   ],
+                     'grab/fi/tv_grab_fi' => [
+                         'grab/fi/tv_grab_fi.pl',
+                         'grab/fi/fi/common.pm',
+                         'grab/fi/fi/day.pm',
+                         'grab/fi/fi/programme.pm',
+                         'grab/fi/fi/programmeStartOnly.pm',
+                         'grab/fi/fi/source/mtv3.pm',
+                         'grab/fi/fi/source/telkku.pm',
+                         'grab/fi/fi/source/telvis.pm',
+                         'grab/fi/fi/source/tvnyt.pm',
+                         'grab/fi/fi/source/yle.pm',
+                     ],
+                   ],
        pl_files => { 'grab/fi/merge.PL' => 'grab/fi/tv_grab_fi' },
        to_clean => [ 'grab/fi/tv_grab_fi' ],
        prereqs  => {
-		    'HTML::TreeBuilder' => 0,
-		    'Time::Local'       => 0,
-		   },
+                    'HTML::TreeBuilder' => 0,
+                    'Time::Local'       => 0,
+                   },
      },
 
 # 2012-03-16 no longer works and maintainer suggests to use _fi now which was extended to
@@ -573,7 +573,7 @@ my @opt_components
        prereqs => { 'HTML::TreeBuilder' => 0 },
      },
 
-# 2008-07-12 - removed by rmeden, not getting programs for a while. 
+# 2008-07-12 - removed by rmeden, not getting programs for a while.
 #
 #     { name => 'tv_grab_nl_wolf',
 #       blurb => 'Alternative grabber for the Netherlands',
@@ -584,16 +584,16 @@ my @opt_components
        blurb => 'Grabber for Hungary and Romania',
        exes => [ 'grab/huro/tv_grab_huro' ],
        pl_files => { 'grab/huro/tv_grab_huro.PL'
-		     => 'grab/huro/tv_grab_huro' },
+                     => 'grab/huro/tv_grab_huro' },
        share_files => { 'grab/huro/jobmap' => 'tv_grab_huro/jobmap',
-			         'grab/huro/catmap.hu' => 'tv_grab_huro/catmap.hu',
-			         'grab/huro/catmap.ro' => 'tv_grab_huro/catmap.ro',
-			         'grab/huro/catmap.sk' => 'tv_grab_huro/catmap.sk',
-			         'grab/huro/catmap.cz' => 'tv_grab_huro/catmap.cz',
+                        'grab/huro/catmap.hu' => 'tv_grab_huro/catmap.hu',
+                        'grab/huro/catmap.ro' => 'tv_grab_huro/catmap.ro',
+                        'grab/huro/catmap.sk' => 'tv_grab_huro/catmap.sk',
+                        'grab/huro/catmap.cz' => 'tv_grab_huro/catmap.cz',
                      },
        to_clean => [ 'grab/huro/tv_grab_huro' ],
        deps => [ 'grab/huro/tv_grab_huro'
-		 => [ 'grab/huro/tv_grab_huro.in' ] ],
+                 => [ 'grab/huro/tv_grab_huro.in' ] ],
        grab_need_share => [ 'huro' ],
        prereqs => { 'HTML::TreeBuilder' => 0 } },
 
@@ -622,20 +622,20 @@ my @opt_components
      #  blurb => 'Grabber for Japan',
      #  exes => [ 'grab/jp/tv_grab_jp' ],
      #  prereqs => { 'HTML::TreeBuilder' => 0,
-	#	    'Text::Kakasi' => 0 } },
+     #               'Text::Kakasi' => 0 } },
 
      { name => 'tv_grab_se_swedb',
        blurb => 'Grabber for Sweden',
        exes => [ 'grab/se_swedb/tv_grab_se_swedb' ],
        pl_files => { 'grab/se_swedb/tv_grab_se_swedb.PL'
-		     => 'grab/se_swedb/tv_grab_se_swedb' },
+                     => 'grab/se_swedb/tv_grab_se_swedb' },
        to_clean => [ 'grab/se_swedb/tv_grab_se_swedb' ],
        deps => [ 'grab/se_swedb/tv_grab_se_swedb'
-		 => [ 'grab/se_swedb/tv_grab_se_swedb.in' ] ],
+                 => [ 'grab/se_swedb/tv_grab_se_swedb.in' ] ],
        prereqs => { 'XML::LibXML' => 0,
                     'Compress::Zlib' => 0,
                     'IO::Stringy' => 0,
-		    'HTTP::Cache::Transparent' => 0,
+                    'HTTP::Cache::Transparent' => 0,
                   },
      },
 
@@ -643,14 +643,14 @@ my @opt_components
        blurb => 'Grabber for Croatia',
        exes => [ 'grab/hr/tv_grab_hr' ],
        pl_files => { 'grab/hr/tv_grab_hr.PL'
-		     => 'grab/hr/tv_grab_hr' },
+                     => 'grab/hr/tv_grab_hr' },
        to_clean => [ 'grab/hr/tv_grab_hr' ],
        deps => [ 'grab/hr/tv_grab_hr'
-		 => [ 'grab/se_swedb/tv_grab_se_swedb.in' ] ],
+                 => [ 'grab/se_swedb/tv_grab_se_swedb.in' ] ],
        prereqs => { 'XML::LibXML' => 0,
                     'Compress::Zlib' => 0,
                     'IO::Stringy' => 0,
-		    'HTTP::Cache::Transparent' => 0,
+                    'HTTP::Cache::Transparent' => 0,
                   },
      },
 
@@ -658,14 +658,14 @@ my @opt_components
        blurb => 'Grabber for Norway (gfeed.info)',
        exes => [ 'grab/no_gfeed/tv_grab_no_gfeed' ],
        pl_files => { 'grab/no_gfeed/tv_grab_no_gfeed.PL'
-		     => 'grab/no_gfeed/tv_grab_no_gfeed' },
+                     => 'grab/no_gfeed/tv_grab_no_gfeed' },
        to_clean => [ 'grab/no_gfeed/tv_grab_no_gfeed' ],
        deps => [ 'grab/no_gfeed/tv_grab_no_gfeed'
-		 => [ 'grab/se_swedb/tv_grab_se_swedb.in' ] ],
+                 => [ 'grab/se_swedb/tv_grab_se_swedb.in' ] ],
        prereqs => { 'XML::LibXML' => 0,
                     'Compress::Zlib' => 0,
                     'IO::Stringy' => 0,
-		    'HTTP::Cache::Transparent' => 0,
+                    'HTTP::Cache::Transparent' => 0,
                   },
      },
 
@@ -673,14 +673,14 @@ my @opt_components
        blurb => 'Grabber for german speaking area (Egon zappt)',
        exes => [ 'grab/eu_egon/tv_grab_eu_egon' ],
        pl_files => { 'grab/eu_egon/tv_grab_eu_egon.PL'
-		     => 'grab/eu_egon/tv_grab_eu_egon' },
+                     => 'grab/eu_egon/tv_grab_eu_egon' },
        to_clean => [ 'grab/eu_egon/tv_grab_eu_egon' ],
        deps => [ 'grab/eu_egon/tv_grab_eu_egon'
-		 => [ 'grab/se_swedb/tv_grab_se_swedb.in' ] ],
+                 => [ 'grab/se_swedb/tv_grab_se_swedb.in' ] ],
        prereqs => { 'XML::LibXML' => 0,
                     'Compress::Zlib' => 0,
                     'IO::Stringy' => 0,
-		    'HTTP::Cache::Transparent' => 0,
+                    'HTTP::Cache::Transparent' => 0,
                   },
      },
 
@@ -688,14 +688,14 @@ my @opt_components
        blurb => 'Grabber for Sweden (tvzon.se)',
        exes => [ 'grab/se_tvzon/tv_grab_se_tvzon' ],
        pl_files => { 'grab/se_tvzon/tv_grab_se_tvzon.PL'
-		     => 'grab/se_tvzon/tv_grab_se_tvzon' },
+                     => 'grab/se_tvzon/tv_grab_se_tvzon' },
        to_clean => [ 'grab/se_tvzon/tv_grab_se_tvzon' ],
        deps => [ 'grab/se_tvzon/tv_grab_se_tvzon'
-		 => [ 'grab/se_swedb/tv_grab_se_swedb.in' ] ],
+                 => [ 'grab/se_swedb/tv_grab_se_swedb.in' ] ],
        prereqs => { 'XML::LibXML' => 0,
                     'Compress::Zlib' => 0,
                     'IO::Stringy' => 0,
-		    'HTTP::Cache::Transparent' => 0,
+                    'HTTP::Cache::Transparent' => 0,
                   },
      },
 
@@ -703,7 +703,7 @@ my @opt_components
        blurb => 'Grabber for France',
        exes => [ 'grab/fr/tv_grab_fr' ],
        prereqs => { 'HTML::Entities' => 1.27,
-		    'HTML::TreeBuilder' => 0 },
+                    'HTML::TreeBuilder' => 0 },
      },
 
      { name => 'tv_grab_fr_kazer',
@@ -715,7 +715,7 @@ my @opt_components
 #
 # depreciate tv_grab_no as it is no longer supported (per author, cwattengard@gmail.com)
 # has been replaced by tv_grab_no_gfeed
-# 
+#
 #     { name => 'tv_grab_no',
 #       blurb => 'Grabber for Norway',
 #       exes => [ 'grab/no/tv_grab_no' ],
@@ -726,7 +726,7 @@ my @opt_components
        blurb => 'Grabber for Portugal',
        exes => [ 'grab/pt/tv_grab_pt' ],
        prereqs => { 'HTML::TreeBuilder' => 0,
-		  }
+                  }
      },
 
      { name => 'tv_grab_pt_meo',
@@ -767,12 +767,12 @@ my @opt_components
        blurb => 'Program to report exceptions and changes in a schedule',
        exes => [ 'choose/tv_check/tv_check' ],
        docs => [ qw(choose/tv_check/README.tv_check
-		    choose/tv_check/tv_check_doc.html
-		    choose/tv_check/tv_check_doc.jpg
-		   ) ],
+                    choose/tv_check/tv_check_doc.html
+                    choose/tv_check/tv_check_doc.jpg
+                   ) ],
        prereqs => { 'Tk' => 0,
-		    'Tk::TableMatrix' => 0,
-		  } },
+                    'Tk::TableMatrix' => 0,
+                  } },
 
      { name => 'tv_pick_cgi',
        blurb => 'CGI program to filter listings (to install manually)',
@@ -832,30 +832,30 @@ foreach my $info (@opt_components) {
     our %module_prereqs;
     local *module_prereqs = $info->{prereqs} || {};
     foreach (sort keys %module_prereqs) {
-	my $ver = $module_prereqs{$_};
-	next if test_module($_, $ver)->[0] eq 'OK';
-	warn "strange, module prereq $_ mentioned twice"
-	  if defined $modules_missing{$_};
-	$modules_missing{$_} = $ver;
+        my $ver = $module_prereqs{$_};
+        next if test_module($_, $ver)->[0] eq 'OK';
+        warn "strange, module prereq $_ mentioned twice"
+          if defined $modules_missing{$_};
+        $modules_missing{$_} = $ver;
     }
 
     our @special_prereqs;
     my %special_missing;
     local *special_prereqs = $info->{special_prereqs} || {};
     foreach (@special_prereqs) {
-	my ($sub, $name, $ver, $friendly_ver) = @$_;
-	next if test_special($sub, $ver)->[0] eq 'OK';
-	warn "strange, special prereq $name mentioned twice"
-	  if defined $special_missing{$name};
-	$special_missing{$name} = $friendly_ver;
+        my ($sub, $name, $ver, $friendly_ver) = @$_;
+        next if test_special($sub, $ver)->[0] eq 'OK';
+        warn "strange, special prereq $name mentioned twice"
+          if defined $special_missing{$name};
+        $special_missing{$name} = $friendly_ver;
     }
-	
+
     my %missing = (%modules_missing, %special_missing);
     if (not keys %missing) {
-	$info->{missing} = 0;
+        $info->{missing} = 0;
     }
     else {
-	$info->{missing} = \%missing;
+        $info->{missing} = \%missing;
     }
 }
 
@@ -887,70 +887,70 @@ END
 
     my $width = 0;
     foreach my $info (@opt_components) {
-	my $w = length("$info->{blurb} ($info->{name})");
-	$width = $w if $w > $width;
+        my $w = length("$info->{blurb} ($info->{name})");
+        $width = $w if $w > $width;
     }
     foreach my $info (@opt_components) {
-	my $missing = $info->{missing};
-	my $s = "$info->{blurb} ($info->{name})";
+        my $missing = $info->{missing};
+        my $s = "$info->{blurb} ($info->{name})";
 
-	# Guess a default value for {install} based on whether
-	# prerequisites were found.
-	#
-	$info->{install} = (not $info->{exclude}) && ($opt_yes || not $info->{missing});
+        # Guess a default value for {install} based on whether
+        # prerequisites were found.
+        #
+        $info->{install} = (not $info->{exclude}) && ($opt_yes || not $info->{missing});
 
-	print STDERR ($s, ' ' x (1 + $width - length $s),
-		      $info->{install} ? '[yes]' : '[no]',
-		      "\n");
+        print STDERR ($s, ' ' x (1 + $width - length $s),
+                      $info->{install} ? '[yes]' : '[no]',
+                      "\n");
     }
     print STDERR "\n";
     if (not ask(0, 'Do you want to proceed with this configuration?', 1)) {
-	# Need to set {install} for each component by prompting.
-	foreach my $info (@opt_components) {
-	    my $missing = $info->{missing};
-	    my $name = $info->{name};
-	    print STDERR "\n* $info->{blurb} ($name)\n\n";
-	    if ($missing) {
-		print STDERR "These dependencies are missing for $name:\n\n";
-		foreach (sort keys %$missing) {
-		    print STDERR "$_";
-		    my $min_ver = $missing->{$_};
-		    if ($min_ver) {
-			print STDERR " (version $min_ver or higher)";
-		    }
-		    print STDERR "\n";
-		}
-		print STDERR "\n";
-	    }
+        # Need to set {install} for each component by prompting.
+        foreach my $info (@opt_components) {
+            my $missing = $info->{missing};
+            my $name = $info->{name};
+            print STDERR "\n* $info->{blurb} ($name)\n\n";
+            if ($missing) {
+                print STDERR "These dependencies are missing for $name:\n\n";
+                foreach (sort keys %$missing) {
+                    print STDERR "$_";
+                    my $min_ver = $missing->{$_};
+                    if ($min_ver) {
+                        print STDERR " (version $min_ver or higher)";
+                    }
+                    print STDERR "\n";
+                }
+                print STDERR "\n";
+            }
 
-	    my $msg;
-	    my $type = $info->{type};
-	    if (not defined $type or $type eq 'install') {
-		$msg = "Do you wish to install $name?";
-	    } elsif ($type eq 'run') {
-		$msg = "Do you plan to run $name?";
-	    } else {
-		die;
-	    }
-	
-	    $info->{install} =
-	      ask(0, $msg, not $missing);
-	}
+            my $msg;
+            my $type = $info->{type};
+            if (not defined $type or $type eq 'install') {
+                $msg = "Do you wish to install $name?";
+            } elsif ($type eq 'run') {
+                $msg = "Do you plan to run $name?";
+            } else {
+                die;
+            }
+
+            $info->{install} =
+              ask(0, $msg, not $missing);
+        }
     }
 }
 else {
     my @to_install = split /\s+/, $opt_components;
     my %by_name;
     foreach (@opt_components) {
-	$by_name{$_->{name}} = $_;
-	$_->{install} = 0; # default if not mentioned
+        $by_name{$_->{name}} = $_;
+        $_->{install} = 0; # default if not mentioned
     }
     foreach (@to_install) {
-	my $i = $by_name{$_};
-	die "unknown component $_\n" if not $i;
-	$i->{install} = 1;
+        my $i = $by_name{$_};
+        die "unknown component $_\n" if not $i;
+        $i->{install} = 1;
     }
-}	
+}
 
 foreach my $info (@opt_components) {
     next if not $info->{install};
@@ -988,24 +988,24 @@ sub test_module( $$ ) {
     die if not defined $mod; die if not defined $minver;
     eval "require $mod";
     if ($@) {
-	# This if-test is separate to suppress spurious 'Use of
-	# uninitialized value in numeric lt (<)' warning.
-	#
-	if ($@ ne '') {
-	    if ($@ =~ /^Can\'t locate \S+\.pm in \@INC/) {
-		return [ 'NOT_INSTALLED', undef ];
-	    }
-	    else {
-		chomp (my $msg = $@);
-		return [ 'FAILED', $msg ];
-	    }
-	}
+        # This if-test is separate to suppress spurious 'Use of
+        # uninitialized value in numeric lt (<)' warning.
+        #
+        if ($@ ne '') {
+            if ($@ =~ /^Can\'t locate \S+\.pm in \@INC/) {
+                return [ 'NOT_INSTALLED', undef ];
+            }
+            else {
+                chomp (my $msg = $@);
+                return [ 'FAILED', $msg ];
+            }
+        }
     }
 
     my $ver = $mod->VERSION;
     if ($minver ne '0') {
-	return [ 'TOO_OLD', undef ] if not defined $ver;
-	return [ 'TOO_OLD', $ver ] if $ver lt $minver;
+        return [ 'TOO_OLD', undef ] if not defined $ver;
+        return [ 'TOO_OLD', $ver ] if $ver lt $minver;
     }
 
     return [ 'OK', undef ];
@@ -1027,8 +1027,8 @@ sub test_special( $$ ) {
     my $ver = $sub->();
     return [ 'NOT_INSTALLED', undef ] if not defined $ver;
     if ($minver ne '0') {
-	return [ 'TOO_OLD', undef ] if not defined $ver;
-	return [ 'TOO_OLD', $ver ] if $ver lt $minver;
+        return [ 'TOO_OLD', undef ] if not defined $ver;
+        return [ 'TOO_OLD', $ver ] if $ver lt $minver;
     }
     return [ 'OK', undef ];
 }
@@ -1046,35 +1046,35 @@ foreach my $p ((sort keys %prereqs), (sort keys %recommended)) {
     die "bad minver for $p" if not defined $minver;
     my ($r, $more) = @{test_module($p, $minver)};
     if ($r eq 'OK') {
-	# Installed and recent enough.
+        # Installed and recent enough.
     }
     elsif ($r eq 'NOT_INSTALLED') {
-	print STDERR "Module $p seems not to be installed.\n";
-	print(($minver ? "$p $minver" : $p), " is $verbed.\n");
-	++ $err if $required;
+        print STDERR "Module $p seems not to be installed.\n";
+        print(($minver ? "$p $minver" : $p), " is $verbed.\n");
+        ++ $err if $required;
     }
     elsif ($r eq 'FAILED') {
-	print STDERR "$Verbed module $p failed to load: $more\n";
-	print(($minver ? "$p $minver" : $p), " is $verbed.\n");
-	++ $err if $required;
+        print STDERR "$Verbed module $p failed to load: $more\n";
+        print(($minver ? "$p $minver" : $p), " is $verbed.\n");
+        ++ $err if $required;
     }
     elsif ($r eq 'TOO_OLD') {
-	if (defined $more) {
-	    print STDERR "$p-$minver is $verbed, but $more is installed\n";
-	}
-	else {
-	    print STDERR "$p-$minver is $verbed, but an unknown version is installed\n";
-	}
-	++ $err if $required;
+        if (defined $more) {
+            print STDERR "$p-$minver is $verbed, but $more is installed\n";
+        }
+        else {
+            print STDERR "$p-$minver is $verbed, but an unknown version is installed\n";
+        }
+        ++ $err if $required;
     }
     else { die }
 }
 if ($err) {
     if ($opt_strictdeps) {
-	die "Required modules missing.  Makefile will not be created.\n";
+        die "Required modules missing.  Makefile will not be created.\n";
     }
     else {
-	warn "Required modules missing, 'make' is unlikely to work\n";
+        warn "Required modules missing, 'make' is unlikely to work\n";
     }
 }
 
@@ -1108,17 +1108,17 @@ sub MY::install {
     #
     my %extra_deps = (install => [ 'plaindoc_install', 'share_install' ]);
     foreach my $t (keys %extra_deps) {
-	foreach my $d (@{$extra_deps{$t}}) {
-	    $inherited =~ s/^(\s*$t\s+::\s.+)/$1 $d/m or die;
-	}
+        foreach my $d (@{$extra_deps{$t}}) {
+            $inherited =~ s/^(\s*$t\s+::\s.+)/$1 $d/m or die;
+        }
     }
 
     foreach (qw(plaindoc share)) {
-	my $target = $_ . '_install';
-	my $uc = uc;
+        my $target = $_ . '_install';
+        my $uc = uc;
 
-	my $inst_var = "INST_$uc";
-	my $extra = <<END
+        my $inst_var = "INST_$uc";
+        my $extra = <<END
 # Add code to create the directory under blib/.
 \$($inst_var)/.exists :: \$(PERL_INC)/perl.h
 	\@\$(MKPATH) \$($inst_var)
@@ -1133,8 +1133,8 @@ $target ::
 
 END
   ;
-	$extra =~ s/ {8}/\t/g;
-	$inherited .= $extra;
+        $extra =~ s/ {8}/\t/g;
+        $inherited .= $extra;
     }
 
     # Remove existing non-working 'uninstall' target.
@@ -1144,24 +1144,24 @@ END
     # For each *_install create a corresponding _uninstall.
     my $targets = ::targets($inherited);
     foreach (qw(pure_perl_install pure_site_install plaindoc_install share_install)) {
-	die "no $_ in: $inherited" if not defined $targets->{$_};
-	my @t = @{$targets->{$_}}; # make a copy
-	my $done = 0;
-	foreach (@t) {
-	    if (s/\@\$\(MOD_INSTALL\)/\$(PERL) -I. -MUninstall -e "uninstall(\@ARGV)"/) {
-		$done = 1;
-		last;
-	    }
-	    s/Installing contents of (\S+) into (\S+)/Removing contents of $1 from $2/;
-	}
-	if (not $done) {
-	    print STDERR "couldn't find \@\$(MOD_INSTALL) in target $_, uninstall may not work\n"
-	      unless $warned_uninstall_broken;
-	}
-	(my $new_target = $_) =~ s/install$/uninstall/ or die;
-	foreach ("\n\n$new_target ::\n", @t) {
-	    $inherited .= $_;
-	}
+        die "no $_ in: $inherited" if not defined $targets->{$_};
+        my @t = @{$targets->{$_}}; # make a copy
+        my $done = 0;
+        foreach (@t) {
+            if (s/\@\$\(MOD_INSTALL\)/\$(PERL) -I. -MUninstall -e "uninstall(\@ARGV)"/) {
+                $done = 1;
+                last;
+            }
+            s/Installing contents of (\S+) into (\S+)/Removing contents of $1 from $2/;
+        }
+        if (not $done) {
+            print STDERR "couldn't find \@\$(MOD_INSTALL) in target $_, uninstall may not work\n"
+              unless $warned_uninstall_broken;
+        }
+        (my $new_target = $_) =~ s/install$/uninstall/ or die;
+        foreach ("\n\n$new_target ::\n", @t) {
+            $inherited .= $_;
+        }
     }
     $inherited .= 'pure_uninstall :: pure_$(INSTALLDIRS)_uninstall' . "\n";
     $inherited .= 'uninstall :: all pure_uninstall plaindoc_uninstall share_uninstall' . "\n";
@@ -1244,69 +1244,69 @@ sub MY::installbin {
     # Add a target for each documentation file.
     my %doc_files;
     foreach (@::docs) {
-	$doc_files{$_} = File::Basename::basename($_);
+        $doc_files{$_} = File::Basename::basename($_);
     }
 
     my %new_filetypes = (plaindoc => \%doc_files, share => \%share_files);
     my %seen_dir;
     foreach my $filetype (sort keys %new_filetypes) {
-	my $uc = uc $filetype;
-	our %files; local *files = $new_filetypes{$filetype};
-	foreach my $src (sort keys %files) {
-	    my $inst_pos = $files{$src};
-	    my $extra = '';
+        my $uc = uc $filetype;
+        our %files; local *files = $new_filetypes{$filetype};
+        foreach my $src (sort keys %files) {
+            my $inst_pos = $files{$src};
+            my $extra = '';
 
-	    # The directory containing this file in blib/ needs to be created.
-	    my @dirs = split m!/!, $inst_pos; pop @dirs;
-	    foreach (0 .. $#dirs) {
-		my $dir = join('/', @dirs[0 .. $_]);
-		my $parent = join('/', @dirs[0 .. $_-1]);
-		next if $seen_dir{$dir}++;
-		die if (length $parent and not $seen_dir{$parent});
-		my $parent_exists = "\$(INST_$uc)/$parent/.exists";
-		$parent_exists =~ tr!/!/!s;
-		$extra .= <<END
+            # The directory containing this file in blib/ needs to be created.
+            my @dirs = split m!/!, $inst_pos; pop @dirs;
+            foreach (0 .. $#dirs) {
+                my $dir = join('/', @dirs[0 .. $_]);
+                my $parent = join('/', @dirs[0 .. $_-1]);
+                next if $seen_dir{$dir}++;
+                die if (length $parent and not $seen_dir{$parent});
+                my $parent_exists = "\$(INST_$uc)/$parent/.exists";
+                $parent_exists =~ tr!/!/!s;
+                $extra .= <<END
 \$(INST_$uc)/$dir/.exists :: \$(PERL_INC)/perl.h $parent_exists
 	\@\$(MKPATH) \$(INST_$uc)/$dir
 	\@\$(EQUALIZE_TIMESTAMP) \$(PERL_INC)/perl.h \$(INST_$uc)/$dir/.exists
 	-\@\$(CHMOD) \$(PERM_RWX) \$(INST_$uc)/$dir
 END
   ;
-	    }
-	    my $dir_exists = "\$(INST_$uc)/" . join('/', @dirs) . '/.exists';
-	    $dir_exists =~ tr!/!/!s;
+            }
+            my $dir_exists = "\$(INST_$uc)/" . join('/', @dirs) . '/.exists';
+            $dir_exists =~ tr!/!/!s;
 
-	    $extra .= <<END
+            $extra .= <<END
 \$(INST_$uc)/$inst_pos: $src Makefile $dir_exists
 	\@\$(RM_F) \$(INST_$uc)/$inst_pos
 	perl -MExtUtils::Command -e cp $src \$(INST_$uc)/$inst_pos
 	-\@\$(CHMOD) \$(PERM_RW) \$(INST_$uc)/$inst_pos
 END
-	      ;
-	    $extra =~ s/ {8}/\t/g;
-	    $inherited .= $extra;
-	}
+              ;
+            $extra =~ s/ {8}/\t/g;
+            $inherited .= $extra;
+        }
 
-	# These targets need to be added to pure_all, using a new target
-	# pure_$filetype.
-	#
-	$inherited =~ s/^(\s*pure_all\s+::\s.+)/$1 pure_$filetype/m
-	  or die "no pure_all in: $inherited";
-	$inherited .= "pure_$filetype :: ";
-	foreach (sort keys %files) {
-	    my $inst_pos = $files{$_};
-	    $inherited .= "\$(INST_$uc)/$inst_pos ";
-	}
-	$inherited .= "\n\t\@\$(NOOP)\n";
-	
-	# And realclean should remove them, by calling realclean_$filetype.
-	$inherited =~ s/^(\s*realclean\s+::\s[^\\]+)/$1 realclean_$filetype /m or die;
-	$inherited .= "realclean_$filetype ::\n\t\$(RM_F) ";
-	foreach (sort keys %files) {
-	    my $inst_pos = $files{$_};
-	    $inherited .= "\$(INST_$uc)/$inst_pos ";
-	}
-	$inherited .= "\n";
+        # These targets need to be added to pure_all, using a new target
+        # pure_$filetype.
+        #
+        $inherited =~ s/^(\s*pure_all\s+::\s.+)/$1 pure_$filetype/m
+          or die "no pure_all in: $inherited";
+        $inherited .= "pure_$filetype :: ";
+        foreach (sort keys %files) {
+            my $inst_pos = $files{$_};
+            $inherited .= "\$(INST_$uc)/$inst_pos ";
+        }
+        $inherited .= "\n\t\@\$(NOOP)\n";
+
+        # And realclean should remove them, by calling realclean_$filetype.
+        $inherited =~ s/^(\s*realclean\s+::\s[^\\]+)/$1 realclean_$filetype /m or die;
+        $inherited .= "realclean_$filetype ::\n\t\$(RM_F) ";
+        foreach (sort keys %files) {
+            my $inst_pos = $files{$_};
+            $inherited .= "\$(INST_$uc)/$inst_pos ";
+        }
+        $inherited .= "\n";
     }
 
     return $inherited;
@@ -1330,9 +1330,9 @@ sub MY::processPL {
     # Add some exra dependencies.
     my ($k, $v);
     while (@deps) {
-	($k, $v, @deps) = @deps;
-	$inherited =~ s!^(\s*$k\s+::\s.+)!"$1 " . join(' ', @$v)!me
-	  or die "no $k in: $inherited";
+        ($k, $v, @deps) = @deps;
+        $inherited =~ s!^(\s*$k\s+::\s.+)!"$1 " . join(' ', @$v)!me
+          or die "no $k in: $inherited";
     }
 
     # And some of the .in generators need the share/ directory passed
@@ -1341,17 +1341,17 @@ sub MY::processPL {
     # no $(DESTDIR).
     #
     foreach (@grab_need_share) {
-	$inherited =~
-	  s<(grab/$_/tv_grab_$_.PL grab/$_/tv_grab_$_)\s*$>
-	    <$1 \$(PREFIX)/share/xmltv>m
-	    or die "no call to $_.PL in: $inherited";
+        $inherited =~
+          s<(grab/$_/tv_grab_$_.PL grab/$_/tv_grab_$_)\s*$>
+            <$1 \$(PREFIX)/share/xmltv>m
+            or die "no call to $_.PL in: $inherited";
     }
 
     foreach (@need_share) {
-	$inherited =~
-	  s<($_.PL $_)\s*$>
-	    <$1 \$(PREFIX)/share/xmltv>m
-	    or die "no call to $_.PL in: $inherited";
+        $inherited =~
+          s<($_.PL $_)\s*$>
+            <$1 \$(PREFIX)/share/xmltv>m
+            or die "no call to $_.PL in: $inherited";
     }
 
 
@@ -1368,11 +1368,11 @@ sub MY::makefile {
 sub MY::manifypods {
     package MY;
     for (my $inherited = shift->SUPER::manifypods(@_)) {
-	foreach my $s (qw(Grab_XML DST Config_file Get_nice Mode Summarize Gunzip GUI Date Supplement)) {
-	    s!\$\(INST_MAN3DIR\)/(?:grab::|)$s[.]\$\(MAN3EXT\)!"\$(INST_MAN3DIR)/XMLTV::$s.\$(MAN3EXT)"!;
-	    s!\$\(INSTALLMAN3DIR\)/$s.\$\(MAN3EXT\)!"\$(INSTALLMAN3DIR)/XMLTV::$s.\$(MAN3EXT)"!;
-	}
-	return $_;
+        foreach my $s (qw(Grab_XML DST Config_file Get_nice Mode Summarize Gunzip GUI Date Supplement)) {
+            s!\$\(INST_MAN3DIR\)/(?:grab::|)$s[.]\$\(MAN3EXT\)!"\$(INST_MAN3DIR)/XMLTV::$s.\$(MAN3EXT)"!;
+            s!\$\(INSTALLMAN3DIR\)/$s.\$\(MAN3EXT\)!"\$(INSTALLMAN3DIR)/XMLTV::$s.\$(MAN3EXT)"!;
+        }
+        return $_;
     }
 }
 
@@ -1383,26 +1383,26 @@ sub targets( $ ) {
     my %r;
     my $curr_target;
     foreach (@lines) {
-	if (/^(\S+)\s+:/) {
-	    # Beginning of a new target.
-	    my $name = $1;
-	    die "target $name seen twice" if defined $r{$name};
-	    $r{$name} = $curr_target = [];
-	}
-	elsif (/^\s+/ and defined $curr_target) {
-	    # Commands for the target.
-	    push @$curr_target, $_;
-	}
+        if (/^(\S+)\s+:/) {
+            # Beginning of a new target.
+            my $name = $1;
+            die "target $name seen twice" if defined $r{$name};
+            $r{$name} = $curr_target = [];
+        }
+        elsif (/^\s+/ and defined $curr_target) {
+            # Commands for the target.
+            push @$curr_target, $_;
+        }
         elsif (/^$/) {
             # Blank lines are legal in a target definition
         }
-	elsif (/^\s*(?:\#.*)?$/) {
-	    undef $curr_target;
-	}
-	else {
-	    chomp;
-	    die "bad makefile line: '$_'";
-	}
+        elsif (/^\s*(?:\#.*)?$/) {
+            undef $curr_target;
+        }
+        else {
+            chomp;
+            die "bad makefile line: '$_'";
+        }
     }
     return \%r;
 }
