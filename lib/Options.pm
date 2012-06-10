@@ -172,8 +172,8 @@ the preferredmethod option has been specified in the call to ParseOptions.
 =back
 
 ParseOptions also takes care of the following options without returning,
-by calling the stage_sub, listchannels_sub and listlineups_sub  callbacks 
-supplied by the grabber:
+by calling the stage_sub, listchannels_sub, list_lineups_sub and get_lineup_sub
+callbacks supplied by the grabber:
 
 =over
 
@@ -280,17 +280,16 @@ version of the grabber.
 
 Optional. A coderef that takes a configuration
 hash as returned by XMLTV::Configure::LoadConfig as the first parameter
-and an option hash as returned by ParseOptions as the second parameter, 
-and returns an xml-string containing a list of all the channel lineups 
-that the grabber can deliver data for using the supplied configuration. 
-Note that the listsub shall not use any channel-configuration from the 
-hashref.
+and an option hash as returned by ParseOptions as the second parameter,
+and returns an xml-string containing a list of all the channel lineups
+that the grabber can deliver data for using the supplied configuration.
+Note that the listsub shall not use any channel-configuration from the
+hashref. The xml-string shall follow the xmltv-lineups.xsd schema.
 
 =item get_lineup_sub
 
-Optional. A coderef that takes a lineup ID as a parameter and returns 
-an xml-string that describes the given lineup. The xml-string shall 
-follow the xmltv-lineup.dtd.
+Optional. A coderef that returns an xml-string describing the configured
+lineup. The xml-string shall follow the xmltv-lineups.xsd schema.
 
 =item preferredmethod
 
@@ -574,7 +573,7 @@ $en [--output FILE] [--quiet] [--debug]
         print qq/
 $gn --list-lineups [--output FILE]
 
-$gn --get-lineup [--output FILE]
+$gn --get-lineup [--config-file FILE] [--output FILE]
 /;
     }
 }
