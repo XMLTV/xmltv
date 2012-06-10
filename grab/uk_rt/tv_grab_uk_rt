@@ -24,9 +24,6 @@ use XML::LibXML; # used for lineups parsing/modification
 #################### TODO ####################
 ##############################################
 
-# - split out utf8 fixups into these which should always be applied
-#   and those which are optional (like misencoded chars)
-#
 # - wrap date/file tests in evals if there is a risk of failure
 #
 # - remove fixups from prog_titles_to_process that are now handled automatically
@@ -1000,9 +997,7 @@ sub write_listings_data {
         }
 
         # detect/correct UTF-8 errors in source data
-        if ($utf8_fixups_status eq 'enabled') {
-            $page = process_utf8_fixups($page, $rt_name, $rt_listings_uri);
-        }
+        $page = process_utf8_fixups($page, $rt_name, $rt_listings_uri);
 
         # Decode source UTF-8 octets, process for HTML entities, and encode
         # into configured output encoding
@@ -1938,85 +1933,91 @@ sub process_utf8_fixups {
         # We use a supplemental file to store these fixups to allow updating
         # without needing to update the grabber itself.
         #
-        # Unicode Replacement Character (U+FFFD)
-        # ======================================
-        #
-        # The UTF-8 source data may also contain the bytes [EF][BF][BD] which
-        # are the UTF-8 encoding of the Unicode Replacement Character U+FFFD.
-        # It is likely that these are introduced during preparation of the
-        # listings data by the Radio Times, as any characters that cannot be
-        # understood are replaced by this character.
-        #
-        t("    Looking for Unicode Replacement Character...");
-        if (m/\xEF\xBF\xBD/) {
-            if (%utf8_fixups && exists $utf8_fixups{'EFBFBD'}) {
-                foreach my $bad_chars (keys %{$utf8_fixups{'EFBFBD'}}) {
-                    my $replacement = $utf8_fixups{'EFBFBD'}{$bad_chars};
-                    # Search for the regex string and replace with char string
-                    if ($page =~ s/$bad_chars/$replacement/g) {
-                        t("      Replaced Unicode Replacement Character with \""
-                                . $replacement . "\"");
+        if ($utf8_fixups_status eq 'enabled') {
+
+            # Unicode Replacement Character (U+FFFD)
+            # ======================================
+            #
+            # The UTF-8 source data may also contain the bytes [EF][BF][BD] which
+            # are the UTF-8 encoding of the Unicode Replacement Character U+FFFD.
+            # It is likely that these are introduced during preparation of the
+            # listings data by the Radio Times, as any characters that cannot be
+            # understood are replaced by this character.
+            #
+            t("    Looking for Unicode Replacement Character...");
+            if (m/\xEF\xBF\xBD/) {
+                if (%utf8_fixups && exists $utf8_fixups{'EFBFBD'}) {
+                    foreach my $bad_chars (keys %{$utf8_fixups{'EFBFBD'}}) {
+                        my $replacement = $utf8_fixups{'EFBFBD'}{$bad_chars};
+                        # Search for the regex string and replace with char string
+                        if ($page =~ s/$bad_chars/$replacement/g) {
+                            t("      Replaced Unicode Replacement Character with \""
+                                    . $replacement . "\"");
+                        }
                     }
                 }
+                if ($page =~ s/\xEF\xBF\xBD/\x3F/g) {
+                    t("    After fixups, data for '$rt_name' still contains Unicode "
+                            . "Replacement character. Replaced with \"?\"\n");
+                    $hadEFBFBD{$rt_name} = $rt_listings_uri;
+                }
             }
-            if ($page =~ s/\xEF\xBF\xBD/\x3F/g) {
-                t("    After fixups, data for '$rt_name' still contains Unicode "
-                        . "Replacement character. Replaced with \"?\"\n");
-                $hadEFBFBD{$rt_name} = $rt_listings_uri;
+
+            # Double-encoded Unicode Replacement Character (6 bytes)
+            # ======================================================
+            #
+            # The correct encoding for the Unicode Replacement Character is
+            # [EF][BF][BD], however it has been seen double-encoded in the listings
+            # data as [C3][AF][C2][BF][C2][BD]. As with the normal replacement
+            # character, there is no way to determine which replacement character
+            # to use in this case, so we substitute a '?' char if we cannot handle
+            # the specific occurence. This error needs to have been seen at least
+            # once in source data to be able to construct a suitable fixup.
+            #
+            t("    Looking for double-encoded Unicode Replacement Character...");
+            if (m/\xC3\xAF\xC2\xBF\xC2\xBD/) {
+                if (%utf8_fixups && exists $utf8_fixups{'C3AFC2BFC2BD'}) {
+                    foreach my $bad_chars (keys %{$utf8_fixups{'C3AFC2BFC2BD'}}) {
+                        my $replacement = $utf8_fixups{'C3AFC2BFC2BD'}{$bad_chars};
+                        # Search for the regex string and replace with char string
+                        if ($page =~ s/$bad_chars/$replacement/g) {
+                            t("      Replaced double-encoded Unicode Replacement Character with \""
+                                    . $replacement . "\"");
+                        }
+                    }
+                }
+                if ($page =~ s/\xC3\xAF\xC2\xBF\xC2\xBD/\x3F/g) {
+                    t("    After fixups, data for '$rt_name' still contains "
+                        . "double-encoded Unicode Replacement character. "
+                        . "Replaced with \"?\"\n");
+                    $hadC3AFC2BFC2BD{$rt_name} = $rt_listings_uri;
+                }
+            }
+
+            # Mis-encoded characters in range [C2][80-9F]
+            # ===========================================
+            #
+            # Single characters that are seen in the source data as bytes in the
+            # range [C2][80-9F] that UTF-8 decode as non-printing characters
+            # instead of their intended character.
+            #
+            t("    Looking for mis-encoded characters in range [C2][80-9F]...");
+            if (m/\xC2[\x80-\x9F]/) {
+                if (%utf8_fixups && exists $utf8_fixups{'C2809F'}) {
+                    foreach my $bad_chars (keys %{$utf8_fixups{'C2809F'}}) {
+                        my $replacement = $utf8_fixups{'C2809F'}{$bad_chars};
+                        # Search for the regex string and replace with char string
+                        if ($page =~ s/$bad_chars/$replacement/g) {
+                            t("      Replaced mis-encoded characters \"" . $bad_chars
+                                    . "\" with \"". $replacement . "\"");
+                        }
+                    }
+                }
             }
         }
 
-        # Double-encoded Unicode Replacement Character (6 bytes)
-        # ======================================================
-        #
-        # The correct encoding for the Unicode Replacement Character is
-        # [EF][BF][BD], however it has been seen double-encoded in the listings
-        # data as [C3][AF][C2][BF][C2][BD]. As with the normal replacement
-        # character, there is no way to determine which replacement character
-        # to use in this case, so we substitute a '?' char if we cannot handle
-        # the specific occurence. This error needs to have been seen at least
-        # once in source data to be able to construct a suitable fixup.
-        #
-        t("    Looking for double-encoded Unicode Replacement Character...");
-        if (m/\xC3\xAF\xC2\xBF\xC2\xBD/) {
-            if (%utf8_fixups && exists $utf8_fixups{'C3AFC2BFC2BD'}) {
-                foreach my $bad_chars (keys %{$utf8_fixups{'C3AFC2BFC2BD'}}) {
-                    my $replacement = $utf8_fixups{'C3AFC2BFC2BD'}{$bad_chars};
-                    # Search for the regex string and replace with char string
-                    if ($page =~ s/$bad_chars/$replacement/g) {
-                        t("      Replaced double-encoded Unicode Replacement Character with \""
-                                . $replacement . "\"");
-                    }
-                }
-            }
-            if ($page =~ s/\xC3\xAF\xC2\xBF\xC2\xBD/\x3F/g) {
-                t("    After fixups, data for '$rt_name' still contains "
-                       . "double-encoded Unicode Replacement character. "
-                       . "Replaced with \"?\"\n");
-                $hadC3AFC2BFC2BD{$rt_name} = $rt_listings_uri;
-            }
-        }
-
-        # Mis-encoded characters in range [C2][80-9F]
-        # ===========================================
-        #
-        # Single characters that are seen in the source data as bytes in the
-        # range [C2][80-9F] that UTF-8 decode as non-printing characters
-        # instead of their intended character.
-        #
-        t("    Looking for mis-encoded characters in range [C2][80-9F]...");
-        if (m/\xC2[\x80-\x9F]/) {
-            if (%utf8_fixups && exists $utf8_fixups{'C2809F'}) {
-                foreach my $bad_chars (keys %{$utf8_fixups{'C2809F'}}) {
-                    my $replacement = $utf8_fixups{'C2809F'}{$bad_chars};
-                    # Search for the regex string and replace with char string
-                    if ($page =~ s/$bad_chars/$replacement/g) {
-                        t("      Replaced mis-encoded characters \"" . $bad_chars
-                                 . "\" with \"". $replacement . "\"");
-                    }
-                }
-            }
-        }
+        # With manual replacements handled above, finally remove any
+        # remaining bad/non-printing characters we find
 
         # Replacements for specific strings seen in source data
         # =====================================================
