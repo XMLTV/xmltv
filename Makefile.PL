@@ -340,11 +340,12 @@ my @opt_components
                 'HTML::TreeBuilder' => 0 },
      },
 
-     { name => 'tv_grab_dtv_la',
-       blurb => 'Grabber for Latin America',
-       exes => [ 'grab/dtv_la/tv_grab_dtv_la' ],
-       prereqs => { 'HTML::TreeBuilder' => 0,
-                    'HTML::Form'    => 0 } },
+# rmeden 2012-06-11 broken since 2010
+#     { name => 'tv_grab_dtv_la',
+#       blurb => 'Grabber for Latin America',
+#       exes => [ 'grab/dtv_la/tv_grab_dtv_la' ],
+#       prereqs => { 'HTML::TreeBuilder' => 0,
+#                    'HTML::Form'    => 0 } },
 
      { name => 'tv_grab_uk_rt',
        blurb => 'Grabber for UK and Ireland (Radio Times)',
@@ -562,16 +563,18 @@ my @opt_components
        exes => [ 'grab/es_laguiatv/tv_grab_es_laguiatv' ],
        prereqs => { 'HTML::TreeBuilder' => 0 } },
 
-     { name => 'tv_grab_es_miguiatv',
-       blurb => 'Alternative grabber for Spain using miguiatv.com',
-       exes => [ 'grab/es_miguiatv/tv_grab_es_miguiatv' ],
-       prereqs => { 'HTML::TreeBuilder' => 0 } },#
+# rmeden 2012-06-11 broken since 2012-03-29
+#     { name => 'tv_grab_es_miguiatv',
+#       blurb => 'Alternative grabber for Spain using miguiatv.com',
+#       exes => [ 'grab/es_miguiatv/tv_grab_es_miguiatv' ],
+#       prereqs => { 'HTML::TreeBuilder' => 0 } },#
 
-     { name => 'tv_grab_nl',
-       blurb => 'Grabber for the Netherlands',
-       exes => [ 'grab/nl/tv_grab_nl' ],
-       prereqs => { 'HTML::TreeBuilder' => 0 },
-     },
+# rmeden 2012-06-11 hasn't worked since 2012-03-06 community switch to python
+#            { name => 'tv_grab_nl',
+#       blurb => 'Grabber for the Netherlands',
+#       exes => [ 'grab/nl/tv_grab_nl' ],
+#       prereqs => { 'HTML::TreeBuilder' => 0 },
+#     },
 
 # 2008-07-12 - removed by rmeden, not getting programs for a while.
 #
@@ -722,12 +725,13 @@ my @opt_components
 #       prereqs => { 'HTML::Entities' => 1.27 },
 #     },
 
-     { name => 'tv_grab_pt',
-       blurb => 'Grabber for Portugal',
-       exes => [ 'grab/pt/tv_grab_pt' ],
-       prereqs => { 'HTML::TreeBuilder' => 0,
-                  }
-     },
+# rmeden 2012-06-11 hasn't worked since 2012-01-30
+#     { name => 'tv_grab_pt',
+#       blurb => 'Grabber for Portugal',
+#       exes => [ 'grab/pt/tv_grab_pt' ],
+#       prereqs => { 'HTML::TreeBuilder' => 0,
+#                  }
+#     },
 
      { name => 'tv_grab_pt_meo',
        blurb => 'Grabber for Portugal (MEO)',
@@ -780,10 +784,11 @@ my @opt_components
        type => 'run',
      },
 
-     { name => 'tv_grab_ee',
-       blurb => 'Grabber for Estonia',
-       exes => [ 'grab/ee/tv_grab_ee' ],
-       prereqs => { 'LWP::Simple' => 0 } },
+# rmeden 2012-06-11 broken since 2011-11-25
+#     { name => 'tv_grab_ee',
+#       blurb => 'Grabber for Estonia',
+#       exes => [ 'grab/ee/tv_grab_ee' ],
+#       prereqs => { 'LWP::Simple' => 0 } },
 
 # rmeden 2011-06-12 not working
 #    { name => 'tv_grab_re',
