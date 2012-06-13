@@ -577,8 +577,6 @@ with the string C<TO>. The strings must be enclosed in single quotes (C<'>) or
 double quotes (C<">). The title mapping occurs before the C<series> command
 processing.
 
-=back
-
 =item B<title strip parental level>
 
 At the beginning of 2012 some programme descriptions started to include
