@@ -1,0 +1,130 @@
+#!/usr/bin/perl
+
+=pod
+
+=head1 NAME
+
+tv_augment_tz - Convert floating time to explicit time.
+
+=head1 SYNOPSIS
+
+tv_augment_tz [--help] [--output FILE] [--tz TIMEZONE] [FILE...]
+
+=head1 DESCRIPTION
+
+Read XMLTV data and augment all times with the correct offset. Times that are
+already explicit will be converted to TIMEZONE as well.
+
+B<--output FILE> write to FILE rather than standard output
+
+B<--tz TIMEZONE> use TIMEZONE (e.g. Europe/Berlin) rather then the default of UTC
+
+=head1 SEE ALSO
+
+L<xmltv(5)>.
+
+=head1 AUTHOR
+
+Karl Dietz, <dekarl@spaetfruehstuecken.org>
+
+=head1 BUGS
+
+Guessing the right time when local time is abigous doesn't work properly.
+
+=cut
+
+use strict;
+use warnings;
+
+use XMLTV::Version '$Id$';
+
+use Encode; # used to convert 'perl strings' into 'utf-8 strings'
+use DateTime;
+use Getopt::Long;
+use XML::LibXML;
+
+use XMLTV;
+use XMLTV::Usage <<END
+$0: Convert floating local time to explicit local time.
+usage: $0 [--help] [--output FILE] [--tz TIMEZONE] [FILE...]
+END
+;
+
+
+my ($opt_help, $opt_output, $opt_tz);
+GetOptions('help' => \$opt_help,
+           'output=s' => \$opt_output,
+	   'tz=s' => \$opt_tz
+)
+  or usage(0);
+usage(1) if $opt_help;
+@ARGV = ('-') if not @ARGV;
+
+if (!defined ($opt_tz)) {
+  $opt_tz = 'UTC';
+}
+
+sub parse_date ( $ ) {
+  my $raw = shift;
+  my ($datetime, $tz) = split (/\s/, $raw);
+
+  my ($year, $month, $day, $hour, $minute, $second) = (0, 0, 0, 0, 0, 0);
+
+  if (length ($datetime) == 4+2+2+2+2+2) {
+    ($year, $month, $day, $hour, $minute, $second) = ($datetime =~ m|(\d\d\d\d)(\d\d)(\d\d)(\d\d)(\d\d)(\d\d)|);
+  } elsif (length ($datetime) == 4+2+2+2+2) {
+    ($year, $month, $day, $hour, $minute) = ($datetime =~ m|(\d\d\d\d)(\d\d)(\d\d)(\d\d)(\d\d)|);
+  } elsif (length ($datetime) == 4+2+2+2) {
+    ($year, $month, $day, $hour, $minute) = ($datetime =~ m|(\d\d\d\d)(\d\d)(\d\d)(\d\d)|);
+  } elsif (length ($datetime) == 4+2+2) {
+    ($year, $month, $day, $hour, $minute) = ($datetime =~ m|(\d\d\d\d)(\d\d)(\d\d)|);
+  } elsif (length ($datetime) == 4+2) {
+    ($year, $month, $day, $hour, $minute) = ($datetime =~ m|(\d\d\d\d)(\d\d)|);
+  } elsif (length ($datetime) == 4) {
+    ($year, $month, $day, $hour, $minute) = ($datetime =~ m|(\d\d\d\d)|);
+  }
+
+  my $dt = DateTime->new (
+    year      => $year,
+    month     => $month,
+    day       => $day,
+    hour      => $hour,
+    minute    => $minute,
+    second    => $second
+  );
+
+  if ($tz) {
+    $dt->set_time_zone ($tz);
+  }
+
+  return $dt;
+}
+
+# load XML
+if ($ARGV[0]) {
+  open *STDIN, '<', $ARGV[0];
+}
+binmode *STDIN; # drop all PerlIO layers possibly created by a use open pragma
+my $doc = XML::LibXML->load_xml(IO => *STDIN);
+
+my $starttimes = $doc->findnodes ('/tv/programme[@start]');
+foreach my $node ($starttimes->get_nodelist ()) {
+  my $time = $node->getAttribute ('start');
+  $time = parse_date ($time)->set_time_zone ($opt_tz)->strftime ('%Y%m%d%H%M%S %z');
+  $node->setAttribute('start', $time);
+}
+
+my $stoptimes = $doc->findnodes ('/tv/programme[@stop]');
+foreach my $node ($stoptimes->get_nodelist ()) {
+  my $time = $node->getAttribute ('stop');
+  $time = parse_date ($time)->set_time_zone ($opt_tz)->strftime ('%Y%m%d%H%M%S %z');
+  $node->setAttribute('stop', $time);
+}
+
+# save modified XML
+if ($opt_output) {
+  open *STDOUT, '>', $opt_output;
+}
+binmode *STDOUT; # as above
+$doc->toFH(*STDOUT);
+

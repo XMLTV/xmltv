@@ -107,7 +107,8 @@ our @docs;
 
 # Executables to be installed.
 my @exes
-  = qw(filter/tv_extractinfo_en
+  = qw(filter/tv_augment_tz
+       filter/tv_extractinfo_en
        filter/tv_extractinfo_ar
        filter/tv_grep
        filter/tv_sort
