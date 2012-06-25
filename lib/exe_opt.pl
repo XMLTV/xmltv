@@ -27,6 +27,7 @@ print '-nologo
 -add "DateTime::TimeZone::Europe::Berlin"
 -add "DateTime::TimeZone::Europe::Copenhagen"
 -add "DateTime::TimeZone::Europe::Helsinki"
+-add "DateTime::TimeZone::Europe::London"
 -add "DateTime::TimeZone::Europe::Lisbon"
 -add "DateTime::TimeZone::Europe::Madrid"
 -add "DateTime::TimeZone::Europe::Paris"
