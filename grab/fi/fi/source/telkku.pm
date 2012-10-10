@@ -35,7 +35,7 @@ sub channels {
     #
     # Channel list can be found from the left sidebar
     #
-    # <div id="channelList">
+    # <div class="l-wrap l-grid--16" id="channelContainer">
     #   ...
     #   <ul>
     #     <li><a href="http://www.telkku.com/channel/list/8/20101218">4 Sport</a></li>
@@ -46,7 +46,7 @@ sub channels {
     #   </ul>
     # </div>
     #
-    if (my $container = $root->look_down("id" => "channelList")) {
+    if (my $container = $root->look_down("id" => "channelContainer")) {
       if (my @list = $container->find("li")) {
 	debug(2, "Source telkku.com found " . scalar(@list) . " channels");
 	foreach my $list_entry (@list) {
@@ -154,44 +154,49 @@ sub grab {
     #
     # All program info is contained within a unsorted list with class "programList"
     #
-    #  <ul class="programList">
+    #  <ul class="l-stack programList">
     #   <li>
-    #    <span class="programDate"><a href="http://www.telkku.com/program/show/2010112621451">23:45&nbsp;Uutisikkuna</a></span><br />
-    #    <span class="programDescription">...</span>
+    #    <a class="program" href="http://www.telkku.com/program/show/2012100920451">
+    #     <div class="theme-hr program__content">
+    #      <div class="program__desc">
+    #       <div class="h4 program__title">23:45&nbsp;Uutisikkuna</div>
+    #       <div class="progrram__desc">...</div>
+    #      </div>
+    #     </div>
+    #    </a>
     #   </li>
     #   ...
     #  </ul>
     #
     my $opaque = startProgrammeList();
-    if (my $container = $root->look_down("class" => "programList")) {
+    if (my $container = $root->look_down("class" => "l-stack programList")) {
       if (my @list = $container->find("li")) {
 	foreach my $list_entry (@list) {
-	  my $date = $list_entry->look_down("class", "programDate");
-	  my $desc = $list_entry->look_down("class", "programDescription");
-	  if ($date && $desc) {
-	    my $link = $date->find("a");
-	    if ($link) {
+	  my $link  = $list_entry->look_down("class", "program");
+	  my $title = $list_entry->look_down("class", "h4 program__title");
+	  my $desc  = $list_entry->look_down("class", "progrram__desc");
+	  if ($link && $title && $desc) {
+	    my $date;
 
-	      # Extract texts from HTML elements. Entities are already decoded.
-	      $date = $link->as_text();
-	      $desc = $desc->as_text();
+	    # Extract texts from HTML elements. Entities are already decoded.
+	    $date = $title->as_text();
+	    $desc = $desc->as_text();
 
-	      # Use "." to match &nbsp; character (it's not included in \s?)
-	      if (my($hour, $minute, , $title) =
-		  $date =~ /^(\d{2}):(\d{2}).(.+)/) {
-		my $href     = $link->attr("href");
-		my $category = (defined($href) && exists($movie_ids->{$href})) ?
-		    "elokuvat" : undef;
+	    # Use "." to match &nbsp; character (it's not included in \s?)
+	    if (my($hour, $minute, $title) =
+		$date =~ /^(\d{2}):(\d{2}).(.+)/) {
+	      my $href     = $link->attr("href");
+	      my $category = (defined($href) && exists($movie_ids->{$href})) ?
+		  "elokuvat" : undef;
 
-		debug(3, "List entry $channel ($hour:$minute) $title");
-		debug(4, $desc);
-		debug(4, $category) if defined $category;
+	      debug(3, "List entry $channel ($hour:$minute) $title");
+	      debug(4, $desc);
+	      debug(4, $category) if defined $category;
 
-		# Only record entry if title isn't empty
-		appendProgramme($opaque, $hour, $minute, $title, $category,
-				$desc)
-		  if length($title) > 0;
-	      }
+	      # Only record entry if title isn't empty
+	      appendProgramme($opaque, $hour, $minute, $title, $category,
+			      $desc)
+		if length($title) > 0;
 	    }
 	  }
 	}
