@@ -639,6 +639,7 @@ sub findMovieInfo($$$$)
 		    return($info); 
 		}
 		elsif ( $info->{qualifier} eq "video_game" ) {
+		    next;
 		}
 		elsif ( $info->{qualifier} eq "tv_series" ) {
 		}
@@ -687,6 +688,7 @@ sub findMovieInfo($$$$)
 			return($info); 
 		    }
 		    elsif ( $info->{qualifier} eq "video_game" ) {
+			next;
 		    }
 		    elsif ( $info->{qualifier} eq "tv_series" ) {
 		    }
@@ -739,6 +741,7 @@ sub findMovieInfo($$$$)
 		    }
 		    elsif ( $info->{qualifier} eq "video_game" ) {
 			$self->status("ignoring close hit on video-game \"$info->{key}\"");
+			next;
 		    }
 		    elsif ( $info->{qualifier} eq "tv_series" ) {
 			$self->status("ignoring close hit on tv series \"$info->{key}\"");
@@ -831,6 +834,7 @@ sub findTVSeriesInfo($$)
 		}
 		elsif ( $info->{qualifier} eq "video_game" ) {
 		    #$self->status("ignoring close hit on made-for-video-movie \"$info->{key}\"");
+		    next;
 		}
 		elsif ( $info->{qualifier} eq "tv_series" ) {
 		    $idInfo=$info;
@@ -2603,7 +2607,9 @@ sub invokeStage($$)
 		    $qualifier="video_movie";
 		}
 		elsif ( $dbkey=~s/\s+\(VG\)$//o ) {
-		    $qualifier="video_game";
+		    #$qualifier="video_game";
+		    delete($movies{$key});
+		    next;
 		}
 		else {
 		    $qualifier="movie";
