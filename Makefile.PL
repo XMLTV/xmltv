@@ -471,13 +471,14 @@ my @opt_components
                     'Time::HiRes' => 0 } ,
      },
 
-     { name     => 'tv_grab_in',
-       blurb => 'Grabber for India (zipazap.com)',
-       exes     => [ 'grab/in/tv_grab_in' ],
-       prereqs => { 'XML::LibXML' => 0,
-                    'IO::Scalar' => 0,
-                  },
-     },
+# 2013-05-13 xmltv feed disabled by What's On due to TOS violations. It may come back
+#     { name     => 'tv_grab_in',
+#       blurb => 'Grabber for India (zipazap.com)',
+#       exes     => [ 'grab/in/tv_grab_in' ],
+#       prereqs => { 'XML::LibXML' => 0,
+#                    'IO::Scalar' => 0,
+#                  },
+#     },
 
      { name     => 'tv_grab_na_dd',
        blurb => '$$ Grabber for North America-schedulesdirect.org',
