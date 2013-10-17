@@ -119,6 +119,8 @@ my @exes
        filter/tv_split
        filter/tv_imdb
        filter/tv_remove_some_overlapping
+       filter/tv_count
+			 filter/tv_merge
        tools/tv_validate_grabber
        tools/tv_validate_file
        tools/tv_find_grabbers
@@ -422,6 +424,82 @@ my @opt_components
        deps => [ 'grab/uk_bleb/tv_grab_uk_bleb' => [ 'grab/uk_bleb/tv_grab_uk_bleb.in' ] ],
        grab_need_share => [ 'uk_bleb' ],
        prereqs => { 'IO::Stringy' => 0, 'Archive::Zip' => 0 },
+     },
+
+     { name => 'tv_grab_uk_atlas',
+       blurb => 'Fast grabber for UK and Ireland using Atlas database',
+       exes => [ 'grab/uk_atlas/tv_grab_uk_atlas' ],
+       share_files => {
+            'grab/uk_atlas/CHANGELOG'
+                => 'tv_grab_uk_atlas/CHANGELOG',
+            'grab/uk_atlas/INSTALL'
+                => 'tv_grab_uk_atlas/INSTALL',
+            'grab/uk_atlas/TODO'
+                => 'tv_grab_uk_atlas/TODO',
+            'grab/uk_atlas/atlasAPIkey'
+                => 'tv_grab_uk_atlas/atlasAPIkey',
+            'grab/uk_atlas/tv_grab_uk_atlas.map.conf'
+                => 'tv_grab_uk_atlas/tv_grab_uk_atlas.map.conf',
+            'grab/uk_atlas/tv_grab_uk_atlas.map.genre.conf'
+                => 'tv_grab_uk_atlas/tv_grab_uk_atlas.map.genre.conf',
+            'grab/uk_atlas/tv_grab_uk_atlas.map.SAMPLE.conf'
+                => 'tv_grab_uk_atlas/tv_grab_uk_atlas.map.SAMPLE.conf',
+            'grab/uk_atlas/cgi-bin/getatlas.pl'
+                => 'tv_grab_uk_atlas/cgi-bin/getatlas.pl',
+       },
+       prereqs => { 'HTTP::Cache::Transparent' => 1.0,
+                    'LWP::UserAgent'  => 0,
+										'HTTP::Cookies'   => 0,
+										'JSON::PP'				=> 0,
+                    'DateTime'				=> 0,
+                    'DateTime::Parse'	=> 0,
+                    'Encode' 					=> 0,
+                    'URI::Escape' 		=> 0,	
+                    'File::Path'  		=> 0,	
+										'Data::Dumper'		=> 0, },
+     },
+
+     { name => 'tv_grab_uk_guardian',
+       blurb => 'Grabber for UK and Ireland using The Guardian website',
+       exes => [ 'grab/uk_guardian/tv_grab_uk_guardian' ],
+       share_files => {
+            'grab/uk_guardian/CHANGELOG'
+                => 'tv_grab_uk_guardian/CHANGELOG',
+            'grab/uk_guardian/DISCLAIMER'
+                => 'tv_grab_uk_guardian/DISCLAIMER',
+            'grab/uk_guardian/INSTALL'
+                => 'tv_grab_uk_guardian/INSTALL',
+            'grab/uk_guardian/TODO'
+                => 'tv_grab_uk_guardian/TODO',
+            'grab/uk_guardian/tv_grab_uk_guardian.map.conf'
+                => 'tv_grab_uk_guardian/tv_grab_uk_guardian.map.conf',
+       },
+       prereqs => { 'HTTP::Cache::Transparent' => 1.0,
+                    'DateTime'        => 0,
+                    'Encode' 					=> 0, },
+     },
+
+     { name => 'tv_grab_uk_tvguide',
+       blurb => 'Grabber for UK and Ireland using TV Guide website',
+       exes => [ 'grab/uk_tvguide/tv_grab_uk_tvguide' ],
+       share_files => {
+            'grab/uk_tvguide/CHANGELOG'
+                => 'tv_grab_uk_tvguide/CHANGELOG',
+            'grab/uk_tvguide/DISCLAIMER'
+                => 'tv_grab_uk_tvguide/DISCLAIMER',
+            'grab/uk_tvguide/INSTALL'
+                => 'tv_grab_uk_tvguide/INSTALL',
+            'grab/uk_tvguide/TODO'
+                => 'tv_grab_uk_tvguide/TODO',
+            'grab/uk_tvguide/tv_grab_uk_tvguide.map.conf'
+                => 'tv_grab_uk_tvguide/tv_grab_uk_tvguide.map.conf',
+       },
+       prereqs => { 'HTTP::Cache::Transparent' => 1.0,
+                    'DateTime'				=> 0,
+                    'DateTime::Format::DateParse'	=> 0,
+                    'Encode' 					=> 0,
+                    'URI::Escape' 		=> 0,	
+										'Data::Dumper'		=> 0, },
      },
 
 # 2008-11-09 disabled after ident string was blocked
