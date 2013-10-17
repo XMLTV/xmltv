@@ -1,0 +1,985 @@
+#!/usr/bin/perl -w
+#
+# Copyright G. Westcott - February 2013
+#
+# This code is distributed under the GNU General Public License v2 (GPLv2) .
+#
+# 
+
+my $_version 	= '$Id$';
+
+
+eval 'exec /usr/bin/perl -w -S $0 ${1+"$@"}'
+    if 0; # not running under some shell
+
+use Data::Dumper;
+
+use strict;
+use warnings;
+use XMLTV::ProgressBar;
+use XMLTV::Options qw/ParseOptions/;
+use XMLTV::Configure::Writer;
+use XMLTV::Get_nice qw(get_nice_tree);
+
+use POSIX qw(strftime);
+use DateTime;
+use DateTime::Format::DateParse;
+use Encode;
+use URI::Escape;
+
+use HTTP::Cache::Transparent;
+
+
+#require HTTP::Cookies;
+#my $cookies = HTTP::Cookies->new;
+#$XMLTV::Get_nice::ua->cookie_jar($cookies);
+
+
+# Although we use HTTP::Cache::Transparent, this undocumented --cache
+# option for debugging is still useful since it will _always_ use a
+# cached copy of a page, without contacting the server at all.
+#
+use XMLTV::Memoize; XMLTV::Memoize::check_argv('XMLTV::Get_nice::get_nice_aux');
+
+use subs qw(t warning);
+my $warnings = 0;
+
+# ------------------------------------------------------------------------------------------------------------------------------------- #
+# Grabber details
+my $VERSION 								= $_version;
+my $GRABBER_NAME 						= 'tv_grab_uk_tvguide';
+my $GRABBER_DESC 						= 'UK - TV Guide (tvguide.co.uk)';
+my $GRABBER_URL 						= 'http://wiki.xmltv.org/index.php/XMLTVProject';
+my $ROOT_URL                = 'http://www.tvguide.co.uk/';
+my $SOURCE_NAME							= 'TV Guide UK';
+my $SOURCE_URL							= 'http://www.tvguide.co.uk/';
+#
+my $generator_info_name 		= $GRABBER_NAME;
+my $generator_info_url 			= $GRABBER_URL;
+my $source_info_name				= $SOURCE_NAME;
+my $source_info_url					= $SOURCE_URL;
+
+
+
+# ------------------------------------------------------------------------------------------------------------------------------------- #
+# Use XMLTV::Options::ParseOptions to parse the options and take care of the basic capabilities that a tv_grabber should
+my ($opt, $conf) = ParseOptions({ 
+			grabber_name 			=> $GRABBER_NAME,
+			capabilities 			=> [qw/baseline manualconfig apiconfig cache/],
+			stage_sub 				=> \&config_stage,
+			listchannels_sub 	=> \&fetch_channels,
+			version 					=> $VERSION,
+			description 			=> $GRABBER_DESC,
+			extra_options			=> [qw/info/]
+});
+
+#print Dumper($conf); exit;
+
+# options.pm hi-jacks the --help arg and creates its own POD synopsis!  This means we can't tell people about our added
+#  parameters.  I would posit that's a bug.  Let's allow '--info' to replace it.
+if ($opt->{'info'}) {
+	use Pod::Usage;
+  pod2usage(-verbose => 2);
+	exit 1;
+}
+
+# any overrides?
+if (defined( $conf->{'generator-info-name'} )) { $generator_info_name = $conf->{'generator-info-name'}->[0]; }
+if (defined( $conf->{'generator-info-url'} ))  { $generator_info_url  = $conf->{'generator-info-url'}->[0]; }
+if (defined( $conf->{'source-info-name'} )) 	 { $source_info_name 		= $conf->{'source-info-name'}->[0]; }
+if (defined( $conf->{'source-info-url'} ))  	 { $source_info_url 		= $conf->{'source-info-url'}->[0]; }
+
+
+
+# ------------------------------------------------------------------------------------------------------------------------------------- #
+# Initialise the web page cache
+init_cachedir( $conf->{cachedir}->[0] );
+HTTP::Cache::Transparent::init( { 
+    BasePath => $conf->{cachedir}->[0],
+    NoUpdate => 60*60,			# cache time in seconds
+		MaxAge => 24,						# flush time in hours
+    Verbose => $opt->{debug},
+} );
+
+
+# ------------------------------------------------------------------------------------------------------------------------------------- #
+# Check we have all our required conf params
+config_check();
+
+# Load the conf file containing mapped channels and categories information
+my %mapchannelhash;
+my %mapcategoryhash;
+loadmapconf();
+#print Dumper(\%mapchannelhash, \%mapcategoryhash); exit;
+
+
+
+# ------------------------------------------------------------------------------------------------------------------------------------- #
+# Progress Bar :)
+my $bar = new XMLTV::ProgressBar({
+  name => "Fetching listings",
+  count => (scalar @{$conf->{channel}}) * ($opt->{days} + 1)		# +1 added for the extra day necessary for <06:00 programmes
+}) unless ($opt->{quiet} || $opt->{debug});
+
+
+
+# ------------------------------------------------------------------------------------------------------------------------------------- #
+# Data store before being written as XML
+my $programmes = ();
+my $channels = ();
+
+# Get the schedule(s) from TV Guide
+fetch_listings();
+
+# print Dumper($programmes);
+
+# Progress Bar
+$bar->finish() && undef $bar if defined $bar;
+
+
+
+# ------------------------------------------------------------------------------------------------------------------------------------- #
+# Filter out programmes outside of requested period (see man page)
+my %w_args;
+if (($opt->{offset} != 0) || ($opt->{days} != -999)) {
+  $w_args{offset} = $opt->{offset};
+  $w_args{days} = ($opt->{days} == -999) ? 100 : $opt->{days};
+  $w_args{cutoff} = '000000';			# e.g. '060000'
+}
+
+
+
+# ------------------------------------------------------------------------------------------------------------------------------------- #
+# Generate the XML
+my $encoding = 'UTF-8';
+my $credits = { 'generator-info-name' => $generator_info_name,
+								'generator-info-url' 	=> $generator_info_url,
+								'source-info-name' 		=> $source_info_name,
+								'source-info-url' 		=> $source_info_url };
+	
+XMLTV::write_data([ $encoding, $credits, $channels, $programmes ], %w_args);
+# Finished!
+
+
+
+# ------------------------------------------------------------------------------------------------------------------------------------- #
+# Signal that something went wrong if there were warnings.
+exit(1) if $warnings;
+
+# All data fetched ok.
+t "Exiting without warnings.";
+exit(0);
+
+
+# #############################################################################
+# # THE MEAT #####################################################################
+# ------------------------------------------------------------------------------------------------------------------------------------- #
+
+sub fetch_listings {
+		# Fetch listings per channel
+		
+		foreach my $channel_id (@{$conf->{channel}}) {
+			# Officially:
+			# http://www.tvguide.co.uk/channellisting.asp?cTime=3%2F19%2F2013+06%3A00%3A00+&ch=857&go=go
+			# But this works too:
+			# http://www.tvguide.co.uk/channellisting.asp?ch=86&cTime=3/18/2013
+			
+			my $baseurl = $ROOT_URL.'channellisting.asp';
+			
+			# Now grab listings for each channel on each day, according to the options in $opt
+			#
+			# tvguide runs from 06:00 so we need to get the previous day as well just for any programmes after midnight
+			#
+			for (my $i=($opt->{offset} -1); $i < ($opt->{offset} + $opt->{days}); $i++) {
+				my $theday = DateTime->today->add (days => $i)->set_time_zone('Europe/London');
+			
+				# Construct the listings url
+				my $url = $baseurl . '?ch=' . $channel_id . '&cTime=' . uri_escape( $theday->strftime('%m/%d/%Y 00:00:00') );
+				#		print $url ."\n";
+
+				# If we need to map the fetched channel_id to a different value
+				my $xmlchannel_id = $channel_id;
+				if (defined(&map_channel_id)) { $xmlchannel_id = map_channel_id($channel_id); }
+				
+				# Fetch the page
+				my $tree = XMLTV::Get_nice::get_nice_tree($url, \&utf8);
+				# $tree->dump; exit;
+
+				# Scrub the page
+				if ($tree) {
+					my $channelname = $tree->look_down('_tag' => 'option', 'value' => $channel_id);
+					$channelname = $channelname->as_text;
+					
+					# 	<table border="0" cellpadding="0" style="background:black;border-collapse: collapse;background-image: url(http://i.g8.tv/HighlightImages/Large/);background-repeat: no-repeat;" width="677">
+
+					my @shows = $tree->look_down('_tag' => 'table', 'border' => '0', 'cellpadding' => '0', 'style' => qr/background:\s*black;border-collapse:\s*collapse;/);
+					
+					if (@shows) {
+						foreach my $show (@shows) {
+							#		$show->dump;
+							
+							# are we processing yesterday's schedule? (see above)
+							if ($i == ($opt->{offset} -1)) {
+								my $showstart = $show->look_down('_tag' => 'span', 'class' => 'tvchannel');
+								my ($h, $i, $a) = $showstart->as_text =~ /(\d*):(\d*)(am|pm)/;
+								if ($a eq 'am' && ($h < 6 || $h == 12)) {
+									# continue processing of pre-6am programme
+								} else {
+									next;
+								}
+								$showstart = $h = $i = $a = undef;
+							}
+							
+							my %prog = ();
+								
+							my $showtime;
+							
+							# see if we have a details page
+							#		<a href="javascript:popup(151361219);" ...
+							#		http://www.tvguide.co.uk/detail.asp?id=151451760
+							my $webdetails = $show->look_down('_tag' => 'a', 'href' => qr/javascript:popup/);
+							my $href = $webdetails->attr('href');
+							my ($id) = $href =~ /javascript:popup\((\d*)\);/;
+							$url = $ROOT_URL . 'detail.asp?id=' . $id;
+							# Fetch the page
+							my $treedetail = XMLTV::Get_nice::get_nice_tree($url, \&utf8);
+							
+							# 	<table border="0" cellpadding="0" style="background:black;border-collapse: collapse;background-image: url(http://i.g8.tv/logobackgrounds/857.jpg); background-repeat: no-repeat;" width="677" height="258px" id="table3" >		
+					
+							my $showdetail = $treedetail->look_down('_tag' => 'table', 'border' => '0', 'cellpadding' => '0', 'style' => qr/background:\s*black;border-collapse:\s*collapse;/);						
+							#	$showdetail->dump;
+							
+							if ($showdetail) {
+								# Details page contains Director names and a better list of Actors
+								
+								# Whitespace between the <span>s stops right() working so we'll try a different approach.  All the data we want are in <span> tags, so we'll
+								#	extract them into a new tree
+								my (@spans) = $showdetail->as_HTML =~ /(<span.*?\/span>)/g;
+								my $spans = join('', @spans);
+								my $treespans = HTML::TreeBuilder->new_from_content($spans);
+								# $treespans->dump;
+								
+								# v---- this code is geting ugly... should convert it an array-based loop   ###########
+								
+								# director
+								# 	<span class="role">Director</span> <span class="actor">Anthony Page</span></a><br>
+								my $showdirector = $treespans->look_down('_tag' => 'span', 'class' => 'role', sub { $_[0]->as_text =~ /^Director/ } );
+								if ($showdirector) {
+									$showdirector = $showdirector->right;
+									#$showdirector = $showdirector->right if ($showdirector->tag eq 'a');
+									if ($showdirector->tag eq 'span' && $showdirector->attr('class') eq 'actor') {
+										if ($showdirector->as_text) {
+											foreach ( split(', ', $showdirector->as_text) ) {
+												push @{$prog{'credits'}{'director'}}, $_;
+											}
+										}
+									}
+									$showdirector->detach;
+								}
+								
+								#	producer
+								my $showproducer = $treespans->look_down('_tag' => 'span', 'class' => 'role', sub { $_[0]->as_text =~ /^Producer/ } );
+								if ($showproducer) {
+									$showproducer = $showproducer->right;
+									#$showproducer = $showproducer->right if ($showproducer->tag eq 'a');
+									if ($showproducer->tag eq 'span' && $showproducer->attr('class') eq 'actor') {
+										if ($showproducer->as_text) {
+											foreach ( split(', ', $showproducer->as_text) ) {
+												push @{$prog{'credits'}{'producer'}}, $_;
+											}
+										}
+									}
+									$showproducer->detach;
+								} else {
+									$showproducer = $treespans->look_down('_tag' => 'span', 'class' => 'role', sub { $_[0]->as_text =~ /^Series Producer/ } );
+									if ($showproducer) {
+										$showproducer = $showproducer->right;
+										#$showproducer = $showproducer->right if ($showproducer->tag eq 'a');
+										if ($showproducer->tag eq 'span' && $showproducer->attr('class') eq 'actor') {
+											if ($showproducer->as_text) {
+												foreach ( split(', ', $showproducer->as_text) ) {
+													push @{$prog{'credits'}{'producer'}}, $_;
+												}
+											}
+										}
+										$showproducer->detach;
+									}
+								}
+								
+								#	 writer
+								my $showwriter = $treespans->look_down('_tag' => 'span', 'class' => 'role', sub { $_[0]->as_text =~ /^Writer/ } );
+								if ($showwriter) {
+									$showwriter = $showwriter->right;
+									#$showwriter = $showwriter->right if ($showwriter->tag eq 'a');
+									if ($showwriter->tag eq 'span' && $showwriter->attr('class') eq 'actor') {
+										if ($showwriter->as_text) {
+											foreach ( split(', ', $showwriter->as_text) ) {
+												push @{$prog{'credits'}{'writer'}}, $_;
+											}
+										}
+									}
+									$showwriter->detach;
+								}
+								
+								#	drop the "Series Producer" (if it's still present)
+								$showproducer = $treespans->look_down('_tag' => 'span', 'class' => 'role', sub { $_[0]->as_text =~ /^Series Producer/ } );
+								if ($showproducer) { 
+									$showproducer = $showproducer->right;
+									$showproducer->detach; 
+								}
+								
+								#	drop the "Executive Producer"
+								$showproducer = $treespans->look_down('_tag' => 'span', 'class' => 'role', sub { $_[0]->as_text =~ /^Executive Producer/ } );
+								if ($showproducer) { 
+									$showproducer = $showproducer->right;
+									$showproducer->detach; 
+								}
+								
+								#		all the "role" left should be Actors
+								my @showactors = $treespans->look_down('_tag' => 'span', 'class' => 'actor');
+								if (scalar @showactors > 0) {
+									foreach my $showactor (@showactors) {
+										if ($showactor->as_text ne '(IMDB)') { 	# ignore IMDB link spans
+											push @{$prog{'credits'}{'actor'}}, $showactor->as_text;
+										}
+									}
+								}
+								
+								#	rating 		i.e. "Certificate"
+								my $showcertificate = $treespans->look_down('_tag' => 'span', 'class' => 'tvchannel', sub { $_[0]->as_text =~ /Certificate/ } );
+								if ($showcertificate) {
+									$showcertificate = $showcertificate->right;
+									if ($showcertificate->tag eq 'span' && $showcertificate->attr('class') eq 'programmetext') {
+										if ($showcertificate->as_text) {
+											$prog{'rating'} = [[ $showcertificate->as_text, 'BBFC' ]]
+										}
+									}
+									$showcertificate->detach;
+								}
+								
+								
+								# TVG fetcher needs stop time (actually an optional DTD element)
+								#		<span class="datetime">10:00am-11:50am <span class=programmetext> (1 hour 50 minutes)</span> Wed 20 Mar</span>
+								# (use the Date provided to avoid issues with the site running from 06:00-06:00)
+								#
+								# Note site displays stop time wrong on GMT/BST changeover, e.g.:
+								#			12:45am-1:10am (25 minutes) Sun 31 Mar
+								# 	this should be 12:45am-2:10am (BST)
+								# 	this makes $showtime->set barf on "invalid local time for date in timezone"
+								#
+								my $showtimes = $treedetail->look_down('_tag' => 'span', 'class' => 'datetime');
+								if ($showtimes) {
+									my ($h, $i, $a, $h2, $i2, $a2, $dt) = $showtimes->as_text =~ /(\d*):(\d*)(am|pm)(?:-(\d*):(\d*)(am|pm))?\s*(?:\(.*\))?\s*(.*)$/;
+									if ($dt) {
+										 $showtime = DateTime::Format::DateParse->parse_datetime( $dt, 'Europe/London' );
+									} else {
+										 $showtime = $theday->clone;
+									}
+									$h  += 12 if $a  eq 'pm' && $h   < 12;		# e.g. 12:30pm means 12:30 !
+									$h  -= 12 if $a  eq 'am' && $h  == 12;		# e.g. 12:30am means 00:30 !
+									$h2 += 12 if $a2 eq 'pm' && $h2  < 12;	
+									$h2 -= 12 if $a2 eq 'am' && $h2 == 12;	
+									$showtime->set(hour => $h, minute => $i, second => 0);
+									$prog{'start'} = $showtime->strftime("%Y%m%d%H%M%S %z");
+									if (defined $h2 && $h2 >= 0) {
+										$showtime->add (days => 1) if $h2 < $h; 
+										# see note above re errors with GMT/BST transition
+										eval {				# try
+											$showtime->set(hour => $h2, minute => $i2, second => 0);
+										} or do {			# catch
+											$showtime->add (minutes => 5);	# we must give TVG *something*
+										}
+									} else {
+										$showtime->add (minutes => 5);	# we must give TVG *something*
+									}
+									$prog{'stop'} = $showtime->strftime("%Y%m%d%H%M%S %z");
+								}
+								
+								
+								undef $treespans;
+							}	# end showdetail
+								
+								
+							# channel
+							$prog{'channel'} = $xmlchannel_id;
+							
+							# title (mandatory)
+							#		<span class="programmeheading">Baywatch</span>
+							my $showtitle = $show->look_down('_tag' => 'span', 'class' => 'programmeheading');
+							$prog{'title'} = [[ encode( 'utf-8', decode( 'windows-1255', $showtitle->as_text)), 'en' ]];
+							$showtitle->detach;
+							
+							
+							# Note: <span class="tvchannel"> is used by StartTime then SubTitle then Category then Subtitles/B&W/etc
+							
+							# start (mandatory)
+							#		<span class="tvchannel">3:00pm </span>
+							# (don't add it even we already have it from the detail page but we still need to delete it from the tree)
+							my $showstart = $show->look_down('_tag' => 'span', 'class' => 'tvchannel');
+							if (!$prog{'start'}) {
+								my ($h, $i, $a) = $showstart->as_text =~ /(\d*):(\d*)(am|pm)/;
+								$h += 12 if $a eq 'pm' && $h  < 12;		# e.g. 12:30pm means 12:30 !
+								$h -= 12 if $a eq 'am' && $h == 12;		# e.g. 12:30am means 00:30 !
+								$showtime = $theday->clone;
+								$showtime->set(hour => $h, minute => $i, second => 0);
+								$showtime->add (days => 1) if ($h < 6);		# site runs from 06:00-06:00 so anything <06:00 is for tomorrow
+								$prog{'start'} = $showtime->strftime("%Y%m%d%H%M%S %z");
+								$showtime->add (minutes => 5);				# we must give TVG *something*
+								$prog{'stop'} = $showtime->strftime("%Y%m%d%H%M%S %z");	# do.
+							}
+							$showstart->detach;
+							
+							# category
+							#		<span class="tvchannel">Category </span><span class="programmetext">General Movie/Drama</span>
+							my $showcategory = $show->look_down('_tag' => 'span', 'class' => 'tvchannel', sub { $_[0]->as_text =~ /Category/ } );
+							if ($showcategory) {
+								$showcategory = $showcategory->right;
+								my @showcategory = split(/\//, $showcategory->as_text);
+								my @showcategories = ();
+								foreach my $category (@showcategory) {
+									# category translation?
+									if (defined(&map_category)) { $category = map_category($category); }
+									if ($category =~ /\|/) { 
+										foreach my $cat (split(/\|/, $category)) { push @showcategories, $cat unless grep(/$cat/, @showcategories); }
+									} elsif ($category ne '') {
+										push @showcategories, $category unless grep(/$category/, @showcategories);
+									}
+								}
+								foreach my $category (@showcategories) {
+									#
+									# GJW - TVG can currently only cope with 1 category so if we have >1 + Drama then drop Drama
+									#					plus only output 1 (it concatenates >1 so *nothing* matches if >1
+									#
+									#	if (scalar @showcategories > 1 && $category eq 'Drama') { next; }
+									push @{$prog{'category'}}, [ $category, 'en' ];
+									#	last; # GJW
+								}
+								$showcategory->left->detach;
+							}
+							
+							# desc
+							#		<span class="programmetext">Dissolving bikinis cause a stir on the beach</span>
+							my $showdesc = $show->look_down('_tag' => 'span', 'class' => 'programmetext');
+							if ($showdesc) {
+								$showdesc = $showdesc->as_text;
+								$showdesc .= '.' if ( (length $showdesc) && (substr $showdesc,-1,1 ne '.') );	# addend a fullstop
+								if (length $showdesc) {
+									$prog{'desc'} = [[ encode( 'utf-8', decode( 'windows-1255', $showdesc)), 'en' ]];
+								}
+							}
+
+							# year
+							# 	strip this off the title e.g. "A Useful Life (2010)"
+							my ($showyear) = $prog{'title'}->[0][0] =~ /.*\((\d\d\d\d)\)$/;
+							if ($showyear) {
+								$prog{'date'} = $showyear;
+								# assume anything with a year is a film - add Films category group
+								# GJW - TVG can currently only cope with 1 category so don't!		# push @{$prog{'category'}}, [ 'Films', 'en' ];
+							}
+							
+							# flags
+							# 		<span class='tvchannel'>(Subtitles)</span> <span class='tvchannel'>(Black &amp; White)</span>
+							my $showflags = $show->look_down('_tag' => 'span', 'class' => 'tvchannel', sub { $_[0]->as_text =~ /Subtitles/ } );
+							if ($showflags) {
+								push @{$prog{'subtitles'}}, {'type' => 'teletext'};
+								$showflags->detach;
+							}
+							$showflags = $show->look_down('_tag' => 'span', 'class' => 'tvchannel', sub { $_[0]->as_text =~ /Audio Described/ } );
+							if ($showflags) {
+								push @{$prog{'subtitles'}}, {'type' => 'deaf-signed'};
+								$showflags->detach;
+							}
+							$showflags = $show->look_down('_tag' => 'span', 'class' => 'tvchannel', sub { $_[0]->as_text =~ /Repeat/ } );
+							if ($showflags) {
+	#	push @{$prog{'previously-shown'}}, {};
+								$prog{'previously-shown'} = {};
+								$showflags->detach;
+							}
+							my $showvideo = $show->look_down('_tag' => 'span', 'class' => 'tvchannel', sub { $_[0]->as_text =~ /Black & White/ } );
+							if ($showvideo) {
+								$prog{'video'}->{'colour'} = '0';
+								$showvideo->detach;
+							}
+							#if ($showflags && $showflags->as_text =~ '\[REP\]') {
+							#	push @{$prog{'previously-shown'}}, {};
+							#}
+						
+						
+							# episode number
+							# 	<span class="season">Season 2 </span> <span class="season">Episode 3 of 22</span>
+							my @showepisode = $show->look_down('_tag' => 'span', 'class' => 'season');
+							my $showepisode;
+							foreach my $el (@showepisode) { 
+								$showepisode .= $el->as_text;
+							}
+							if ($showepisode) {
+								my ($showsxx, $showexx, $showeof) = ( $showepisode =~ /^(?:(?:Series|Season) (\d+)(?:[., :]+)?)?(?:Episode (\d+)(?: of (\d+))?)?/ );
+								# scan the description for any "Part x of x." info
+								my ($showpxx, $showpof) = ('', '');
+								($showpxx, $showpof) = ( $showdesc =~ /Part (one|two|three|four|five|six|seven|eight|nine|\d+)(?: of (one|two|three|four|five|six|seven|eight|nine|\d+))?/ ) if ($showdesc);
+								my $showepnum = make_ns_epnum($showsxx, $showexx, $showeof, $showpxx, $showpof);
+								if ($showepnum && $showepnum ne '...') {
+									$prog{'episode-num'} = [[ $showepnum, 'xmltv_ns' ]];
+								}
+								#print "--$showepnum-- ".$showepisode->as_text."\n";
+							}
+							
+							# episode title
+							# 	<span class="tvchannel">The Fabulous Buchannon Boys</span>
+							my $showeptitle = $show->look_down('_tag' => 'span', 'class' => 'tvchannel');
+							if ($showeptitle) {
+								$prog{'sub-title'} = [[ encode( 'utf-8', decode( 'windows-1255', $showeptitle->as_text)), 'en' ]];
+								$showeptitle->detach;
+							}
+						
+							# director						
+							# never seen one but let's assume they're in the description
+							if (!$prog{'credits'}->{'director'}) {
+								if ($showdesc) {
+									my ($directors) = ( $showdesc =~ /(?:Directed by|Director) ([^\.]*)\.?/ );
+									if ($directors) {
+										$directors =~ s/ (with|and) /,/ig;
+										$directors =~ s/ (singer|actor|actress) //ig;			# strip these words
+										$directors =~ s/,,/,/g;	# delete empties
+										#print $directors."\n";
+										my @directors = split(/,/, $directors);
+										s{^\s+|\s+$}{}g foreach @directors;	# strip leading & trailing spaces
+										$prog{'credits'}->{'director'} = \@directors  if (scalar @directors > 0);
+									}
+								}
+							}
+							
+							# actors
+							# these are buried in the description  :-(
+							if (!$prog{'credits'}->{'actor'}) {			
+								if ($showdesc) {
+									my ($actors) = ( $showdesc =~ /(?:starring)([^\.]*)\.?/i );
+									if ($actors) {
+										$actors =~ s/ (also|starring|with|and) /,/ig;		# may be used to separate names
+										$actors =~ s/ (singer|actor|actress) //ig;			# strip these words
+										$actors =~ s/,,/,/g;	# delete empties
+										#print $actors."\n";
+										my @actors = split(/,/, $actors);
+										s{^\s+|\s+$}{}g foreach @actors;	# strip leading & trailing spaces
+										$prog{'credits'}->{'actor'} = \@actors  if (scalar @actors > 0);
+									}
+								}
+							}
+							
+							# rating
+							#		<span class="programmetext">Rating<br></span><span class="programmeheading">3.9</span>
+							my $showrating = $show->look_down('_tag' => 'span', 'class' => 'programmetext', sub { $_[0]->as_text =~ /Rating/ } );
+							if ($showrating) {
+								$showrating = $showrating->right;
+								$showrating = $showrating->right if ($showrating->tag eq 'br');
+								if ($showrating->tag eq 'span' && $showrating->attr('class') eq 'programmeheading') {
+									if ($showrating->as_text) {
+										$prog{'star-rating'} =  [ $showrating->as_text . '/10' ];
+									}
+								}
+							}
+							
+				
+							# print Dumper \%prog;
+							push(@{$programmes}, \%prog);
+						}
+						
+
+					} else {
+						# no schedule found
+						warning 'No schedule found';
+					}
+					
+					undef @shows;
+					
+					# Add to the channels hash
+					$channels->{$channel_id} = { 'id'=> $xmlchannel_id , 'display-name' => [[$channelname, 'en']]  };
+
+				} else {
+					# tree conversion failed
+					warning 'Could not parse the page';
+				}
+
+				$bar->update if defined $bar;
+			}
+		}
+}
+
+
+# #############################################################################
+# # THE VEG ######################################################################
+# ------------------------------------------------------------------------------------------------------------------------------------- #
+
+sub make_ns_epnum {
+		# Convert an episode number to its xmltv_ns compatible - i.e. reset the base to zero
+		# Input = series number, episode number, total episodes,  part number, total parts,
+		#  e.g. "1, 3, 6, 2, 4" >> "0.2/6.1/4",    "3, 4" >> "2.3."
+		#
+		my ($s, $e, $e_of, $p, $p_of) = @_;
+		#	print Dumper(@_);
+
+		# "Part x of x" may contaain integers or words (e.g. "Part 1 of 2", or "Part one")
+		$p = text_to_num($p) if defined $p;
+		$p_of = text_to_num($p_of) if defined $p_of;
+		
+		# re-base the series/episode/part numbers
+		$s-- if (defined $s && $s > 0);
+		$e-- if (defined $e && $e > 0);
+		$p-- if (defined $p && $p > 0);
+		
+		# make the xmltv_ns compliant episode-num
+		my $episode_ns = '';
+		$episode_ns .= $s if defined $s;
+		$episode_ns .= '.';
+		$episode_ns .= $e if defined $e;
+		$episode_ns .= '/'.$e_of if defined $e_of;
+		$episode_ns .= '.';
+		$episode_ns .= $p if defined $p;
+		$episode_ns .= '/'.$p_of if defined $p_of;
+		
+		#print "--$episode_ns--";
+		return $episode_ns;
+}
+	
+sub text_to_num {
+		# Convert a word number to int e.g. 'one' >> '1'
+		#
+		my ($text) = @_;
+		if ($text !~ /^[+-]?\d+$/) {	# standard test for an int
+			my %nums = (one => 1, two => 2, three => 3, four => 4, five => 5, six => 6, seven => 7, eight => 8, nine => 9);
+			return $nums{$text} if exists $nums{$text};
+		}
+		return $text
+}
+
+sub map_channel_id {
+		# Map the fetched channel_id to a different value (e.g. our PVR needs specific channel ids)
+		# mapped channels should be stored in a file called  tv_grab_uk_guardian.map.conf
+		# containing lines of the form:  map==fromchan==tochan  e.g. 'map==5-star==5STAR'
+		#
+		my ($channel_id) = @_;
+		my $mapchannels = \%mapchannelhash;
+		if (%mapchannelhash && exists $mapchannels->{$channel_id}) { 
+			return $mapchannels->{$channel_id} ; 
+		}
+		return $channel_id;
+}
+
+sub map_category {
+		# Map the fetched category to a different value (e.g. our PVR needs specific genres)
+		# mapped categories should be stored in a file called  tv_grab_uk_guardian.map.conf
+		# containing lines of the form:  cat==fromcategory==tocategory  e.g. 'cat==General Movie==Film'
+		#
+		my ($category) = @_;
+		my $mapcategories = \%mapcategoryhash;
+		if (%mapcategoryhash && exists $mapcategories->{$category}) { 
+			return $mapcategories->{$category} ; 
+		}
+		return $category;
+}
+
+sub loadmapconf {
+		# Load the conf file containing mapped channels and categories information
+		# 
+		# This file contains 2 record types:
+		# 	lines starting with "map" are used to 'translate' the incoming channel id to those required by your PVR
+		#			e.g. 	map==dave==DAVE     will output "DAVE" in your XML file instead of "dave"
+		# 	lines starting with "cat" are used to translate categories (genres) in the incoming data to those required by your PVR
+		# 		e.g.  cat==Science Fiction==Sci-fi			will output "Sci-Fi" in your XML file instead of "Science Fiction"
+		# 
+		my $mapchannels = \%mapchannelhash;
+		my $mapcategories = \%mapcategoryhash;
+		#		
+		my $fn = get_default_confdir() . "/supplement/$GRABBER_NAME/$GRABBER_NAME.map.conf";
+		my $fhok = open my $fh, '<', $fn or warning("Cannot open conf file $fn");
+		if ($fhok) {
+			while (my $line = <$fh>) { 
+				chomp $line;
+				chop($line) if ($line =~ m/\r$/);
+				next if $line =~ /^#/ || $line eq '';
+				my ($type, $mapfrom, $mapto, $trash) = $line =~ /^(.*)==(.*)==(.*?)([\s\t]*#.*)?$/;
+				SWITCH: {
+						lc($type) eq 'map' && do { $mapchannels->{$mapfrom} = $mapto; last SWITCH; };
+						lc($type) eq 'cat' && do { $mapcategories->{$mapfrom} = $mapto; last SWITCH; };
+						warning("Unknown type in map file: \n $line");
+				}
+			}
+			close $fh;
+		}
+		# print Dumper ($mapchannels, $mapcategories);
+}
+
+sub fetch_channels {
+	my ($opt, $conf) = @_;
+  
+	# Fetch channels via a dummy call to BBC1 listings
+	#		http://www.tvguide.co.uk/channellisting.asp?ch=86&cTime=
+	my $channel_list = $ROOT_URL.'channellisting.asp?ch=86&cTime=';
+
+  my $result;
+  my $channels = {};
+
+  my $bar = new XMLTV::ProgressBar({
+    name => "Fetching channels",
+    count => 1
+  }) unless ($opt->{quiet} || $opt->{debug});
+
+  # Get the page containing the list of channels 
+  my $tree = XMLTV::Get_nice::get_nice_tree($channel_list, \&utf8);
+	#		$tree->dump;
+  my $_channels = $tree->look_down('_tag' => 'select', 'name' => 'ch');
+	my @channels = $_channels->look_down('_tag' => 'option');
+			#		print $_channels->as_HTML;
+			#		foreach  my $xchannel (@channels) { print $xchannel->as_HTML; }
+
+  $bar->update() && $bar->finish && undef $bar if defined $bar;
+
+  $bar = new XMLTV::ProgressBar({
+    name => "Parsing result",
+    count => scalar @channels
+  }) unless ($opt->{quiet} || $opt->{debug});
+
+  # Browse through the downloaded list of channels and map them to a hash XMLTV::Writer would understand
+  foreach my $channel (@channels) {
+    if ($channel->as_text) {
+      my ($id) = $channel->attr('value');
+			my ($url) = 'channellisting.asp?ch=' . $channel->attr('value');
+			my ($name) = $channel->as_text;
+
+      $channels->{"$id"} = {
+        id => "$id",
+        'display-name' => [[ encode( 'utf-8', decode( 'windows-1255', $name)), 'en' ]],
+        url => [ $ROOT_URL.$url ]
+      };
+
+    }
+
+    $bar->update() if defined $bar;
+  }
+
+  $bar->finish() && undef $bar if defined $bar;
+
+  # Notifying the user :)
+  $bar = new XMLTV::ProgressBar({
+    name => "Reformatting",
+    count => 1
+  }) unless ($opt->{quiet} || $opt->{debug});
+
+  # Let XMLTV::Writer format the results as a valid xmltv file
+  my $writer = new XMLTV::Writer(OUTPUT => \$result, encoding => 'utf-8');
+  $writer->start({'generator-info-name' => $generator_info_name});
+  $writer->write_channels($channels);
+  $writer->end();
+
+  $bar->update() && $bar->finish() if defined $bar;
+
+  return $result;
+}
+
+sub config_stage {
+		my( $stage, $conf ) = @_;
+		die "Unknown stage $stage" if $stage ne "start";
+
+		my $result;
+		my $writer = new XMLTV::Configure::Writer( OUTPUT => \$result, encoding => 'utf-8' );
+		$writer->start( { grabber => $GRABBER_NAME } );
+		$writer->write_string( {
+				id => 'cachedir', 
+				title => [ [ 'Directory to store the cache in', 'en' ] ],
+				description => [ 
+				 [ $GRABBER_NAME.' uses a cache with files that it has already '. 
+					 'downloaded. Please specify where the cache shall be stored. ', 
+					 'en' ] ],
+				default => get_default_cachedir(),
+		 } );
+
+		$writer->end( 'select-channels' );
+
+		return $result;
+}
+
+sub config_check {
+		if (not defined( $conf->{cachedir} )) {
+				print STDERR "No cachedir defined in configfile " . 
+										 $opt->{'config-file'} . "\n" .
+										 "Please run the grabber with --configure.\n";
+				exit 1;
+		}
+
+		if (not defined( $conf->{'channel'} )) {
+				print STDERR "No channels selected in configfile " .
+										 $opt->{'config-file'} . "\n" .
+										 "Please run the grabber with --configure.\n";
+				exit 1;
+		}
+}
+
+sub get_default_dir {
+    my $winhome = $ENV{HOMEDRIVE} . $ENV{HOMEPATH} 
+			if defined( $ENV{HOMEDRIVE} ) 
+					and defined( $ENV{HOMEPATH} ); 
+    
+    my $home = $ENV{HOME} || $winhome || ".";
+    return $home;
+}
+
+sub get_default_confdir {
+    return get_default_dir() . "/.xmltv";
+}
+
+sub get_default_cachedir {
+    return get_default_dir() . "/.xmltv/cache";
+}
+
+sub init_cachedir {
+    my( $path ) = @_;
+    if( not -d $path ) {
+        mkpath( $path ) or die "Failed to create cache-directory $path: $@";
+    }
+}
+
+sub utf8 {
+		# Catch the error:
+		#    "Parsing of undecoded UTF-8 will give garbage when decoding entities at /usr/lib/perl5/site_perl/5.8.8/XMLTV/Get_nice.pm line 57."
+		# (e.g. http://eli.thegreenplace.net/2007/07/20/parsing-of-undecoded-utf-8-will-give-garbage-when-decoding-entities/ )
+		#
+		my ($html) = @_;
+		return decode('UTF-8', $html); 
+}
+
+sub t {
+    my( $message ) = @_;
+    print STDERR $message . "\n" if $opt->{debug};
+}
+
+sub warning {
+    my( $message ) = @_;
+    print STDERR $message . "\n";
+    $warnings++;
+}
+
+if (0) {		# not used
+sub initialise_ua {
+	my $cookies = HTTP::Cookies->new;
+	#my $ua = LWP::UserAgent->new(keep_alive => 1);
+	my $ua = LWP::UserAgent->new;
+	# Cookies
+	$ua->cookie_jar($cookies);
+	# Define user agent type
+	$ua->agent('Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US)');
+	# Define timouts
+	$ua->timeout(240);
+	# Use proxy if set in http_proxy etc.
+	$ua->env_proxy;
+	
+	return $ua;
+}
+}
+
+# #############################################################################
+
+__END__
+
+=pod
+
+=head1 NAME
+
+tv_grab_uk_tvguide - Grab TV listings for UK from the TV Guide UK website.
+
+=head1 SYNOPSIS
+
+tv_grab_uk_tvguide --help
+
+tv_grab_uk_tvguide --info
+  
+tv_grab_uk_tvguide --version
+
+tv_grab_uk_tvguide --capabilities
+
+tv_grab_uk_tvguide --description
+
+tv_grab_uk_tvguide [--config-file FILE]
+           [--days N] [--offset N]
+           [--output FILE] [--quiet] [--debug]
+
+tv_grab_uk_tvguide --configure [--config-file FILE]
+
+tv_grab_uk_tvguide --configure-api [--stage NAME]
+           [--config-file FILE]
+           [--output FILE]
+
+tv_grab_uk_tvguide --list-channels [--config-file FILE]
+           [--output FILE] [--quiet] [--debug]
+
+=head1 DESCRIPTION
+
+Output TV listings in XMLTV format for many channels available in UK.
+The data come from tvguide.co.uk
+
+First you must run B<tv_grab_uk_tvguide --configure> to choose which channels
+you want to receive.
+
+Then running B<tv_grab_uk_tvguide> with no arguments will get a listings in XML
+format for the channels you chose for available days including today.
+
+=head1 OPTIONS
+
+B<--configure> Prompt for which channels to download and write the
+configuration file.
+
+B<--config-file FILE> Set the name of the configuration file, the
+default is B<~/.xmltv/tv_grab_uk_tvguide.conf>.  This is the file written by
+B<--configure> and read when grabbing.
+
+B<--output FILE> When grabbing, write output to FILE rather than
+standard output.
+
+B<--days N> When grabbing, grab N days rather than all available days.
+
+B<--offset N> Start grabbing at today + N days.  N may be negative.
+
+B<--quiet> Suppress the progress-bar normally shown on standard error.
+
+B<--debug> Provide more information on progress to stderr to help in
+debugging.
+
+B<--list-channels> Write output giving <channel> elements for every
+channel available (ignoring the config file), but no programmes.
+
+B<--capabilities> Show which capabilities the grabber supports. For more
+information, see L<http://wiki.xmltv.org/index.php/XmltvCapabilities>
+
+B<--version> Show the version of the grabber.
+
+B<--help> Print a help message and exit.
+
+B<--info> Print this help page and exit.
+
+=head1 ERROR HANDLING
+
+If the grabber fails to download data for some channel on a specific day, 
+it will print an errormessage to STDERR and then continue with the other
+channels and days. The grabber will exit with a status code of 1 to indicate 
+that the data is incomplete. 
+
+=head1 ENVIRONMENT VARIABLES
+
+The environment variable HOME can be set to change where configuration
+files are stored. All configuration is stored in $HOME/.xmltv/. On Windows,
+it might be necessary to set HOME to a path without spaces in it.
+
+=head1 SUPPORTED CHANNELS
+
+For information on supported channels, see http://tvguide.co.uk/
+
+=head1 AUTHOR
+
+Geoff Westcott. This documentation and parts of the code
+based on various other tv_grabbers from the XMLTV-project.
+
+=head1 SEE ALSO
+
+L<xmltv(5)>.
+
+=cut
+
