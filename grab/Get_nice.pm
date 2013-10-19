@@ -9,6 +9,14 @@
 # $XMLTV::Get_nice::Delay to zero, or a value in seconds.  This is the
 # maximum delay - on average the sleep will be half that.
 #
+#This random delay will be between 0 and 5 ($Delay) seconds. This means
+# some sites will complain you're grabbing too fast (since 20% of your 
+# grabs will be less than 1 second apart). To introduce a minimum delay 
+# set $XMLTV::Get_nice::MinDelay to a value in seconds.
+# This will be added to $Delay to derive the actual delay used. 
+# E.g. Delay = 5 and MinDelay = 3, then the actual delay will be 
+# between 3 and 8 seconds,
+#
 # get_nice() is the function to call, however
 # XMLTV::Get_nice::get_nice_aux() is the one to cache with
 # XMLTV::Memoize or whatever.  If you want an HTML::Tree object use
@@ -23,6 +31,7 @@ our @EXPORT = qw(get_nice get_nice_tree error_msg);
 use LWP::UserAgent;
 use XMLTV;
 our $Delay = 5; # in seconds
+our $MinDelay = 0; # in seconds
 our $FailOnError = 1; # Fail on fetch error
 
 
@@ -68,7 +77,7 @@ sub get_nice_aux( $ ) {
         # to sleep for a while before getting the next page - being
         # nice to the server.
         #
-        my $next_get_time = $last_get_time + (rand $Delay);
+        my $next_get_time = $last_get_time + (rand $Delay) + $MinDelay;
         my $sleep_time = $next_get_time - time();
         sleep $sleep_time if $sleep_time > 0;
     }
