@@ -137,6 +137,10 @@ my $bar = new XMLTV::ProgressBar({
 my $programmes = ();
 my $channels = ();
 
+# Start/Stop times for grabbing
+my $starttime;
+my $stoptime;
+
 # Get the schedule(s) from Atlas
 fetch_listings();
 
@@ -201,29 +205,53 @@ sub fetch_listings {
 			
 			if ($opt->{date}) {
 				$from = str2time( $opt->{date} );
-				$to 	= $from + 86400;
+				$to 	= $from + 86400;		# this will be wrong the days that DST changes :(   
+				# if the 'clocks have gone back' we need to fetch an extra hour
+				$to += 3600 if ((localtime($from))[8] == 1 && (localtime($to))[8] == 0);
+				# if the 'clocks have goneforward' the day is 1 hour shorter
+				$to -= 3600 if ((localtime($from))[8] == 0 && (localtime($to))[8] == 1);
 			
-			} elsif ($opt->{hours}) {				# test 'hours' first since 'days' defaults to '5'
-				$from = DateTime->now->add( hours => $opt->{offset} )->set_time_zone('Europe/London')->epoch();
-				$to 	= $from + ($opt->{hours} * 3600);
+			} elsif ($opt->{hours}) {		# test 'hours' first since 'days' has a default
+				$from = DateTime->now->add( hours => $opt->{offset} )->set_time_zone('UTC')->epoch();
+				$to 	= $from + ($opt->{hours} * 3600);		# todo: adjust for DST?
 			
 			} elsif ($opt->{days}) {
-				$from = DateTime->today->add( days => $opt->{offset} )->set_time_zone('Europe/London')->epoch();
+				$from = DateTime->today->add( days => $opt->{offset} )->set_time_zone('UTC')->epoch();
 				$to 	= $from + ($opt->{days} * 86400);
 	
-			} else {											# unlikely to get here since 'days' defaults to '5'
-				# default to today only
-				#		$from = DateTime->today->set_time_zone('Europe/London')->strftime('%Y-%m-%dT00:00:00.000Z');
-				#		$to 	= DateTime->today->add ( days => 1 )->set_time_zone('Europe/London')->strftime('%Y-%m-%dT00:00:00.000Z');
-				$from = DateTime->today->set_time_zone('Europe/London')->epoch();
-				$to 	= DateTime->today->add ( days => 1 )->set_time_zone('Europe/London')->epoch();
+				# we need to fetch a 'calendar' day so we must adjust the times for DST
+				$from -= 3600 if ((localtime($from))[8] == 1);
+				$to -= 3600   if ((localtime($to))[8] == 1);
+	
+			} else {										# unlikely to get here since 'days' has a default
+				# default to today only  (todo: adjust for DST)
+				$from = DateTime->today->set_time_zone('UTC')->epoch();
+				$to 	= DateTime->today->add( days => 1 )->set_time_zone('UTC')->epoch();
 			}
 			
 			# Adjust for --dst param
 			$to += 3600  if ($opt->{dst});
 			
+			# Store the Start/Stop times for grabbing
+			$starttime = $from;
+			$stoptime = $to;
+			
+			# testing above code for DST handling
+			#  we're aiming for epoch times which cover a *calendar* day irrespective of DST
+			if (0) {
+				foreach (qw/20130330 20130331 20130401 20131026 20131027 20131028/) {
+					$from = DateTime->from_epoch( epoch=>str2time( $_ )+7200 )->truncate( to => 'day' )->add( days => $opt->{offset} )->set_time_zone('UTC')->epoch();
+					$to 	= $from + ($opt->{days} * 86400);
+					print STDERR "$from --> $to \n";
+					$from -= 3600 if ((localtime($from))[8] == 1);
+					$to -= 3600   if ((localtime($to))[8] == 1);
+					print STDERR "$from --> $to \n";
+					print STDERR (localtime($from))[8] ." ".(localtime($to))[8] ."\n";
+					print STDERR "$from --> $to \n" . DateTime->from_epoch( epoch=>$from )->set_time_zone('Europe/London')->strftime('%F %T %z').' -- '.DateTime->from_epoch( epoch=>$to )->set_time_zone('Europe/London')->strftime('%F %T %z')."\n----------\n"
+				} exit;
+			}
 			# debug
-			#print DateTime->from_epoch( epoch=>$from )->set_time_zone('Europe/London')->strftime('%F %T %z').' -- '.DateTime->from_epoch( epoch=>$to )->set_time_zone('Europe/London')->strftime('%F %T %z')."\n" if $opt->{debug}; exit;
+			#print STDERR "$from --> $to \n" . DateTime->from_epoch( epoch=>$from )->set_time_zone('Europe/London')->strftime('%F %T %z').' -- '.DateTime->from_epoch( epoch=>$to )->set_time_zone('Europe/London')->strftime('%F %T %z')."\n" if $opt->{debug}; exit;
 			
 			
 			# -------------------------------------------------------------------------------------------------------------------------------- #
@@ -430,6 +458,11 @@ sub get_schedule_from_json {
 						# Some PVRs are going to barf on either (or both) these 
 						# According to MetaBroadcast it's what PA use to signify a "follow-on" programme.  Hmm....
 						
+						
+						# Prevent ValidateGrabber reporting a failure when concatenating two day's schedules
+						if ( defined $conf->{'overlaps'} && $conf->{'overlaps'}->[0] eq 'prevent' ) {
+							next if ( $bcast{'start'} < $starttime );
+						}
 						
 						# Convert the broadcast/programme to XMLTV format
 						add_programme_to_xml($channel_id, \%item, \%bcast);
