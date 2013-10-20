@@ -497,7 +497,7 @@ my @opt_components
        },
        prereqs => { 'HTTP::Cache::Transparent' => 1.0,
                     'DateTime'				=> 0,
-                    'DateTime::Format::DateParse'	=> 0,
+                    'Date::Parse'			=> 0,
                     'Encode' 					=> 0,
                     'URI::Escape' 		=> 0,	
                     'File::Path'  		=> 0,	
