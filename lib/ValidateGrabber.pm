@@ -185,7 +185,7 @@ sub ValidateGrabber {
     my( $shortname, $exe, $conf, $op, $sharedir, $usecache ) = @_;
 
     # if sharedir contains 'blib' we should prepend the relevant development paths!
-    if( $sharedir =~ m|/blib/share/$| ) {
+    if( defined $sharedir && $sharedir =~ m|/blib/share/$| ) {
       my( $blib )=( $sharedir =~ m|^(.*/blib)/share/$| );
 
       use Env qw(@PATH @PERL5LIB);
