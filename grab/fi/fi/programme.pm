@@ -28,9 +28,9 @@ sub _trim {
 sub new {
   my($class, $channel, $language, $title, $start, $stop) = @_;
   _trim($title);
-  croak "${class}::new called without valid title, start or stop"
+  croak "${class}::new called without valid title or start"
     unless defined($channel) && defined($title) && (length($title) > 0) &&
-           defined($start) && defined($stop);
+           defined($start);
 
   my $self = {
 	      channel  => $channel,
@@ -64,8 +64,40 @@ sub episode {
     push(@{ $self->{episode} }, [$episode, $language]);
   }
 }
+sub season_episode {
+  my($self, $season, $episode) = @_;
+  # only accept a pair of valid, positive integers
+  if (defined($season) && defined($episode)) {
+    $season  = int($season);
+    $episode = int($episode);
+    if (($season  > 0) && ($episode > 0)) {
+      $self->{season}         = $season;
+      $self->{episode_number} = $episode;
+    }
+  }
+}
+sub start {
+  my($self, $start) = @_;
+  $self->{start} = $start
+    if defined($start) && length($start);
+  $start = $self->{start};
+  croak "${self}::start: object without valid start time"
+    unless defined($start);
+  return($start);
+}
+sub stop {
+  my($self, $stop) = @_;
+  $self->{stop} = $stop
+    if defined($stop) && length($stop);
+  $stop = $self->{stop};
+  croak "${self}::stop: object without valid stop time"
+    unless defined($stop);
+  return($stop);
+}
 
+# read-only
 sub language { $_[0]->{language} }
+sub title    { $_[0]->{title}    }
 
 # Convert seconds since Epoch to XMLTV time stamp
 #
@@ -98,6 +130,8 @@ sub dump {
   my $title       = $self->{title};
   my $category    = $self->{category};
   my $description = $self->{description};
+  my $episode     = $self->{episode_number};
+  my $season      = $self->{season};
   my $subtitle    = $self->{episode};
 
   #
@@ -157,7 +191,7 @@ sub dump {
   #
   # Example:
   #
-  #   config:      series title Batman
+  #   config:      series description Batman
   #   description: Pingviinin paluu. Amerikkalainen animaatiosarja....
   #
   # This will generate a program with
@@ -199,6 +233,10 @@ sub dump {
   if (defined($description) && length($description)) {
     $xmltv{desc} = [[$description, $language]];
     debug(4, "XMLTV programme description: $description");
+  }
+  if (defined($season) && defined($episode)) {
+    $xmltv{'episode-num'} =  [[ ($season - 1) . '.' . ($episode - 1) . '.', 'xmltv_ns' ]];
+    debug(4, "XMLTV programme season/episode: $season/$episode");
   }
 
   $writer->write_programme(\%xmltv);

@@ -168,7 +168,7 @@ sub grab {
     #   ...
     #  </ul>
     #
-    my $opaque = startProgrammeList();
+    my $opaque = startProgrammeList($id, "fi");
     if (my $container = $root->look_down("class" => "l-stack programList")) {
       if (my @list = $container->find("li")) {
 	foreach my $list_entry (@list) {
@@ -194,9 +194,11 @@ sub grab {
 	      debug(4, $category) if defined $category;
 
 	      # Only record entry if title isn't empty
-	      appendProgramme($opaque, $hour, $minute, $title, $category,
-			      $desc)
-		if length($title) > 0;
+	      if (length($title) > 0) {
+		my $object = appendProgramme($opaque, $hour, $minute, $title);
+		$object->category($category);
+		$object->description($desc);
+	      }
 	    }
 	  }
 	}
@@ -225,8 +227,7 @@ sub grab {
     # The lines in [] don't appear on every page.
     #
     # Convert list to program objects
-    return(convertProgrammeList($opaque, $id, "fi",
-				$yesterday, $today, $tomorrow));
+    return(convertProgrammeList($opaque, $yesterday, $today, $tomorrow));
   }
 
   return;

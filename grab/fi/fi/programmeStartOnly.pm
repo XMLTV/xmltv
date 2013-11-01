@@ -19,24 +19,31 @@ our @EXPORT = qw(startProgrammeList appendProgramme convertProgrammeList);
 # Import from internal modules
 fi::common->import();
 
-sub startProgrammeList() { return([]) }
+sub startProgrammeList($$) {
+  my($id, $language) = @_;
+  return({
+	  id         => $id,
+	  language   => $language,
+	  programmes => []
+	 });
 
-sub appendProgramme($$$$$$$) {
-  my($programmes, $hour, $minute, $title, $category, $description) = @_;
-
-  push(@{ $programmes }, {
-			  category    => $category,
-			  description => $description,
-			  hour        => $hour,
-			  minute      => $minute,
-			  # minutes since midnight
-			  start       => $hour * 60 + $minute,
-			  title       => $title,
-			 });
 }
 
-sub convertProgrammeList($$$$$$) {
-  my($programmes, $id, $language, $yesterday, $today, $tomorrow) = @_;
+sub appendProgramme($$$$) {
+  my($self, $hour, $minute, $title) = @_;
+
+  # NOTE: start time in minutes from midnight -> must be converted to epoch
+  my $object = fi::programme->new($self->{id}, $self->{language},
+				  $title, $hour * 60 + $minute);
+
+  push($self->{programmes}, $object);
+  return($object);
+}
+
+sub convertProgrammeList($$$$) {
+  my($self, $yesterday, $today, $tomorrow) = @_;
+  my $programmes = $self->{programmes};
+  my $id         = $self->{id};
 
   # No data found -> return empty list
   return unless @{ $programmes };
@@ -44,7 +51,7 @@ sub convertProgrammeList($$$$$$) {
   # Check for day crossing between first and second entry
   my @dates = ($today, $tomorrow);
   if ((@{ $programmes } > 1) &&
-      ($programmes->[0]->{start} > $programmes->[1]->{start})) {
+      ($programmes->[0]->start() > $programmes->[1]->start())) {
 
     # Did caller specify yesterday?
     if (defined $yesterday) {
@@ -58,12 +65,14 @@ sub convertProgrammeList($$$$$$) {
   my @objects;
   my $date          = shift(@dates);
   my $current       = shift(@{ $programmes });
-  my $current_start = $current->{start};
-  my $current_epoch = timeToEpoch($date, $current->{hour}, $current->{minute});
+  my $current_start = $current->start();
+  my $current_epoch = timeToEpoch($date,
+				  int($current_start / 60),
+				  $current_start % 60);
   foreach my $next (@{ $programmes }) {
 
     # Start of next program might be on the next day
-    my $next_start = $next->{start};
+    my $next_start = $next->start();
     if ($current_start > $next_start) {
 
       #
@@ -101,15 +110,18 @@ sub convertProgrammeList($$$$$$) {
       }
     }
 
-    my $next_epoch = timeToEpoch($date, $next->{hour}, $next->{minute});
+    my $next_epoch = timeToEpoch($date,
+				 int($next_start / 60),
+				 $next_start % 60);
 
-    # Create program object
-    debug(3, "Programme $id ($current_epoch -> $next_epoch) $current->{title}");
-    my $object = fi::programme->new($id, $language, $current->{title},
-				    $current_epoch, $next_epoch);
-    $object->category($current->{category});
-    $object->description($current->{description});
-    push(@objects, $object);
+    my $title = $current->title();
+    debug(3, "Programme $id ($current_epoch -> $next_epoch) $title");
+
+    # overwrite start & stop times with epoch: see appendProgramme()
+    $current->start($current_epoch);
+    $current->stop($next_epoch);
+
+    push(@objects, $current);
 
     # Move to next program
     $current       = $next;

@@ -90,7 +90,8 @@ if (GetOptions(\%Option,
 	       "list-channels",
 	       "offset=i",
 	       "output=s",
-	       "quiet")) {
+	       "quiet",
+	       "test-mode")) {
 
   pod2usage(-exitstatus => 0,
 	    -verbose => 2)
@@ -209,6 +210,9 @@ sub _getChannels($$) {
   foreach my $source (@sources) {
     debug(1, "requesting channel list from source '" . $source->description ."'");
     if (my $list = $source->channels()) {
+      die "test failure: source '" . $source->description . "' didn't find any channels!\n"
+	if ($Option{'test-mode'} && (keys %{$list} == 0));
+
       while (my($id, $value) = each %{ $list }) {
 	my($language, $name) = split(" ", $value, 2);
 	$callback->($opaque, $id, $name, $language);
@@ -363,6 +367,8 @@ sub doGrab() {
 
 	    # Add programmes to list
 	    push(@programmes, @{ $programmes });
+	  } elsif ($Option{'test-mode'}) {
+	    die "test failure: source '" . $source->description . "' didn't retrieve any programmes for '$id'!\n";
 	  }
 	}
       }

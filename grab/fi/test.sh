@@ -63,7 +63,7 @@ if [ -z "$preserve_directory" ]; then
     rm -rf ${test_dir}
 fi
 mkdir -p ${test_dir}
-script_file="${script_file} ${debug}"
+script_file="${script_file} ${debug} --test-mode"
 cd ${test_dir}
 set -x +e
 
@@ -75,6 +75,11 @@ set -x +e
 perl -I ${xmltv_lib} ${script_file} --ahdmegkeja > /dev/null 2>&1
 perl -I ${xmltv_lib} ${script_file} --version > /dev/null 2>&1
 perl -I ${xmltv_lib} ${script_file} --description > /dev/null 2>&1
+perl -I ${xmltv_lib} ${script_file} --list-channels --cache  t_fi_cache  > t_fi_channels.xml --quiet 2>t_fi_channels.log
+if [ $? -ne 0 ]; then
+    tail -1 t_fi_channels.log
+    test_failure=1
+fi
 perl -I ${xmltv_lib} ${script_file} --config-file ${script_dir}/test.conf --offset 1 --days 2 --cache  t_fi_cache  > t_fi_1_2.xml --quiet 2>t_fi_1.log
 validate_xml t_fi_1_2.xml
 ${xmltv_script}/tv_cat t_fi_1_2.xml --output /dev/null 2>t_fi_6.log

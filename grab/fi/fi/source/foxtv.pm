@@ -21,6 +21,9 @@ BEGIN {
 fi::common->import();
 fi::programmeStartOnly->import();
 
+# Cleanup filter regexes
+my $cleanup_match = qr/\s*(?:\d+\.\s+Kausi\.\s+)?(?:Kausi\s+\d+\.\s+)?(?:Osa|Jakso)\s+\d+\.\s*/i;
+
 # Description
 sub description { 'foxtv.fi' }
 
@@ -91,7 +94,7 @@ sub grab {
   # Fetch & parse HTML
   my $root = fetchTree($url);
   if ($root) {
-    my $opaque = startProgrammeList();
+    my $opaque = startProgrammeList($id, "fi");
 
     #
     # All program info is contained in a table column *without* class
@@ -153,16 +156,32 @@ sub grab {
 		$title = $title->as_text();
 		$desc  = $desc->as_text();
 
-		# Description can be empty or "-"
-		undef $desc if ($desc eq '') || ($desc eq '-');
-
 		# Season, episode number & episode name (optional)
 		($season)         = ($season->as_text() =~ /(\d+)/)
 		  if $season;
 		($episode_number) = ($episode_number->as_text() =~ /(\d+)/)
 		  if $episode_number;
-		($episode_name)   = ($episode_name->as_text() =~ /^\s*(.+)\s*$/)
+		($episode_name)   = ($episode_name->as_text() =~ /^\s*(.+)$/)
 		  if $episode_name;
+
+		# Cleanup some of the most common inconsistencies....
+		$desc =~ s/^$cleanup_match//o
+		  if defined($desc);
+		if (defined($episode_name)) {
+		  $episode_name =~ s/$cleanup_match//o;
+		  $episode_name =~ s/\s+$//;
+		  if (defined($desc)) {
+		    # Strip optional parental guidance to improve following match
+		    my $tmp;
+		    ($tmp = $episode_name) =~ s/\s+\((?:\d+|S)\)$//;
+		    $desc =~ s/^$tmp\.\s+//;
+		  }
+		}
+
+		# Description can be empty or "-"
+		undef $desc if ($desc eq '') || ($desc eq '-');
+		undef $episode_name
+		  if defined($episode_name) && ($episode_name eq '');
 
 		debug(3, "List entry fox ($hour:$minute) $title");
 		debug(4, $episode_name) if defined $episode_name;
@@ -170,7 +189,10 @@ sub grab {
 		debug(4, sprintf("s%02de%02d", $season, $episode_number))
 		  if (defined($season) && defined($episode_number));
 
-		appendProgramme($opaque, $hour, $minute, $title, undef, $desc);
+		my $object = appendProgramme($opaque, $hour, $minute, $title);
+		$object->description($desc);
+		$object->episode($episode_name, "fi");
+		$object->season_episode($season, $episode_number);
 	      }
 	    }
 	  }
@@ -178,7 +200,7 @@ sub grab {
 	  # Get stop time for last entry in the table: first start
 	  if ($first_tomorrow) {
 	    my($hour, $minute) = _start($first_tomorrow);
-	    appendProgramme($opaque, $hour, $minute, "DUMMY", undef, undef)
+	    appendProgramme($opaque, $hour, $minute, "DUMMY")
 	      if ($hour && $minute);
 	  }
 	}
@@ -197,7 +219,7 @@ sub grab {
     # (see above) by adding the start time of the first entry from tomorrow
     # as a DUMMY program. This works for Monday to Saturday, but not for
     # Sunday :-(
-    return(convertProgrammeList($opaque, $id, "fi", undef, $today, $tomorrow));
+    return(convertProgrammeList($opaque, undef, $today, $tomorrow));
   }
 
   return;

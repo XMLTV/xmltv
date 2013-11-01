@@ -23,6 +23,53 @@ fi::common->import();
 # Description
 sub description { 'mtv3.fi' }
 
+# Grab channels from one group page
+sub _get_channels($$) {
+  my($channels, $page) = @_;
+
+  # Fetch & parse HTML
+  my $root = fetchTree("http://www.mtv3.fi/tvopas/${page}.shtml", "iso-8859-1");
+  if ($root) {
+
+    #
+    # Channel name & order can be found from the headers in this table:
+    #
+    #  <table cellspacing="0" cellpadding="0" border="0" class="ohjelmisto" id="ohjelmisto">
+    #   <tr>
+    #    <th width="17%"><div title="MTV3 Leffa" class="channel-logo channel-mtv3-leffa">MTV3 Leffa</div></th>
+    #    <th width="17%"><div title="C More First" class="channel-logo channel-cmore-first">C More First</div></th>
+    #    ...
+    #   </tr>
+    #   ...
+    #  </table>
+    #
+    if (my $container = $root->look_down("class" => "ohjelmisto")) {
+      if ((my @headers = $container->find("th")) &&
+	  (my @entries = $container->find("td"))) {
+
+        if (@entries >= @headers) {
+	  my $count = 0;
+
+	  debug(2, "Source mtv3.fi found " . scalar(@headers) . " channels in group ${page}");
+	  foreach my $option (@headers) {
+	    my $name  = $option->as_text();
+	    my $class = $entries[$count++]->attr("class");
+
+	    if (length($name) && defined($class) &&
+		(my($index) = ($class =~ /^kanava(\d+)$/))) {
+	      debug(3, "channel '$name' (${index}.${page})");
+	      $channels->{"${index}.${page}.mtv3.fi"} = "fi $name";
+	    }
+	  }
+	}
+      }
+    }
+
+    # Done with the HTML tree
+    $root->delete();
+  }
+}
+
 # Grab channel list
 sub channels {
   my %channels;
@@ -42,28 +89,23 @@ sub channels {
     #  <option value="/tvopas/muutkanavat.shtml">Digiviihde</option>
     # </select>
     #
+    # Unfortunately they are not in the correct order
+    #
     if (my $container = $root->look_down("onchange" => qr/^window.open/)) {
       if (my @options = $container->find("option")) {
-	my $count;
-	my $oldpage = "";
+	my %pages;
 
 	debug(2, "Source mtv3.fi found " . scalar(@options) . " channels");
 	foreach my $option (@options) {
-	  my $id   = $option->attr("value");
-	  my $name = $option->as_text();
+	  my $id = $option->attr("value");
 
 	  if (defined($id) &&
-	      (my($page) = ($id =~ m,^/tvopas/(\w+)\.shtml$,)) &&
-	      length($name)) {
-	    if ($page ne $oldpage) {
-	      $count   = 0;
-	      $oldpage = $page;
-	    }
-	    $count++;
-	    debug(3, "channel '$name' (${count}.${page})");
-	    $channels{"${count}.${page}.mtv3.fi"} = "fi $name";
+	      (my($page) = ($id =~ m,^/tvopas/(\w+)\.shtml$,))) {
+	    $pages{$page}++;
 	  }
 	}
+	debug(2, "Source mtv3.fi found " . scalar(keys %pages) . " groups");
+	_get_channels(\%channels, $_) foreach (keys %pages);
       }
     }
 
@@ -142,7 +184,8 @@ sub grab {
 
 		$start   = _toEpoch($day, $start);
 		my $stop = _toEpoch($day, $end);
-		if ($stop < $start) {
+		# Sanity check: prevent day change on the first entry
+		if (@objects && ($stop < $start)) {
 		  $day  = $tomorrow;
 		  $stop = _toEpoch($day, $end);
 		}

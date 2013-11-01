@@ -103,7 +103,7 @@ sub grab {
     #  </table>
     # </div>
     #
-    my $opaque = startProgrammeList();
+    my $opaque = startProgrammeList($id, "fi");
     if (my $container = $root->look_down("class" => "tm")) {
       if (my @rows = $container->find("tr")) {
 	foreach my $row (@rows) {
@@ -121,8 +121,10 @@ sub grab {
 		debug(4, $desc);
 
 		# Only record entry if title isn't empty
-		appendProgramme($opaque, $hour, $minute, $title, undef, $desc)
-		  if length($title) > 0;
+		if (length($title) > 0) {
+		  my $object = appendProgramme($opaque, $hour, $minute, $title);
+		  $object->description($desc);
+		}
 	      }
 	    }
 	  }
@@ -141,8 +143,7 @@ sub grab {
     # Unfortunately the last entry of $today is not the first entry of
     # $tomorrow. That means that the last entry will always be missing as we
     # don't have a stop time for it :-(
-    return(convertProgrammeList($opaque, $id, "fi",
-				undef, $today, $tomorrow));
+    return(convertProgrammeList($opaque, undef, $today, $tomorrow));
   }
 
   return;
