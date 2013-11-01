@@ -1,6 +1,6 @@
 # -*- mode: perl; coding: utf-8 -*- ###########################################
 #
-# tv_grab_fi: source specific grabber code for http://tv.nyt.fi
+# tv_grab_fi: source specific grabber code for http://tv.hs.fi
 #
 ###############################################################################
 #
@@ -9,10 +9,13 @@
 # VERSION: $Id$
 #
 # INSERT FROM HERE ############################################################
-package fi::source::tvnyt;
+package fi::source::tvhs;
 use strict;
 use warnings;
 
+#
+# NOTE: this data source was earlier known as http://tv.tvnyt.fi
+#
 BEGIN {
   our $ENABLED = 1;
 }
@@ -23,7 +26,7 @@ use Carp;
 fi::common->import();
 
 # Description
-sub description { 'tv.nyt.fi' }
+sub description { 'tv.hs.fi' }
 
 # Grab channel list
 sub channels {
@@ -35,28 +38,28 @@ sub channels {
   while (defined(my $group = shift(@groups))) {
 
     # Fetch & parse HTML
-    my $root = fetchTree("http://tv.nyt.fi/grid?service=tvnyt&grid_type=list&layout=false&group=$group");
+    my $root = fetchTree("http://tv.hs.fi/home/grid?group=${group}");
     if ($root) {
 
       #
       # Group list can be found in dropdown
       #
       #  <select id="group_select" ...>
-      #   <option value="tvnyt*today*free_air_fi*list" selected>...</option>
-      #   <option value="tvnyt*today*sanoma_fi*list">...</option>
+      #   <option value="today*free_air_fi*list" selected>...</option>
+      #   <option value="today*sanoma_fi*list">...</option>
       #   ...
       #  </select>
       #
       unless ($added) {
 	if (my $container = $root->look_down("id" => "group_select")) {
 	  if (my @options = $container->find("option")) {
-	    debug(2, "Source tv.nyt.fi found " . scalar(@options) . " groups");
+	    debug(2, "Source tv.hs.fi found " . scalar(@options) . " groups");
             foreach my $option (@options) {
 	      unless ($option->attr("selected")) {
 		my $value = $option->attr("value");
 
 		if (defined($value) &&
-		    (my($tag) = ($value =~ /^tvnyt\*today\*(\w+)\*/))) {
+		    (my($tag) = ($value =~ /^today\*(\w+)\*/))) {
 		  debug(3, "group '$tag'");
 		  push(@groups, $tag);
 		}
@@ -84,7 +87,7 @@ sub channels {
       if (my $container = $root->look_down("class" => "grid_table")) {
 	my $head = $container->find("thead");
 	if ($head && (my @headers = $head->find("th"))) {
-	  debug(2, "Source tv.nyt.fi found " . scalar(@headers) . " channels in group '$group'");
+	  debug(2, "Source tv.hs.fi found " . scalar(@headers) . " channels in group '$group'");
 	  foreach my $header (@headers) {
 	      if (my $image = $header->find("img")) {
 		my $name = $image->attr("alt");
@@ -95,7 +98,7 @@ sub channels {
 		  debug(3, "channel '$name' ($channel_id)");
 
 		  # Underscore is not a valid XMLTV channel ID character
-		  ($channel_id = "${channel_id}.${group}.tv.nyt.fi") =~ s/_/-/g;
+		  ($channel_id = "${channel_id}.${group}.tv.hs.fi") =~ s/_/-/g;
 
 		  $channels{$channel_id} = "fi $name";
 		}
@@ -110,7 +113,7 @@ sub channels {
 
   }
 
-  debug(2, "Source tv.nyt.fi parsed " . scalar(keys %channels) . " channels");
+  debug(2, "Source tv.hs.fi parsed " . scalar(keys %channels) . " channels");
   return(\%channels);
 }
 
@@ -126,14 +129,14 @@ sub grab {
   my($self, $id, $yesterday, $today, $tomorrow, $offset) = @_;
 
   # Get channel number from XMLTV id
-  return unless my($channel, $group) = ($id =~ /^(\w+)\.(\w+)\.tv\.nyt\.fi$/);
+  return unless my($channel, $group) = ($id =~ /^([-\w]+)\.([-\w]+)\.tv\.hs\.fi$/);
 
   # Replace Dash with Underscore for URL
   $channel =~ s/-/_/g;
   $group   =~ s/-/_/g;
 
   # Fetch & parse HTML
-  my $root = fetchTree("http://tv.nyt.fi/grid?service=tvnyt&grid_type=list&layout=false&group=$group&date=" .
+  my $root = fetchTree("http://tv.hs.fi/home/grid?group=${group}&date=" .
 		       sprintf("%04d-%02d-%02d",
 			       $today->year(), $today->month(), $today->day()));
   if ($root) {
@@ -186,7 +189,7 @@ sub grab {
 		$desc  = $desc->as_text() if $desc;
 
 		debug(3, "List entry ${channel}.${group} ($start -> $end) $title");
-		debug(4, $desc);
+		debug(4, $desc) if $desc;
 
 		# Create program object
 		my $object = fi::programme->new($id, "fi", $title, $start, $end);
