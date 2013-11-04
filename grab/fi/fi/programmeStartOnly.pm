@@ -36,7 +36,7 @@ sub appendProgramme($$$$) {
   my $object = fi::programme->new($self->{id}, $self->{language},
 				  $title, $hour * 60 + $minute);
 
-  push($self->{programmes}, $object);
+  push(@{ $self->{programmes} }, $object);
   return($object);
 }
 
