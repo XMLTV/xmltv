@@ -180,8 +180,10 @@ sub grab {
 
 		# Description can be empty or "-"
 		undef $desc if ($desc eq '') || ($desc eq '-');
+		# Episode name can be the same as the title
 		undef $episode_name
-		  if defined($episode_name) && ($episode_name eq '');
+		  if defined($episode_name) &&
+		     (($episode_name eq '') || ($episode_name eq $title));
 
 		debug(3, "List entry fox ($hour:$minute) $title");
 		debug(4, $episode_name) if defined $episode_name;
