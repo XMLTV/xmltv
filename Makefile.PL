@@ -456,7 +456,8 @@ my @opt_components
                     'Encode' 					=> 0,
                     'URI::Escape' 		=> 0,	
                     'File::Path'  		=> 0,	
-										'Data::Dumper'		=> 0, },
+										'Data::Dumper'		=> 0,
+										'Pod::Usage'			=> 0,	},
      },
 
      { name => 'tv_grab_uk_guardian',
