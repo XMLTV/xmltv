@@ -212,13 +212,14 @@ my %reversed_title_subtitle;  # key = title, value = title
 my %replacement_titles;       # key = old title, value = replacement title
 my %replacement_episodes;     # key = title, value = hash (where key = old ep, value = new ep)
 my %replacement_cats;         # key = title, value = category
-my %replacement_cats_film;    # key = title, value = category
 my %replacement_title_eps;    # key = 'old_title . '|' . old_ep', value = (new_title, new_ep)
 my %replacement_title_desc;   # key = 'old_title . '|' . old_ep' . '|' . 'old_desc', value = (new_title, new_ep)
 my %flagged_title_eps;        # key = old_title from title fixup routine 8
 my %dotdotdot_titles;         # key = replacement title ending with '...' seen in title fixup routine 8
 my %replacement_ep_from_desc; # key = title, value = hash (where key = desc, value = new ep)
 my %demoted_title;            # key = title, value = title
+my %replacement_cats_film;    # key = title, value = category
+my %subtitle_remove_text;     # key = title, value = hash (where key/value = text to remove)
 my %uc_prog_titles;           # key = title, value = title
 my %new_title_in_subtitle_fixed; # key = 'title . '|' . episode', value = hashref (keys are title and episode)
 my %title_in_subtitle_fixed;  # key = 'title . '|' . episode', value = hashref (keys are title and episode)
@@ -1602,6 +1603,18 @@ sub load_prog_titles_to_process {
                 $have_title_data = 1;
                 next PROG_TITLE_ENTRY;
             }
+            elsif ($code eq '13') {
+                my @fields = split( /~/, $process_text, 2);
+                if (scalar @fields != 2) {
+                    t("[13] Invalid number of fields (need 2) in processing text: '" . $process_text . "'");
+                    next PROG_TITLE_ENTRY;
+                }
+                my( $title, $text_to_remove ) = @fields;
+                push @{$subtitle_remove_text{$title}}, $text_to_remove;
+                t("[13] Will remove text '" . $text_to_remove . "' from subtitle for title '" . $title . "'");
+                $have_title_data = 1;
+                next PROG_TITLE_ENTRY;
+            }
             else {
                 t("Unknown code seen in prog_titles_to_process file,"
                   . " skipping entry '" . $line . "'");
@@ -2398,6 +2411,10 @@ sub process_title_fixups {
 
     # Next, process subtitles to make them consistent
     #
+    # Remvoe text from programme subtitles (type = 13)
+    if (! $prog->{'_subtitles_processed'}) {
+        process_subtitle_remove_text($prog);
+    }
     # Look for inconsistent programme subtitles (type = 7)
     if (! $prog->{'_subtitles_processed'}) {
         process_replacement_episodes($prog);
@@ -3275,6 +3292,36 @@ sub process_replacement_episodes {
                 $prog->{'_episode'} = $replacement_episodes{$bad_episode_title}->{$bad_episode};
                 t("      Replaced episode info '" . $bad_episode . "' with '" . $prog->{'_episode'} . "'");
                 $prog->{'_subtitles_processed'} = 1;
+            }
+        }
+    }
+}
+
+# Process text to remove from subtitles. The %subtitle_remove_text data structure
+# is a hash of arrays.
+#
+sub process_subtitle_remove_text {
+    my $prog = shift;
+
+    if ($have_title_data && %subtitle_remove_text && defined $prog->{'_episode'}) {
+        my $title = $prog->{'_title'};
+        my $episode = $prog->{'_episode'};
+        if ($subtitle_remove_text{$title}) {
+            REMOVE_TEXT:
+            foreach my $remove_text (sort @{$subtitle_remove_text{$title}}) {
+                if ($prog->{'_episode'} =~ m/^(\Q$remove_text\E)(?:\s*:|\s*-|\s+)\s*(.*)$/) {
+                    $prog->{'_episode'} = $2;
+                    t("      Removed text '" . $remove_text . "' from subtitle for title '" . $prog->{'_title'} . "'");
+                    $prog->{'_subtitles_processed'} = 1;
+                    last REMOVE_TEXT;
+                }
+                # We need a non-greedy match at the start of the subtitle
+                elsif ($prog->{'_episode'} =~ m/^(.*?)\s*(?::|-)?\s*(\Q$remove_text\E)$/) {
+                    $prog->{'_episode'} = $1;
+                    t("      Removed text '" . $remove_text . "' from subtitle for title '" . $prog->{'_title'} . "'");
+                    $prog->{'_subtitles_processed'} = 1;
+                    last REMOVE_TEXT;
+                }
             }
         }
     }
