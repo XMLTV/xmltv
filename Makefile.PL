@@ -436,6 +436,8 @@ my @opt_components
                 => 'tv_grab_uk_atlas/INSTALL',
             'grab/uk_atlas/TODO'
                 => 'tv_grab_uk_atlas/TODO',
+            'grab/uk_atlas/FAQ'
+                => 'tv_grab_uk_atlas/FAQ',
             'grab/uk_atlas/atlasAPIkey'
                 => 'tv_grab_uk_atlas/atlasAPIkey',
             'grab/uk_atlas/tv_grab_uk_atlas.map.conf'
