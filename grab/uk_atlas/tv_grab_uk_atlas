@@ -19,6 +19,7 @@ use Data::Dumper;
 
 use XMLTV::ProgressBar;
 use XMLTV::Options qw/ParseOptions/;
+use XMLTV::Supplement qw/GetSupplement SetSupplementRoot/;
 use XMLTV::Configure::Writer;
 use XMLTV::Ask;
 
@@ -226,11 +227,11 @@ sub fetch_listings {
 			} elsif ($opt->{hours}) {		# test 'hours' first since 'days' has a default
 				$from = DateTime->now->add( hours => $opt->{offset} )->set_time_zone('UTC')->epoch();
 				$to 	= $from + ($opt->{hours} * 3600);		# todo: adjust for DST?
-			
+				
 			} elsif ($opt->{days}) {
 				$from = DateTime->today->add( days => $opt->{offset} )->set_time_zone('UTC')->epoch();
 				$to 	= $from + ($opt->{days} * 86400);
-	
+			
 				# we need to fetch a 'calendar' day so we must adjust the times for DST
 				$from -= 3600 if ((localtime($from))[8] == 1);
 				$to -= 3600   if ((localtime($to))[8] == 1);
@@ -701,9 +702,16 @@ sub map_PA_category {
 }
 
 sub loadmapconf {
-		# Load the conf file containing mapped channels and categories information
+		# Load the files containing mappings for channels and genres (categories)
+		#
+		# There are 3 files:
+		#     grabber specified channel mappings
+		#     grabber specified genre mappings
+		#     user specified channel & genre mappings  (optional file)
+		#
+		# Any user specified mappings will override the corresponding grabber specified mapping.
 		# 
-		# This file contains 2 record types:
+		# There are 2 record types:
 		# 	lines starting with "map" are used to 'translate' the Atlas channel id to those required by your PVR
 		#			e.g. 	map==cbjc==DAVE     will output "DAVE" in your XML file instead of "cbjc"
 		# 	lines starting with "cat" are used to translate categories (genres) in the Atlas data to those required by your PVR
@@ -713,13 +721,36 @@ sub loadmapconf {
 		my $mapchannels = \%mapchannelhash;
 		my $mapcategories = \%mapcategoryhash;
 		#		
-		my $fn = get_supplement_dir() . '/'. $GRABBER_NAME . '.map.conf';
+		foreach ( qw/channels genres/ ) {
+			
+			# Retrieve grabber map file via XMLTV::Supplement
+			my $supplement = GetSupplement($GRABBER_NAME, 'tv_grab_uk_atlas.map.'.$_.'.conf');
+			die "Error: XMLTV $_ map data is missing, exiting"
+				if (! defined $supplement || $supplement eq '');
+			my @lines = split /[\r\n]+/, $supplement;
+			foreach my $line (@lines) {		
+				chomp $line;  chop($line) if ($line =~ m/\r$/);  trim($line);
+				next if $line =~ /^#/ || $line eq '';
+				
+				my ($type, $mapfrom, $mapto, $trash) = $line =~ /^(.*)==(.*)==(.*?)([\s\t]*#.*)?$/;
+				SWITCH: {
+						lc($type) eq 'map' && do { $mapchannels->{$mapfrom} = $mapto; last SWITCH; };
+						lc($type) eq 'cat' && do { $mapcategories->{$mapfrom} = $mapto; last SWITCH; };
+						warning("Unknown type in map file: \n $line");
+				}
+			}
+			
+		}
+		
+		# Retrieve user map file from 'supplement' dir (*not* using XMLTV::Supplement)	
+		#  and overwrite any corresponding grabber mappings		
+		my $fn = get_supplement_dir() . '/'. $GRABBER_NAME . '.user.map.conf';
 		my $fhok = open my $fh, '<', $fn or warning("Cannot open conf file $fn");
 		if ($fhok) {
 			while (my $line = <$fh>) { 
-				chomp $line;
-				chop($line) if ($line =~ m/\r$/);
+				chomp $line;  chop($line) if ($line =~ m/\r$/);  trim($line);
 				next if $line =~ /^#/ || $line eq '';
+				
 				my ($type, $mapfrom, $mapto, $trash) = $line =~ /^(.*)==(.*)==(.*?)([\s\t]*#.*)?$/;
 				SWITCH: {
 						lc($type) eq 'map' && do { $mapchannels->{$mapfrom} = $mapto; last SWITCH; };
@@ -742,19 +773,19 @@ sub loadmapgenre {
 		
 		my $mapgenrehash = \%mapgenrehash;
 		#		
-		my $fn = get_supplement_dir() . '/'. $GRABBER_NAME . '.map.genre.conf';
-		my $fhok = open my $fh, '<', $fn or warning("Cannot open genre file $fn");
-		if ($fhok) {
-			while (my $line = <$fh>) { 
-				chomp $line;
-				chop($line) if ($line =~ m/\r$/);
-				next if $line =~ /^#/ || $line eq '';
-				my ($mapfrom, $mapto, $trash) = $line =~ /^(.*)==(.*?)([\s\t]*#.*)?$/;
-				$mapgenrehash->{$mapfrom} = $mapto;
-			}
-			close $fh;
+		# Retrieve PA genres file via XMLTV::Supplement
+    my $supplement = GetSupplement($GRABBER_NAME, 'tv_grab_uk_atlas.pa.genres.conf');
+    die "Error: XMLTV PA genres data is missing, exiting"
+			if (! defined $supplement || $supplement eq '');
+    my @lines = split /[\r\n]+/, $supplement;
+		foreach my $line (@lines) {
+			chomp $line;  chop($line) if ($line =~ m/\r$/);  trim($line);
+			next if $line =~ /^#/ || $line eq '';
+			
+			my ($mapfrom, $mapto, $trash) = $line =~ /^(.*)==(.*?)([\s\t]*#.*)?$/;
+			$mapgenrehash->{$mapfrom} = $mapto;
 		}
-		# print Dumper ($mapgenrehash);
+		 #print Dumper ($mapgenrehash);
 }
 
 sub fetch_channels {
@@ -1059,9 +1090,9 @@ sub config_stage {
 				foreach my $p (@platforms) {
 						my %platform = %$p;
 						next unless $platform{'id'} eq $conf->{'platform'}[0];
-				
+						
 						# may not be a regionalised platform (e.g. Saorview)
-						if ( (!defined $platform{'regions'}) || (scalar @{$platform{'regions'}} == 0) ) {	
+						if ( (!defined $platform{'regions'}) || (scalar @{$platform{'regions'}} == 0) ) {		
 			
 									$writer->write_option( {
 											value => $platform{'id'},
@@ -1201,6 +1232,11 @@ sub uc_words {
 	return $string;
 }
 
+sub trim {
+	# Remove leading & trailing spaces
+	$_[0] =~ s/^\s+|\s+$//g;       
+}
+
 sub t {
     my( $message ) = @_;
     print STDERR $message . "\n" if $opt->{debug};
@@ -1236,16 +1272,19 @@ tv_grab_uk_atlas --description
 
 tv_grab_uk_atlas 
            [--days N] [--offset N] [--dst]
+					 [--channel S]
 					 [--config-file FILE]
            [--output FILE] [--quiet] [--debug]
 
 tv_grab_uk_atlas 
            [--hours N] [--offset N]
+					 [--channel S]
 					 [--config-file FILE]
            [--output FILE] [--quiet] [--debug]
 
 tv_grab_uk_atlas 
            [--date DATE] [--dst]
+					 [--channel S]
 					 [--config-file FILE]
            [--output FILE] [--quiet] [--debug]
 
@@ -1293,7 +1332,9 @@ B<--date N> Grab just this date (instead of days/offset).
 B<--dst> Some PVRs have trouble with BST times and "lose" an hour at the end 
 of the day schedule.  This adds an extra hour to the schedule fetched.
 
-B<--channel S> Grab just this channel (ignore the channels in the config file).
+B<--channel S> Grab just this channel (ignore the channels in the config file). 
+Can be specified either as Atlas channel id (e.g. "cbbw") or mapped 
+channel name (e.g. "south.bbc1.bbc.co.uk").
 
 B<--quiet> Suppress the progress-bar normally shown on standard error.
 
@@ -1327,7 +1368,7 @@ it might be necessary to set HOME to a path without spaces in it.
 
 =head1 SUPPORTED CHANNELS
 
-For information on supported channels, see ???
+For information on supported channels, see $HOME/.xmltv/supplement/tv_grab_uk_atlas/tv_grab_uk_atlas.map.channels.conf
 
 =head1 AUTHOR
 

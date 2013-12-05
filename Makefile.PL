@@ -438,12 +438,14 @@ my @opt_components
                 => 'tv_grab_uk_atlas/TODO',
             'grab/uk_atlas/FAQ'
                 => 'tv_grab_uk_atlas/FAQ',
-            'grab/uk_atlas/tv_grab_uk_atlas.map.conf'
-                => 'tv_grab_uk_atlas/tv_grab_uk_atlas.map.conf',
-            'grab/uk_atlas/tv_grab_uk_atlas.map.genre.conf'
-                => 'tv_grab_uk_atlas/tv_grab_uk_atlas.map.genre.conf',
-            'grab/uk_atlas/tv_grab_uk_atlas.map.SAMPLE.conf'
-                => 'tv_grab_uk_atlas/tv_grab_uk_atlas.map.SAMPLE.conf',
+            'grab/uk_atlas/tv_grab_uk_atlas.user.map.conf'
+                => 'tv_grab_uk_atlas/tv_grab_uk_atlas.user.map.conf',
+            'grab/uk_atlas/tv_grab_uk_atlas.pa.genres.conf'
+                => 'tv_grab_uk_atlas/tv_grab_uk_atlas.pa.genres.conf',
+            'grab/uk_atlas/tv_grab_uk_atlas.map.genres.conf'
+                => 'tv_grab_uk_atlas/tv_grab_uk_atlas.map.genres.conf',
+            'grab/uk_atlas/tv_grab_uk_atlas.map.channels.conf'
+                => 'tv_grab_uk_atlas/tv_grab_uk_atlas.map.channels.conf',
             'grab/uk_atlas/cgi-bin/getatlas.pl'
                 => 'tv_grab_uk_atlas/cgi-bin/getatlas.pl',
        },
