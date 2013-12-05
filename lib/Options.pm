@@ -437,7 +437,7 @@ sub ParseOptions
 	# Redirect STDOUT to the file.
 	if( not open( STDOUT, "> $opt->{output}" ) )
 	{
-	    print STDERR "Cannot write to $opt->{output}.";
+	    print STDERR "Cannot write to $opt->{output}.\n";
 	    exit 1;
 	}
 	
@@ -515,7 +515,7 @@ sub ParseOptions
 
     if( not defined( $conf ) )
     {
-	print STDERR "You need to configure the grabber by running it with --configure";
+	print STDERR "You need to configure the grabber by running it with --configure \n";
 	exit 1;
     }
 	
