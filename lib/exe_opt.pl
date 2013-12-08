@@ -36,9 +36,9 @@ print '-nologo
 -add "DateTime::TimeZone::Europe::Zurich"
 -add="Tk::ProgressBar"
 -trim="Net::FTP::A"
--trim="B"
 -trim="Apache::Const;Apache::RequestIO;DIME::Payload;MIME::Entity;Apache::RequestRec;DIME::Message;I18N::Langinfo"
 -trim="Apache2::RequestUtil;APR::Table;Apache2::Const;Apache2::RequestRec;Apache2::RequestIO"
+-trim="File::BSDGlob;HTTP::Lite;Tie::IxHash;Jcode"
 -trim=DateTime::Format
 -info CompanyName="XMLTV Project http://www.xmltv.org"
 -info FileDescription="EXE bundle of XMLTV tools to manage TV Listings"
