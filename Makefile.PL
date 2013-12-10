@@ -693,26 +693,27 @@ my @opt_components
 #       exes => [ 'grab/dk/tv_grab_dk' ],
 #       prereqs => { 'HTML::TreeBuilder' => 0 } },
 
-     { name => 'tv_grab_dk_dr',
-       blurb => 'Grabber for Denmark (dr.dk)',
-       exes => [ 'grab/dk_dr/tv_grab_dk_dr' ],
-       prereqs => { 'Data::Dumper' => 0,
-                    'DateTime::Locale' => 0,
-                    'IO::Stringy' => 0,
-                    'Parse::RecDescent' => 0,
-                    'LWP::Simple' => 0,
-                    'DateTime' => 0,
-                  },
-     },
+# 2013-12-10 - removed by rmeden, lots of site changes
+#     { name => 'tv_grab_dk_dr',
+#       blurb => 'Grabber for Denmark (dr.dk)',
+#       exes => [ 'grab/dk_dr/tv_grab_dk_dr' ],
+#       prereqs => { 'Data::Dumper' => 0,
+#                    'DateTime::Locale' => 0,
+#                    'IO::Stringy' => 0,
+#                    'Parse::RecDescent' => 0,
+#                    'LWP::Simple' => 0,
+#                    'DateTime' => 0,
+#                  },
+#     },
 
-     #
-     # 2009-03-05 rmeden - source site seems to be blocking our agent string
-     #
-     #{ name => 'tv_grab_jp',
-     #  blurb => 'Grabber for Japan',
-     #  exes => [ 'grab/jp/tv_grab_jp' ],
-     #  prereqs => { 'HTML::TreeBuilder' => 0,
-     #               'Text::Kakasi' => 0 } },
+#
+# 2009-03-05 rmeden - source site seems to be blocking our agent string
+#
+#{ name => 'tv_grab_jp',
+#  blurb => 'Grabber for Japan',
+#  exes => [ 'grab/jp/tv_grab_jp' ],
+#  prereqs => { 'HTML::TreeBuilder' => 0,
+#               'Text::Kakasi' => 0 } },
 
      { name => 'tv_grab_se_swedb',
        blurb => 'Grabber for Sweden',
