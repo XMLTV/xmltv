@@ -273,12 +273,15 @@ if ($opt_days) {
 # (for now we will drop the end time of the last programme of the last day
 #  - stop time is optional according to the DTD).
 #
-my %allowed_days = (1 => 1, 2 => 2, 3 => 3, 4 => 4, 5 => 5, 6 => 6, 7 => 7, 8 => 8);
-die "--offset cannot be negative" if defined $opt_offset and $opt_offset < 0;
-die "--days must be positive" if defined $opt_days and $opt_days <= 0;
+my $max_days = 8;
 $opt_offset = 0 if !$opt_offset;
 $opt_days = 7 if !$opt_days;
-$opt_days = min($opt_days, 8);
+my %allowed_days = (1 => 1, 2 => 2, 3 => 3, 4 => 4, 5 => 5, 6 => 6, 7 => 7, 8 => 8);
+die "--offset cannot be negative" if $opt_offset < 0;
+die "--days must be positive" if $opt_days <= 0;
+die "--days exceeds site availability ($max_days)" if $opt_days > $max_days;
+$opt_days = min($opt_days, $max_days);
+die "--offset ($opt_offset) plus --days ($opt_days) exceeds site availability ($max_days)" if ($opt_offset + $opt_days > $max_days);
 my $use_days = 0;
 
 
@@ -340,6 +343,7 @@ $writer->start($HEAD);
 
 if ($mode eq 'list-channels') {
 	# Write channels mode.
+	get_channels(\%channels);
 	foreach my $id (keys %channels) {
 		$writer->write_channel({id => $id, 'display-name' => [ [ $channels{$id}, 'en' ] ]});
 	}
@@ -374,7 +378,7 @@ foreach my $chanid (keys %channels) {
 	$writer->write_channel({ id => $ch_xid, 'display-name' => [ [ $n , 'en' ] ] });
 }
 
-my $bar = new XMLTV::ProgressBar('getting listings', (scalar keys %channels) * $opt_days)
+my $bar = new XMLTV::ProgressBar('getting listings', (scalar keys %channels) * min(($opt_days + 1),$max_days))
   if not $opt_quiet;
 
 foreach (keys %channels) {
@@ -818,7 +822,14 @@ sub process_dstvnew_html {
 	my $now = time();
 	my ($data, $prev_r, $r);
 
-  for (my $i=$opt_offset; $i < ($opt_offset + $opt_days); $i++) {
+	# For each day requested get the page and extract the programmes.
+	# Listings don't have a duration or a stop time so we need to work "one behind"
+	#  (i.e. we can only write a show once we have the start time of the *next* show).
+	# This means we need to grab an extra day to calculate the stop time of the last show.
+	# (Obviously if the 'offset + days' exceeds the site limit (i.e. 8 days data) then we can't do this
+	#  and the last programme will be omitted from the xml).
+	
+  for (my $i=$opt_offset; $i <= ($opt_offset + $opt_days) && $i < $max_days; $i++) {
 	
 		# get the page and parse to a document object
 		my $result = get_dstvnew($name, $i);
@@ -866,8 +877,8 @@ sub process_dstvnew_html {
 		#
 		# ??? sometimes it seems we get  'div' => 'ui-listings' but other times we get 'table' => 'ui-search-results' !!!
 		my $schedule = $tree->look_down(_tag => 'table', id => 'ui-search-results');
-		#print STDERR 'could not find schedule'."\n" if !$schedule;
 		if (!$schedule) {
+			#print STDERR 'could not find schedule'."\n" if !$schedule;
 			$schedule = $tree->look_down(_tag => 'div', id => 'ui-listings');
 		}
 		die 'could not find schedule'."\n" if !$schedule;
@@ -882,7 +893,7 @@ sub process_dstvnew_html {
 				
 			my $rating;
 			if (defined $desc) {
-				$rating = $1 if $desc =~ / \((13|16|18|PG|PG13|R18)\)$/;		# any others?  is there a better way (e.g. 2 numeric || 4 alpha-num)?
+				$rating = $1 if $desc =~ / \((13|16|18|PG|PG13|R18|Family)\)$/;		# any others?  is there a better way (e.g. 2 numeric || 4 alpha-num)?
 			}
 			$desc =~ s/\Q($rating)// if $rating;
 		
@@ -901,14 +912,14 @@ sub process_dstvnew_html {
 			}
 			$prev_r = $r;
 
+			# if we are here only to get the start time of the first programme, then we are done
+			if (($opt_offset + $opt_days) == $i) { last; }
+				
 		}		
 		$tree->delete;
 		update $bar if not $opt_quiet;
 	
 	}
-
-	# Can't write the last programme since we don't have a stop time or a duration
-	#		$writer->write_programme($prev_r) if $prev_r;
 			
 	$data = "success";
 	return $data;
