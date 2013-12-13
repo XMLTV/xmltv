@@ -137,8 +137,8 @@ migth be a good idea to add a cache file the keeps the program description so th
 # migth be a good idea to add a cache file the keeps the program description so there is no need to fetch it.
 
 
-my $CableCompany = "cablevision"; #"multicanal";
-my $urlRoot="http://www.buscador" . $CableCompany . ".com.ar/";
+my $CableCompany = "cablevisionfibertel";    # "cablevision"; #"multicanal";
+my $urlRoot="http://www.buscador." . $CableCompany . ".com.ar/";
 
 
 ######################################################################
@@ -158,6 +158,12 @@ use Switch;
 use Encode qw(from_to is_utf8 _utf8_off encode decode);
 use utf8;
 
+use HTTP::Cookies;
+use LWP::UserAgent;
+my $lwp = &initialise_ua();
+
+use JSON::PP;
+
 use XMLTV;
 use XMLTV::Memoize;
 use XMLTV::ProgressBar;
@@ -174,7 +180,7 @@ use XMLTV::Mode;
 use XMLTV::Date;
 
 
-sub select_Location();
+sub select_location();
 
 
 
@@ -269,7 +275,7 @@ elsif ($mode eq 'grab') {
     @config_lines = XMLTV::Config_file::read_lines($config_file);
 }
 elsif ($mode eq 'list-channels') {
-    # Config file not used.
+    @config_lines = XMLTV::Config_file::read_lines($config_file);
 }
 else { die }
 
@@ -283,15 +289,15 @@ if (($opt_zone != 0) && ($mode ne 'configure')) {
 ######################################################################
 # write configurationDateCalc(
 
+
 if ($mode eq 'configure') {
     open(CONF, ">$config_file") or die "cannot write to $config_file: $!";
 
-	%location = select_Location();
-	print CONF "location $location{id} $location{name}\n";
-	
-	# Whatever we are doing, we need the channels data.
-	%channels = get_channels(); # sets @ch_all
-	
+    %location = select_location();
+    print CONF "location $location{id} $location{name}\n";
+
+    # we need the channels data.
+    %channels = get_channels(); # sets @ch_all
 
     # Ask about each channel.
     my @chs = sort keys %channels;
@@ -318,7 +324,6 @@ if ($mode eq 'configure') {
 }
 
 
-
 # Not configuration, we must be writing something, either full
 # listings or just channels.
 #
@@ -335,49 +340,58 @@ $w_args{encoding} = 'ISO-8859-15';
 my $writer = new XMLTV::Writer(%w_args);
 $writer->start($HEAD);
 
-if ($mode eq 'list-channels') {
-    $writer->write_channel($_) foreach @ch_all;
-    $writer->end();
-    exit();
-}
 
 ######################################################################
-# We are producing full listings.
-die if $mode ne 'grab';
-
 # Read configuration
 my $line_num = 1;
 foreach (@config_lines) {
     ++ $line_num;
     next if not defined;
-if (/^location:?\s+(\S+)\s+([^\#]+)/) {
-        %location=( id => $1, name=>$2 );      
+
+    if (/^location:?\s+(\S+)\s+([^\#]+)/) {
+        %location=( id => $1, name=>$2 );
     }else{
-	die "No location specified, run me with --configure\n"
-  	if not keys %location;
-#	    if (/^channel:?\s+(\S+)\s+(\S+)\s+([^\#]+)/) {
-	# Whatever we are doing, we need the channels data.
-	%channels = get_channels() if not  %channels; # sets @ch_all
-
-
- 	   if (/^channel:?\s+(\S+)\s+([^\#]+)/) {
-		my $ch_did = $1;
-#		my $ch_sourceid = $2;
-		my $ch_name = $2;
-		$ch_name =~ s/\s*$//;
-		push @channels, $ch_did;
-		$channels{$ch_did} = $ch_name;
-	    }
-	    else {
-		warn "$config_file:$line_num: bad line\n";
-	    }
-	}
+        die "No location specified, run me with --configure\n"
+          if not keys %location;
+    
+    #    if (/^channel:?\s+(\S+)\s+(\S+)\s+([^\#]+)/) {
+    if (/^channel:?\s+(\S+)\s+([^\#]+)/) {
+      my $ch_did = $1;
+      #    my $ch_sourceid = $2;
+      my $ch_name = $2;
+      $ch_name =~ s/\s*$//;
+      push @channels, $ch_did;
+      $channels{$ch_did} = $ch_name;
+    } else {
+      warn "$config_file:$line_num: bad line\n";
+    }
+  }
 }
 
 
-# Whatever we are doing, we need the channels data.
-#%channels = get_channels(); # sets @ch_all
+######################################################################
+if ($mode eq 'list-channels') {
+    # we need the channels data.
+    %channels = get_channels(); # sets @ch_all
+		
+		foreach (@ch_all) {
+			#channel' writer only accepts id, display-name, url, icon
+			delete $_->{'channel-id'};
+			delete $_->{'channel-num'};
+			$writer->write_channel($_);
+		}
+    $writer->end();
+    exit();
+}
 
+
+######################################################################
+# We are producing full listings.
+die if $mode ne 'grab';
+
+
+# we need the channels data.  (oh no we don't!)
+#%channels = get_channels(); # sets @ch_all
 
 
 ######################################################################
@@ -385,12 +399,15 @@ if (/^location:?\s+(\S+)\s+([^\#]+)/) {
 
 # Assume the listings source uses ARG TIME (see BUGS above).
 my $now = DateCalc(parse_date('now'), "$opt_offset days");
+
 die "No channels specified, run me with --configure\n"
   if not keys %channels;
 
-
 die "No location specified, run me with --configure\n"
   if not keys %location;
+
+die "No channels selected, run me with --configure\n"
+  if (scalar @channels == 0);
 
 
 #if (not keys %location) {
@@ -402,40 +419,55 @@ die "No location specified, run me with --configure\n"
 #}
 my @to_get;
 
-
+# print the <channel> info
 foreach my $ch_did (@channels) {
     my $index=0;
     my $ch_name=$channels{$ch_did};
     my $ch_xid="$ch_did.cablevision";
-    my $tot_ch=@ch_all;
-    while (($tot_ch > $index) and (${$ch_all[$index]}{'id'} ne $ch_xid)) {
-        $index=$index+1;
-    }
-    next if ($tot_ch <= $index);
-    my $ch_num=${ch_all[$index]}{'channel-num'};
-    $writer->write_channel({ id => $ch_xid,
-			     'display-name' => [ [ $ch_name ],
-						 [ $ch_num ] ] });
-    my $day=UnixDate($now,'%Q');
-    for (my $i=0;$i<$opt_days;$i++) {
-        push @to_get, [ $day, $ch_did, $ch_num ];
-        #for each day
-        $day=nextday($day); die if not defined $day;
-    }
+		
+    #       my $tot_ch=@ch_all;
+    #       while (($tot_ch > $index) and (${$ch_all[$index]}{'id'} ne $ch_xid)) {
+    #           $index=$index+1;
+    #       }
+    #       next if ($tot_ch <= $index);
+		#      		
+    #       my $ch_num=${ch_all[$index]}{'channel-num'};
+    #       $writer->write_channel({ id => $ch_xid,
+		#       	     'display-name' => [ [ $ch_name ],
+		#       				 [ $ch_num ] ] });			 
+    #       my $day=UnixDate($now,'%Q');
+    #       for (my $i=0;$i<$opt_days;$i++) {
+    #           push @to_get, [ $day, $ch_did, $ch_num ];
+    #           #for each day
+    #           $day=nextday($day); die if not defined $day;
+    #       }
+		
+    $writer->write_channel({ 'id' => $ch_xid,
+                             'display-name' => [ [ $ch_name ] ] });
 }
 
-
-# This progress bar is for both downloading and parsing.  Maybe
-# they could be separate.
-#
-my $bar = new XMLTV::ProgressBar('getting listings', scalar @to_get)
+# progress bar
+my $bar = new XMLTV::ProgressBar('getting listings', $opt_days)
   if not $opt_quiet;
-foreach (@to_get) {
-	foreach (process_table($_->[0], $_->[1], $_->[2])) {
-		$writer->write_programme($_);
+	
+# fetch and print the <programme> info
+for (my $i = $opt_offset; $i < $opt_offset + $opt_days; $i++) {
+
+	# the ajax fetches 6 stations at a time, so we'll emulate that
+	my $numtoprocess = 6;
+	for ( my $j=0; $j < scalar @channels; $j+=$numtoprocess ) {
+
+		# array slice returns 'undef' for values oustide the array
+		my @slice = @channels[$j..$j+$numtoprocess-1];
+		my @schedule = process_table( $i, \@slice );   # $i is the day number (0...) to fetch
+		foreach (@schedule) {
+			$writer->write_programme($_);
+		}
 	}
+
 	update $bar if not $opt_quiet;
 }
+
 $bar->finish() if not $opt_quiet;
 $writer->end();
 
@@ -469,6 +501,244 @@ BEGIN {
 # returns: list of the programme hashes to write
 #
 sub process_table {
+    my ($day, $chanstoprocess) = @_;
+		
+    # Get the programme schedule for the selected channels for the param day
+		
+		# First we need the container for the Location 
+    #   https://buscador.cablevisionfibertel.com.ar/index.aspx?cl=136
+		#	  http://www.buscador.cablevisionfibertel.com.ar/index.aspx?dia=1&hora=1
+    #   
+		my $url = $urlRoot.'index.aspx?cl='.$location{'id'}.'&dia='.$day;
+    my $page = fetch_url($url);  
+    die $page if $page =~ /^Status:/;  
+    #store_page($page);
+    my $tree = get_tree($page); $page = undef;
+		
+		# Now we need to emulate the AJAX call for the grid
+		#
+		#   "/TVGridWS/TvGridWS.asmx/ReloadGrid"
+		#    "{"daySel":"0","clasDigId":"136","signalsIdsReceived":"343,3,192,709,477,62|2,3,4,5,6,7","digHd":1}" 
+		#    
+		#         function pageLoad() {
+    #            blackin();
+    #            var elementAux1 = document.getElementById('ContGral_digClasId');
+    #            var elementAux2 = document.getElementById('ContGral_daySelected');
+		#    
+    #            TVGridWS.ReloadGrid(elementAux2.value, elementAux1.value, idsSignalText1 + "|" + sintoniaSignal, (digHd.value != "true") ? 1 : 2, onSuccessFirst);
+    #        }
+		#    
+		#    <input type="hidden" name="ctl00$ContGral$digClasId" id="ContGral_digClasId" value="136" />
+    #    <input type="hidden" name="ctl00$ContGral$digHd" id="ContGral_digHd" value="false" />
+    #    <input type="hidden" name="ctl00$ContGral$daySelected" id="ContGral_daySelected" value="0" />
+		#    
+		$url = $urlRoot.'TVGridWS/TvGridWS.asmx/ReloadGrid';
+    my $clasDigId = $tree->look_down( '_tag' => 'input', 'id' => 'ContGral_digClasId' )->attr('value');
+    my $daySel = $tree->look_down( '_tag' => 'input', 'id' => 'ContGral_daySelected' )->attr('value');
+    my $digHd = $tree->look_down( '_tag' => 'input', 'id' => 'ContGral_digHd' )->attr('value') ne 'true' ? 1 : 2;
+		my $idsSignalText1 = $tree->look_down( '_tag' => 'input', 'id' => 'ContGral_idsChanels' )->attr('value');
+		my $sintoniaSignal = $tree->look_down( '_tag' => 'input', 'id' => 'ContGral_sintoniaChanels' )->attr('value');
+
+    #	   <input type="hidden" name="ctl00$ContGral$idsChanels" id="ContGral_idsChanels" 
+ 		#         value="772,192,477,96,175,35,36,6,292,40,229,18,223,84,153,978,136,226,76,2292,77,45,33,15,37,22,19,366,11,164,17,178,9,57" />
+		#    <input type="hidden" name="ctl00$ContGral$sintoniaChanels" id="ContGral_sintoniaChanels"
+    #         value="7,8,9,10,11,12,13,14,15,16,17,18,19,20,20,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38" />
+		
+		my @webIds = split(/,/, $idsSignalText1 );
+		my @tvIds = split(/,/, $sintoniaSignal );	
+		my ( %webIdsHash, %tvIdsHash );
+    for (my $i=0; $i<scalar @webIds; $i++) {
+			$webIdsHash{$webIds[$i]} = $tvIds[$i];
+			$tvIdsHash{$tvIds[$i]} = $webIds[$i];
+		}
+		my ($idsSignalText1_1, $sintoniaSignal_1) = ('','');
+		foreach (@{$chanstoprocess}) {
+			next if !defined $_;  # see the @channels array slice above
+			$sintoniaSignal_1 .= ($sintoniaSignal_1 ne '' ? ',' : '') . $_;
+			$idsSignalText1_1 .= ($idsSignalText1_1 ne '' ? ',' : '') . $tvIdsHash{$_};
+		}
+		
+		my $vars = [ "daySel"=>$daySel, "clasDigId"=>$clasDigId, "signalsIdsReceived"=>$idsSignalText1_1.'|'.$sintoniaSignal_1, "digHd"=>$digHd ];
+		#use Data::Dumper; print STDERR Dumper($vars);
+    $page = fetch_url($url, 'post', $vars); 
+    die $page if $page =~ /^Status:/;  	 
+    #store_page($page);
+		
+		use XML::Parser;
+		my $xml = XML::Parser->new(Style => 'Tree')->parse($page);
+		my $html = $xml->[1]->[2];
+		#print Dumper($html);
+		my $res_tree = HTML::TreeBuilder->new_from_content($html);
+		#print Dumper($res_tree);
+		undef $xml; undef $html;
+		
+		
+    my @progs = $res_tree->look_down( '_tag' => 'div', 'class' => 'programa' );
+		die 'no programmes found' if !scalar @progs;
+		#print Dumper(@progs);
+		#print STDERR "\nprogs found ".scalar @progs."\n";
+		
+		my @r;
+		foreach my $cur (@progs) {
+      my $p = make_programme_hash($cur, \%webIdsHash, \%tvIdsHash);
+			next if (defined $p && $p eq 'false');
+			if (not $p) {
+					require Data::Dumper;
+					my $d = Data::Dumper::Dumper($cur);
+					warn "cannot write programme on day $day:\n$d\n";
+			}
+			
+			else {
+					push @r, $p;
+			}
+		}
+		return @r;
+}
+
+# Hashes the program for future saving in XMLTV format
+sub make_programme_hash {
+    my ( $prog, $webIds, $tvIds ) = @_;
+		
+			#  <div id="accordion38201" class="programa" style="width:204px;left:2244px">
+			#    <span class="title" onmouseover="pintarCanal(343);" onmouseout="despintarCanal();">Noticias y consumidores</span>
+			#  	<div id="programaInterno" class="programaInterno" style="display: none;">
+			#  	  <span class="category">Noticias</span>
+			#  		<span class="dataProgram">Argentina  |  Con Susana Andrada, Myriam Bunin</span>
+			#  		<div class="diaGrilla">Hoy martes 10 de diciembre 11:00:00Hs</div>
+			#  		<img class="chapaParentalProgram" src="images/parental/PG.png" alt="Se recomienda orientación parental" title="Se recomienda orientación parental">
+			#  		<div class="duracionGrilla">Duración: 60min</div>
+			#  		<a rel="#overlay_ficha" href="FichaContent.aspx?id=38201&amp;idSig=343" class="masinfoGrid"></a>
+			#  	</div>
+			#  </div>
+			
+			# <div id="accordion27254" class="programa" style="width:102px;left:1836px">
+			#   <span class="title" onmouseover="pintarCanal(178);" onmouseout="despintarCanal();">Boys Toys<br>
+			#      <span class="titleSeason">Temporada: 3</span>
+			#      <span class="titleChapter">Episodio: 311</span>
+			#   </span>
+			#   <div id="programaInterno" class="programaInterno" style="display: none;">
+			#      <span class="category">Variedades</span>
+			#      <span class="dataProgram">2013 </span>
+			#      <span class="sinopsisShort">Los juguetes más innovadores del siglo XXI. Recorremos el mundo para traerte los mejores aparatos técnicos, productos súper exclusivos y vehículos ultra poderosos. Prepárate para experimentar lo último en juguetes tecnológicos.</span>
+			#      <div class="diaGrilla">Hoy viernes 13 de diciembre 09:00:00Hs</div>
+			#      <img class="chapaParentalProgram" src="images/parental/NR.png" alt="No clasificada" title="No clasificada">
+			#      <div class="duracionGrilla">Duración: 30min</div>
+			#      <a rel="#overlay_ficha" href="FichaContent.aspx?id=27254&amp;idSig=178" class="masinfoGrid"></a>
+			#   </div>
+			# </div>
+		
+		my $cur;
+		my %temp;
+		$temp{'title'} = $prog->look_down( '_tag' => 'span', 'class' => 'title' );
+		if (!defined $temp{'title'}) {			# empty div
+			return 'false';
+		}
+		$temp{'ch'} = $temp{'title'}->attr('onmouseover');
+		$temp{'start'} = $prog->look_down( '_tag' => 'div', 'class' => 'diaGrilla' );
+		$temp{'duration'} = $prog->look_down( '_tag' => 'div', 'class' => 'duracionGrilla' );
+		$temp{'series'} = $temp{'title'}->look_down( '_tag' => 'span', 'class' => 'titleSeason' );
+		$temp{'episode'} = $temp{'title'}->look_down( '_tag' => 'span', 'class' => 'titleChapter' );
+		$temp{'data'} = $prog->look_down( '_tag' => 'span', 'class' => 'dataProgram' );
+		$temp{'desc'} = $prog->look_down( '_tag' => 'span', 'class' => 'sinopsisShort' );
+		$temp{'category'} = $prog->look_down( '_tag' => 'span', 'class' => 'category' );
+		$temp{'rating'} = $prog->look_down( '_tag' => 'img', 'class' => 'chapaParentalProgram' );
+		
+		$cur->{'title'} = $temp{'title'}->as_text;		
+		$cur->{'start'} = $temp{'start'}->as_text;
+		$cur->{'duration'} = $temp{'duration'}->as_text;
+		$cur->{'desc'} = $temp{'desc'}->as_text if $temp{'desc'};
+		$cur->{'category'} = $temp{'category'}->as_text if $temp{'category'};
+		
+		if (defined $temp{'series'}) {
+			$cur->{'series'} = $temp{'series'}->as_text;
+			$cur->{'series'} =~ s/Temporada:\s//;
+			$temp{'series'}->detach();
+		}
+		
+		if (defined $temp{'episode'}) {
+			my $episodetext = $temp{'episode'}->as_text;
+			$episodetext =~ s/Episodio:\s//;
+			if ($episodetext =~ /^(\d+)/ ) {
+				$cur->{'episode'} = $1  if $1 ne '';
+				if ( $episodetext =~ /^(\d+) - (.*)$/ ) { 
+					$cur->{'sub-title'} = $2;
+				}
+			} elsif ($episodetext ne '') {
+				$cur->{'sub-title'} = $episodetext;
+			}
+			$temp{'episode'}->detach();	
+		}
+		$cur->{'title'} = $temp{'title'}->as_text;		
+		
+		#print "$temp{'ch'} $cur->{'start'} $cur->{'title'} \n";
+		
+		if ( defined $temp{'data'} ) {
+			my $data = $temp{'data'}->as_text;
+			if ( $data =~ /^(.*?)\s?((19|20)\d\d)(\s\|\s)?(.*?)$/ ) {
+				$cur->{'country'} = $1 if $1 ne '';
+				$cur->{'date'} = $2 if $2 ne '';
+				if ($5 ne '' && $5 ne ' ') {
+					my $credits = $5;
+					$credits =~ s/Con\s/,/ ;
+					my @credits = split(',',$credits);
+					s{^\s+|\s+$}{}g foreach @credits;	# strip leading & trailing spaces
+					foreach (@credits) {
+						push @{$cur->{'credits'}}, $_  if $_ ne '';
+					}
+					undef $credits;
+				}
+			}
+		}
+		
+		if ( defined $temp{'rating'} ) {
+			my $rating = $temp{'rating'}->attr('src');
+			if ( $rating =~ /.*\/(.*?)\.png/ ) {		# src="images/parental/NR.png"
+				$cur->{'rating'} = $1;
+			}
+		}
+			
+		if (defined $cur->{'series'} || defined $cur->{'episode'}) {
+			$cur->{'episode-num'} = ( defined $cur->{'series'} && $cur->{'series'} > 0 ? $cur->{'series'} -1 : '' ) . '.' .
+															( defined $cur->{'episode'} && $cur->{'episode'} > 0 ? $cur->{'episode'} -1 : '' ) . '.';
+		}
+		
+		$temp{'ch'} =~ /pintarCanal\((\d*)\)/;
+		my $ch_xmltv_id = $webIds->{$1}.'.cablevision';
+		
+		use Date::Language;
+		my $lang = Date::Language->new('Spanish');
+		# Crappy Date::Language won't parse things like 'Hoy martes 10 de diciembre 2013 11:00' !! 
+		$cur->{'start'} =~ s/(Hoy|Manana)//;			
+		$cur->{'start'} =~ s/:00Hs//;
+		$cur->{'start'} =~ s/de//;
+    $cur->{'starttime'} = $lang->str2time( $cur->{'start'} );
+		# durations always seem to be in minutes (e.g. "Duración: 150min")
+		my $duration;
+		if ($cur->{'duration'} =~ /Duración:\s(\d*)min/ ) {
+			$duration = $1;
+			$cur->{'stoptime'} = $cur->{'starttime'} + ($duration * 60);
+		}
+		
+    my %prog;
+    $prog{channel}=$ch_xmltv_id;
+    $prog{title}=[ [ $cur->{'title'}, $LANG ] ];
+    $prog{'sub-title'}=[ [ $cur->{'sub-title'}, $LANG ] ] if defined $cur->{'sub-title'};
+		$prog{'episode-num'} = [[ $cur->{'episode-num'}, 'xmltv_ns' ]] if defined $cur->{'episode-num'};
+    $prog{start} = POSIX::strftime("%Y%m%d%H%M%S", gmtime( $cur->{'starttime'} )) . ' -0300';
+    $prog{stop} = POSIX::strftime("%Y%m%d%H%M%S", gmtime( $cur->{'stoptime'} )) . ' -0300'  if defined $cur->{'stoptime'};
+    $prog{desc}=[ [ $cur->{'desc'}, $LANG ] ] if defined $cur->{'desc'} && $cur->{'desc'} ne '';
+		$prog{credits}->{'actor'} = $cur->{'credits'}  if defined $cur->{'credits'} && (scalar @{$cur->{'credits'}} > 0);
+    $prog{category}=[ [ $cur->{category}, $LANG ] ] if defined $cur->{category};
+    $prog{date}=$cur->{date} if defined $cur->{date};
+    $prog{country}=[ [ $cur->{country}, $LANG ] ] if defined $cur->{country};
+    $prog{rating}=[ [ $cur->{rating}, $LANG ] ] if defined $cur->{rating};
+    return \%prog;
+
+}
+
+# DEPRECATED
+if (0){
+sub __process_table {
     my ($date, $ch_xmltv_id, $ch_ar_id) = @_;
     my $weekNr = GetWeekNumber($date);
 #initial setting
@@ -579,9 +849,12 @@ sub process_table {
     @program_data=undef;
     return @r;
 }
-
+}
+					
+# DEPRECATED
+if (0){
 # Hashes the program for future saving in XMLTV format
-sub make_programme_hash {
+sub __make_programme_hash {
     my ($date, $ch_xmltv_id, $ch_ar_id, $cur ) = @_;
 
     my %prog;
@@ -590,7 +863,7 @@ sub make_programme_hash {
     $prog{title}=[ [ $cur->{title}, $LANG ] ];
     t "turning local time $cur->{time}, on date $date, into UTC";
     eval { $prog{start}=to_UTC("$date $cur->{time}", '-0300') };
-#	print "turning local time $cur->{time}, on date $date, into UTC is $prog{start}\n";
+    #  print "turning local time $cur->{time}, on date $date, into UTC is $prog{start}\n";
     if ($@) {
         warn "bad time string: $cur->{time}";
         return undef;
@@ -604,17 +877,17 @@ sub make_programme_hash {
     t "...got $prog{stop}";
 
     if ($prog{stop} le $prog{start}) {
-   	t "... stop Date wrong: [$prog{stop}] ";
-	@tempstop=split(" ",$prog{stop});
-	$tempstop[0]=DateCalc($tempstop[0], '+ 1 day');
-	$tempstop[0]=~ s/://g;
-	$prog{stop}= $tempstop[0] . " " . $tempstop[1];
-    	t "...Fixed as $prog{stop}\n";
+      t "... stop Date wrong: [$prog{stop}] ";
+      @tempstop=split(" ",$prog{stop});
+      $tempstop[0]=DateCalc($tempstop[0], '+ 1 day');
+      $tempstop[0]=~ s/://g;
+      $prog{stop}= $tempstop[0] . " " . $tempstop[1];
+      t "...Fixed as $prog{stop}\n";
     } 
     $prog{desc}=[ [ $cur->{desc}, $LANG ] ] if defined $cur->{desc};
     $prog{credits}=$cur->{credits} if defined $cur->{credits};
 
-#    $prog{credits}=[ "actor","pepe badia" ];
+    #    $prog{credits}=[ "actor","pepe badia" ];
 
     $prog{category}=[ [ $cur->{category}, $LANG ] ] if defined $cur->{category};
     $prog{length}=$cur->{length} if defined $cur->{length};
@@ -623,6 +896,7 @@ sub make_programme_hash {
     $prog{rating}=[ [ $cur->{rating}, $LANG ] ] if defined $cur->{rating};
     return \%prog;
 
+}
 }
 
 sub to_UTC {
@@ -654,7 +928,6 @@ sub to_UTC {
 # All work is done by private get_programs_for function
 
 
-
 sub get_program_data {
     my ($date,@ProgramWeek) = @_;
     my @nowarr=(
@@ -668,12 +941,68 @@ sub get_program_data {
     return get_programs_for($ProgramWeek[$weekday]);
 }
 
-
-
-
-
 # get channel listing
 sub get_channels {
+    my $bar = new XMLTV::ProgressBar('getting list of channels', 1)  if not $opt_quiet;
+    my %channels;
+    
+    # Get the available channels for the selected locality
+    #   https://buscador.cablevisionfibertel.com.ar/index.aspx?cl=631
+    #   
+    my $page = fetch_url($urlRoot.'index.aspx?cl='.$location{'id'});  
+    die $page if $page =~ /^Status:/;  
+    #store_page($page);
+    my $tree = get_tree($page); $page = undef;
+    
+    my $selectlist = $tree->look_down( '_tag' => 'select', 'id' => 'OpcionesGrilla_ChannelChoice' );
+    die 'Cannot find channels list' if !$selectlist;
+    my @selectoptions = $selectlist->look_down( '_tag' => 'option' );
+		
+		# we also need to map the web channel id to the tv channel id
+		#    <input type="hidden" name="ctl00$ContGral$idsChanels" id="ContGral_idsChanels" 
+		#         value="772,192,477,96,175,35,36,6,292,40,229,18,223,84,153,978,136,226,76,2292,77,45,33,15,37,22,19,366,11,164,17,178,9,57" />
+		#    <input type="hidden" name="ctl00$ContGral$sintoniaChanels" id="ContGral_sintoniaChanels"
+    #         value="7,8,9,10,11,12,13,14,15,16,17,18,19,20,20,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38" />
+    #	
+		my @webIds = split(/,/, $tree->look_down( '_tag' => 'input', 'id' => 'ContGral_idsChanels' )->attr('value') );
+		my @tvIds = split(/,/, $tree->look_down( '_tag' => 'input', 'id' => 'ContGral_sintoniaChanels' )->attr('value') );	
+		my %webIds;
+    for (my $i=0; $i<scalar @webIds; $i++) {
+			$webIds{$webIds[$i]} = $tvIds[$i];
+		}
+		
+    foreach my $option (@selectoptions) {
+      my $channel_id = $option->attr('value');
+      next if $channel_id eq '-1' || $channel_id eq '0' || $channel_id eq '';
+		
+      my $channel_num = $webIds{$channel_id};
+      my $channel_name = $option->as_text();    
+      $channels{$channel_num}=$channel_name;
+      my $coded_chan_name=encodeco("utf-8", $channel_name);
+      #    print $coded_chan_name;
+      push @ch_all, { 
+                    'display-name' => [[ $coded_chan_name, $LANG ]],
+                    'channel-num' => $channel_num,
+                    'channel-id'  => $channel_id,
+                    'id'=> "$channel_num.cablevision"
+      };
+    }
+
+    $tree->delete;
+    die "no channels could be found" if not keys %channels;
+  
+    #use Data::Dumper; print Dumper(\%channels);exit;
+    #use Data::Dumper; print Dumper(@ch_all);exit;
+
+    update $bar if not $opt_quiet;
+    $bar->finish() if not $opt_quiet;
+    return %channels;
+}
+
+# DEPRECATED
+if (0){
+# get channel listing
+sub __get_channels {
     my $bar = new XMLTV::ProgressBar('getting list of channels', 1)
 	if not $opt_quiet;
     my %channels;
@@ -710,8 +1039,9 @@ sub get_channels {
     $bar->finish() if not $opt_quiet;
     return %channels;
 }
+}
 
-
+# DEPRECATED
 sub get_txt_elems {
     my ($tree) = @_;
 
@@ -731,7 +1061,7 @@ sub get_txt_elems {
     return @txt_elem;
 }
 
-
+# DEPRECATED
 # Bump a YYYYMMDD date by one.
 sub nextday {
     my $d = shift;
@@ -740,6 +1070,7 @@ sub nextday {
     return UnixDate($n, '%Q');
 }
 
+# DEPRECATED
 sub GetWeekNumber {
     my $date=shift;
     my $today=UnixDate(parse_date('now'),"%Q"); 
@@ -761,7 +1092,7 @@ sub GetWeekNumber {
     return $weekdate; 
 }
 
-
+# DEPRECATED
 sub bump_start_day {
     my ($cur,$next) = @_;
     if (!defined($next)) {
@@ -782,6 +1113,7 @@ sub bump_start_day {
 #
 ################################################################################
 
+# DEPRECATED
 # Get top most container
 sub get_grid_offset_top {
     my ($tree) = @_;
@@ -795,6 +1127,7 @@ sub get_grid_offset_top {
     return 0;
 }
 
+# DEPRECATED
 # Get left most offset for containers
 sub get_grid_offset_left {
     my ($tree) = @_;
@@ -807,6 +1140,7 @@ sub get_grid_offset_left {
     return $left;
 }
 
+# DEPRECATED
 # Get default row height
 sub get_grid_row_height {
     my ($tree) = @_;
@@ -819,6 +1153,7 @@ sub get_grid_row_height {
     return $height;
 }
 
+# DEPRECATED
 # Get default row width
 sub get_grid_row_width {
     my ($tree) = shift;
@@ -829,13 +1164,7 @@ sub get_grid_row_width {
     return $rowDia[int ($#rowDia/2)]->attr('width');
 }
 
-
-
-
-
-
-
-
+# DEPRECATED
 sub parse_program {
 		my ($celda) = @_; 
 #channel, station, startday, celda)
@@ -1009,7 +1338,7 @@ sub parse_program {
 
 }
 
-
+# DEPRECATED
 ################################################################################
 # 
 # Returns a hash with:
@@ -1041,17 +1370,7 @@ sub get_programs_for {
     return sort { Date_Cmp(ParseDate($a->{time}),ParseDate($b->{time})) } @data;
 }
 
-
-
-
-
-
-
-
-
-
-
-
+# DEPRECATED
 sub encodeco {
  my($tempdummy,$temptexto)=@_;
 #    print "$temptexto\n";
@@ -1066,9 +1385,7 @@ sub encodeco {
     return $temptexto;
 }
 
-
-
-
+# DEPRECATED
 # Returns the time based on coordinates
 sub get_start_time {
  my ($curr_top,$offset_top,$default_height)=@_;
@@ -1090,6 +1407,7 @@ sub trim {
     return $string;
 }
 
+# DEPRECATED
 # Remove HTML tagging from extended chars
 sub Clean_amp {
     my ($texto)=@_;
@@ -1109,6 +1427,7 @@ sub Clean_amp {
    return $texto;
 }
 
+# DEPRECATED
 # Adjusts stop time from a program to a time that doesn't overlaps considering a threshold
 sub adjust_stoptime {
     my ($date,$prog_cur,$curstop,$nextstart,$ch_xmltv_id)=@_;
@@ -1127,10 +1446,53 @@ sub adjust_stoptime {
     return $curstop;
 }
 
-
-
 # Select Location
-sub select_Location( ) {
+sub select_location( ) {
+
+    my $bar = new XMLTV::ProgressBar('getting list of Locations', 1)  if not $opt_quiet;
+
+    my ($page, $data, $choice);
+    
+    # Get the available provinces
+    #   https://buscador.cablevisionfibertel.com.ar/ProvinceSelector.aspx
+    #
+    $page = fetch_url($urlRoot.'ProvinceSelector.aspx');
+    die $page if $page =~ /^Status:/;
+    $data = get_json($page); $page = undef;
+    my @provinces;
+    foreach my $province (@{ $data->{'rows'} }) {
+      push @provinces, $province->{'Provincia'};
+    }
+      
+    $choice=ask_choice("Select your Province:",$provinces[0],@provinces);
+    my $selectedprovince = $choice;
+    
+    
+    # Get the available localities for the selected province
+    #   https://buscador.cablevisionfibertel.com.ar/LocalitySelector.aspx?province=BUENOS%20AIRES
+    #
+    $page = fetch_url($urlRoot.'LocalitySelector.aspx?province='.$selectedprovince);
+    die $page if $page =~ /^Status:/;
+    $data = get_json($page); $page = undef;
+    my %localities;
+    foreach my $locality (@{ $data->{'rows'} }) {
+      $localities{ $locality->{'Localidad'} } = $locality->{'Id'};
+    }
+    my @names;
+    foreach (sort keys %localities) {
+      push @names, $_;
+    }
+    
+    $choice=ask_choice("Select your Locality:",$names[0],@names);
+    my $selectedlocality = $choice;
+    
+    return ( id=> $localities{$choice}, name=>$choice );
+}
+
+# DEPRECATED
+if (0){
+# Select Location
+sub __select_Location( ) {
 
     my $bar = new XMLTV::ProgressBar('getting list of Locations', 1)
 	if not $opt_quiet;
@@ -1162,5 +1524,70 @@ sub select_Location( ) {
     my $choice=ask_choice("Select your Locations:",$names[0],@names);
     return ( id=> $Locations{$choice}, name=>$choice );
 
+}
+}
+
+
+# Initialise LWP
+sub initialise_ua {
+		my $cookies = HTTP::Cookies->new;
+		#my $ua = LWP::UserAgent->new(keep_alive => 1);
+		my $ua = LWP::UserAgent->new;
+		# Cookies
+		$ua->cookie_jar($cookies);
+		# Define user agent type
+		#$ua->agent('Mozilla/5.0 (compatible; MSIE 9.0; Windows NT 6.0; Trident/5.0');
+		# Define timouts
+		$ua->timeout(240);
+		# Use proxy if set in http_proxy etc.
+		$ua->env_proxy;
+		#
+		return $ua;
+}
+
+# Fetch a page
+sub fetch_url ( $$$ ) {
+		my $url = shift;
+		my $method = shift;
+		my $varhash = shift;
+		my $res;
+		if (defined $method && lc($method) eq 'post') {
+			$res = $lwp->post($url, $varhash);
+		} else {
+			$res = $lwp->get($url);
+		}
+		if (!$res->is_success) {
+				# error - format as a valid http status line
+				return "Status: ".$res->status_line;
+		}
+		return $res->content;
+}
+
+# Parse a JSON response
+sub get_json ( $ ) {
+		my $page = shift;
+		my $data = JSON::PP->new()->utf8(1)->decode($page);
+		$page = undef;
+		return $data;
+}
+		
+# Parse HTML into a tree
+sub get_tree ( $ ) {
+	my $page = shift;
+	my $tree = HTML::TreeBuilder->new();
+  $tree->utf8_mode(1);
+	$tree->parse($page) or die "Cannot parse content\n";
+	$tree->eof;
+	return $tree;
+}
+
+# Store a page (used for debugging)
+sub store_page ( $ ) {
+	my $data = shift;
+	my $fn = 'grab'.time(); 
+	my $fhok = open my $fh, '>', $fn or warning("Cannot open file $fn");  
+	print $fh $data; 
+	close $fh;
+	return;
 }
 
