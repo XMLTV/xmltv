@@ -1243,7 +1243,7 @@ sub getStatsLines($)
 1;
 
 package XMLTV::IMDB::Crunch;
-use LWP::Simple;
+use LWP;
 
 # Use Term::ProgressBar if installed.
 use constant Have_bar => eval {
@@ -1330,7 +1330,7 @@ sub new
 	else { die }
     }
     if ( $self->{downloadMissingFiles} ) {
-	my $baseUrl = 'ftp://ftp.fu-berlin.de/pub/misc/movies/database/';
+	my $baseUrl = 'ftp://ftp.fu-berlin.de/pub/misc/movies/database';
 	foreach ( sort keys %missingListFiles ) {
 	    my $url = "$baseUrl/$_.list.gz";
 	    my $filename = delete $missingListFiles{$_};
@@ -1358,18 +1358,24 @@ $filename.
 
 END
   ;
-	    # For downloading we use LWP::Simple::getstore() to write
-	    # to a file.
+	    # For downloading we use LWP
 	    #
-	    my $resp = getstore($url, $filename);
+	    my $ua = LWP::UserAgent->new();
+	    $ua->env_proxy();
+	    $ua->show_progress(1);
+
+	    my $req = HTTP::Request->new(GET => $url);
+	    $req->authorization_basic('anonymous', 'tv_imdb');
+
+	    my $resp = $ua->request($req, $filename);
 	    my $got_size = -s $filename;
-	    if (defined $resp and is_success($resp)) {
+	    if (defined $resp and $resp->is_success ) {
 		die if not $got_size;
 		print STDERR "<$url>\n\t-> $filename, success\n\n";
 	    }
 	    else {
 		my $msg = "failed to download $url to $filename";
-		$msg .= ", http response code: $resp" if defined $resp;
+		$msg .= ", http response code: ".$resp->status_line if defined $resp;
 		warn $msg;
 		if ($got_size) {
 		    warn "renaming $filename -> $partial\n";
@@ -1953,7 +1959,7 @@ sub invokeStage($$)
     my $startTime=time();
     if ( $stage == 1 ) {
 	$self->status("parsing Movies list for stage $stage..");
-	my $countEstimate=$self->dbinfoCalcEstimate("movies", 43);
+	my $countEstimate=$self->dbinfoCalcEstimate("movies", 47);
 
 	my $num=$self->readMoviesOrGenres("Movies", $countEstimate, "$self->{imdbListFiles}->{movies}");
 	if ( $num < 0 ) {
@@ -2004,7 +2010,7 @@ sub invokeStage($$)
     elsif ( $stage == 2 ) {
 	$self->status("parsing Directors list for stage $stage..");
 
-	my $countEstimate=$self->dbinfoCalcEstimate("directors", 225);
+	my $countEstimate=$self->dbinfoCalcEstimate("directors", 258);
 
 	my $num=$self->readCastOrDirectors("Directors", $countEstimate, "$self->{imdbListFiles}->{directors}");
 	if ( $num < 0 ) {
@@ -2071,7 +2077,7 @@ sub invokeStage($$)
 	$self->status("parsing Actors list for stage $stage..");
 
 	#print "re-reading movies into memory for reverse lookup..\n";
-	my $countEstimate=$self->dbinfoCalcEstimate("actors", 415);
+	my $countEstimate=$self->dbinfoCalcEstimate("actors", 449);
 
 	my $num=$self->readCastOrDirectors("Actors", $countEstimate, "$self->{imdbListFiles}->{actors}");
 	if ( $num < 0 ) {
@@ -2122,7 +2128,7 @@ sub invokeStage($$)
     elsif ( $stage == 4 ) {
 	$self->status("parsing Actresses list for stage $stage..");
 
-	my $countEstimate=$self->dbinfoCalcEstimate("actresses", 382);
+	my $countEstimate=$self->dbinfoCalcEstimate("actresses", 483);
 	my $num=$self->readCastOrDirectors("Actresses", $countEstimate, "$self->{imdbListFiles}->{actresses}");
 	if ( $num < 0 ) {
 	    if ( $num == -2 ) {
@@ -2171,7 +2177,7 @@ sub invokeStage($$)
     }
     elsif ( $stage == 5 ) {
 	$self->status("parsing Genres list for stage $stage..");
-	my $countEstimate=$self->dbinfoCalcEstimate("genres", 61);
+	my $countEstimate=$self->dbinfoCalcEstimate("genres", 68);
 
 	my $num=$self->readMoviesOrGenres("Genres", $countEstimate, "$self->{imdbListFiles}->{genres}");
 	if ( $num < 0 ) {
@@ -2221,7 +2227,7 @@ sub invokeStage($$)
     }
     elsif ( $stage == 6 ) {
 	$self->status("parsing Ratings list for stage $stage..");
-	my $countEstimate=$self->dbinfoCalcEstimate("ratings", 63);
+	my $countEstimate=$self->dbinfoCalcEstimate("ratings", 68);
 
 	my $num=$self->readRatings($countEstimate, "$self->{imdbListFiles}->{ratings}");
 	if ( $num < 0 ) {
