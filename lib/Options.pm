@@ -278,13 +278,10 @@ version of the grabber.
 
 =item list_lineups_sub
 
-Optional. A coderef that takes a configuration
-hash as returned by XMLTV::Configure::LoadConfig as the first parameter
-and an option hash as returned by ParseOptions as the second parameter,
-and returns an xml-string containing a list of all the channel lineups
-that the grabber can deliver data for using the supplied configuration.
-Note that the listsub shall not use any channel-configuration from the
-hashref. The xml-string shall follow the xmltv-lineups.xsd schema.
+Optional. A coderef that takes an option hash as returned by ParseOptions 
+as a parameter, and returns an xml-string containing a list of all the 
+channel lineups for which the grabber can deliver data. 
+The xml-string shall follow the xmltv-lineups.xsd schema.
 
 =item get_lineup_sub
 
