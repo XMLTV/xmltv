@@ -75,9 +75,11 @@ my ($opt, $conf);
 # Use XMLTV::Options::ParseOptions to parse the options and take care of the basic capabilities that a tv_grabber should
  ($opt, $conf) = ParseOptions({ 
 			grabber_name 			=> $GRABBER_NAME,
-			capabilities 			=> [qw/baseline manualconfig apiconfig cache/],
+			capabilities 			=> [qw/baseline manualconfig apiconfig lineups cache/],
 			stage_sub 				=> \&config_stage,
-			listchannels_sub 	=> \&fetch_channels,
+			listchannels_sub 	=> \&list_channels,
+			list_lineups_sub  => \&list_lineups,
+			get_lineup_sub    => \&get_lineup,
 			version 					=> $VERSION,
 			description 			=> $GRABBER_DESC,
 			extra_options			=> [qw/hours=i date=s dst channel=s info/],
@@ -116,7 +118,7 @@ HTTP::Cache::Transparent::init( {
 
 # ------------------------------------------------------------------------------------------------------------------------------------- #
 # Used by the configure sub
-my @platforms;
+my @platforms; my %regions;
 my $selected_platform; my $selected_region;
 my $platform_title; my $region_title;
 
@@ -789,112 +791,137 @@ sub loadmapgenre {
 		 #print Dumper ($mapgenrehash);
 }
 
-sub fetch_channels {
-		# Fetch Atlas' channels for a Region for a Platform
+sub list_lineups ( $ ) {
+		# Returns an xml-string containing a list of all the  channel lineups for which the grabber can deliver data (in xmltv-lineups.xsd format).
 		
-		# This sub is used by both --configure and --list-channels
-		# For --configure we will already have a Platform & Region from config_stage()
-		# For --list-channels it's not practical to list all channels for all regions for all platforms
-		#  (this would take too long (over 10 mins) and would place an unnecessary load on the Atlas server -
-		#   if you really want to see all 38,242 (!) records this would generate then please see the static files
-		#   in the 'data' directory on github)
-		#
-		# It seems XMLTV doesn't really handle the situation where there are multiple Platforms->Regions
-		# The only way we can reduce the list is to have the user select Platform and Region and then just 
-		# list the channels for that one Region. But this duplicates the selections we've done in config_stage()
-		# unfortunately. If anyone can see a more practical way of doing this please let me know.
-		#
+		my $nb = 'Note: list-lineups and get-lineup is still unofficial in XMLTV, and the format and content of this xml is liable to change.';  print STDERR $nb."\n";
+		
+		my $opts = $_;
+		fetch_platforms();
+		
+		# There doesn't seem to be a proc in XMLTV for writing the xmltv-lineups.xml
+		#  so we'll have to roll our own
+		#  (to validate use  " xmllint -noout -schema xmltv-lineups.xsd  filename " )
+		
+		# The lineups xml doesn't map well to the Atlas database but we'll try
+
+		use XML::Writer;
+
+		my $w = XML::Writer->new( 'ENCODING' => 'UTF-8', 'DATA_MODE' => 1, 'DATA_INDENT' => 1 );		# OUTPUT to stdout
+		$w->xmlDecl('UTF-8');
+		$w->comment($nb);
+		$w->startTag('xmltv-lineups',
+											'modified'						=> strftime("%FT%T %z", localtime),
+											'source-info-name' 		=> $source_info_name,
+											'source-info-url' 		=> $source_info_url,
+											'generator-info-name' => $generator_info_name,
+											'generator-info-url' 	=> $generator_info_url );
+	
+			foreach my $platform (@platforms) {	
+				$w->startTag('xmltv-lineup', 'id' => $platform->{'id'} );
+					$w->startTag('type');
+					$w->characters('STB');
+					$w->endTag('type');
+					$w->startTag('display-name', 'lang' => 'en' );
+					$w->characters($platform->{'title'});
+					$w->endTag('display-name');
+					foreach my $country (@{$platform->{'countrieslist'}}) {					
+						$w->startTag('availability', 'area' => 'country' );
+						$w->characters($country);
+						$w->endTag('availability');
+					}
+				$w->endTag('xmltv-lineup');
+				foreach my $region (@{$platform->{'regions'}}) {		
+					$w->startTag('xmltv-lineup', 'id' => $region->{'id'} );
+						$w->startTag('type');
+						$w->characters('STB');
+						$w->endTag('type');
+						$w->startTag('display-name', 'lang' => 'en' );
+						$w->characters($platform->{'title'} .' - '. $region->{'title'});
+						$w->endTag('display-name');
+						$w->startTag('availability', 'area' => 'region' );
+						$w->characters($region->{'title'});
+						$w->endTag('availability');
+					$w->endTag('xmltv-lineup');
+				}
+			}
+		
+		$w->endTag('xmltv-lineups');		
+		$w->end();
+		return;
+}
+
+sub get_lineup ( $$ ) {
+		# Returns an xml-string describing the configured lineup (in xmltv-lineups.xsd format).
+		
+		my $nb = 'Note: list-lineups and get-lineup is still unofficial in XMLTV, and the format and content of this xml is liable to change.';  print STDERR $nb."\n";
 		
 		my ($conf, $opt) = @_;
+		my @channels = fetch_channels ($conf, $opt);
+		
+		use XML::Writer;
 
-		if ($opt->{'configure'}) { 
-				# temporary diversion...
-				# Store some extra data in the conf file (just for info)
-				#
-				# Ideally we would do this in config_stage but that will only write data captured va 'Ask'
-				# 	(i.e. we can't add our own data).  Neither does it have the $opt array with the config_file 
-				#		name so we can't even write it manually!  The only place we can do that is here.
-				#
-				open OUT, ">> ".$opt->{'config-file'}
-						or die "Failed to open $opt->{'config-file'} for writing";
-				print OUT "platform-title=$platform_title\n";
-				print OUT "region-title=$region_title\n";
-				close OUT;
-				#  ...now back to the normal listchannels_sub
-		}
-		elsif ($opt->{'list-channels'}) { 
-				$selected_platform = $conf->{'platform'}[0];
-				$selected_region = $conf->{'region'}[0];
+		my $w = XML::Writer->new( 'ENCODING' => 'UTF-8', 'DATA_MODE' => 1, 'DATA_INDENT' => 1 );		# OUTPUT to stdout
+		$w->xmlDecl('UTF-8');
+		$w->comment($nb);
+		$w->startTag('xmltv-lineups',
+											'modified'						=> strftime("%FT%T %z", localtime),
+											'source-info-name' 		=> $source_info_name,
+											'source-info-url' 		=> $source_info_url,
+											'generator-info-name' => $generator_info_name,
+											'generator-info-url' 	=> $generator_info_url );
+											
+			$w->startTag('xmltv-lineup', 'id' => $conf->{'platform'}[0] );
+				$w->startTag('type');
+				$w->characters('STB');
+				$w->endTag('type');
+				$w->startTag('display-name', 'lang' => 'en' );
+				$w->characters($conf->{'platform-title'}[0]);
+				$w->endTag('display-name');
 				
-				# Need to load our 'map' file.  --list-channels doesn't reach that part of the code
-				loadmapconf();
-		}
-		
-
-		#		http://atlas.metabroadcast.com/3.0/channel_groups/cbhN.json?annotations=channels 
-		#
-		# Channels are a concatenation of platform-wide channels + region-specific channels 
-		#
-		# Platform code is $selected_platform  (captured by select-platform in config_stage()
-		# Region code is $selected_region  (captured by select-region in config_stage()
-		#
-		my @urls = ();
-		push @urls, $ROOT_URL.'channel_groups/'.$selected_platform.'.json?annotations=channels';
-		push @urls, $ROOT_URL.'channel_groups/'.$selected_region.'.json?annotations=channels'  if $selected_region;
-
-		my @channels = ();
-
-		my $bar = new XMLTV::ProgressBar({
-			name => "Fetching channels",
-			count => 1
-		});
-
-		foreach my $url (@urls) {
-			print STDERR $url ."\n" 	if ($opt->{debug});
-			
-			# Fetch the page
-			my $res = $lwp->get( $url );
-			
-			if ($res->is_success) {
-					#print $res->content;
-					
-					# Extract the available channels
-					my $data = JSON::PP->new()->utf8(0)->decode($res->content);
-					$res = undef;
-
-					my $channels = $data->{'channel_groups'}[0]->{'channels'};
-					foreach my $c (@$channels) {
-							my %chan = %$c;
-							next unless ($chan{'channel'}->{'type'} eq 'channel');
-					
-							my %channel = ();
-					
-							$channel{'num'} 	= $chan{'channel_number'};
-							$channel{'id'} 		= $chan{'channel'}->{'id'};
-							$channel{'title'} = $chan{'channel'}->{'title'};
-							$channel{'image'} = $chan{'channel'}->{'image'};
-							
-							
-							if ($opt->{'list-channels'}) { 
-								# if the user has a 'map' file then map the Atlas channel_id to the user's one (since this is the one which will be
-								#  displayed in xml listings)
-								if (defined(&map_channel_id)) { $channel{'id'} = map_channel_id($channel{'id'}); }
+				foreach my $channel (@channels) {
+					$w->startTag('lineup-entry');
+						$w->startTag('preset');
+						$w->characters($channel->{'num'});
+						$w->endTag('preset');
+						$w->startTag('station', 'rfc2838' => map_channel_id($channel->{'id'}) );
+							$w->startTag('name', 'lang' => 'en' );
+							$w->characters($channel->{'title'});
+							$w->endTag('name');
+							$w->emptyTag('logo', 'url' => $channel->{'image'} ) if $channel->{'image'};
+							if ($channel->{'media_type'} && $channel->{'media_type'} eq 'video') {
+								if (defined $channel->{'high_definition'}) {
+									$w->startTag('video');
+										$w->startTag('format');
+										$w->characters( ($channel->{'high_definition'} eq 1 ? 'HDTV' : 'SDTV') );
+										$w->endTag('format');
+									$w->endTag('video');
+								} else {
+									$w->emptyTag('video');
+								}
 							}
-					
-					
-							push @channels, \%channel;
-					}
-					
-			} else {
-					print $res->status_line . "\n";
-			}
-			
-		}
-	
-		$bar->update() && $bar->finish && undef $bar if defined $bar;
+							if ($channel->{'media_type'} && $channel->{'media_type'} eq 'audio') {
+								$w->emptyTag('audio');
+							}
+						$w->endTag('station');
+						$w->startTag('stb-channel');						
+							$w->startTag('stb-preset');
+							$w->characters($channel->{'num'});
+							$w->endTag('stb-preset');
+						$w->endTag('stb-channel');
+					$w->endTag('lineup-entry');
+				}
 		
-		#print Dumper(@channels);
-
+			$w->endTag('xmltv-lineup');
+		$w->endTag('xmltv-lineups');		
+		$w->end();
+		return;
+}
+		
+sub list_channels ( $$ ) {
+		# List all available channels on the configured 'region' (in xmltv.dtd format).
+		
+		my @channels = fetch_channels (@_);
 		
 		# We must return an xml-string (c.f. Options.pm), E.g.:
 		#  	<channel id="cbbR">
@@ -924,21 +951,131 @@ sub fetch_channels {
 		return $result;
 }
 
-sub fetch_platforms {
+sub fetch_channels ( $$ ) {
+		# Fetch Atlas' channels for a Region for a Platform
+		
+		# This sub is used by both --configure and --list-channels (and --get-lineup)
+		# For --configure we have a Platform & Region from config_stage()
+		# For --list-channels we have a Platform & Region from %conf
+		# For --list-channels it's not practical to list all channels for all regions for all platforms
+		#  (this would take too long (over 10 mins) and would place an unnecessary load on the Atlas server -
+		#   if you really want to see all 38,242 (!) records this would generate then please see the static files
+		#   in the 'data' directory on github)
+		#
+		
+		my ($conf, $opt) = @_;
+
+		if ($opt->{'configure'}) { 
+				# temporary diversion...
+				# Store some extra data in the conf file (just for info)
+				#
+				# Ideally we would do this in config_stage but that will only write data captured va 'Ask'
+				# 	(i.e. we can't add our own data).  Neither does it have the $opt array with the config_file 
+				#		name so we can't even write it manually!  The only place we can do that is here.
+				#
+				open OUT, ">> ".$opt->{'config-file'}
+						or die "Failed to open $opt->{'config-file'} for writing";
+				print OUT "platform-title=$platform_title\n";
+				print OUT "region-title=$region_title\n";
+				if ($conf->{'lineupcode'}[0] ne '') { 
+					# if user selected a lineup then we need to manually write the platform/region (since there's no configure_stage for them)
+					print OUT "platform=$selected_platform\n";
+					print OUT "region=$selected_region\n";
+				}
+				close OUT;
+				#  ...now back to the normal listchannels_sub
+		}
+		else { 
+				$selected_platform = $conf->{'platform'}[0];
+				$selected_region = $conf->{'region'}[0];
+				
+				# Need to load our 'map' file.  --list-channels doesn't reach that part of the code
+				loadmapconf();
+		}
+		
+
+		#		http://atlas.metabroadcast.com/3.0/channel_groups/cbhN.json?annotations=channels 
+		#
+		# Channels are a concatenation of platform-wide channels + region-specific channels 
+		#
+		# Platform code is $selected_platform  (captured by select-platform in config_stage()
+		# Region code is $selected_region  (captured by select-region in config_stage()
+		#
+		my @urls = ();
+		push @urls, $ROOT_URL.'channel_groups/'.$selected_platform.'.json?annotations=channels';
+		push @urls, $ROOT_URL.'channel_groups/'.$selected_region.'.json?annotations=channels'  if $selected_region;
+
+		my @channels = ();
+
+		my $bar = new XMLTV::ProgressBar({
+			name => "Fetching channels",
+			count => 1
+		}) unless ($opt->{quiet} || $opt->{debug});
+
+		foreach my $url (@urls) {
+			print STDERR $url ."\n" 	if ($opt->{debug});
+			
+			# Fetch the page
+			my $res = $lwp->get( $url );
+			
+			if ($res->is_success) {
+					#print $res->content;
+					
+					# Extract the available channels
+					my $data = JSON::PP->new()->utf8(0)->decode($res->content);
+					$res = undef;
+
+					my $channels = $data->{'channel_groups'}[0]->{'channels'};
+					foreach my $c (@$channels) {
+							my %chan = %$c;
+							next unless ($chan{'channel'}->{'type'} eq 'channel');
+					
+							my %channel = ();
+					
+							$channel{'num'} 	= $chan{'channel_number'};
+							$channel{'id'} 		= $chan{'channel'}->{'id'};
+							$channel{'title'} = $chan{'channel'}->{'title'};
+							$channel{'image'} = $chan{'channel'}->{'image'};
+							$channel{'media_type'} = $chan{'channel'}->{'media_type'};
+							$channel{'high_definition'} = $chan{'channel'}->{'high_definition'};
+							
+							if ($opt->{'list-channels'}) { 
+								# if the user has a 'map' file then map the Atlas channel_id to the user's one (since this is the one which will be
+								#  displayed in xml listings)
+								if (defined(&map_channel_id)) { $channel{'id'} = map_channel_id($channel{'id'}); }
+							}
+					
+							push @channels, \%channel;
+					}
+					
+			} else {
+					print $res->status_line . "\n";
+			}
+			
+		}
+	
+		$bar->update() && $bar->finish && undef $bar if defined $bar;
+		
+		#print Dumper(@channels);exit;
+		return @channels;
+}
+
+sub fetch_platforms () {
 		# Fetch Atlas' channel_groups
 		
-		# (note: $opt & $conf have not been returned by ParseOptions() yet, since that hasn't exited yet)
+		# (note: if called during --configure then $opt & $conf have not been returned by ParseOptions() yet, since that hasn't exited yet)
 		
 		#		http://atlas.metabroadcast.com/3.0/channel_groups.json?type=platform
 		my $url = $ROOT_URL.'channel_groups.json?type=platform';
 		#print STDERR $url ."\n";
 
 		@platforms = ();
+		undef %regions;
 
 		my $bar = new XMLTV::ProgressBar({
 			name => "Fetching platforms",
 			count => 1
-		});
+		}) unless ($opt->{quiet} || $opt->{debug});
 
 		# Fetch the page
 		my $res = $lwp->get( $url );
@@ -960,6 +1097,7 @@ sub fetch_platforms {
 						$platform{'id'} = $group{'id'};
 						$platform{'title'} = $group{'title'};
 						
+						$platform{'countrieslist'} = $group{'available_countries'};
 						$platform{'countries'} = '';
 						foreach my $country (@{$group{'available_countries'}}) {
 							$platform{'countries'} .= '(' . $country . ')';
@@ -968,6 +1106,7 @@ sub fetch_platforms {
 						$platform{'regions'} = ();
 						foreach my $region (@{$group{'regions'}}) {
 							push @{$platform{'regions'}},  { 'id' => $region->{'id'}, 'title' =>  $region->{'title'} };
+							$regions{$region->{'id'}} = { 'title' => $region->{'title'}, 'platform_id' => $platform{'id'}, 'platform_title' => $platform{'title'} };
 						}
 						
 						push @platforms, \%platform;
@@ -977,13 +1116,14 @@ sub fetch_platforms {
 				print $res->status_line . "\n";
 		}
 	
-		$bar->update if defined $bar;
-		$bar->finish() && undef $bar if defined $bar;
+		$bar->update() && $bar->finish && undef $bar if defined $bar;
 		
-		return @platforms;
+		#print Dumper(@platforms);exit; 
+		#print Dumper(\%regions);exit;
+		return;
 }
 
-sub config_stage {
+sub config_stage ( $$ ) {
 		my ( $stage, $conf ) = @_;				# note that $conf is mostly empty at this stage of course
 
 		my $result;
@@ -1027,13 +1167,77 @@ sub config_stage {
 						default => 'yes',
         } );
 				
+        $writer->end('select-lineup');
+				
+    }	
+		# ------------------------------------------------------------------ #
+    elsif ($stage eq 'select-lineup') {
+
+				# I don't like the way the "lineup" functionality is supposed to work:
+				#    If user selects a lineup then we are supposed to get ALL channels for that lineup.  Every time.  No exception
+				#    Not only does that mean (i) we have to do a fetch of the channels for the lineup EVERY time the grabber is run,
+				#    (since the channels for the lineup would *not* be stored in the config file)
+				#    but (ii) we are potentially grabbing 600 channels *just because* the user selected a lineup -- not only does this
+				#    place a load on the data source, but it might not even be what the user needs.
+				#    AIUI "lineup" is so a user's PVR can grab data in a (semi-) automated way.  But that doesn't mean that just because
+				#    I am using MythTV that I want to get all 600 channels!  (Especially if it's a paid for service where you pay per channel
+				#    downloaded.)
+				#    Therefore I'm going to still run the channels selector.  If a user/PVR software really wants all 600 channels then all
+				#    they have to do is send "all" in response to the subsequent question.
+				
+				$writer->write_string( {
+						id => 'lineupcode', 			# don't use 'lineup' or else we don't run the channels selector
+						title => [ [ 'Enter your viewing region', 'en' ] ],
+						description => [ [ 'Enter the region code you want or leave blank to select from a list', 'en' ] ],
+						default => '',
+        } );
+				
+				$writer->end('check-lineup');
+				
+    }		
+		# ------------------------------------------------------------------ #
+    elsif ($stage eq 'check-lineup') {
+				
+				fetch_platforms();
+				
+				if ($conf->{'lineupcode'}[0] ne '') {
+					# selected 'code' could be a platform OR a region
+					my $lineupcode = $conf->{'lineupcode'}[0];
+					{ LOOP:
+						foreach my $platform (@platforms) {
+							if ($platform->{'id'} eq $lineupcode) {
+								$selected_platform = $platform->{'id'};							
+								$platform_title = $platform->{'title'};
+								$selected_region = '';	
+								$region_title = '';
+								last LOOP;
+							}
+							foreach my $region (@{$platform->{'regions'}}) {
+								if ($region->{'id'} eq $lineupcode) {
+									$selected_platform = $platform->{'id'};							
+									$platform_title = $platform->{'title'};
+									$selected_region = $region->{'id'};
+									$region_title = $region->{'title'};
+									last LOOP;
+								}
+							}
+						}
+					}
+				
+					if (defined $selected_platform && $selected_platform ne '') {		
+						$writer->end('select-channels');
+					}
+				}
+				else 
+				{
         $writer->end('select-platform');
+				}
 				
     }	
 		# ------------------------------------------------------------------ #
     elsif ($stage eq 'select-platform') {
 
-				fetch_platforms();
+				#fetch_platforms();
 				
         $writer->start_selectone( {
             id => 'platform',
@@ -1056,6 +1260,9 @@ sub config_stage {
     }		
 		# ------------------------------------------------------------------ #
     elsif ($stage eq 'select-region') {
+				
+				# store platform selected in previous stage				
+				$selected_platform = $conf->{'platform'}[0];
 				
         $writer->start_selectone( {
             id => 'region',
@@ -1091,11 +1298,11 @@ sub config_stage {
 				}
 				
         $writer->end_selectone();
-				$writer->end('select-done');
+				$writer->end('clean-up');
 
     }
 		# ------------------------------------------------------------------ #
-    elsif ($stage eq 'select-done') {
+    elsif ($stage eq 'clean-up') {
 		
 				# Store some extra data in the conf file (just for info)
 				#
@@ -1253,13 +1460,13 @@ tv_grab_uk_atlas
            [--output FILE] [--quiet] [--debug]
 
 tv_grab_uk_atlas 
-           [--hours N] [--offset N]
+           --hours N [--offset N]
 					 [--channel S]
 					 [--config-file FILE]
            [--output FILE] [--quiet] [--debug]
 
 tv_grab_uk_atlas 
-           [--date DATE] [--dst]
+           --date DATE [--dst]
 					 [--channel S]
 					 [--config-file FILE]
            [--output FILE] [--quiet] [--debug]
@@ -1273,6 +1480,12 @@ tv_grab_uk_atlas --configure-api [--stage NAME]
 tv_grab_uk_atlas --list-channels [--config-file FILE]
            [--output FILE] [--quiet] [--debug]
 
+tv_grab_uk_atlas --list-lineups [--output FILE]
+           [--quiet] [--debug]
+
+tv_grab_uk_atlas --get-lineup [--config-file FILE] [--output FILE]
+           [--quiet] [--debug]
+					 
 =head1 DESCRIPTION
 
 Output TV listings in XMLTV format for many channels available in UK.
@@ -1318,7 +1531,12 @@ B<--debug> Provide more information on progress to stderr to help in
 debugging.
 
 B<--list-channels> Write output giving <channel> elements for every
-channel available (ignoring the config file), but no programmes.
+channel available in the current configuration.
+
+B<--list-lineups> Write output giving list of available viewing regions.
+
+B<--get-lineup> Write output giving <channel> elements for every
+channel available in the current lineup.
 
 B<--capabilities> Show which capabilities the grabber supports. For more
 information, see L<http://wiki.xmltv.org/index.php/XmltvCapabilities>
