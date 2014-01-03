@@ -153,7 +153,7 @@ sub dump {
   #
   # Check 1: object already contains episode
   #
-  my($left, $right);
+  my($left, $special, $right);
   if (defined($subtitle)) {
     # nothing to be done
   }
@@ -197,14 +197,37 @@ sub dump {
   # This will generate a program with
   #
   #   title:       Batman
-  #   sub-title:   Pingviinin paluu.
+  #   sub-title:   Pingviinin paluu
+  #   description: Amerikkalainen animaatiosarja....
+  #
+  # Special cases
+  #
+  #   text:        Pingviinin paluu?. Amerikkalainen animaatiosarja....
+  #   sub-title:   Pingviinin paluu?
+  #   description: Amerikkalainen animaatiosarja....
+  #
+  #   text:        Pingviinin paluu... Amerikkalainen animaatiosarja....
+  #   sub-title:   Pingviinin paluu...
+  #   description: Amerikkalainen animaatiosarja....
+  #
+  #   text:        Pingviinin paluu?!? Amerikkalainen animaatiosarja....
+  #   sub-title:   Pingviinin paluu?!?
   #   description: Amerikkalainen animaatiosarja....
   #
   elsif ((defined $description)               &&
 	 (exists $series_description{$title}) &&
-         (($left, $right) = ($description =~ /^\s*([^.!?]+[.!?])\s*(.*)/))) {
-    # We only remove period from episode title, preserve others
-    $left =~ s/\.$//;
+         (($left, $special, $right) = ($description =~ /^\s*([^.!?]+[.!?])([.!?]+\s+)?\s*(.*)/))) {
+    unless (defined $special) {
+      # We only remove period from episode title, preserve others
+      $left =~ s/\.$//;
+    } elsif (($left    !~ /\.$/) &&
+	     ($special =~ /^\.\s/)) {
+      # Ignore extraneous period after sentence
+    } else {
+      # Preserve others, e.g. ellipsis
+      $special =~ s/\s+$//;
+      $left    .= $special;
+    }
     debug(3, "XMLTV series title '$title' episode '$left'");
     ($subtitle, $description) = ($left, $right);
   }
