@@ -709,6 +709,19 @@ my @opt_components
 #                  },
 #     },
 
+# 2014-01-04 - added by bilbo_uk, replacement grabber
+     { name => 'tv_grab_dk_dr',
+       blurb => 'Grabber for Denmark (dr.dk)',
+       exes => [ 'grab/dk_dr/tv_grab_dk_dr' ],
+       prereqs => { 'Data::Dumper' => 0,
+                    'LWP::UserAgent' => 0,
+                    'IO::Scalar' => 0,
+                    'DateTime' => 0,
+                    'Try::Tiny' => 0,
+                    'JSON' => 0,
+                  },
+     },
+
 #
 # 2009-03-05 rmeden - source site seems to be blocking our agent string
 #
