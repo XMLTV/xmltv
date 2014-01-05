@@ -717,7 +717,6 @@ my @opt_components
                     'LWP::UserAgent' => 0,
                     'IO::Scalar' => 0,
                     'DateTime' => 0,
-                    'Try::Tiny' => 0,
                     'JSON' => 0,
                   },
      },
