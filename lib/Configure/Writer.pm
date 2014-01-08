@@ -3,6 +3,10 @@ package XMLTV::Configure::Writer;
 use strict;
 use warnings;
 
+# use version number for feature detection:
+# 0.005065 : can use 'constant' in write_string()
+our $VERSION = 0.005065;
+
 BEGIN {
     use Exporter   ();
     our (@ISA, @EXPORT, @EXPORT_OK, %EXPORT_TAGS);
@@ -140,6 +144,17 @@ element:
     default => "",
     } );
 
+		
+To add a constant use 'constant' key:
+	If constant value is empty then revert to 'ask' procedure.
+
+  $writer->write_string( {
+    id => 'version', 
+    title => [ [ 'Version number', 'en' ] ],
+    description => [ [ 'Automatically added version number - no user input', 'en' ] ],
+    constant => '123',
+    } );
+		
 =back
 
 =cut
@@ -186,6 +201,9 @@ sub write_string_tag {
     my $default = delete $ch{default};
     
     $h{default} = $default if defined $default;
+		
+    my $constant = delete $ch{constant};  
+    $h{constant} = $constant if defined $constant;
     
     $self->startTag( $tag, %h );
     
