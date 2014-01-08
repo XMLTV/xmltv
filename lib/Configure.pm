@@ -1,5 +1,10 @@
 package XMLTV::Configure;
 
+# use version number for feature detection:
+# 0.005065 : can use 'constant' in write_string()
+# 0.005065 : comments in config file not restricted to starting in first column
+our $VERSION = 0.005065;
+
 BEGIN {
     use Exporter   ();
     our (@ISA, @EXPORT, @EXPORT_OK, %EXPORT_TAGS);
@@ -71,14 +76,14 @@ sub LoadConfig
     {
 	$line =~ tr/\n\r//d;
 	next if $line =~ /^\s*$/;
-	next if $line =~ /^#/;
+	next if $line =~ /^\s*#/;
         
 	# Only accept lines with key=value or key!value. 
 	# No white-space is allowed before
 	# the equal-sign. White-space after the equal-sign is considered
 	# part of the value, except for white-space at the end of the line
 	# which is ignored.
-	my( $key, $sign, $value ) = ($line=~ /^(\S+)([=!])(.*?)\s*$/ );
+	my( $key, $sign, $value ) = ($line=~ /^(\S+)([=!])(.*?)\s*(#.*)?$/ );
 
 	return undef unless defined $key;
 	if( $sign eq '=' )
@@ -216,16 +221,18 @@ sub configure_stage
 	my $title = getvalue( $p, 'title', $lang );
 	my $description = getvalue( $p, 'description', $lang );
 	my $default = $p->findvalue( '@default' );
+	my $constant = $p->findvalue( '@constant' );
 	
 	my $value;
 
-	my $q = defined( $default ) ? "$title: [$default]" :
+	my $q = $default ne '' ? "$title: [$default]" :
 	                              "$title:";
 
-	say( "$description" );
+	say( "$description" ) if $constant eq '';
 	if( $tag eq 'string' )
 	{
-	    $value = ask( "$q" );
+	    $value = $constant if $constant ne '';
+	    $value = ask( "$q" ) if $constant eq '';
 	    $value = $default if $value eq "";
 	    print OUT "$id=$value\n";
 	}
