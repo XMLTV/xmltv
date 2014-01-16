@@ -21,13 +21,21 @@
 # XMLTV::Get_nice::get_nice_aux() is the one to cache with
 # XMLTV::Memoize or whatever.  If you want an HTML::Tree object use
 # get_nice_tree().
+# Alternatively, get_nice_json() will get you a JSON object,
+# or get_nice_xml() will get a XML::Parser 'Tree' object
 #
 
 use strict;
 
 package XMLTV::Get_nice;
+
+# use version number for feature detection:
+# 0.005065 : new methods get_nice_json(), get_nice_xml()
+# 0.005065 : add utf8 decode option to get_nice_tree()
+our $VERSION = 0.005065;
+
 use base 'Exporter';
-our @EXPORT = qw(get_nice get_nice_tree error_msg);
+our @EXPORT = qw(get_nice get_nice_tree get_nice_xml get_nice_json error_msg);
 use LWP::UserAgent;
 use XMLTV;
 our $Delay = 5; # in seconds
@@ -53,18 +61,59 @@ sub get_nice( $ ) {
     return scalar get_nice_aux($_[0]);
 }
 
-# Fetch page and return as HTML::Tree object.  Optional argument is a
-# function to put the page data through (eg, to clean up bad
+# Fetch page and return as HTML::Tree object.   
+# Optional arguments:
+# i) a function to put the page data through (eg, to clean up bad
 # characters) before parsing.
+# ii) convert incoming UTF-8 to UNICODE when set to 1
 #
-sub get_nice_tree( $;$ ) {
-    my ($uri, $filter) = @_;
+sub get_nice_tree( $;$$ ) {
+    my ($uri, $filter, $utf8) = @_;
     require HTML::TreeBuilder;
     my $content = get_nice $uri;
     $content = $filter->($content) if $filter;
-    my $t = new HTML::TreeBuilder;
-    $t->parse($content) or die "cannot parse content of $uri\n";
+    if ($utf8) {
+      # (note: HTML::Parser->utf8_mode is only available Perl 5.8) 
+      require Encode;
+      $content = decode('UTF-8', $content);   # strict utf-8
+    }
+    my $t = HTML::TreeBuilder->new()->parse($content) or die "cannot parse content of $uri\n";
     $t->eof;
+    return $t;
+}
+
+# Fetch page and return as XML::Parser 'Tree' object.  
+# Optional arguments:
+# i) a function to put the page data through (eg, to clean up bad
+# characters) before parsing.
+# ii) convert incoming UTF-8 to UNICODE when set to 1
+#
+sub get_nice_xml( $;$$ ) {
+    my ($uri, $filter, $utf8) = @_;
+    require XML::Parser;
+    my $content = get_nice $uri;
+    $content = $filter->($content) if $filter;
+    if ($utf8) {
+      require Encode;
+      $content = decode('UTF-8', $content);   # strict utf-8
+    }
+    my $t = XML::Parser->new(Style => 'Tree')->parse($content) or die "cannot parse content of $uri\n";
+    return $t;
+}
+
+# Fetch page and return as JSON::PP object.  
+# Optional arguments:
+# i) a function to put the page data through (eg, to clean up bad
+# characters) before parsing.
+# ii) convert incoming UTF-8 to UNICODE when set to 1
+#
+sub get_nice_json( $;$$ ) {
+    my ($uri, $filter, $utf8) = @_;
+    require JSON::PP;
+    my $content = get_nice $uri;
+    $content = $filter->($content) if $filter;
+    $utf8 = 0 if !defined $utf8; #(not necessary but safer)
+    my $t = JSON::PP->new()->utf8($utf8)->decode($content) or die "cannot parse content of $uri\n";
     return $t;
 }
 
