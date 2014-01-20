@@ -433,14 +433,6 @@ my @opt_components
        blurb => 'Fast grabber for UK and Ireland using Atlas database',
        exes => [ 'grab/uk_atlas/tv_grab_uk_atlas' ],
        share_files => {
-            'grab/uk_atlas/CHANGELOG'
-                => 'tv_grab_uk_atlas/CHANGELOG',
-            'grab/uk_atlas/INSTALL'
-                => 'tv_grab_uk_atlas/INSTALL',
-            'grab/uk_atlas/TODO'
-                => 'tv_grab_uk_atlas/TODO',
-            'grab/uk_atlas/FAQ'
-                => 'tv_grab_uk_atlas/FAQ',
             'grab/uk_atlas/tv_grab_uk_atlas.user.map.conf'
                 => 'tv_grab_uk_atlas/tv_grab_uk_atlas.user.map.conf',
             'grab/uk_atlas/tv_grab_uk_atlas.pa.genres.conf'
@@ -469,14 +461,6 @@ my @opt_components
        blurb => 'Grabber for UK and Ireland using The Guardian website',
        exes => [ 'grab/uk_guardian/tv_grab_uk_guardian' ],
        share_files => {
-            'grab/uk_guardian/CHANGELOG'
-                => 'tv_grab_uk_guardian/CHANGELOG',
-            'grab/uk_guardian/DISCLAIMER'
-                => 'tv_grab_uk_guardian/DISCLAIMER',
-            'grab/uk_guardian/INSTALL'
-                => 'tv_grab_uk_guardian/INSTALL',
-            'grab/uk_guardian/TODO'
-                => 'tv_grab_uk_guardian/TODO',
             'grab/uk_guardian/tv_grab_uk_guardian.map.conf'
                 => 'tv_grab_uk_guardian/tv_grab_uk_guardian.map.conf',
        },
@@ -490,14 +474,6 @@ my @opt_components
        blurb => 'Grabber for UK and Ireland using TV Guide website',
        exes => [ 'grab/uk_tvguide/tv_grab_uk_tvguide' ],
        share_files => {
-            'grab/uk_tvguide/CHANGELOG'
-                => 'tv_grab_uk_tvguide/CHANGELOG',
-            'grab/uk_tvguide/DISCLAIMER'
-                => 'tv_grab_uk_tvguide/DISCLAIMER',
-            'grab/uk_tvguide/INSTALL'
-                => 'tv_grab_uk_tvguide/INSTALL',
-            'grab/uk_tvguide/TODO'
-                => 'tv_grab_uk_tvguide/TODO',
             'grab/uk_tvguide/tv_grab_uk_tvguide.map.conf'
                 => 'tv_grab_uk_tvguide/tv_grab_uk_tvguide.map.conf',
        },
