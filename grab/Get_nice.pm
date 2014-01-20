@@ -32,6 +32,7 @@ package XMLTV::Get_nice;
 # use version number for feature detection:
 # 0.005065 : new methods get_nice_json(), get_nice_xml()
 # 0.005065 : add utf8 decode option to get_nice_tree()
+# 0.005065 : expose the LWP response object ($Response)
 our $VERSION = 0.005065;
 
 use base 'Exporter';
@@ -41,6 +42,7 @@ use XMLTV;
 our $Delay = 5; # in seconds
 our $MinDelay = 0; # in seconds
 our $FailOnError = 1; # Fail on fetch error
+our $Response; # LWP response object
 
 
 our $ua = LWP::UserAgent->new;
@@ -142,6 +144,9 @@ sub get_nice_aux( $ ) {
     #
     $last_get_time = time();
 
+		# expose the response object for those grabbers which need to process the headers, status code, etc.
+		$Response = $r;
+		
     if ($r->is_error) {
         # At the moment download failures seem rare, so the script dies if
         # any page cannot be fetched.  We could later change this routine
