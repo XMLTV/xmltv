@@ -76,7 +76,7 @@ sub get_nice_tree( $;$$ ) {
     $content = $filter->($content) if $filter;
     if ($utf8) {
       # (note: HTML::Parser->utf8_mode is only available Perl 5.8) 
-      require Encode;
+      require Encode; import Encode;
       $content = decode('UTF-8', $content);   # strict utf-8
     }
     my $t = HTML::TreeBuilder->new()->parse($content) or die "cannot parse content of $uri\n";
@@ -96,7 +96,7 @@ sub get_nice_xml( $;$$ ) {
     my $content = get_nice $uri;
     $content = $filter->($content) if $filter;
     if ($utf8) {
-      require Encode;
+      require Encode; import Encode;
       $content = decode('UTF-8', $content);   # strict utf-8
     }
     my $t = XML::Parser->new(Style => 'Tree')->parse($content) or die "cannot parse content of $uri\n";
