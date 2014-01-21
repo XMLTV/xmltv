@@ -3,6 +3,10 @@ package XMLTV::Options;
 use strict;
 use warnings;
 
+# use version number for feature detection:
+# 0.005065 : added --info / --man option (prints POD and then exits)
+our $VERSION = 0.005065;
+
 BEGIN {
     use Exporter   ();
     our (@ISA, @EXPORT, @EXPORT_OK, %EXPORT_TAGS);
@@ -41,76 +45,80 @@ my %cap_options = (
 			   version
 			   capabilities
 			   description
+				 info
+				 man
 			   /],
 		   baseline => [qw/
-				days=i
-				offset=i
-				quiet
-				output=s
-				debug
-				config-file=s
-				/],
+			   days=i
+			   offset=i
+			   quiet
+			   output=s
+			   debug
+			   config-file=s
+			   /],
 		   manualconfig => [qw/configure/],
 		   apiconfig => [qw/
-				 configure-api
-				 stage=s
-				 list-channels
-				 /],
+			   configure-api
+			   stage=s
+			   list-channels
+			   /],
 		   tkconfig => [qw/gui=s/],
 		   # The cache option is normally handled by XMLTV::Memoize
 		   # but in case it is not used, we handle it here as well.
 		   cache => [qw/
-                             cache:s
-                             /],
+			   cache:s
+			   /],
 		   share => [qw/
-			     share=s
-			     /],
+			   share=s
+			   /],
 		   preferredmethod => [qw/
-				       preferredmethod
-				       /],
-           lineups => [qw/
-                 get-lineup
-                 list-lineups
-                 /],
+			   preferredmethod
+			   /],
+		   lineups => [qw/
+			   get-lineup
+			   list-lineups
+			   /],
 		   );
 
 my %cap_defaults = (
-		    all => {
-			capabilities => 0,
-			help => 0,
-			version => 0,
+		   all => {
+			   capabilities => 0,
+			   help => 0,
+			   version => 0,
+			   info => 0,
+			   man => 0,
+			   },
+		   baseline => {
+			   quiet => 0,
+			   days => 5,
+			   offset => 0,
+			   output => undef,
+			   debug => 0,
+			   gui => undef,
+			   },
+		   manualconfig => {
+			   configure => 0,
+			   },
+		   apiconfig => {
+			   'configure-api' => 0,
+			   stage => 'start',
+			   'list-channels' => 0,
+			   },
+		   tkconfig => {
 		    },
-		    baseline => {
-			quiet => 0,
-			days => 5,
-			offset => 0,
-			output => undef,
-			debug => 0,
-			gui => undef,
-		    },
-		    manualconfig => {
-			configure => 0,
-		    },
-		    apiconfig => {
-			'configure-api' => 0,
-			stage => 'start',
-			'list-channels' => 0,
-		    },
-		    tkconfig => {
-		    },
-		    cache => {
-			cache => undef,
-		    },
-		    share => {
-			share => undef,
-		    },
-		    preferredmethod => {
-			preferredmethod => 0,
-		    },
-            lineups => {
-            'get-lineup' => 0,
-            'list-lineups' => 0,
-            }
+		   cache => {
+			   cache => undef,
+			   },
+		   share => {
+			   share => undef,
+			   },
+		   preferredmethod => {
+			   preferredmethod => 0,
+			   },
+		   lineups => {
+			   'get-lineup' => 0,
+			   'list-lineups' => 0,
+			   }
 		   );
 
 =head1 USAGE
@@ -157,6 +165,8 @@ ParseOptions handles the following options automatically without returning:
 =over
 
 =item --help
+
+=item --info (or --man)
 
 =item --capabilities
 
@@ -425,6 +435,20 @@ sub ParseOptions
     {
 	print $p->{description} . "\n";
 	exit 0;
+    }
+    elsif( $opt->{info} || $opt->{man} )
+    {
+      # pod2usage(-verbose => 2) doesn't work under Windows xmltv.exe (since it needs perldoc)
+      if ($^O eq 'MSWin32')
+      {
+        require Pod::Text;
+        Pod::Text->new (sentence => 0, margin => 2, width => 78)->parse_from_file($0);
+      }
+      else 
+      {
+        require Pod::Usage; import Pod::Usage; pod2usage(-verbose => 2);
+      }
+      exit 0;
     }
 
     XMLTV::Ask::init($opt->{gui});
