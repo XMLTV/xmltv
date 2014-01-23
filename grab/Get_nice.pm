@@ -31,7 +31,7 @@ package XMLTV::Get_nice;
 
 # use version number for feature detection:
 # 0.005065 : new methods get_nice_json(), get_nice_xml()
-# 0.005065 : add utf8 decode option to get_nice_tree()
+# 0.005065 : add decode option to get_nice_tree()
 # 0.005065 : expose the LWP response object ($Response)
 our $VERSION = 0.005065;
 
@@ -67,17 +67,17 @@ sub get_nice( $ ) {
 # Optional arguments:
 # i) a function to put the page data through (eg, to clean up bad
 # characters) before parsing.
-# ii) convert incoming UTF-8 to UNICODE when set to 1
+# ii) convert incoming page to UNICODE using this codepage (use "UTF-8" for  strict utf-8)
 #
 sub get_nice_tree( $;$$ ) {
-    my ($uri, $filter, $utf8) = @_;
+    my ($uri, $filter, $codepage) = @_;
     require HTML::TreeBuilder;
     my $content = get_nice $uri;
     $content = $filter->($content) if $filter;
-    if ($utf8) {
+    if ($codepage) {
       # (note: HTML::Parser->utf8_mode is only available Perl 5.8) 
       require Encode; import Encode;
-      $content = decode('UTF-8', $content);   # strict utf-8
+      $content = decode($codepage, $content);
     }
     my $t = HTML::TreeBuilder->new()->parse($content) or die "cannot parse content of $uri\n";
     $t->eof;
@@ -88,16 +88,16 @@ sub get_nice_tree( $;$$ ) {
 # Optional arguments:
 # i) a function to put the page data through (eg, to clean up bad
 # characters) before parsing.
-# ii) convert incoming UTF-8 to UNICODE when set to 1
+# ii) convert incoming page to UNICODE using this codepage (use "UTF-8" for  strict utf-8)
 #
 sub get_nice_xml( $;$$ ) {
-    my ($uri, $filter, $utf8) = @_;
+    my ($uri, $filter, $codepage) = @_;
     require XML::Parser;
     my $content = get_nice $uri;
     $content = $filter->($content) if $filter;
-    if ($utf8) {
+    if ($codepage) {
       require Encode; import Encode;
-      $content = decode('UTF-8', $content);   # strict utf-8
+      $content = decode($codepage, $content);
     }
     my $t = XML::Parser->new(Style => 'Tree')->parse($content) or die "cannot parse content of $uri\n";
     return $t;
@@ -107,14 +107,14 @@ sub get_nice_xml( $;$$ ) {
 # Optional arguments:
 # i) a function to put the page data through (eg, to clean up bad
 # characters) before parsing.
-# ii) convert incoming UTF-8 to UNICODE when set to 1
+# ii) convert incoming UTF-8 to UNICODE
 #
 sub get_nice_json( $;$$ ) {
     my ($uri, $filter, $utf8) = @_;
     require JSON::PP;
     my $content = get_nice $uri;
     $content = $filter->($content) if $filter;
-    $utf8 = 0 if !defined $utf8; #(not necessary but safer)
+    $utf8 = defined $utf8 ? 1 : 0;
     my $t = JSON::PP->new()->utf8($utf8)->decode($content) or die "cannot parse content of $uri\n";
     return $t;
 }
