@@ -552,6 +552,8 @@ sub PrintUsage
 
     print qq/
 $gn --help
+
+$gn --info
 	
 $gn --version
 
