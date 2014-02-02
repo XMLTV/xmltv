@@ -87,8 +87,10 @@ use Date::Manip;
 use HTML::TreeBuilder;
 use HTML::Entities; # parse entities
 use IO::File;
+use DateTime;
 
 use LWP::Simple;
+use Encode;
 
 use XMLTV;
 use XMLTV::Memoize;
@@ -96,7 +98,7 @@ use XMLTV::ProgressBar;
 use XMLTV::Ask;
 use XMLTV::Config_file;
 use XMLTV::DST;
-use XMLTV::Get_nice;
+use XMLTV::Get_nice 0.005065;
 use XMLTV::Mode;
 use XMLTV::Date;
 # Todo: perhaps we should internationalize messages and docs?
@@ -112,30 +114,27 @@ END
   ;
 
 # Attributes of the root element in output.
-my $HEAD = { 'source-info-url'     => 'http://www.laguiatv.com/programacion.php',
-	     'source-data-url'     => "http://www.laguiatv.com/programacion_vertical.php",
+my $HEAD = { 'source-info-url'     => 'http://www.laguiatv.com/programacion/',
+	     'source-data-url'     => "http://www.laguiatv.com/programacion/",
 	     'generator-info-name' => 'XMLTV',
 	     'generator-info-url'  => 'http://xmltv.org/',
 	   };
 		   
-# Whether zero-length programmes should be included in the output.
-my $WRITE_ZERO_LENGTH = 0;
+my $WRITE_ZERO_LENGTH = 0;  # whether zero-length programmes should be included in the output.
 my $DO_SLOWER_DESC_GET = 0;
 my $CONFIG_VERSION = 1; # default to v1 (v1 doesnt have version info)
-my $EXPECTED_CONFIG_VERSION = 2;
+my $EXPECTED_CONFIG_VERSION = 3;
+my $CONFIG_USECACHE = 0;  # whether to use a disc cache for web pages
+my $CONFIG_CACHEDIR;	# directory to store cached web pages
 
 # default language
 my $LANG="es";
 
+# default web page encoding
+my $WEB_ENCODING = 'iso-8859-15';
+
 # Global channel_data
 our @ch_all;
-
-# debug print function
-sub debug_print
-{
-#	my ($str) = @_;
-#	print "$str";
-}
 
 my @hide_channels = (
     "canal-bar.a", # currently gives 404 not found
@@ -149,10 +148,11 @@ my @hide_channels = (
 XMLTV::Memoize::check_argv('XMLTV::Get_nice::get_nice_aux');
 my ($opt_days, $opt_offset, $opt_help, $opt_output,
     $opt_configure, $opt_config_file, $opt_gui,
-    $opt_quiet, $opt_list_channels);
-$opt_days  = 1; # default
+    $opt_quiet, $opt_list_channels, $opt_debug);
+$opt_days  = 4; # default
 $opt_offset = 0; # default
 $opt_quiet  = 0; # default
+$opt_debug  = 0; # default
 GetOptions('days=i'        => \$opt_days,
 	   'offset=i'      => \$opt_offset,
 	   'help'          => \$opt_help,
@@ -161,17 +161,36 @@ GetOptions('days=i'        => \$opt_days,
        'gui:s'         => \$opt_gui,
 	   'output=s'      => \$opt_output,
 	   'quiet'         => \$opt_quiet,
-	   'list-channels' => \$opt_list_channels
+	   'list-channels' => \$opt_list_channels,
+	   'debug'         => \$opt_debug,
 	  )
   or usage(0);
 
 # Force days to be 1, since we get all days at once
-$opt_days = 1;
+#		$opt_days = 1;
 die 'number of days must not be negative'
   if (defined $opt_days && $opt_days < 0);
 usage(1) if $opt_help;
 
+# [mod Jan 2014 - max days is 4
+die 'max days available is 4 (today + 3)'
+  if ( $opt_offset + $opt_days > 4 );
+
 XMLTV::Ask::init($opt_gui);
+
+
+# Although we use HTTP::Cache::Transparent, this undocumented --cache
+# option for debugging is still useful since it will _always_ use a
+# cached copy of a page, without contacting the server at all.
+#
+use XMLTV::Memoize; XMLTV::Memoize::check_argv('XMLTV::Get_nice::get_nice_aux');
+
+
+# debug print function
+sub debug_print
+{
+	print STDERR $_[0]."\n" if $opt_debug;
+}
 
 my $mode = XMLTV::Mode::mode('grab', # default
 			     $opt_configure => 'configure',
@@ -195,7 +214,7 @@ elsif ($mode eq 'list-channels') {
 else { die }
 
 # Whatever we are doing, we need the channels data.
-my %channels; # sets @ch_all
+my %channels = get_channels(); # sets @ch_all
 my @channels;
 
 my %icons;
@@ -216,9 +235,28 @@ if ($mode eq 'configure') {
     
     open(CONF, ">$config_file") or die "cannot write to $config_file: $!";
 
-    print CONF "configversion 2\n";
+    print CONF "configversion 3\n";
+	
+    # Ask about using a cache
+    my $usecache = ask_boolean("Do you want to use a cache for web pages (recommended)", 'yes');
+    warn("cannot read input, using default")
+        if not defined $usecache;
+
+    print CONF "usecache ";
+    print CONF "yes\n" if $usecache;
+    print CONF "no\n" if not $usecache;
+	
+	my $cachedir = "$ENV{HOME}/.xmltv/cache";
+	if ($usecache)
+	{
+		my $cachedir = ask("Directory for cache (default=$cachedir)");
+		warn("cannot read input, using default")
+			if not defined $cachedir;
+	} 
+	print CONF "cachedir ".$cachedir."\n";
+	
     # Ask about getting descs
-    my $getdescs = ask_boolean("Do you want to get descriptions (very slow)");
+    my $getdescs = ask_boolean("Do you want to get descriptions (very slow)", 'yes');
     warn("cannot read input, using default")
         if not defined $getdescs;
 
@@ -255,7 +293,7 @@ if ($mode eq 'configure') {
 #        }
 #        else
 #        {
-            print CONF "channel $_ $name\n";
+            print CONF "channel $_ ".encode($WEB_ENCODING, $name)."\n";
 #        }
 	# TODO don't store display-name in config file.
 
@@ -281,7 +319,7 @@ if (defined $opt_output) {
     die "cannot write to $opt_output: $!" if not defined $fh;
     $w_args{OUTPUT} = $fh;
 }
-$w_args{encoding} = 'ISO-8859-1';
+$w_args{encoding} = 'UTF-8';
 my $writer = new XMLTV::Writer(%w_args);
 $writer->start($HEAD);
 
@@ -304,6 +342,17 @@ foreach (@config_lines) {
     if (/configversion:?\s+(\S+)/)
     {
         $CONFIG_VERSION = $1;
+    }
+    elsif (/usecache:?\s+(\S+)/)
+    {
+		if($1 eq "yes")
+        {
+            $CONFIG_USECACHE = 1;
+        }
+    }
+    elsif (/cachedir:?\s+(\S+)/)
+    {
+		$CONFIG_CACHEDIR = $1;
     }
     elsif (/getdescriptions:?\s+(\S+)/)
     {
@@ -334,7 +383,7 @@ foreach (@config_lines) {
         my $ch_did = $1;
         my $ch_name = $2;
 
-        #debug_print "Got channel $ch_name icon $ch_icon\n";
+        debug_print "Fetching channel $ch_name";
         $ch_name =~ s/\s*$//;
         push @channels, $ch_did;
         $channels{$ch_did} = $ch_name;
@@ -343,6 +392,21 @@ foreach (@config_lines) {
 	warn "$config_file:$line_num: bad line\n";
     }
 }
+
+
+
+if ($CONFIG_USECACHE) {
+use HTTP::Cache::Transparent;
+HTTP::Cache::Transparent::init( { 
+    BasePath => $CONFIG_CACHEDIR,
+    NoUpdate => 60*60,			# cache time in seconds
+	MaxAge => 4,				# flush time in hours
+    Verbose => $opt_debug,
+} );
+}
+
+
+
 
 ######################################################################
 # begin main program
@@ -376,12 +440,17 @@ foreach my $ch_did (@channels) {
 		$writer->write_channel({ id => $ch_xid,
 					 'display-name' => [ [ $ch_name ] ] });
 #	}
-    my $day=UnixDate($now,'%Q');
-    for (my $i=0;$i<$opt_days;$i++) {
-        push @to_get, [ $day, $ch_xid, $ch_did ];
-        #for each day
-        $day=nextday($day); die if not defined $day;
-    }
+
+	# [Jan 2014] - current website offers a fixed 4 days of data
+	#	my $day=UnixDate($now,'%Q');
+	#	for (my $i=0;$i<$opt_days;$i++) {
+	#		push @to_get, [ $day, $ch_xid, $ch_did ];
+	#		#for each day
+	#		$day=nextday($day); die if not defined $day;
+	#	}
+	#
+	push @to_get, [ '', $ch_xid, $ch_did ];
+	
 	update $iconbar if not $opt_quiet;
 }
 
@@ -391,7 +460,7 @@ foreach my $ch_did (@channels) {
 my $bar = new XMLTV::ProgressBar({name => 'getting listings', count => scalar @to_get})
   if not $opt_quiet;
 foreach (@to_get) {
-	debug_print("process $_->[0], $_->[1], $_->[2]\n");
+	debug_print "process $_->[0], $_->[1], $_->[2]\n";
 	foreach (process_table($_->[0], $_->[1], $_->[2])) {
 		$writer->write_programme($_);
 	}
@@ -430,10 +499,11 @@ BEGIN {
 sub process_table {
 
     my ($date, $ch_xmltv_id, $ch_es_id) = @_;
+		
 	my $ch_conv_id = convert_id_to_laguiatvid($ch_es_id);
     my $today = UnixDate($date, '%d/%m/%Y');
 
-    my $url = "http://www.laguiatv.com/programacion/$ch_es_id";
+    my $url = 'http://www.laguiatv.com/programacion/'.$ch_es_id.'.html';
 	debug_print "Getting $url\n";
     t $url;
     local $SIG{__WARN__} = sub 
@@ -442,7 +512,17 @@ sub process_table {
 	};
 
     # parse the page to a document object
-    my $tree = get_nice_tree $url;
+	my $tree;
+	#  HTML::Parse keeps reporting "Parsing of undecoded UTF-8 will give garbage when decoding entities" yet I can see no UTF8 in the pages!
+	#    Save the page and run it again and you don't get the warning!
+	#    You can't even supress the warning!  What a crock.
+	{
+		local $SIG{__WARN__} = sub {
+			warn @_ unless (defined $_[0] && $_[0] =~ /^Parsing of undecoded UTF-/);
+		};
+		$tree = get_nice_tree($url,'',$WEB_ENCODING);
+	}
+
     my @program_data = get_program_data($tree);
     my $bump_start_day=0;
 
@@ -473,24 +553,45 @@ sub process_table {
 sub make_programme_hash {
     my ($date, $ch_xmltv_id, $ch_es_id, $cur, $next) = @_;
 
+	#require Data::Dumper; debug_print Data::Dumper::Dumper($cur);
+	
     my %prog;
 
     $prog{channel}=$ch_xmltv_id;
-    $prog{title}=[ [ $cur->{title}, $LANG ] ];
-    $prog{"sub-title"}=[ [ $cur->{subtitle}, $LANG ] ] if defined $cur->{subtitle};
+    $prog{title}=[ [ encode( 'UTF-8', $cur->{title} ), $LANG ] ];
+    $prog{"sub-title"}=[ [ encode( 'UTF-8', $cur->{subtitle} ), $LANG ] ] if defined $cur->{subtitle};
     # $prog{category}=[ [ $cur->{category}, $LANG ] ];
+	$prog{start}=$cur->{stime};
+	$prog{stop} =$cur->{etime} if defined $cur->{etime};
+    $prog{desc}=[ [ encode( 'UTF-8', $cur->{desc} ), $LANG ] ] if defined $cur->{desc};
+    # $prog{category}=[ [ encode( 'UTF-8', $cur->{category} ), $LANG ] ] if defined $cur->{category};
+	$prog{'date'} = $cur->{year}  if defined $cur->{year};
+	$prog{'star-rating'} =  [ $cur->{rating} . '/5' ] if defined $cur->{rating};
+	$prog{'rating'} =  [[ $cur->{classification}, '' ]] if defined $cur->{classification};
 
-    t "turning local time $cur->{time}, on date $date, into UTC";
-    eval { $prog{start}=utc_offset("$date $cur->{time}", '+0100') };
-    if ($@) {
-	warn "bad time string: $cur->{time}";
-	return undef;
+	if (defined $cur->{genres})
+	{
+		foreach ( @{ $cur->{genres} } )
+		{
+			push @{$prog{'category'}}, [ encode('UTF-8', $_), $LANG ]  if $_ ne '';
+		}
+	}
+	if (defined $cur->{directors})
+	{
+		foreach ( @{ $cur->{directors} } )
+		{
+			push @{$prog{'credits'}{'director'}}, encode('UTF-8', $_)  if $_ ne '';
+		}
+	}
+	if (defined $cur->{actors})
+	{
+		foreach ( @{ $cur->{actors} } )
+		{
+			push @{$prog{'credits'}{'actor'}}, encode('UTF-8', $_)  if $_ ne '';
     }
-    t "...got $prog{start}";
-    # FIXME: parse description field further
+	}
+						
 
-    $prog{desc}=[ [ $cur->{desc}, $LANG ] ] if defined $cur->{desc};
-    $prog{category}=[ [ $cur->{category}, $LANG ] ] if defined $cur->{category};
     return \%prog;
 }
 sub bump_start_day {
@@ -514,58 +615,261 @@ sub get_program_data
     my ($tree) = @_;
     my @data;
 
+	my $today = DateTime->today->set_time_zone('Europe/Madrid');
+
+	# - current website offers a fixed 4 days of data
+	# ignore any programmes outside requested range
+	my $startgrab = $today->clone->add('days' => $opt_offset)->epoch();
+	my $stopgrab = $today->clone->add('days' => ($opt_offset + $opt_days))->epoch();
+	debug_print 'Grab times: start: '.DateTime->from_epoch(epoch=>$startgrab)->strftime("%Y %m %d %H%M %S %z").' stop: '.DateTime->from_epoch(epoch=>$stopgrab)->strftime("%Y %m %d %H%M %S %z");
     # find schedule table
 
-    my @divs = $tree->find_by_tag_name("_tag"=>"div");
+	# the following could could do with some error checking but I don't have time to do that right now  :-(
+	
+    my @divs = $tree->look_down('_tag' => 'div', 'id' => qr/dia1|nad2|nad3|nad4/);
 
     foreach my $div (@divs)
     {
-        my $class = $div->attr('class');
+		my ($i) = $div->attr('id') =~ /(?:dia|nad)(\d)/;
+		#'debugtime'  debug_print "i= $i ".$div->attr('id');
+		#'debugtime'  debug_print 'today: '.$today->strftime("%Y %m %d %H%M %S %z");
+		my $theday = $today->clone->add(days => ($i - 1));
+		#'debugtime'  debug_print 'theday: '.$theday->strftime("%Y %m %d %H%M %S %z");
 		
-        if ($class && $class eq "clip")
+		my @trs = $div->look_down('_tag' => 'tr');
+	
+		foreach my $tr (@trs)
         {
-            debug_print("Got clip\n");
-            my $p_category = "";
 
-            my @litems = $div->find_by_tag_name("_tag"=>"li"); 
-            foreach my $litem (@litems)
+			my $stime = $tr->look_down('_tag' => 'th')->as_text;
+			trim($stime);
+	
+			my $p_div = $tr->look_down('_tag' => 'div', 'class' => 'programa');
+			next if !$p_div;
+			
+			my $a = $p_div->look_down('_tag' => 'a');
+			
+			my $p_url = $a->attr('href');
+			my $p_title = $a->as_text;
+			
+			my $p_times = $p_div->look_down('_tag' => 'p')->as_text;
+			
+			my ($h, $i, $h2, $i2) = $p_times =~ /(\d*):(\d*) a (\d*):(\d*)/;
+			
+			my $showtime = $theday->clone->set(hour => $h, minute => $i, second => 0);
+			
+			# - current website offers a fixed 4 days of data
+			# ignore any programmes outside requested range
+			#'debugtime'  debug_print 'this: '.$showtime->strftime("%Y %m %d %H%M %S %z");
+			next if ( $showtime->epoch() < $startgrab ) || ( $showtime->epoch() >= $stopgrab );
+			
+			my $p_stime = $theday->clone->set(hour => $h, minute => $i, second => 0)->strftime("%Y%m%d%H%M%S %z");
+			
+			my $p_etime;
+			# this will probably fail around DST times
+			if (defined $h2 && $h2 >= 0) 
             {
-                $p_category = $litem->attr('class');
+				$showtime->add(days => 1) if $h2 < $h; 
+				eval {        # try
+					$showtime->set(hour => $h2, minute => $i2, second => 0);
+					$p_etime = $showtime->strftime("%Y%m%d%H%M%S %z");
+				} or do {     # catch
+					# no output prog 'stop' time
             }
+			}
+			
 
-            my @links = $div->find_by_tag_name("_tag"=>"a");
+			# get descriptions?  Kinda compulsory now since there is no longer *any* description on the schedule page
+			#
+			my ($p_description, $p_rating, $p_classification, $p_year, @p_genres, @p_actors, @p_directors) = ('', '', '', '', (), (), ());		
 
-            foreach my $link (@links)
+			#
+			{ # begin code block
+			if ($DO_SLOWER_DESC_GET) 	# get descriptions 
             {
-                my @txts = get_txt_elems($link);
-                my $p_title = $txts[0];
-                my ($p_stime, $ignore, $p_etime) = split(/\ /, $txts[1]);
-                my $p_description = "";
 
-                debug_print("title: $p_title start: $p_stime end: $p_etime cat: $p_category c2: " . $categories{$p_category} . "\n");
-                if($p_title && $p_title ne "" && $p_stime && $p_stime ne "")
+				my $url = $p_url;
+				debug_print "Getting $url";
+				t $url;
+
+				last if $url eq 'javascript:void(0);' ;
+				
+				# parse the page to a document object
+				#  HTML::Parse keeps reporting "Parsing of undecoded UTF-8 will give garbage when decoding entities" yet I can see no UTF8 in the pages!
+				# Often on the http://hoycinema.abc.es/ pages. (Could be due to the <script> they have *before* the <meta Content-Type> ?)
+				{
+					local $SIG{__WARN__} = sub {
+						warn @_ unless (defined $_[0] && $_[0] =~ /^Parsing of undecoded UTF-/);
+					};
+					$tree = get_nice_tree($url,'',$WEB_ENCODING);
+				}
+				
+				my $div = $tree->look_down('_tag' => 'div', 'id' => 'contenedor');		# container
+				$tree->dump if !$div;
+				exit if !$div;
+				
+				# see if the title has a year
+				# <h1 itemprop="name">&laquo;Fin de semana al desnudo&raquo; 
+				#	<span><a href="/peliculas/1974.html" title="Películas del año 1974">(1974)</a></span>
+				# </h1>
+				my $h1 = $div->look_down('_tag' => 'h1', 'itemprop' => 'name');
+				if ($h1)
+				{
+					my $a = $h1->look_down('_tag' => 'a');
+					($p_year) = $a->as_text =~ /^\((19\d\d|20\d\d)\)$/  if $a;
+				}	
+
+				$div = $div->look_down('_tag' => 'div', 'class' => 'modulo');
+				last if !$div;
+
+				# get the various <dl> blocks
+				my @dls = $div->look_down('_tag' => 'dl');
+				foreach my $dl (@dls)
+				{
+					my $dt = $dl->look_down('_tag' => 'dt');
+					next if !$dt;
+					
+					if ($dt->as_text =~ /Informaci.n/)
                 {
-                    my %h = (time =>        $p_stime,
-                             title=>        $p_title);
+						#<dl class="datos">
+						#	<dt>Información:</dt>
+						#	<dd class="calificacion">SC</dd>
+						#	<dd itemprop="genre">Comedia</dd>
+						#	<dd itemprop="duration">93 minutos</dd>
+						#	<dd>Sin especificar</dd>    OR e.g.   <dd>EE.UU.</dd>
+						#</dl>
+						my $t = $dl->look_down('_tag' => 'dd', 'class' => 'calificacion');
+						$p_classification = $t->as_text  if $t;
+						#
+						$t = $dl->look_down('_tag' => 'dd', 'itemprop' => 'genre');
+						@p_genres = split(/,/, $t->as_text)  if $t;
+					}
+								
+					if ($dt->as_text =~ /Director/)
+					{	
+						#<dl>
+						#	<dt>Director:</dt>
+						#	<dd itemprop="director" itemscope itemtype="http://schema.org/Person">
+						#		<a href="/perfil-cine/peter-webber-97721/" title="Peter Webber"><span itemprop="name">Peter Webber</span></a>
+						#		<a href="/perfil-cine/mariano-ozores-20092/" title="Mariano Ozores"><span itemprop="name">Mariano Ozores</span></a>
+						#	</dd>
+						#</dl>
+						my @t = $dl->look_down('_tag' => 'span', 'itemprop' => 'name');
+						foreach (@t)
+						{
+							push @p_directors, $_->as_text;
+						}
+					}
+					
+					if ($dt->as_text =~ /Int.rpretes/)
+					{		
+						#<dl class="interpretes" itemprop="actor" itemscope itemtype="http://schema.org/Person">
+						#	<dt>Intérpretes:</dt>
+						#	<dd>
+						#		<a href="/perfil-cine/mandy-patinkin-4279/" title="Mandy Patinkin"><span itemprop="name">Mandy Patinkin</span></a>,
+						#		<a href="/perfil-cine/alfredo-landa-15923/" title="Alfredo Landa"><span itemprop="name">Alfredo Landa</span></a>,
+						#		<a href="/perfil-cine/thomas-gibson-18922/" title="Thomas Gibson"><span itemprop="name">Thomas Gibson</span></a>,
+						#	</dd>
+						#	<dd class="enlace"><a href="/peliculas/1974/fin-de-semana-al-desnudo-9814/reparto.html" title="Reparto completo">Reparto completo</a></dd>
+						#</dl>
+						my @t = $dl->look_down('_tag' => 'span', 'itemprop' => 'name');
+						foreach (@t)
+						{
+							push @p_actors, $_->as_text;
+						}
+						# note: we could follow the "Reparto completo" link for the complete cast list
+					}
+					
+					if ($dt->as_text =~ /Descripci.n/)
+					{	
+						#<dl>
+						#	<dt>Descripción:</dt>
+						#	<dd>Programa que repasa todas las noticias de interés general, nacionales, internacionales, así como deportivas. Incluye El tiempo. Presentador: Albert Martínez.</dd>
+						#</dl>
+						my $t = $dl->look_down('_tag' => 'dd');
+						$p_description = $t->as_text  if $t;
+					}
+					
+					if ($dt->as_text =~ /Sinopsis/)
+					{	
+						#<dl class="sinopsis">
+						#	<dt>Sinopsis:</dt>
+						#	<dd itemprop="description">La historia de la psicóloga Virginia Johnson (Lizzy Caplan) y el tímido ginecólogo William Masters (Michael Sheen),...<a href="/series/masters-of-sex-25058/sinopsis.html" title="Leer sinopsis completa">Leer sinopsis completa</a>.</dd>
+						#</dl>
+						#
+						# For a *really* long description we could follow the 'Leer sinopsis completa' link but we won't do that until someone asks for it!  ;-)
+						#
+						if ($p_description eq '')
+						{
+							my $t = $dl->look_down('_tag' => 'dd', 'itemprop' => 'description');
+							if ($t)
+							{
+								my $a = $t->look_down('_tag' => 'a');
+								$a->detach  if $a;
+								$p_description = $t->as_text;
+							}
+						}
+					}
+								
 
-                    if($p_category && $p_category ne "")
+				}
+				
+				# if no description then try for a synopis
+				#	<aside id="sinopsis"><h2>Sinopsis</h2><p itemprop="description">...
+				if ($p_description eq '')
+				{
+					my $h2 = $tree->look_down('_tag' => 'h2', sub { $_[0]->as_text =~ /Sinopsis/ } );
+					if ($h2) 
                     {
-                        my $cat = $categories{$p_category};
-                        if($cat && $cat ne "")
+						my $p = $h2->right();
+						$p_description = $p->as_text  if ( $p->tag() eq 'p' && $p->attr('itemprop') eq 'description' );
+						#
+						# website sometimes has invalid html (nested <p>) which treebuilder flattens
+						# so append <p> siblings
+						while (1)
+						{
+							$p = $p->right();
+							last if ( $p->tag() ne 'p' );
+							$p_description .= $p->as_text  if ( $p->tag() eq 'p' );
+						}
+					} 
+				}
+				
+				# rating  (x/5)
+				#	<meta itemprop="ratingValue" content="2.2"/>
+				my $meta = $div->look_down('_tag' => 'meta', 'itemprop' => 'ratingValue');
+				if ($meta) 
                         {
-                            $h{category} = $cat;
+					$p_rating = $meta->attr('content');
                         }
+				
+
                     }
+			} # end code block
+
+            #debug_print("title: $p_title start: $p_stime end: $p_etime cat: $p_category c2: " . $categories{$p_category} . "\n");
+            debug_print("title: $p_title start: $p_stime end: $p_etime");
+			
+			if($p_title && $p_title ne "" && $p_stime && $p_stime ne "")
+			{
+				my %h = ('stime' =>        $p_stime,
+						 'etime' =>        $p_etime,
+						 'title' =>        $p_title,
+						 );
+				$h{year} 			= $p_year if defined $p_year && $p_year ne "";
+				$h{rating} 			= $p_rating if $p_rating ne "";
                     $h{desc} = $p_description if $p_description ne "";
+				$h{classification} 	= $p_classification if $p_classification ne "";
+				$h{directors} 		= \@p_directors if scalar @p_directors > 0;
+				$h{actors} 			= \@p_actors if scalar @p_actors > 0;
+				$h{genres} 			= \@p_genres if scalar @p_genres > 0;
 
                     push @data, \%h;
 
-                    $p_title = "";
-                    $p_stime = "";
-                    $p_category = "";
-                }
             }
+            
         }
+		
     }
     return @data;
 }
@@ -671,32 +975,30 @@ sub get_channels
     my $bar = new XMLTV::ProgressBar({name => 'finding channels', count => 1})
 	if not $opt_quiet;
     my %channels;
-    my $url="http://www.laguiatv.com/programacion";
+	
+	# the front page is very big and slow to parse, so we'll
+	# get channels via a dummy call to TVE 1 and then parse out the channel selector
+    my $url="http://www.laguiatv.com/programacion/tve-1-807.html";
     t $url;
 
     my $channel_id;
     my $channel_name;
-    my $elem;
+    my $channel_num;
 
-    my $tree = get_nice_tree $url;
+    my $tree = get_nice_tree($url,'',$WEB_ENCODING);
 
-    my @uls = $tree->find_by_tag_name("_tag"=>"ul");
+    my @options = $tree->look_down('_tag' => 'select', 'id' => 'cadenas_programacion')->look_down('_tag' => 'option');
 
-    foreach my $ul (@uls) 
-    {
-        my $uclass = $ul->attr('class');
-        if ($uclass && $uclass eq 'channel-list')
-        {
-            my @links = $ul->find_by_tag_name("_tag"=>"a");
-
-            # <a href="/programacion/intereconomia" title="Intereconomía">
-            foreach my $link (@links) 
+    foreach my $option (@options) 
             {
-                $channel_name = $link->attr('title');
-                $channel_id = $link->attr('href');
+		next if !$option->attr('value');
 
-                $channel_id =~ s/^\/programacion\///;
+		# <option value="tve-1-807">TVE 1</option>
+		$channel_name = $option->as_text;
+		$channel_id = $option->attr('value');
+		($channel_num) = $option->attr('value') =~ /.*?-(\d+)$/;
 
+		# remove channels that should not be listed
                 my $hide = 0;
                 foreach my $hide_id (@hide_channels)
                 {
@@ -709,14 +1011,17 @@ sub get_channels
                 if($hide == 0)
                 { 
                     $channels{$channel_id}=$channel_name;
-                    print("Got channel $channel_name with id $channel_id\n");
-                }
-            }
-        }
+				debug_print "Got channel $channel_name with id $channel_id"  if $opt_list_channels;
+
+				my $coded_chan_name=encode("utf-8",$channel_name);
+				push @ch_all, { 
+					'display-name' => [[ $coded_chan_name, $LANG ],[$channel_num]],
+					'channel-num' => $channel_num,
+					'id'=> "$channel_id.laguiatv" 
+				};		
+		}
+
     }
-
-    # remove channels that should not be listed
-
 
     die "no channels could be found" if not keys %channels;
     update $bar if not $opt_quiet;
@@ -757,4 +1062,15 @@ sub nextday {
     my $p = parse_date($d);
     my $n = DateCalc($p, '+ 1 day');
     return UnixDate($n, '%Q');
+}
+
+sub trim {
+	# Remove leading & trailing spaces
+	$_[0] =~ s/^\s+|\s+$//g;       
+}
+
+sub utf8 {
+		# Catch the error:
+		#    "Parsing of undecoded UTF-8 will give garbage when decoding entities 
+		return decode('UTF-8', $_[0]); 
 }
