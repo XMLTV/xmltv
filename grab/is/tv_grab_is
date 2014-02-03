@@ -389,7 +389,15 @@ sub process_xml_channel( $$$$$$ ) {
     my $parser = XML::LibXML->new(); die unless defined $parser;
     my $xslt = XML::LibXSLT->new(); die unless defined $xslt;
     my $stylesheet = $xslt->parse_stylesheet($parser->parse_string($xsl_transform));
-    my $results = $stylesheet->transform($parser->parse_string($xml));
+	
+	# suppress warning message caused by using Perl var rather than a physical document()
+	my $results;
+	{
+		local $SIG{__WARN__} = sub {
+			warn @_ unless (defined $_[0] && $_[0] =~ /^I\/O warning : failed to load external entity "unknown-/);
+		};
+		$results = $stylesheet->transform($parser->parse_string($xml));
+	}
 
     # Step 2: Loop through all programmes and all their children.
     # Do some processing on the children and then dump the programme 
@@ -441,9 +449,19 @@ sub process_xml_channel( $$$$$$ ) {
                     }
                 } elsif ($node->nodeName eq 'category') {
                     # FIXME where does the empty category element come from?
-                    if (!$node->hasChildNodes()) {
-                        $programme->removeChild($node);
-                    }
+					# [bilbo] sometimes (for no determinable reason) the document lookup is failing - maybe because it's 
+					#	a Perl var and not a real doc, for some reason...? It fails to load the document() (clue = no "I/O warning" in this case)
+					#	Run it again and it's fine. Or not!
+                    #if (!$node->hasChildNodes()) {
+                    #    $programme->removeChild($node);
+                    #}
+					# That's just too flaky so let's go "old school" for now (otherwise nightly validator fails)
+					#	print STDERR "was: ".$node."\n";
+					my %categories = ( '1'=>'children', '2'=>'series', '3'=>'news', '4'=>'educational', '5'=>'sports', '6'=>'misc', '7'=>'movie', '8'=>'culture', '9'=>'music', '13'=>'news magazine' );
+					my $category = $categories{$node->firstChild->data};
+					$node->removeChildNodes();
+					$node->appendText($category);
+					#	print STDERR "now: ".$node."\n";
                 }
             }
             
@@ -472,6 +490,7 @@ sub process_ruv_is ( $$$$$$ ){
           <entry key="7">movie</entry>
           <entry key="8">culture</entry>
           <entry key="9">music</entry>
+          <entry key="13">news magazine</entry>
         </data:category>
         
         <xsl:template match="/">
@@ -508,10 +527,11 @@ sub process_ruv_is ( $$$$$$ ){
         </xsl:template>
 
         <!-- Two matches for <category>. With funky lookup as explained at http://www.ibm.com/developerworks/library/x-xsltip.html#h2 -->
-        <xsl:template match="category[\@value &gt;= 1 and \@value &lt;= 9]">
+        <xsl:template match="category[\@value &gt;= 1 and \@value &lt;= 9 or \@value = 13]">
             <category>
                 <xsl:variable name="category_value"><xsl:value-of select="\@value" /></xsl:variable>
-                <xsl:value-of select="document('')/*/data:category/entry[\@key = \$category_value]"/>
+                <!-- ([bilbo] too flaky - see note above) xsl:value-of select="document('')/*/data:category/entry[\@key = \$category_value]"/-->
+                <xsl:value-of select="\$category_value"/>
              </category>
         </xsl:template>
         <xsl:template match="category">
