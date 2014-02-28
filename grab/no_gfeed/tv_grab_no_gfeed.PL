@@ -15,7 +15,7 @@ while (<$in_fh>) {
     s/\@\@country/Norway/;
     s/\@\@desc/Norway (beta)/;
     s%\@\@url%http://data.epg.no/xmltv/channels.xml.gz%;
-    s%\@\@site%http://data.epg.no/%;
+    s%\@\@site%http://xmltv.se/%;
     print $out_fh $_;
 }
 close $out_fh or die "cannot close $out: $!";
