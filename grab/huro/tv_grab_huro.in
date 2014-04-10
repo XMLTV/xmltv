@@ -195,14 +195,18 @@ our %COUNTRIES = (Hungary => [ 'hu', '+0100' ],
                   Romania => [ 'ro', '+0200' ], 
                  Slovakia => [ 'sk', '+0100' ]);
 our %WORDS = (
-		cz => { episode => "Epizoda"},
+		cz => { episode => "Epizoda",
+				minute  =>  "minut",
+				links   => "Linky" },
 		hu => {	episode => "rész",
 				minute =>  "perc",
 				links => "linkek" },
-		ro => { episode =>  "no such info on webpage",
+		ro => { episode => "episodul",		# patch #84
 				minute => "minute",
 				links => "Linkuri" },
-		sk => { episode => "Epizóda"}
+		sk => { episode => "Epizóda",
+				minute  =>  "minút",	
+				links   => "Linky" }
 	) ;
 
 sub domain();
@@ -210,9 +214,10 @@ sub xid( $ );
 sub xhead();
 sub process_table( $$$$ );
 sub parse_short_desc ( $ );
-sub get_channels();
+sub get_channels( ;$ );
 sub get_infourl_data( $$ );
 sub add_person ( $$$ );
+sub extract_episode( $ );
 sub grab_icon( $ );
 sub get_channel_urls( $ );
 sub worker( $ );
@@ -333,11 +338,11 @@ sub process_table( $$$$ ) {
 		worker("base-downloading");
 		$XMLTV::Get_nice::FailOnError = 1;
 		my $data=get_nice($url);
-		# FIXME strip sponsored links, they don't work in xmltv anyway
-		$data =~ s|\x0D||g; # strip carriage return
+		# strip links to bet-at-home.com  # bug #447
+ 		$data =~ s|\x0A||g; # strip new line
 		$data =~ s|<span class=\"spons_link.*?</span>||g;
-		$data =~ s|<div style=\"display:none\">.*?</div>||g;
-		# strip links to divido.hu
+		$data =~ s|<script type=\"text\/javascript\">.*?</script>||g;
+		# strip links to divido.hu and provideo.ro
 		$data =~ s|<a onclick=\"loggin.*?</a>||g;
 
 		$tree = HTML::TreeBuilder->new_from_content($data) or 
@@ -531,7 +536,8 @@ sub process_table( $$$$ ) {
 				else {
 					warn "cannot found title: $startdate" ;
 				}
-				# add one space after the title, if there is none
+				# add one space after the title, if there is none           # ???
+				$program{title} = ' ' if $program{title} eq '';   # bug #408
 				my @tmp = get_all_text($col);
 				$_ = join(' ', @tmp);
 				s/  +/ /g;
@@ -714,22 +720,28 @@ sub parse_short_desc ($) {
 
 	t "parse_short_desc: text: '$cont'";
         $WORDS{$COUNTRY}->{episode}="zdontmatchz" unless exists $WORDS{$COUNTRY}->{episode};
-	# port.hu episode style
-	if (m/\s*([0-9\/]+)\. $WORDS{$COUNTRY}->{episode}/) { $episode = $1; }
+	# port.hu episode style with season   (# patch #80)
+	if (m/\s*([IVX]+\.\/[0-9]+)\. $WORDS{$COUNTRY}->{episode}/) { $episode = $1; }
+	# port.hu episode style without season
+	elsif (m/\s*([0-9\/]+)\. $WORDS{$COUNTRY}->{episode}/) { $episode = $1; }
+	# port.ro episode style with season   (# patch #74)
+	elsif (m/$WORDS{$COUNTRY}->{episode} \s*([0-9]+, [A-Za-z]+ [0-9])/) { $episode = $1; }
 	# port.cz/.sk episode style with season
-	elsif (m/$WORDS{$COUNTRY}->{episode} \s*([0-9]+, [IVX]+\.)/) { $episode = $1; }
+	elsif (m/$WORDS{$COUNTRY}->{episode} \s*([0-9]+, [IVX]+)\./) { $episode = $1; }
 	# port.cz/.sk episode style for two episodes back to back in one slot
 	elsif (m/$WORDS{$COUNTRY}->{episode} \s*(\d+, \d+)/) { $episode = $1; }
-	# port.cz/.sk episode style without season
+	# port.cz/.sk/.ro episode style without season
 	elsif (m/$WORDS{$COUNTRY}->{episode} \s*([0-9\/]+)/) { $episode = $1; }
+	
 	if (m/\s*(\d+)'/)           { $minutes = $1; }
-	if (m/\s*([12][0-9]{3})/)    { $year = $1 }
+	if (m/\(.*?((?:19|20)[0-9]{2})/) { $year = $1 }		# bug #448 
 
 	t "found episode: '$episode'" if defined $episode;
 	t "found minutes: '$minutes'" if defined $minutes;
 	t "found year: '$year'"		  if defined $year;
 
 	foreach (keys %CATMAP) {
+		next unless defined $CATMAP{$_};		# bug #443
 		if ($cont =~ /$CATMAP{$_}[0]/i) {
 			push @categories, [$_, "en"];
 			push @categories, [$CATMAP{$_}[1], $COUNTRY];
@@ -740,33 +752,10 @@ sub parse_short_desc ($) {
 	$prog->{q(category)} = \@categories if @categories;
 	$prog->{q(length)} = $minutes * 60 if defined $minutes;
 	$prog->{q(date)} = $year if defined $year ;
-	if (defined($episode)) {
-		if($episode =~ m#(\d+)/(\d+)#) {
-			my $current = $1;
-			my $total = $2;
-			# swap numbers for port.hu, they have total/current
-			if ($current > $total) {
-				($total, $current) = ($current, $total);
-			}
-			# episode-num spec with the total number specified.
-			# however XMLTV counts from 0 on ...
-			$prog->{q(episode-num)} = [[ sprintf('. %d/%d .', $current - 1, $total), "xmltv_ns" ],
-				[ $episode, "onscreen" ]];
-		} elsif($episode =~ m#(\d+), ([IVX]+)#) {
-			# decode season from roman numeral
-			my $season = arabic ($2);
-			# episode-num spec with the total number specified.
-			# however XMLTV counts from 0 on ...
-			$prog->{q(episode-num)} = [[ sprintf('%d . %d .', $season - 1, $1 - 1), "xmltv_ns" ],
-				[ $episode, "onscreen" ]];
-		} elsif($episode =~ m#(\d+)#) {
-			# episode-num spec with just the episode number
-			# however XMLTV counts from 0 on ...
-			$prog->{q(episode-num)} = [[ sprintf('. %d .', $1 - 1), "xmltv_ns" ]];
-		} else {
-			$prog->{q(episode-num)} = [[ $episode, "onscreen" ]];
-		}
-	}
+	
+	$prog->{q(episode-num)} = extract_episode( $episode )
+		if defined $episode ;
+		
 }
 
 #-------------------------------------------------------------------------------
@@ -800,7 +789,8 @@ sub get_nice_gzip( $ ) {
 #				'id' => "$channel_id.$d",
 #				'icon' => [ { src => $iconurl } ] )
 #-------------------------------------------------------------------------------
-sub get_channels() {
+sub get_channels( ;$ ) {
+	my $mode = shift;
 	my $d = domain();
 	my $bar = new XMLTV::ProgressBar('getting list of channels', 1)
 		if not $opt_quiet;
@@ -838,12 +828,14 @@ sub get_channels() {
 						'display-name' => [ [ $channel_name, $COUNTRY ] ],
 						'id' => "$channel_id.$d"
 					) ;
+					if (!defined $mode || $mode ne 'grab') {  # no point doing this for 'grab'
 					# fetch and get icon url
 					worker("base-downloading");
 					if (my $iconurl = grab_icon( $channel_id )) {
 						$channel{'icon'} = [ { src => $iconurl } ];
 					}
 					worker("base-parsing");
+					}
 					$CHANNELS{$channel_id} = \%channel;
 				} 
 			}
@@ -871,13 +863,14 @@ sub add_person ( $$$ ) {
 
 	return unless length($person);
 
-	if (defined($JOBMAP{$job})) {
+	# suppress if job is not known, or if not mapped to DTD
+	if (defined $JOBMAP{$job} && length($JOBMAP{$job})) {
 		push @{$$rcredits{$JOBMAP{$job}}}, $person;
+		t "credits: added: '$job -> $person'";
 	}
 	else {
-		push @{$$rcredits{'actor'}}, $person;
+		t "credits: NOT added: '$job -> $person'";
 	}
-	t "credits: added: '$job -> $person'";
 }
 
 
@@ -953,6 +946,7 @@ sub get_infourl_data( $$ ) {
 
 	t "subtitle parsing ...";
 	($anchor) = $tree->look_down(_tag=>"span", class=>"blackbigtitle");
+	($anchor) = $tree->look_down(_tag=>"h1", class=>"blackbigtitle") if !defined $anchor;	# 2014-04-09 it seems to now be in <h1>
 	if ($anchor) {
 		$elem = $anchor; 
 		my ($engtitle, @tmp);
@@ -976,10 +970,27 @@ sub get_infourl_data( $$ ) {
 		$joined =~ s/\xA0//;	# remove the to_text()'s results of &nbsp
 		$joined =~ s/^\s+//;	# remove blanks
 		$joined =~ s/\s+$//;	# remove blanks
+		$joined =~ s/,$//;  	# remove trailing comma
 		t "anchor and right sibling found, joinedlines parsed :'$joined'";
 		$prog->{q(sub-title)} = [[$joined, $COUNTRY]] if length($joined);
 	}
 
+	# ICON
+	# anchor point: 
+	# the programme image will be tagged as follows:
+	#		<div class="random-media-wrapper"><img class="object_picture" src="http://media.port-network.com/picture/instance_2/92418_2.jpg" width="250" height="221" style="float:" alt="Închisoarea îngerilor - Tim Robbins" border="0" />
+
+	t "programme icon parsing ...";
+	$anchor = $tree->look_down(_tag=>"div", class=>"random-media-wrapper");
+	$anchor = $anchor->look_down(_tag=>"img", class=>"object_picture") if $anchor;
+	if ($anchor) {
+		my %icon;
+		$icon{'src'} = $anchor->attr('src') if $anchor->attr('src');
+		$icon{'width'} = $anchor->attr('width') if $anchor->attr('width');
+		$icon{'height'} = $anchor->attr('height') if $anchor->attr('height');
+		$prog->{q(icon)} = [ \%icon ] if $anchor->attr('src');
+	}
+	
 	# LINKS:
 	# try to grab IMDB, All Movie, official web site of the program
 	# anchor point:
@@ -1041,7 +1052,7 @@ sub get_infourl_data( $$ ) {
 			$joined = join(" ", @lines);
 			$joined =~ s/\xA0//;	# remove the to_text()'s results of &nbsp
 			$joined =~ s/^\s+//;	# remove blanks
-			t "found description $joined";
+			t "found description: $joined";
 			
 			if (length($joined)) {
 				delete($prog->{q(desc)});
@@ -1068,11 +1079,81 @@ sub get_infourl_data( $$ ) {
 	return if ($#separators < 1);
 	
 	($anchor) = $separators[1];
-	if ($anchor->parent()->tag() ne "td" || $anchor->parent->attr('width') ne "98%") {
+	if ($anchor->parent()->tag() ne "td" || !defined $anchor->parent->attr('width') || $anchor->parent->attr('width') ne "98%") {   # bug #445
 		t "credits section not found";
 		return;
 	}
 
+	# get the rating if available
+	#    <img alt="(AP)" title="Recomandat acordul parintilor" class="age_limit_icon" src="http://media.port-network.com/page_elements/parental_guidance_mini_pix_ro.png">
+	if (my $img = $anchor->parent()->look_down('_tag' => 'img', 'class' => 'age_limit_icon')) {
+		my $rating = $img->attr('alt');
+		$rating =~ s/[\(\)]//g;			# strip the brackets
+		my $rating_icon = $img->attr('src');
+		$prog->{q(rating)} = [[ $rating, '', [{'src' => $rating_icon }] ]];
+	}
+	
+	# unfortunately the star-rating (vote_box) if fetched with an AJAX call
+	# e.g.  http://www.port.sk/arrow/pls/fi/vote.print_vote_box?i_object_id=139692&i_area_id=6&i_reload_container=id%3D%22vote_box%22&i_is_separator=0
+	#
+	# we could use TreeBuilder->store_cdata(true)  to store the cdata under the root node, but I think it's easier to just regexp the html
+	#  /*<![CDATA[*/
+	#  ajaxRequest(
+	#  {'url':'vote.print_vote_box?',
+	#  'parameters':'i_object_id=139692&i_area_id=6&i_reload_container=id%3D%22vote_box%22&i_is_separator=0',
+	#  'method':'GET',
+	#  ...
+	#
+	if ( $data =~ m/ajaxRequest\(.*?{'url':'(vote.print_vote_box\?)',.*?'parameters':'(.*?)',.*?'method':'GET'/s ) {
+		
+		my $ajaxurl = $1 . $2;					# ajax uri
+		(my $baseurl) = $url =~ m#(.*/)#;		# greedy match up to last / char
+		$ajaxurl = $baseurl . $ajaxurl;			# prepend the uri
+	
+		t "fetching ajax url" . d $ajaxurl; 
+		
+		# store current values of get_nice
+		my $get_fail = $XMLTV::Get_nice::FailOnError;
+		my $get_delay = $XMLTV::Get_nice::Delay;
+		$XMLTV::Get_nice::FailOnError = 0;		# don't abort if not found
+		$XMLTV::Get_nice::Delay = 0;			# no delay
+		
+		my $ajaxdata;
+		if (defined($ajaxdata = get_nice($ajaxurl))) {
+			worker("ajax-downloading");
+			my $ajaxtree = HTML::TreeBuilder->new_from_content($ajaxdata) or
+				die "could not fetch/parse $ajaxurl (infopage)";
+				
+			worker("ajax-parsing");
+			if (my $anchor = $ajaxtree->look_down(_tag=>"div", class=>qr/starholder/)) {
+				my $starsval;
+				if (my $stars = $anchor->look_down(_tag=>"span", class=>"ctxt")) {
+					$starsval = $stars->as_text();
+					$starsval =~ s/,/./; $starsval += 0;	# convert to float
+					$prog->{q(star-rating)} = [[ sprintf("%.0f / 10", $starsval) ]];
+				}
+				#
+				# add another "star-rating" showing the number of votes (it doesn't really belong here but there's nowhere better)
+				# - this gives a clue as to whether 0 means 'bad' or it simply means 'unrated'!
+				#
+				if (my $votes = $anchor->look_down(_tag=>"div", class=>"votenum")) {
+					my $votesval = $votes->as_text();
+					if ($votesval) {
+						(my $num_votes) = $votesval =~ /(\d*)/;
+						# if star-rating is 0 and num_votes is null then we'll assume it hasn't been voted on yet
+						if ($starsval == 0 && $num_votes eq '') { undef $prog->{q(star-rating)} }
+						push @{ $prog->{q(star-rating)} }, [ $num_votes, "votes" ]  if $num_votes ne '';
+					}
+				}
+			}
+		}
+		# restore the previous values
+		$XMLTV::Get_nice::FailOnError = $get_fail;
+		$XMLTV::Get_nice::Delay = $get_delay;
+	}
+	
+	
+	
 	# collect all text lines, we
 	# achive this to jump to the parent first, and walk all the childs until
 	# the anchor is reached
@@ -1113,10 +1194,14 @@ sub get_infourl_data( $$ ) {
 				# possibilitys
 				# 1: amerikai filmdráma sorozat, 90 perc, 2000, 2. rész
 				# 12 éven aluliak számára ....
+				#   added 2004-04-07 :
+				# (ro) Coreea de Sud, 2009, serial de aventuri, episodul 5
 
 				$_ = $part;
 				SWITCH: {
 					if ((m/\s*([0-9\/]+)\. $WORDS{$COUNTRY}->{episode}/) && (! defined $episode))
+						{ $episode = $1; last SWITCH;}
+					if ((m/$WORDS{$COUNTRY}->{episode} \s*([0-9\/]+)/) && (! defined $episode))
 						{ $episode = $1; last SWITCH;}
 					if ((m/\s*(\d+) $WORDS{$COUNTRY}->{minute}/) && (! defined $minutes))
 						{ $minutes = $1; last SWITCH;}
@@ -1139,24 +1224,26 @@ sub get_infourl_data( $$ ) {
 				# note: \b(.+): do not match to " író: ", because í is not
 				# part of \b
 
-				if (($_) = $part =~ /^\s*(\S+):/) {
+				# bug #451 [line deleted]
+				
+				if (($_) = $part =~ /^\s*(\S+):/) {		# does the $line include a  ':'
 					# remove the "jobname:" string
 					$part =~ s/^\s*(\S+):\s*//;
-					t "is this a known job?: '$_'";		# e.g.: hu-job 
-					if (defined($JOBMAP{$_})) {
-						t "yes, this string is a jobname";
+					
+					t "assuming string is a jobname";
 						# this means, we should add our until now collected
 						# person to the credits, and begin to collect new 
 						# actors...
 
 						add_person($job, $person, \%credits);
 
-						if (length($JOBMAP{$_})) {
+					t "is this a known job?: '$_'";		# e.g.: hu-job 
+					if (defined $JOBMAP{lc($_)} && length($JOBMAP{lc($_)})) {
 							# newly readed part has a en-job (this is defined in DTD, so
 							# this will be the next used job for XML generation
 
-							t "job known in DTD as: $JOBMAP{$_}";
-							$job = $_;
+						t "job known in DTD as: $JOBMAP{lc($_)}";
+						$job = lc($_);
 							$person = $part;
 						} #en-job
 						else {
@@ -1166,7 +1253,6 @@ sub get_infourl_data( $$ ) {
 							$person = "$_: $part ";
 						} #hu-job
 						next;
-					} #hu-job
 				} #: in the part
 
 				# we are here, if:
@@ -1200,6 +1286,7 @@ sub get_infourl_data( $$ ) {
 	add_person($job, $person, \%credits) if length($person);
 
 	t "CREDITS: " . d \%credits;
+	$prog->{q(credits)} = \%credits;
 
 	#$prog->{q(category)} = [[ $category, $COUNTRY ]]
 		#if defined $category and length $category;
@@ -1210,19 +1297,60 @@ sub get_infourl_data( $$ ) {
 	$prog->{q(date)} = $year
 		if defined $year ;
 
+	$prog->{q(episode-num)} = extract_episode( $episode )
+		if defined $episode ;
+
+	$tree->delete;
+}
+		
+
+#-------------------------------------------------------------------------------
+# extract_episode
+#-------------------------------------------------------------------------------
+# desc		: parse text containing the episode details 
+# arguments	: 1- episode data
+# returns	: xmltv episode-num definition
+#-------------------------------------------------------------------------------
+sub extract_episode( $ ) {
+	my $episode = shift;
+	my ($episode_num, $season);
+	
 	if(defined($episode)) {
 		if($episode =~ m#(\d+)/(\d+)#) {
 			# episode-num spec with the total number specified.
+			# swap numbers for port.hu, they have total/num
+			my ($num, $total) = ($1, $2);
+			($num, $total) = ($2, $1) if ($num > $total);		
 			# however XMLTV counts from 0 on ...
-			$prog->{q(episode-num)} = [[ sprintf('%d/%d', $1 - 1, $2), "xmltv_ns" ]];
-		}
-		else {
-			$prog->{q(episode-num)} = [[ $episode, "onscreen" ]];
+			$episode_num = [[ sprintf('. %d/%d .', $num - 1, $total), "xmltv_ns" ], [ $episode, "onscreen" ]];
+			
+		} elsif($episode =~ m#([IVX]+)\./(\d+)#) {
+			# patch #80
+			# port.hu style episode numbering: <serie_in_roman>./<episode_in_arabic>. e.g. V./3
+			# episode-num spec with the total number specified.
+			# decode season from roman numeral
+			$season = arabic ($1);
+			# however XMLTV counts from 0 on ...
+			$episode_num = [[ sprintf('%d . %d .', $season - 1, $2 - 1), "xmltv_ns" ], [ $episode, "onscreen" ]];
+		
+		} elsif($episode =~ m#(\d+), ([IVX]+)#) {
+			# episode-num spec with the total number specified.
+			# decode season from roman numeral
+			$season = arabic ($2);
+			# however XMLTV counts from 0 on ...
+			$episode_num = [[ sprintf('%d . %d .', $season - 1, $1 - 1), "xmltv_ns" ], [ $episode, "onscreen" ]];	
+			
+ 		} elsif($episode =~ m#(\d+)#) {
+ 			# episode-num spec with just the episode number
+ 			# however XMLTV counts from 0 on ...
+			$episode_num = [[ sprintf('. %d .', $1 - 1), "xmltv_ns" ], [ $episode, "onscreen" ]];
+			
+ 		} else {
+ 			$episode_num = [[ $episode, "onscreen" ]];
 		}
 	}
 
-	$prog->{q(credits)} = \%credits;
-	$tree->delete;
+	return $episode_num;
 }
 
 
@@ -1241,6 +1369,35 @@ sub grab_icon( $ ) {
 	my $fetchurl	= "http://www." . domain() . "/tv/kep_ado/al_".(int(${channelid}) % 10000).".gif";
 	my ($file, $iconurl);
 
+	# that $fetchurl no longer works for RO, so...
+	#test if url is valid
+	$XMLTV::Get_nice::FailOnError = 0;
+	my $image = get_nice($fetchurl);
+	if (!defined $image) {
+		# image url not valid, so we must get it from the programmes page. Ideally we would do that during the main grab but this is a Q&D fix
+		# and I don't want to change too much of this code
+		my $url = "http://www." . domain() . "/pls/w/tv.channel?i_ch=".$channelid."&i_date=".UnixDate('today','%Y-%m-%d')."&i_where=1";
+			
+		my $data=get_nice($url);
+		my $tree = HTML::TreeBuilder->new_from_content($data) or 
+			die "could not fetch/parse $url (grab_icon)\n";
+		worker("base-parsing");
+
+		my $body = $tree->look_down("_tag"=>"body");
+		my $container = $body->look_down("_tag" => "div", "class" => qr/main-container-100/);
+		if ($container) {
+			if (my $imgdiv = $container->look_down("_tag" => "div", "style" => qr/float\s*:\s*left/, sub { 
+												my $imgtag = $_[0]->look_down('_tag' => 'img');
+												return 0 unless $imgtag; 
+												return $imgtag->attr('src') =~ m/http:\/\/media/;
+												} ))
+			{
+				$fetchurl = $imgdiv->look_down('_tag' => 'img')->attr('src');
+			}
+		}
+	}
+    $XMLTV::Get_nice::FailOnError = 1;
+        
 	return $fetchurl if ($opt_icons && ! $opt_local_icons);
 
 	# create directory
@@ -1264,7 +1421,11 @@ sub grab_icon( $ ) {
 	if (open(FILE,">$file")) {
 		t "fetching $fetchurl...";
 		$XMLTV::Get_nice::FailOnError = 0;
-		if (my $image = get_nice($fetchurl)) {
+		#if (my $image = get_nice($fetchurl)) {     # now grabbed above
+		if (!$image) { 
+			$image = get_nice($fetchurl);
+		}
+		if ($image) {
 			t "icon for $channelid grabbed successfully";
 			print FILE $image;
 			close FILE;
@@ -1417,9 +1578,9 @@ sub load_configs() {
 	foreach (split( /\n/, $jobmap_str )) {
 		++ $line_num;
 		tr/\r//d;
-		
 		s/#.*//;
 		next if m/^\s*$/;
+		s/^\s+|\s+$//g;   # trim spaces
 
 		$where = "$jobmap_file:$line_num";
 		@fields = split m/:/;
@@ -1444,6 +1605,7 @@ sub load_configs() {
 		tr/\r//d;
 		s/#.*//;
 		next if m/^\s*$/;
+		s/^\s+|\s+$//g;   # trim spaces
 
 		$where = "$catmap_file:$line_num";
 		@fields = split m/:/;
@@ -1677,7 +1839,7 @@ if ($mode eq 'grab') {
 	my @portids = load_configs();
 
 	# sets %CHANNELS
-	get_channels();
+	get_channels($mode);
 
 	worker("xml-writing");
 	my $writer = new XMLTV::Writer(%w_args);
