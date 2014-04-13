@@ -604,6 +604,16 @@ my @opt_components
 #                     'XML::LibXML' => 0,
 #          },
 #     },
+# 2014-04-13 reinstate after unbreak 
+     { name     => 'tv_grab_fi_sv',
+       blurb    => 'Grabber for Finland (Swedish)',
+       exes     => [ 'grab/fi_sv/tv_grab_fi_sv' ],
+       prereqs  => {
+                     'DateTime'    => 0,
+                     'IO::Scalar' => 0,
+                     'HTML::TreeBuilder' => 0,
+          },
+     },
 
 # 2009-03-08 removed due to breakage after source site changes
 #     { name => 'tv_grab_es',
