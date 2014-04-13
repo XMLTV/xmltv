@@ -33,7 +33,8 @@ package XMLTV::Get_nice;
 # 0.005065 : new methods get_nice_json(), get_nice_xml()
 # 0.005065 : add decode option to get_nice_tree()
 # 0.005065 : expose the LWP response object ($Response)
-our $VERSION = 0.005065;
+# 0.005066 : support unknown tags in HTML::TreeBuilder ($IncludeUnknownTags)
+our $VERSION = 0.005066;
 
 use base 'Exporter';
 our @EXPORT = qw(get_nice get_nice_tree get_nice_xml get_nice_json error_msg);
@@ -43,6 +44,8 @@ our $Delay = 5; # in seconds
 our $MinDelay = 0; # in seconds
 our $FailOnError = 1; # Fail on fetch error
 our $Response; # LWP response object
+our $IncludeUnknownTags = 0; # add support for HTML5 tags which are unknown to older versions of TreeBuilder (and therfore ignored by it)
+
 
 
 our $ua = LWP::UserAgent->new;
@@ -79,7 +82,9 @@ sub get_nice_tree( $;$$ ) {
       require Encode; import Encode;
       $content = decode($codepage, $content);
     }
-    my $t = HTML::TreeBuilder->new()->parse($content) or die "cannot parse content of $uri\n";
+    my $t = HTML::TreeBuilder->new();
+		$t->ignore_unknown(!$IncludeUnknownTags);
+		$t->parse($content) or die "cannot parse content of $uri\n";
     $t->eof;
     return $t;
 }
