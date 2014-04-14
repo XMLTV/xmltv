@@ -137,23 +137,15 @@ $startDate->add( days => $opt->{offset} );
 my $endDate=$startDate->clone()->add( days => $opt->{days} );
 $endDate->add( seconds => -1 );
 
-my $requestCallsigns = join( ',', @{$conf->{channel}} );
-$requestCallsigns =~ s/([^A-Za-z0-9,])/sprintf("%%%02X", ord($1))/seg;
-
-my $request = 'http://services.sapo.pt/EPG/GetChannelListByDateInterval';
-$request .= '?channelSiglas=' . $requestCallsigns;
-$request .= '&startDate=' . $startDate->ymd('-') . ' ' . $startDate->hms(':');
-$request .= '&endDate=' . $endDate->ymd('-') . ' ' . $endDate->hms(':');
-
 my $xpc = XML::LibXML::XPathContext->new;
 $xpc->registerNs('EPG', 'http://services.sapo.pt/Metadata/EPG');
 
-my $epgsource;
+my $epgsource = '';
 if ($opt->{days} > 0) {
     if( !$opt->{quiet} ) {
-        print( STDERR "requesting $request\n" );
+        print( STDERR "fetching data\n" );
     }
-    $epgsource = get_nice( $request );
+    get_epg( \$epgsource, $startDate, $endDate );
 } else {
     if( !$opt->{quiet} ) {
         print( STDERR "no data available for the requested time period\n" );
@@ -237,15 +229,20 @@ if( $is_success ) {
 sub config_stage
 {
      my( $stage, $conf ) = @_;
-
-     # Sample stage_sub that only needs a single stage.
-
      die "Unknown stage $stage" if $stage ne "start";
 
      my $result;
-     my $writer = new XMLTV::Configure::Writer( OUTPUT => \$result,
-                                                              encoding => 'utf-8' );
+     my $writer = new XMLTV::Configure::Writer( OUTPUT => \$result, encoding => 'utf-8' );
      $writer->start( { grabber => 'tv_grab_pt_meo' } );
+
+	 $writer->write_string( {
+				id => 'maxchannels', 
+				title => [ [ 'Maximum channels to grab at once', 'en' ] ],
+				description => [ 
+				 [ 'The source can return an error if too many channels are grabbed at once, so the fetch is split into multiple fetches and joined together.', 
+					 'en' ] ],
+				default => '5',
+		 } );
 
      $writer->end( 'select-channels' );
 
@@ -279,6 +276,55 @@ sub list_channels
      }
 
      return $output->toString();
+}
+
+# Fetch the epg in chunks for a max of x channels per request
+#  x is 'maxchannels' in config file, or default is 5
+#  (c.f. Bug #486 Error obtaining data for more than 20 channels )
+#
+sub get_epg
+{
+    my( $epgref, $startDate, $endDate ) = @_;
+    
+    my $channelsListSize = scalar @{$conf->{channel}};
+    my $maxChannelsPerRequest = $conf->{maxchannels}[0] || 5;
+    my $baseRequest = 'http://services.sapo.pt/EPG/GetChannelListByDateInterval';
+    my $i = 0;
+    while ($i < $channelsListSize) {
+        my $j = ($i + $maxChannelsPerRequest); $j = ($j > $channelsListSize) ? $channelsListSize : $j; $j--;
+        my @partialChannelList = @{$conf->{channel}}[$i ... $j];
+
+        my $partialRequest = make_url(\@partialChannelList, $startDate, $endDate);
+    
+        print( STDERR "requesting $partialRequest\n" )  if( !$opt->{quiet} );
+        my $partialEpgsource = get_nice( $partialRequest );
+
+        if (length($$epgref) == 0) {
+            $$epgref = $partialEpgsource;
+        } else {
+            # merge new data into existing
+            my ($newdata) = $partialEpgsource =~ m/(<Channel>.*<\/Channel>)/is;
+            my ($x, $y) = $$epgref =~ m/^(.*<\/Channel>)(.*)$/is;
+            $$epgref = ($x || '') . $newdata . ($y || '');
+        }
+
+        $i += $maxChannelsPerRequest;
+    }
+    
+}
+
+# Format a request url using data supplied 
+sub make_url
+{
+    my ( $channels, $startDate, $endDate ) = @_;
+    
+    my $requestCallsigns = join( ',', @$channels );
+    $requestCallsigns =~ s/([^A-Za-z0-9,])/sprintf("%%%02X", ord($1))/seg;
+        
+    return 'http://services.sapo.pt/EPG/GetChannelListByDateInterval'
+                . '?channelSiglas=' . $requestCallsigns
+                . '&startDate=' . $startDate->ymd('-') . ' ' . $startDate->hms(':')
+                . '&endDate=' . $endDate->ymd('-') . ' ' . $endDate->hms(':') ;
 }
 
 sub dt_from_string
