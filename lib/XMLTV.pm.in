@@ -33,6 +33,11 @@ our $VERSION = '0.5.64';
 #
 my $KEEP_ENCODING = 1;
 
+# We need a way of telling parsefiles_callback() to optionally *not* die when presented with multiple encodings,
+# but without affecting any other packages which uses it (i.e. so a new sub param is out of the question)
+# - best I can think of for the minute is a global  (yuk)
+my $DIE_ON_MULTIPLE_ENCODINGS = 1;
+    
 my %warned_unknown_key;
 sub warn_unknown_keys( $$ );
 
@@ -498,7 +503,9 @@ sub parsefiles_callback( $$$$@ ) {
     my $all_credits;
     my %all_channels;
 
-    my $do_next_file; # to be defined below
+    my $do_next_file;    # sub to parse file ( defined below)
+    my $do_file_number;  # current file in @files array
+    
     my $my_enc_cb = sub( $ ) {
 	my $e = shift;
 	t 'encoding callback';
@@ -509,7 +516,7 @@ sub parsefiles_callback( $$$$@ ) {
 		warn "two files both have unspecified character encodings, hope they're the same\n";
 	    }
 	    elsif (not $da and $de) {
-		warn "encoding $e not being returned to caller\n";
+		##warn "encoding $e not being returned to caller\n";
 		$all_encoding = $e;
 	    }
 	    elsif ($da and not $de) {
@@ -517,14 +524,20 @@ sub parsefiles_callback( $$$$@ ) {
 	    }
 	    elsif ($da and $de) {
 		if (uc($all_encoding) ne uc($e)) {
+		    if ( defined $DIE_ON_MULTIPLE_ENCODINGS && !$DIE_ON_MULTIPLE_ENCODINGS ) {
+			warn "this file's encoding $e differs from others' $all_encoding \n";
+		    } else {
 		    die "this file's encoding $e differs from others' $all_encoding - aborting\n";
 		}
 	    }
+	    }
 	    else { die }
+	    t 'have encoding, call user';
+	    $enc_cb->($e, $do_file_number) if $enc_cb;
 	}
 	else {
 	    t 'not seen encoding before, call user';
-	    $enc_cb->($e) if $enc_cb;
+	    $enc_cb->($e, $do_file_number) if $enc_cb;
 	    $all_encoding = $e;
 	    $have_encoding = 1;
 	}
@@ -554,19 +567,25 @@ sub parsefiles_callback( $$$$@ ) {
 	}
 	else {
 	    $all_channels{$id} = $c;
-	    $ch_cb->($c) if $ch_cb;
+	    $ch_cb->($c, $do_file_number) if $ch_cb;
 	}
     };
 
     my $my_p_cb = sub( $ ) {
+	my $doing_file = $do_file_number;
+	
 	$do_next_file->(); # if any
-	$p_cb->(@_) if $p_cb;
+	
+	$do_file_number = $doing_file;
+	$p_cb->(@_, $do_file_number) if $p_cb;
     };
 
     $do_next_file = sub() {
 	while (@files) {
 	    # Last first.
 	    my $f = pop @files;
+
+	    $do_file_number = scalar @files;
 
 	    # In older versions of perl there were segmentation faults
 	    # when calling die() inside the parsing callbacks, so we
@@ -928,25 +947,45 @@ differ.
 
 The first argument is a hash reference giving information to pass to
 C<XMLTV::Writer>E<39>s constructor.  But do not specify encoding, this
-will be taken from the input files.  Currently C<catfiles()> will fail
-work if the input files have different encodings.
+will be taken from the input files.  C<catfiles()> will abort if the 
+input files have different encodings, unless the 'UTF8'=1 argument 
+is passed in.
 
 =cut
 
 sub catfiles( $@ ) {
     my $w_args = shift;
     my $w;
+    my $enc;	# encoding of current file
+    my @encs;	# encoding of all files being catenated
     my %seen_ch;
+    
+    $DIE_ON_MULTIPLE_ENCODINGS = ( defined $w_args->{UTF8} ? 0 : 1 );
+    
     XMLTV::parsefiles_callback
       (sub {
-	   die if defined $w;
-	   $w = new XMLTV::Writer(%$w_args, encoding => shift);
+	   $enc = shift;
+	   my $do_file = shift;  
+	   $encs[$do_file] = (defined $enc ? $enc : 'unknown');
+	   t "file $do_file = $enc" if defined $enc;
+	   $w = new XMLTV::Writer(%$w_args, encoding => ( defined $w_args->{UTF8} ? 'UTF-8' : $enc ) )  if !defined $w;
        },
        sub { $w->start(shift) },
        sub {
 	   my $c = shift;
 	   my $id = $c->{id};
 	   if (not defined $seen_ch{$id}) {
+	   
+	       my $do_file = shift;
+	       if (defined $w_args->{UTF8}) { 
+	          if (uc($encs[$do_file]) ne 'UTF-8' && $encs[$do_file] ne 'unknown') {
+	             # recode the incoming channel name
+		     t 'recoding channel from '.$encs[$do_file].' to UTF-8';
+		     require XMLTV::Data::Recursive::Encode;
+		     $c = XMLTV::Data::Recursive::Encode->from_to($c, $encs[$do_file], 'UTF-8');
+	          }
+	       }
+	   
 	       $w->write_channel($c);
 	       $seen_ch{$id} = $c;
 	   }
@@ -958,7 +997,19 @@ sub catfiles( $@ ) {
 		 . "picking one arbitrarily\n";
 	   }
        },
-       sub { $w->write_programme(shift) },
+       sub { 
+	   my $p = shift;
+	   my $do_file = shift;
+	   if (defined $w_args->{UTF8}) {
+	      if (uc($encs[$do_file]) ne 'UTF-8' && $encs[$do_file] ne 'unknown') {
+	         # recode the incoming programme
+		 t 'recoding prog from '.$encs[$do_file].' to UTF-8';
+		 require XMLTV::Data::Recursive::Encode;
+		 $p = XMLTV::Data::Recursive::Encode->from_to($p, $encs[$do_file], 'UTF-8');
+	      }
+	   }
+	   $w->write_programme($p);
+       },
        @_);
     $w->end();
 }
