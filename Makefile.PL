@@ -276,7 +276,8 @@ my @opt_components
                     'HTML::Entities'    => 0,
                     'HTTP::Cookies'     => 0,
                     'LWP::UserAgent'    => 0,
-                    'JSON::PP'          => 0, } },
+                    'JSON::PP'          => 0,
+                    'Date::Language'    => 0, } },
 
 # Disabled 2006-04-12 since it doesn't provide data anymore.
 #     { name     => 'tv_grab_au',
@@ -352,6 +353,18 @@ my @opt_components
 #       exes => [ 'grab/dtv_la/tv_grab_dtv_la' ],
 #       prereqs => { 'HTML::TreeBuilder' => 0,
 #                    'HTML::Form'    => 0 } },
+# 2014-04-21 reinstate after unbreak 
+     { name => 'tv_grab_dtv_la',
+       blurb => 'Grabber for Latin America & Caribbean',
+       exes => [ 'grab/dtv_la/tv_grab_dtv_la' ],
+       prereqs => { 'LWP::UserAgent'    => 0,
+                    'HTTP::Cookies'     => 0,
+                    'HTML::TreeBuilder' => 0,
+                    'JSON::PP'          => 0,
+                    'Date::Manip'       => 0,
+                    'Date::Parse'       => 0,
+                    'Date::Language'    => 0, } 
+	},
 
      { name => 'tv_grab_uk_rt',
        blurb => 'Grabber for UK and Ireland (Radio Times)',
@@ -660,7 +673,7 @@ my @opt_components
 #       prereqs => { 'HTML::TreeBuilder' => 0 } },
 
      { name => 'tv_grab_huro',
-       blurb => 'Grabber for Hungary and Romania',
+       blurb => 'Grabber for Hungary, Romania, Slovakia, Czech Republic',
        exes => [ 'grab/huro/tv_grab_huro' ],
        pl_files => { 'grab/huro/tv_grab_huro.PL'
                      => 'grab/huro/tv_grab_huro' },
