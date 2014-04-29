@@ -12,7 +12,7 @@ tv_grab_nl --help
 tv_grab_nl [--config-file FILE] --configure
 
 tv_grab_nl [--config-file FILE] [--output FILE] [--days N]
-           [--offset N] [--quiet] [--slow]
+           [--offset N] [--quiet] [--fast]
 
 =head1 DESCRIPTION
 
@@ -38,8 +38,8 @@ B<--days N> Grab N days.  The default is one week.
 B<--offset N> Start N days in the future.  The default is to start
 from today.
 
-B<--slow> Fetch full programme details from the site.  This gives
-richer output but involves many more page fetches.
+B<--fast> Only fetch summary information for each programme. This is
+only title, start/stop times, categories.
 
 B<--quiet> Suppress the progress messages normally written to standard
 error.
@@ -76,9 +76,14 @@ use Getopt::Long;
 use Data::Dumper;
 use HTML::TreeBuilder;
 use HTML::Entities; # parse entities
+use HTTP::Cache::Transparent;
 use IO::File;
-use URI;
-use Date::Manip;
+#use URI;
+#use Date::Manip;
+use Date::Parse;
+use Date::Format;
+use DateTime;
+use Encode;
 use XMLTV;
 use XMLTV::Memoize;
 use XMLTV::ProgressBar;
@@ -93,7 +98,7 @@ use XMLTV::Usage <<END
 $0: get Dutch television listings in XMLTV format
 To configure: $0 --configure [--config-file FILE]
 To grab listings: $0 [--config-file FILE] [--output FILE] [--days N]
-        [--offset N] [--quiet] [--slow]
+        [--offset N] [--quiet] [--fast]
 To show capabilities: $0 --capabilities
 To show version: $0 --version
 END
@@ -116,9 +121,9 @@ BEGIN {
 # Function prototypes.
 sub time_to_str( $ );
 sub get_channels();
-sub process_summary_page( $$$$$ );
+sub get_programmes( $$$ );
 sub parse_dutch_date( $ );
-sub process_details_page( $$$ );
+sub process_details_page( $ );
 
 # Whether zero-length programmes should be included in the output.
 my $WRITE_ZERO_LENGTH = 0;
@@ -131,6 +136,9 @@ my $TZ = '+0100';
 # default language
 my $LANG = 'nl';
 
+# character encoding of output file
+my $ENCODING = 'ISO-8859-1';
+
 ######################################################################
 # get options
 
@@ -138,9 +146,10 @@ my $LANG = 'nl';
 XMLTV::Memoize::check_argv('XMLTV::Get_nice::get_nice_aux');
 my ($opt_days, $opt_offset, $opt_help, $opt_output,
     $opt_configure, $opt_config_file, $opt_gui, $opt_quiet,
-    $opt_list_channels, $opt_slow, $opt_share);
+    $opt_list_channels, $opt_fast, $opt_share, $opt_debug);
 $opt_days   = 7; # default
 $opt_offset = 0; # default
+$opt_debug  = 0;
 GetOptions('days=i'        => \$opt_days,
 	   'offset=i'      => \$opt_offset,
 	   'help'          => \$opt_help,
@@ -149,11 +158,14 @@ GetOptions('days=i'        => \$opt_days,
            'gui:s'         => \$opt_gui,
 	   'output=s'      => \$opt_output,
 	   'quiet'         => \$opt_quiet,
-	   'slow'	   => \$opt_slow,
+	   'fast'	   => \$opt_fast,
 	   'list-channels' => \$opt_list_channels,
 	   'share=s'       => \$opt_share,         # undocumented
+	   'debug'         => \$opt_debug,         # undocumented
 	  )
   or usage(0);
+
+my $opt_slow = !$opt_fast;  # configure the old version's 'slow' flag (this is now the default unles --fast is specified)
 
 if( defined $opt_offset && ( $opt_offset < 0 || $opt_offset > 6 ) ) {
 	print '!! Offset must be between 0-6 (0 is today), using default (0)',"\n";
@@ -166,6 +178,14 @@ if( defined $opt_days && ( $opt_days < 1 || $opt_days + $opt_offset > 7 ) ) {
 }
 
 usage(1) if $opt_help;
+
+# Initialise the web page cache
+HTTP::Cache::Transparent::init( { 
+    BasePath => get_default_cachedir(),
+    NoUpdate => 60*60,          # cache time in seconds
+    MaxAge => 24,               # flush time in hours
+    Verbose => $opt_debug,
+} );
 
 XMLTV::Ask::init($opt_gui);
 
@@ -195,7 +215,7 @@ if ($mode eq 'configure') {
     
     # Ask about each channel.
     my @chs = sort { $a <=> $b } keys %channels;
-    my @names = map { $channels{$_} } @chs;
+    my @names = map { $channels{$_}->{'name'} } @chs;
     my @qs = map { "add channel $_?" } @names;
     my @want = ask_many_boolean(1, @qs);
 
@@ -238,7 +258,7 @@ if (defined $opt_output) {
     die "cannot write to $opt_output: $!" if not defined $fh;
     $w_args{OUTPUT} = $fh;
 }
-$w_args{encoding} = 'ISO-8859-1';
+$w_args{encoding} = $ENCODING;
 my $writer = new XMLTV::Writer(%w_args);
 # TODO: standardize these things between grabbers.
 $writer->start
@@ -260,10 +280,11 @@ if ($mode eq 'list-channels') {
     update $bar if not $opt_quiet;
 
     foreach my $ch_did (sort(keys %channels)) {
-    	my $ch_name = $channels{$ch_did};
+    	my $ch_name = $channels{$ch_did}->{'name'};
     	my $ch_xid = "$ch_did.tvgids.nl";
     	$writer->write_channel({ id => $ch_xid,
-    	 'display-name' => [ [ $ch_name ] ] });
+    	   'display-name' => [ [ $ch_name ] ],
+           'icon' => [{'src' => $channels{$ch_did}->{'url'}}] });
     }
 
     $writer->end();
@@ -327,316 +348,68 @@ for( my $i = $opt_offset; $i < ($opt_days+$opt_offset); $i++ )
 {
     foreach $ch_did (@channels) {
         my $ch_xid = "$ch_did.tvgids.nl";
-   	    my $url = 'http://www.tvgids.nl/zoeken/'.
-			"?q=&d=$i&z=$ch_did&t=0&g=&v=0";
+   	    #my $url = 'http://www.tvgids.nl/zoeken/'."?q=&d=$i&z=$ch_did&t=0&g=&v=0";
+        my $url = "http://www.tvgids.nl/json/lists/programs.php?channels=$ch_did&day=$i";
+
    	    push @to_get, [ $url, $ch_xid, $ch_did, $i ];
     }
 }
 
-my %warned_ch_name; # suppress duplicate warnings
+# programme store - stores programmes within starttime within channel (so we can check for duplicates)
+#      @{ $programmes->{ $ch_id }->{ $p->{'start_epoch'} } 
+my $programmes = {};
 
-my @summary_page_data;
-my $bar = new XMLTV::ProgressBar('Downloading summary...', scalar @to_get)
+my $bar = new XMLTV::ProgressBar('Downloading schedules...', scalar @to_get)
   if not $opt_quiet;
+
+# time limits for grab
+my $grab_start = DateTime->today(time_zone => 'Europe/Amsterdam')->epoch() + ($opt_offset * 86400);
+my $grab_end = $grab_start + ($opt_days * 86400);
+#print STDERR "\n start/end grab: $grab_start $grab_end \n";
 
 foreach (@to_get) {
     my ($url, $ch_xmltv_id, $ch_tvgids_id, $i) = @$_;
     die if ref $url;
 
-		my $start_day = UnixDate(DateCalc($now, "+ $i days"), '%Y-%m-%d');
+    #my $start_day = UnixDate(DateCalc($now, "+ $i days"), '%Y-%m-%d');
 		
-    print STDERR "Fetching ",$url," ...\n" if not $opt_quiet;
+    get_programmes ($url, $ch_xmltv_id, $ch_tvgids_id);    
 
-    push @summary_page_data,
-			process_summary_page($url, $start_day, $start_day, $ch_xmltv_id, \$channels{$ch_tvgids_id});
  	  update $bar if not $opt_quiet;
 }
 $bar->finish() if not $opt_quiet;
 
-# Now we've fetched the descriptions, we know the channel names.
+
+# All data has been gathered. Restructure the data for XMLTV writer.
+            			#
+my @to_write = ();
+foreach ( keys %{$programmes} ) {
+    my $_ch_progs = $programmes->{$_};
+    foreach ( sort keys %{$_ch_progs} ) {
+        my $_dt_progs = $_ch_progs->{$_};
+        foreach (@{ $_dt_progs }) {
+            push @{to_write}, $_;
+            			}
+            			}
+    }
+
+# write the channels info
 foreach $ch_did (@channels) {
-    print STDERR "processing channel #$ch_did\n" if not $opt_quiet;
-    $ch_name = $channels{$ch_did};
-    die "did not see any name for $ch_did in any listing pages"
-      if not defined $ch_name;
+    my $ch_name = $channels{$ch_did}->{'name'};
     my $ch_xid = "$ch_did.tvgids.nl";
     $writer->write_channel({ id => $ch_xid,
-			     'display-name' => [ [ $ch_name ] ] });
-}
-
-my @summary_programmes;
-my %detail_url_to_summary_url;
-
-foreach (@summary_page_data) {
-    my ($summary_url, $ch_xmltv_id, @data) = @$_;
-		
-    # Try to do something with the programmes that have no start
-    # time.  Put them into a clump with the preceding valid
-    # programme.
-    #
-    my $clump;			# [ start, stop, programmes ].  stop may be undef.
-    my @clumps;
-
-    foreach (@data) {
-    	my ($start, $stop, $title, $url) = @$_;
-    	die if ref $url;
-    	local $SIG{__WARN__} = sub { warn "$url: $_[0]" };
-    	for ($detail_url_to_summary_url{$url}) {
-    	    warn "more than one programme with same details page $url"
-    	      if defined;
-    	    $_ = $summary_url;
-    	}
-	
-    	# Start and stop are common to a whole clump, but these
-    	# two are given individually for each programme.
-    	#
-    	my $details = [ $title, $url ];
-	
-    	if (not defined $start) {
-    	    if (not $clump) {
-        		warn "programme '$title' at beginning of page has no start time, dropping\n";
-    	    	next;
-    	    }
-    	    t 'found programme with no start time';
-	
-    	    if (defined $clump->[1]) {
-        		t 'make it start at stop of last clump';
-        		die if not defined $clump->[0];
-        		push @clumps, $clump;
-        		$clump = [ $clump->[1], $stop, [ $details ] ];
-        		die if not defined $clump->[0];
-    	    }
-    	    else {
-        		t 'current clump has no stop, add to clump';
-        		push @{$clump->[2]}, $details;
-        		t 'maybe set stop of current clump';
-        		$clump->[1] = $stop;
-    	    }
-    	}
-    	else {
-    	    t 'programme has start time, make new clump';
-    	    if ($clump) {
-        		die if not defined $clump->[0];
-        		my $cmp = Date_Cmp($clump->[0], $start);
-        
-        		if ($cmp == 0) {
-        		    # Oddity in the web pages: this programme has the
-        		    # same start time as a previous one.  (Until I
-        		    # found this case, the clumping was only for cases
-        		    # where a programme lacked a start time, I think.)
-        		    # Anyway handle this by making it join the
-        		    # existing clump.
-        		    #
-        		    t 'same start time as existing clump, join it';
-
-        		    if (defined $stop) {
-            			# Compare stop time of the current clump with
-            			# this programme and extend the clump if
-            			# necessary.
-            			#
-            			my $cmp = Date_Cmp($clump->[1], $stop);
-            			if ($cmp < 0) {
-            			    # Okay, later stop time, extend clump.
-            			    $clump->[1] = $stop;
-            			}
-            			elsif ($cmp == 0) {
-            			    # Okay.
-            			}
-            			elsif ($cmp > 0) {
-    	    	    	    warn "programme (from $start to $stop) has same start as one before it, but earlier stop, ignoring stop time\n";
-        	    		}
-            			else { die }
-        		    }
-
-        		    push @{$clump->[2]}, $details;
-        		}
-        		else {
-        		    # (Don't bother checking that $cmp < 0, it should
-    	    	    # be, but often programmes appear out of order...)
-        		    #
-        		    push @clumps, $clump;
-        		    $clump = [ $start, $stop, [ $details ] ];
-        		    t 'started a new clump for new start time, now: ' . d $clump;
-        		}
-    	    }
-    	    else {
-        		t 'no existing clump, starting one for this programme';
-        		$clump = [ $start, $stop, [ $details ] ];
-    	    }
-    
-            die if not defined $clump->[0];
-        }
-    }
-
-    if ($clump) {
-    	die if not defined $clump->[0];
-    	push @clumps, $clump;
-    }
-
-    t '\@clumps=' . d \@clumps;
-    
-   # Now add the clumpidx attributes.
-   foreach (@clumps) {
-    	my ($start, $stop, $l) = @$_;
-    	die if not defined $start;
-    	my $num_in_clump = @$l;
-    	if ($num_in_clump == 1) {
-    	    # Common case, no clumpidx needed.
-    	}
-    	elsif ($num_in_clump > 1) {
-    	    foreach my $i (0 .. $num_in_clump - 1) {
-        		# Add clumpidx as last thing in list.
-        		push @{$l->[$i]}, "$i/$num_in_clump";
-    	    }
-    	}
-    	else { die }
-    }
-
-    t 'after adding clumpidxes, \@clumps=' . d \@clumps;
-    
-    # Finally turn the data into programmes.
-    foreach (@clumps) {
-    	my ($start, $stop, $l) = @$_;
-    	die if not defined $start;
-    	foreach (@$l) {
-    	    my ($title, $url, $clumpidx) = @$_;
-    	    my %h = (channel => $ch_xmltv_id,
-    		     title => [ [ $title, $LANG ] ],
-        );
-	
-        for (date_to_local($start, $TZ)) {
-    		$h{start} = UnixDate($_->[0], '%q') . " $_->[1]";
-	    }
-
-	    if (defined $stop) {
-    		for (date_to_local($stop, $TZ)) {
-    		    $h{stop} = UnixDate($_->[0], '%q') . " $_->[1]";
-    		}
-	    }
-	    
-	    if (defined $url) {
-    		die if ref $url;
-    		$h{url} = [ $url ];
-	    }
-
-        $h{clumpidx} = $clumpidx if defined $clumpidx;
-        push @summary_programmes, \%h;
-	}
-    }
-}
-
-my @to_write;
-if ($opt_slow) {
-    $bar = new XMLTV::ProgressBar('getting details', scalar @summary_programmes)
-      if not $opt_quiet;
-    foreach my $s (@summary_programmes) {
-	my $urls = delete $s->{url};
-	if (not defined $urls) {
-	    push @to_write, $s;
-	    update $bar if $bar;
-	    next;
-	}
-	die if not @$urls;
-	warn "strange, more than one URL for programme, picking first"
-	  if @$urls > 1;
-	my $url = $urls->[0];
-	die if not defined $url;
-	$url = "$url"; die if ref $url;
-	my $summary_url = $detail_url_to_summary_url{$url};
-	die if not defined $summary_url;
-	die if ref $summary_url;
-	my $ch_xmltv_id = $s->{channel};
-	die if not defined $ch_xmltv_id;
-	die if ref $ch_xmltv_id;
-	my $detailed
-	  = process_details_page($ch_xmltv_id, $url, $summary_url);
-	if (not $detailed) {
-	    warn "skipped details page $url\n";
-
-	    # We still have the summary though, we can use that at least.
-	    push @to_write, $s;
-	    update $bar if $bar;
-	    next;
-	}
-	if ($detailed eq 'END') {
-	    # Apparently this means nothing more for this day.  But
-	    # we're not processing according to days so there is no
-	    # easy way to skip the right number of following
-	    # programmes.  In any case, we want the programme output
-	    # to be the same as in fast mode, so we more or less
-	    # ignore this indication from process_details_page().
-	    #
-	    push @to_write, $s;
-	    update $bar if $bar;
-	    next;
+    	   'display-name' => [ [ $ch_name ] ],
+           'icon' => [{'src' => $channels{$ch_did}->{'url'}}] });
 	}
 
-	# Could check 'van' and 'tot' times against those in the
-	# original page.
-	#
-	delete $detailed->{van}; delete $detailed->{tot};
-
-	# Pluck any values from $s that are also in $detailed, and
-	# check they match.
-	#
-	foreach (sort keys %$detailed) {
-	    my $old = delete $s->{$_};
-	    next if not defined $old;
-	    my $new = $detailed->{$_};
-
-	    if ($_ eq 'title') {
-    		# We know how to merge this.  TODO write general
-    		# XMLTV::Merge. 
-    		#
-    		my %already;
-    		foreach my $a (@$new) {
-    		    my $d = Dumper($a);
-    		    $already{$d}++ && warn "duplicate $_: $d";
-    		}
-    		foreach my $o (@$old) {
-    		    my $d = Dumper($o);
-    		    push @$new, $o unless $already{$d};
-    		}
-	    }
-	    else {
-    		# Compare the two data structures.  For this to work
-    		# correctly it requires Data::Dumper 2.12 or later, as
-    		# shipped with perl 5.8.0.  Older versions don't
-    		# support $Sortkeys.  But we don't have any version
-    		# check here - in the worst case all that results from
-    		# using an older Data::Dumper is a few spurious
-    		# warning messages.
-    		#
-    		my $old_dump = Dumper($old);
-    		my $new_dump = Dumper($new);
-    		if ($old_dump ne $new_dump) {
-    		    warn "mismatch between summary page and details page $url for $_: $old_dump vs $new_dump\n";
-    		}
-	    }
-	}
-
-	# Deal with any remaining keys in summary but not in
-	# detailed.  This should include start and stop.
-	#
-	%$detailed = (%$detailed, %$s);
-
-	push @to_write, $detailed;
-	update $bar if $bar;
-    }
-    $bar->finish() if $bar;
-}
-else {
-    @to_write = @summary_programmes;
-}
-
+# write the programmes info
 $writer->write_programme($_) foreach @to_write;
+
+	#
 $writer->end();
 
 ######################################################################
 # subroutine definitions
-
-# Suppress duplicate warnings.
-my (%warned_regel, $warned_discarding_parts, $warned_slot);
 
 my $warned_bad_chars;
 sub tidy( $ ) {
@@ -649,442 +422,26 @@ sub tidy( $ ) {
     }
 }
 
-# Returns a programme hashref, or undef, or the magic 'END'.
-sub process_details_page( $$$ ) {
-    foreach (@_) { die if ref }
-
-    my ($ch_xmltv_id, $url, $master_url) = @_;
-
-    local $SIG{__WARN__} = sub {
-    	warn "$url (from $master_url): $_[0]";
-    };
-
-    # Get HTML::TreeBuilder object.  Should be deleted later.
-    my $t;
-    eval { $t = get_nice_tree $url, \&tidy };
-    if ($@) {
-    	warn "error getting/parsing $url: $@";
-    	return;
-    }
-
-    my @elems = $t->look_down('_tag' => 'div', 'class' => 'detailBox');
-    if (not @elems or @elems != 1) {
-    	warn "did not see one single 'progDetail' element, skipping page";
-    	return;
-    }
+sub trim( $ ) {
+    # Remove leading & trailing spaces
+    $_[0] =~ s/^\s+|\s+$//g;
+    return $_[0];
+}
     
-    my $elem = $elems[0];
-    my @hs = $elem->look_down('_tag' => 'h2');    
-    if (not @hs or @hs != 1) {
-        warn "could not find a valid 'h2' title, skipping page";
-        return;
-    }    
-    
-    my @desc;                            # accumulate bits
-    my @info;				 # accumulate info bits
-    my @nm = $hs[0]->look_down('_tag' => 'span', 'class' => 'title');
-    my $naam = $nm[0]->as_text();
-	$naam =~ s/^\s+//; $naam =~ s/\s+$//;
-    @nm = $hs[0]->look_down('_tag' => 'span', 'class' => 'channeltime');
-    if( @nm ) {
-        my $text = $nm[0]->as_text(); $text =~ s/^\s+//; $text =~ s/\s+$//;
-        push @info, ['Zender', $text];
-    }
-    my @ps = $elem->look_down('_tag' => 'div', 'class' => 'description');
-    if (not @ps) {
-        warn "could not find a valid description, skipping page";
-        return;
-    }
-    my @texts = $ps[0]->look_down('_tag' => 'span', 'class' => 'type');
-    if( @texts ) {
-	my $text = $texts[0]->as_text();
-	$text =~ s/^\s+//; $text =~ s/\s+$//;
-        push @info, [ 'Type', $text ] if $text ne '';
-    }
-    @texts = $ps[0]->look_down('_tag' => 'p');
-    if (not @texts) {
-	warn "could not find description parts";
-	return;
-    }
-    # $texts[0]->dump();
-    # this may have other html tags... like <ul><li>...</ul> and even <p></p>
-    foreach my $pps (@texts) {
-        my @texts = $pps->look_down('_tag' => 'p');
-        if( @texts ) {
-            foreach my $p (@texts) {
-            # class=" type" subtitle and class
-                 my $text = $p->as_text();
-                 $text =~ s/^\s+//; $text =~ s/\s+$//;
-                 $text =~ s/Over\s+dit\s+programma\s+.*bekend.//;
-                 push @desc, $text if $text ne '';
-            }
-        } else {
-            # real content of description
-            $_ = $pps->as_text();
-            s/^\s+//; s/\s+$//;
-            s/Over\s+dit\s+programma\s+.*bekend.//;
-            push @desc, $_ if $_ ne '' ;
-        }
-    }
+sub dedupe( @ ) {
+    # Remove duplicates from an array
+    my %temp_hash = map { $_, 0 } @_;
+    return keys %temp_hash;
+}
 
-    @elems = $elem->look_down('_tag' => 'div', 'class' => 'info');
-    if (not @elems or @elems != 1) {
-    	warn "did not see one single 'info' element, skipping page";
-    }
-    
-    $elem = $elems[0];
-    my @trs = $elem->look_down('_tag' => 'li');
-    if( not @trs ) {
-        warn "did not find records below the 'info' element, skipping page";
-        return;
-    }
-    
-    foreach my $tr (@trs) {
-        my @ths = $tr->look_down('_tag' => 'strong');
-        if ( @ths ) {
-            my $th =  $ths[0]->as_text();
-            my $tds = $tr->as_text(); $tds =~ s/^$th//; $tds =~ s/^\s+//; $tds =~ s/\s+$//; 
-            if( @ths == 1 && $tds ne '' ) {
-        	push @info, [ $th, $tds ];
-            }
-        }
-        else { # icons are used
-	    my @tis = $tr->look_down('_tag' => 'img');
-            foreach (@tis) {
-                my $ti = $_->attr('alt'); # for time being push it on comment
-                push @info, [ 'Commentaar' , $ti ];
-                $ti = $_->attr('src'); $ti =~ s/.*\///; $ti =~ s/\.png.*//;
-                push @info, [ 'Kijkwijzer' , $ti ]; 
-            }
-        }
-    }
-
-    # Process the list of [ heading, data ] pairs.
-    my (
-    	# Exactly one:
-    	$van, $tot,
-
-    	# At most one:
-        $director, $previously_shown, $orig_title, $sub_title, $genre,
-        $date, $episode_num, $writers, $commentators, $audio,
-
-    	# Zero or more:
-        @presenter, @url, @actor, @category, @rating
-    );
-
-    my ($teletext_sub, $widescreen, $blackandwhite) = 0; # boolean
-    my $seen_datum = '';
-    my $last;
-
-    ELEM: foreach (@info) {
-        my ($regel, $text) = @$_;
-
-        $regel =~ s/^\s+//;
-        $regel =~ s/\s+$//;
-
-    	if ($regel eq '') {
-    	    # Continuation of the previous one, hopefully.
-    	    $regel = $last;
-    	}
-    	else {
-    	    # They usually end with a colon but not always.
-    	    $regel =~ s/:$//;
-    	    $last = $regel;
-    	}
-
-        if ($regel eq 'Acteurs') {
-            warn "seen 'Acteurs' twice" if @actor;
-
-            $text =~ s/en\/of/, /g;
-            $text =~ s/\//, /g;
-            @actor = split /, /, $text;
-            foreach (@actor) {
-                s/^\s+//;
-                s/\s+$//;
-                # 'e.a' appearing in the description means 'and others';
-                # it's implicit in XMLTV that there might be other actors,
-                # so we quietly remove it.
-                #
-                s/\s*e\.a\s*$//;
-                $text = $_;
-                while (length $text) {
-                    if ($text =~ s/\s*([^:]+):\s*([^.]+)(?:$|\.)//) {
-                        warn "discarding information about the parts played by each actor\n"
-                        unless $warned_discarding_parts++;
-                        $_ = $2;
-                    }
-                    elsif ($text =~ s/\s*([^,]+)(?:$|,)//) {
-                        $_ = $1;
-                    }
-                    else {
-                        warn "unknown remnant 'Acteurs' text '$text'";
-                        last;
-                    }
-                }
-            }
-        }
-        else {
-            # not actors, now convert to text
-            #$text = $text->as_text();
-            $text =~ s/^\s+//;
-            $text =~ s/\s+$//;
-
-	    if ($regel eq 'Datum') {
-    	        warn "seen 'Datum' twice\n" if $seen_datum ne '';
-                $seen_datum = $text . ', ';
-            }
-            elsif ( $regel eq 'Uitzendtijd' ) {
-                if ( $seen_datum ne '' ) {
-        	    # Extract time strings from the text, but not full
-        	    # Date::Manip objects.
-        	    #
-        	    ($van,$tot) = time_to_str($seen_datum . $text);
-                    $seen_datum = '';
-	        }
-		else { warn "Seen 'Uitzendtijd' but no 'Datum'\n"; } 
-    	    }
-    	    elsif ($regel eq 'Inhoud') {
-    	        # Empty text for this happens often, just skip it.
-    	        push @desc, $text if $text ne '';
-    	    }
-    	    elsif ($regel eq 'Genre') {
-    	        warn "seen 'Genre' twice\n" if defined $genre;
-    	        # Empty text for this happens often, just skip it.
-    	        #$genre = $text if $text ne '';
-                push @category, [ $text, $LANG ];
-    	    }
-    	    elsif ($regel eq 'Zender') {
-                # In the new layout, this field contains the logo
-                # for the channel. Ignore it, because these logos
-                # are too small to use in an application.
-    	        #
-    	    }
-    	    elsif ($regel eq 'Omroep') {
-                # We ignore this setting, because the XMLTV format
-                # doesn't have room for this. In Holland, a few broadcasters
-                # share the same channel.       
-    	        #
-    	    }
-            elsif ($regel eq 'Kleur') {
-		if( $text =~ /[Zz]wart/ ) {
-		     $blackandwhite++;
-                } else { warn " Seen Kleur with unknown value $text\n" ; }
-            }
-    	    elsif ($regel eq 'Bijzonderheden') {
-    	        foreach (split /,\s*/, $text) {
-        	    if ($_ eq 'Teletekst ondertiteld') {
-        	        # I'm guessing this means teletext subtitles :-).
-        	        $teletext_sub++
-        	          && warn 'seen teletext subtitles twice';
-        	    }
-        	    elsif ($_ eq 'Breedbeeld uitzending') {
-        	        $widescreen++ && warn 'seen widescreen twice';
-        	    }
-        	    elsif ($_ eq 'Breedbeelduitzending') {
-        	        $widescreen++ && warn 'seen widescreen twice';
-        	    }
-                    elsif ($_ eq 'Zwart-Wit') {
-                        $blackandwhite++ && warn 'seen black & white twice';
-                    }
-                    elsif ( $_ =~ /[Ss]tereo/ ) {
-                        $audio = 'stereo';
-                    }
-                    elsif ( $_ =~ /[Ss]urround/ ) {
-                        $audio = 'surround';
-                    }
-                    elsif ( $_ =~ /^[Dd]olby/ ) {
-                        $audio = 'dolby';
-                    }
-        	    elsif (length >= 50) {
-        	        # Some long sentence, part of description.
-        	        push @desc, $_;
-        	    }
-        	    else {
-        	        warn "unknown 'Bijzonderheden' bit $_"
-        	          unless $warned_regel{"Bijzonderheden: $_"}++;	
-        	        push @desc, $_;
-        	    }
+sub dedupepreserve( @ ) {
+    # Remove duplicates from an array preserving the original sequence
+    my (@unique, %seen) = ((),());
+    foreach ( @_ ) {
+      next if $seen{ $_ }++;
+      push @unique, $_;
     	        }
-    	    }
-            elsif ($regel eq 'Teletekst') {
-                # Teletekst contains the 'teletext' page for this programme
-                # This information isn't used at the moment
-            }
-    	    elsif ($regel eq 'Presentatie') {
-    	        push @presenter, $text;
-    	    }
-    	    elsif ($regel eq 'Aflevering') {
-    	        warn "seen 'Aflevering"
-    	          if defined $episode_num;
-    	        if ($text eq 'Slot') {
-        	    # The last episode of a series.  There isn't a way to
-        	    # store this in the current XMLTV format.
-        	    #
-        	    warn "discarding 'Slot'" unless $warned_slot++;
-    	        }
-    	        elsif ($text =~ /^\d+$/) {
-        	    if ($text == 0) {
-        	        warn "I thought episode nums on the site were from 1";
-        	    }
-    	    	    else {
-        	        $episode_num = $text - 1;
-        	    }
-    	        }
-    	        elsif ($text =~ /^(?:\d+-)+\d$/) {
-    	    	    # This means multiple episodes.  This ought to be
-        	    # handled by turning the programme into a clump.
-        	    #
-        	    warn "programme covers multiple episodes ($text), not handled";
-    	        }
-    	        else {
-        	    warn "bad episode number $text";
-    	        }
-    	    }
-    	    elsif ($regel eq 'Titel aflevering') {
-    	        warn "seen 'Titel aflevering' twice"
-    	          if defined $sub_title;
-    	        $sub_title = $text;
-    	    }
-    	    elsif ($regel eq 'Url') {
-    	        # We have to turn the string given, which is normally
-    	        # just a hostname, into a URL.  I don't see why they
-    	        # don't just link to it directly, this is a web site
-    	        # after all.
-    	        #
-    	        # Anyway, the URI library doesn't seem to have any way
-    	        # to take a string and turn it into a URL adding
-    	        # 'http:' if necessary, so we do this by hand.
-    	        #
-    	        if ($text !~ tr/://) {
-        	    $text = "http://$text";
-    	        }
-    	        push @url, $text;
-    	    }
-    	    elsif ($regel eq 'Scenario') {
-    	        warn "seen 'Scenario' twice" if $writers;
-    	        push @$writers, $text;
-    	    }
-    	    elsif ($regel eq 'Email') {
-    	        push @url, "mailto:$text";
-    	    }
-    	    elsif ($regel eq 'Bron') {
-    	        # FIXME cannot do anything special with this.  It
-    	        # means 'source' and perhaps by parsing the text we
-    	        # could find the names of writers or whatever.
-    	        #
-    	        # push @desc, "$regel: $text";
-    	    }
-    	    elsif ($regel eq 'Commentaar') {
-    	        push @$commentators, $text;
-    	    }
-    	    elsif ($regel eq 'Jaar van premiere') {
-    	        # Year of release, I think.
-    	        warn "seen 'Jaar van premiere' twice"
-    	          if defined $date;
-    	        $date = $text;
-    	    }
-            elsif ($regel eq 'Regie') {
-                warn "seen 'Regie' twice" if defined $director;
-                push @$director, $text;
-            }
-            elsif ($regel eq 'Regisseur') {
-                warn "seen 'Regie' twice" if defined $director;
-                push @$director, $text;
-            }
-    	    elsif ($regel eq 'Orginele titel') {
-    	        warn "seen 'Orginele titel' twice" if defined $orig_title;
-    	        $orig_title = $text;
-    	    }
-    	    elsif ($regel eq 'Behaalde prijzen') {
-    	        # Awards won.  It doesn't seem worth adding a separate
-    	        # field for this to the XMLTV format, just append to
-    	        # the description.
-    	        #
-    	        # push @desc, "$regel: $text";
-    	    }
-            elsif ($regel eq 'Type' ) {
-                # type broadcast as ziekenhuisserie, actuele talkshow
-                # XMLTC record????
-                push @category, [$text, $LANG];
-            }
-            elsif ($regel eq 'Kijkwijzer' ) {
-                # advisory: <-yr, angst, geweld, ...
-                if( $text =~ /\d+/ ) { $text = '-'. $text; }
-                push @rating, [ $text, 'advisory'] ;
-            }
-    	    elsif ($regel eq 'Website') {
-    	        push @url, ($text =~ /^[a-z]+:/) ? $text : "http://$text";
-    	    }
-    	    else {
-    	        # Unknown key, report it back to the prompt
-    	        #
-    	        warn "unknown programme info key $regel\n"
-    	          unless $warned_regel{$regel}++;
-    	    }
-        }
-    }
-
-    $t->delete();
-    undef $t;
-
-    if (not defined $naam) {
-    	warn "did not see programme title, skipping programme\n";
-    	return;
-    }
-    if (not defined $van) {
-       	warn "did not find programme starttime, skipping programme\n";
-    	return;
-    }
-    if (not defined $tot) {
-       	warn "did not see programme endtime, skipping programme\n";
-    	return;
-    }
-
-    my @title = ([ $naam, $LANG]);
-    push @title, [ $orig_title ] if defined $orig_title; # not Dutch!
-
-    # We return a programme hash with 'van' and 'tot' rather than
-    # fully parsed times.
-    #
-    my %prog
-      = (channel => $ch_xmltv_id,
-	 title   => \@title,
-	 van     => $van,
-	 tot     => $tot,
-	);
-	
-    # We have lots of bits of description.  But we make them
-    # into a single <desc> element because they probably give
-    # different information, rather than stating the same
-    # information in different ways.
-    #
-    $prog{desc} = [ [ join("\n\n", @desc), $LANG ] ] if @desc;
-
-    $prog{'sub-title'} = [ [ $sub_title, $LANG ] ] if defined $sub_title;
-    $prog{subtitles} = [ { type => 'teletext' } ] if $teletext_sub;
-    $prog{'episode-num'} = [ [ $episode_num ] ] if defined $episode_num;
-    $prog{url} = \@url if @url;
-    $prog{date} = $date if defined $date;
-    #$prog{category} = [ [ $genre, $LANG ] ] if defined $genre;
-    $prog{category} = \@category if @category;
-    $prog{rating} = \@rating if @rating;
-    $prog{'previously-shown'} = $previously_shown if $previously_shown;
-
-    my %video;
-    $video{aspect} = '16:9' if $widescreen;
-    $video{colour} = 0 if $blackandwhite;
-    $prog{video} = \%video if %video;
-    $prog{audio}{stereo} = $audio if defined $audio;
-
-    my %credits;
-    $credits{presenter} = \@presenter if @presenter;
-    $credits{actor} = \@actor if @actor;
-    $credits{writer} = $writers if $writers;
-    $credits{commentator} = $commentators if $commentators;
-    $credits{director} = $director if $director;
-    $prog{credits} = \%credits if %credits;
-
-    return \%prog;
+    return @unique;
 }
 
 sub time_to_str( $ ) {
@@ -1124,87 +481,22 @@ sub get_channels() {
     my %channels;
 
     # Download the full list
-    my $url = 'http://www.tvgids.nl';
+    my $url = 'http://www.tvgids.nl/json/lists/channels.php';
 
-    # All stations are in the select box.
-    # The station ID is the option value
-    my $t = get_nice_tree $url;
-    my @conts = map { [ $_->content_list() ] }
-      $t->look_down('_tag' => 'select', 'id' => 'zenderid');
-
-    foreach my $cont (@conts) {
-	my @children =@$cont;
-
-	if (scalar(@children) == 0) {
-	    warn 'No stations are defined';
-	    next;
-        }
-
-	foreach my $station_line (@children) { 
-	    if ($station_line ne ' ') {
-		# This if statement is to prevent parsing the last
-		# empty element from the list.
-
-                if ( $station_line->tag() eq 'optgroup' ) {
-                    # Add the contents of the optgroups to the full list
-		    my @groupchilds = $station_line->look_down('_tag' => 'option');
-                    foreach my $groupchild (@groupchilds) {
-                        push @children, $groupchild;
-                    }
-                }
-		else {
-		    my $channel_id = $station_line->attr('value');
-
-       	    	    # I am only interested in the normal channels.
-		    # tvgids.nl has some pages for the regional stations also
-		    # All normal channels have id <0,300>
-       	    	    # That is at the moment... Could change in future...
-		    if ($channel_id && $channel_id > 0 && $channel_id < 500) {
-			my $channel_name = $station_line->as_text();
-			$channels{$channel_id} = $channel_name
-                    }
-                }
-	    }
-	}
+    my $chs = get_nice_json($url, '', 1);
+    foreach (@{$chs}) {
+        $channels{ $_->{'id'} } = { 'name' => $_->{'name'}, 'url' => 'http://tvgidsassets.nl/iphone/channels/big/'.$_->{'id'}.'b.png' };
     }	
-
-    $t->delete(); undef $t;
 
     return %channels;
 }
 
 
-# Process a page containing the summary information.
-#
-# Parameters:
-#   URL to fetch
-#   Date::Manip object giving day for programmes in page (at least
-#     until they cross midnight)
-#   Date::Manip object giving official 'date' of page (normally the
-#     same as the previous parameter)
-#   Reference to a scalar which is to hold the display-name of the
-#     channel.  If not set, it will be populated with the name
-#     found.  If set, it will be checked against the data on the page.
-#
-# Returns a list of tuples of the form [ start, stop, title, url ]
-# where start and stop are Date::Manip objects, title is a string, and
-# url is the page to download if you want full details.
-#
-# Note that stop may be unset, since the format doesn't require that
-# stop times be known.  More surprisingly, start may be unset as well!
-# The meaning of this is that the times for that programme were
-# completely nonsensical, and you should do something like putting it
-# into a clump with the last valid programme that appeared before it,
-# or else drop it with a warning.
-#
-my %warned_bad_channel_name;
+# Fetch & process a day's schedules for a channel
+sub get_programmes( $$$ ) {
 
-sub process_summary_page( $$$$$ ) {
-    my ($url, $day, $official_day, $ch_xmltv_id, $ch_name_ref) = @_;
-    my ($start_hhmm, $stop_hhmm);
+    my ($url, $ch_xid, $ch_id) = @_;
     die if not defined $url; die if ref $url;
-    die if not defined $day; die if ref $day;
-    die if not defined $official_day; die if ref $official_day;
 
     local $SIG{__WARN__} = sub {
     	warn "$url: $_[0]";
@@ -1214,248 +506,284 @@ sub process_summary_page( $$$$$ ) {
     	die "$url: $_[0]";
     };
 
-    my $t = get_nice_tree $url;
-    my @elems = $t->look_down('_tag' => 'div', 'class' => 'programs');
+    print STDERR "Fetching ",$url," ...\n" if not $opt_quiet;
 
-    if (not @elems) {
+    my $t = get_nice_json($url, '', 1);
+    if ( not $t->{ $ch_id }) {
     	warn 'did not find any programmes in page';
     	return ();
     }
 
-    my @bits;
-		
-    foreach my $e (@elems) {
-    	my @cont = $e->look_down('_tag' => 'div', 'class' => 'program');
-      foreach my $tr (@cont) {
-                my @ahs = $tr->look_down('_tag' => 'a');
-                foreach my $ah (@ahs) {
-                     my @ati = $ah->look_down('_tag' => 'span', 'class'=> 'time');
-                     my @att = $ah->look_down('_tag' => 'span', 'class'=> 'title');
-                     my @ch = $ah->look_down('_tag' => 'span', 'class'=> 'channel');
-		     if( @ati == 1 && @att == 1 && @ch == 1 && @ahs >=1 ) {
-			push @bits, [ 0, $ati[0]->as_text(), $att[0]->as_text(), $ch[0]->as_text(), $ahs[0]->attr('href'), $_ ];
-	             }
-	        }
-      }
-    }
-
-    $t->delete();
-    undef $t;
-    
-    if (not @bits) {
-    	warn 'Did not see any content, skipping page';
-    	return ();
-    }
-    
-    t 'got bits: ' . d @bits;
-		
-    my @todo;
-    my @data;
-
-    $day = $official_day;
-
-    while (@bits > 0) {
-    	my $bit = shift @bits;
-    	
-    	if( $bit->[0] == 1 ) {
-       	    my $date_str = $bit->[1];
-     	    my $d = parse_dutch_date($date_str);
-	    if (defined $d) {
-	       my ($d_base, $d_tz) = @{date_to_local($d, $TZ)};
-#		print UnixDate($d_base, '%Q'),"\n";
-#		print UnixDate($day, '%Q'),"\n";
-		if( UnixDate($d_base, '%Q') eq UnixDate( DateCalc($day, '+ 1 day'), '%Q') ) {
-		    # We found our next day!
-		    # Add the existing @todo to the data
-		    push @data, [ UnixDate($day, '%Y-%m-%d'), @todo ] if (@todo);
-		    @todo = [];
-		    $day = UnixDate( DateCalc($day, '+ 1 day'), '%Y-%m-%d');
-		}
-	    }
-	    else {
-		die "Cannot parse date '$date_str'";
-	    }
-	    next;
-	}
-			
-    	my $ch = $bit->[3];
-    	t 'shifted bit to get $ch=' . d $ch;
-    	for ($$ch_name_ref) {
-    	    if (not defined) { $_ = $ch }
-       	    elsif ($_ ne $ch) {
-        	# Most likely the channels file has the wrong name.
-        	warn "expected channel name $_, got $ch\n"
-        	     unless $warned_bad_channel_name{$_}{$ch}++;
-        	$_ = $ch;
-    	    }
-    	}
-	
-    	my $times = $bit->[1];
-    	t 'shifted bit to get $times=' . d $times;
-			
-    	my $title_href = $bit->[4];
-    	my $title = $bit->[2];
-    	t 'shifted bit to get $title_href=' . d $title_href . ', ' . '$title=' . d $title;
-				
-    	if ($title =~ /^Ieder heel uur .+, tenzij anders vermeld$/) {
-    	    # A certain programme on the hour.  But it isn't worth
-    	    # adding this to the output, ignore it.
-    	    #
-    	    next;
-    	}
-
-    	if ($title eq 'NB: Programmering onder voorbehoud') {
-    	    # Programming subject to change.  There isn't a way to
-    	    # represent this in the current XMLTV format.
-    	    #
-    	    next;
-    	}
-	
-
-    	if ($times =~ /^(\d\d):(\d\d) - /
-    	    and 0 <= $1 and $1 < 24 and 0 <= $2 and $2 < 60) {
-    	    $start_hhmm = "$1:$2";
-    	}
-    	if ($times =~ / - (\d\d):(\d\d)$/
-    	    and 0 <= $1 and $1 < 24 and 0 <= $2 and $2 < 60) {
-    	    $stop_hhmm = "$1:$2";
-    	}
-
-    	# Right, got channel name, times, and title.
-    	# FIXME should check channel name (among other things).
-    	#
-     	my $title_url = URI->new_abs($title_href, $url);
-       
-     	# We prefer to handle URLs as strings.
-     	push @todo, [ $start_hhmm, $stop_hhmm, $title, "$title_url" ];
-    }
-
-    # Add the remaining data to the @todo array
-    push @data, [ $day, @todo ] if (@todo); @todo = [];
-
-    # Now we need to make some sense of the times.  When stop time
-    # appears before start time this could mean we have crossed
-    # midnight, or it could just be a mistake.  If there is more than
-    # one such potential crossing we pick the one with the shortest
-    # resulting programme length and assume the others are mistakes.
+    # fetch each programme from the JSON object
     #
-    my @page;
-
-    for (my $c = 0; $c < @data; ++$c) {
-	($day, @todo) = @{$data[$c]};
+    # some channels return an array   { "2" : [{},{}] }
+    # whereas other return a hash!    { "3" : { "0" : {}, "1" : {} } }
+    #
+    my @progs_to_process;
 		
-	my @crossings;
-	my $shortest;
-	my $next_day = UnixDate(DateCalc($day, '+ 1 day'), '%Y-%m-%d');
-	my $crossing_at;
-        # ${Log::TraceMessages::On} = 1;
-	
-	t 'looking at raw times and searching for midnight crossing: ' . d \@todo;
-	
-	for (my $i = 0; $i < @todo; ++$i) {
-	    ($start_hhmm, $stop_hhmm) = @{$todo[$i]};
-	    t '$start_hhmm=' . d $start_hhmm;
-	    t '$stop_hhmm=' . d $stop_hhmm;
-	    next if not defined $start_hhmm;
-	    next if not defined $stop_hhmm;
+    if ( ref $t->{ $ch_id } eq 'HASH' ) {
+        @progs_to_process = @{ $t->{ $ch_id } }{ sort { $a <=> $b } keys %{ $t->{ $ch_id } } };
+    } elsif ( ref $t->{ $ch_id } eq 'ARRAY' ) {
+        @progs_to_process = @{ $t->{ $ch_id } };
+    } else {
+        die "unknown type of reply object ".ref $t->{ $ch_id };
+    }
 
-  	    my $start = parse_local_date("$day $start_hhmm", $TZ);
-	    my $stop = parse_local_date("$day $stop_hhmm", $TZ);
-	    t "checking if $start -> $stop goes backwards";
-	    next if Date_Cmp($start, $stop) <= 0;
-	    t "yup, it's a candidate";
-
-	    my $stop_next_day = parse_local_date("$next_day $stop_hhmm", $TZ);
-	    die if Date_Cmp($stop_next_day, $start) <= 0;
-	    t 'if it were, stop time on next day would be: ' . d $stop_next_day;
-
-  	    my $distance = Delta_Format(DateCalc($start, $stop_next_day), 0, '%st');
-	    t '...and length of programme: ' . d $distance;
-	    t 'shortest length so far: ' . d $shortest;
+    foreach my $_p (@progs_to_process) {
+        # e.g.
+        #{
+        #  "db_id": "16291308",
+        #  "titel": "De Wereld Draait Door",
+        #  "genre": "Informatief",
+        #  "soort": "Talkshow",
+        #  "kijkwijzer": "",
+        #  "artikel_id": null,
+        #  "artikel_titel": null,
+        #  "artikel_tekst": null,
+        #  "artikel_foto": null,
+        #  "datum_start": "2014-04-29 19:00:00",
+        #  "datum_end": "2014-04-29 20:00:00"
+        #},
+        #{
+        #  'db_id' => '16387388',
+        #  'titel' => "NOS UEFA Champions League Live, Chelsea - Atl\x{e9}tico Madrid",
+        #  'genre' => 'Sport',
+        #  'soort' => 'Voetbal',
+        #  'kijkwijzer' => '',
+        #  'artikel_id' => '64576',
+        #  'artikel_titel' => 'Chelsea jaagt op derde cup op rij',
+        #  'artikel_tekst' => 'Na een ultraverdedigende 0-0-wedstrijd in Madrid mag Chelsea in eigen huis proberen Atl&eacute;tico Madrid te verslaan. Winst is namelijk genoeg voor een plek in de finale van de Champions League.',
+        #  'artikel_foto' => 'mourinho_madrid_320.jpg',
+        #  'datum_start' => '2014-04-30 20:40:00',
+        #  'datum_end' => '2014-04-30 22:45:00',
+        #  'is_highlight' => '1'
+        #};
     
-	    if (not defined $shortest or $distance < $shortest) {
-	    	t 'this is the best so far';
-	    	$shortest = $distance;
-	    	$crossing_at = $i;
-	    }
-  	}
+    
+        # Grab data into a hash for this programme
+        my $p;
+        $p->{'channel'}     = $ch_xid;
+        $p->{'title'}       = $_p->{'titel'};
+        $p->{'db_id'}       = $_p->{'db_id'};
+		
+        # calc TZ offset for this programme
+        my $tz = DateTime->from_epoch( epoch=>str2time( $_p->{'datum_start'}, 'GMT' ), time_zone=>'Europe/Amsterdam' )->strftime('%z');
 
-	t '@todo=' . d \@todo;
+        $p->{'start_epoch'} = str2time($_p->{'datum_start'}, $tz);
+        $p->{'stop_epoch'}  = str2time($_p->{'datum_end'}, $tz);    
+        $p->{'start'}       = time2str( "%Y%m%d%H%M%S %z", $p->{'start_epoch'}, $tz );
+        $p->{'stop'}        = time2str( "%Y%m%d%H%M%S %z", $p->{'stop_epoch'}, $tz );
 
-	# Now given the place at which we cross from $day to $next_day we
-	# can add the appropriate days to the hh:mm times.
-	#
-	if (not defined $crossing_at) {
-  	    push @$_, $day, $day foreach @todo;
+        #print STDERR "$tz : $p->{'start_epoch'} \n";
+    	
+        push @{$p->{'genres'}}, $_p->{'genre'}  if ($_p->{'genre'} ne '');  # (e.g. Film) - put before soort
+        push @{$p->{'genres'}}, $_p->{'soort'}  if ($_p->{'soort'} ne '');
+			
+        $p->{'url'}         = "http://www.tvgids.nl/programma/".$p->{'db_id'};
+	
+			
+        # is the start time within range of this grab?
+        next  if ( $p->{'start_epoch'} < $grab_start || $p->{'start_epoch'} >= $grab_end );
+	
+
+        # if user wants details then get them from the programme page
+        if ($opt_slow) {
+            process_details_page ( \$p );
     	}
-	else {
-	    for (my $i = 0; $i < $crossing_at; ++$i) {
-	    	push @{$todo[$i]}, $day, $day;
-	    }
-	    for (my $i = $crossing_at) {
-	    	push @{$todo[$i]}, $day, $next_day;
-	    }
-	    for (my $i = $crossing_at + 1; $i < @todo; ++$i) {
-	    	push @{$todo[$i]}, $next_day, $next_day;
+
+        # de-dupe the categories
+        @{ $p->{'genres'} } = dedupepreserve ( @{ $p->{'genres'} } );
+       
+
+        # Reformat the data to create the data structure for the programme
+        my $p_out = {};
+        $p_out->{'channel'} 	= $p->{'channel'};
+        $p_out->{'title'} 		= [[ encode($ENCODING, $p->{'title'}), $LANG ]];
+        $p_out->{'start'} 		= $p->{'start'};
+        $p_out->{'stop'} 		= $p->{'stop'}  if (defined $p->{'stop'} && $p->{'stop'} ne '');
+        $p_out->{'desc'} 		= [[ encode($ENCODING, $p->{'desc'}), $LANG ]]  if (defined $p->{'desc'} && $p->{'desc'} ne '');
+        $p_out->{'sub-title'} 	= [[ encode($ENCODING, $p->{'sub_title'}), $LANG ]]  if (defined $p->{'sub_title'} && $p->{'sub_title'} ne '');
+
+        $p_out->{'date'} 		= $p->{'year'}  if (defined $p->{'year'} && $p->{'year'} ne '');
+
+        $p_out->{'rating'} 		= [[ $p->{'rating'} ]]  if (defined $p->{'rating'} && $p->{'rating'} ne '');
+        push @{ $p_out->{'rating'}[0] }, ( undef, [{'src' => $p->{'rating_icon'}}] )  if (defined $p->{'rating_icon'} && $p->{'rating_icon'} ne '');
+		
+        $p_out->{'url'} 	  	= [ encode($ENCODING, $p->{'url'}) ]  if (defined $p->{'url'} && $p->{'url'} ne '');
+        $p_out->{'video'}->{'aspect'} = '16:9'  if (defined $p->{'widescreen'} && $p->{'widescreen'} == 1);
+	
+        # encode the 'credits'
+        @{ $p->{'directors'} } = map { encode($ENCODING, trim $_) }  @{ $p->{'directors'} }  if defined $p->{'directors'};
+        @{ $p->{'actors'} }    = map { encode($ENCODING, trim $_) }  @{ $p->{'actors'} }     if defined $p->{'actors'};
+        $p_out->{'credits'}{'director'} = $p->{'directors'}  if (defined $p->{'directors'} && scalar $p->{'directors'});
+        $p_out->{'credits'}{'actor'}    = $p->{'actors'}     if (defined $p->{'actors'}    && scalar $p->{'actors'});
+	
+
+        push @{ $p_out->{'title'} }, [ encode($ENCODING, $p->{'original_title'}) ]  if (defined $p->{'original_title'} && $p->{'original_title'} ne '');  # original title is not Dutch!
+
+        # any extra description?
+        push @{ $p_out->{'desc'} }, [ encode($ENCODING, $p->{'desc_add'}), $LANG ]  if (defined $p->{'desc_add'} && $p->{'desc_add'} ne '');
+
+    
+        if ( scalar @{ $p->{'genres'} } ) {
+            foreach (@{ $p->{'genres'} }) {
+                push @{ $p_out->{'category'} }, [ encode($ENCODING, $_), $LANG ];
 	    }
   	}
 
-	# Now we can parse the dates into Date::Manip objects.
-	my @parsed;
 
-  	foreach (@todo) {
-	    my ($start_hm, $stop_hm, $title, $title_url, $start_day, $stop_day) = @$_;
-	    my ($start, $stop);
-	    if (defined $start_hm && defined $start_day) {
-	    	$start = parse_local_date("$start_day $start_hm", $TZ);
+        # store the programme avoiding duplicates
+        # also check for duplicate start times and set clumpidx
+        {
+            if ( defined $programmes->{ $ch_id }->{ $p->{'start_epoch'} } ) {
+                # duplicate prog or contemporary?
+                my $dup = 0; my $_P;
+                foreach $_P ( @{ $programmes->{ $ch_id }->{ $p->{'start_epoch'} } } ) {
+                    $dup = 1  if ( $_P->{'title'}[0][0] eq $p_out->{'title'}[0][0] );	# duplicate
+    	}
+                next if $dup;	# ignore duplicates (go to next programme)
+                if (!$dup) { 
+                    # contemporary programme so set clumpidx
+                    my $numclumps = scalar @{ $programmes->{ $ch_id }->{ $p->{'start_epoch'} } }  + 1;
+                    # set (or adjust) clumpidx of existing programmes
+                    my $i = 0;
+                    foreach $_P ( @{ $programmes->{ $ch_id }->{ $p->{'start_epoch'} } } ) {
+                        $_P->{'clumpidx'} = "$i/$numclumps";
+                        $i++;
 	    }
-	    if (defined $stop_hm && defined $stop_day) {
-	    	$stop = parse_local_date("$stop_day $stop_hm", $TZ);
+                    # set clumpidx for new programme
+                    $p_out->{'clumpidx'} = "$i/$numclumps";
 	    }
-	    push @parsed, [ $start, $stop, $title, $title_url ]
-					if (defined $title);
+	    }
+  	}
+
+        # store the programme
+        push @{ $programmes->{ $ch_id }->{ $p->{'start_epoch'} } }, $p_out;
+	    }
+    
 	}
 
-	t 'after parsing dates: ' . d \@parsed;
+# Fetch and parse an individual programme information page
+sub process_details_page( $ ) {
+    my ($p) = @_;
 
-	# Check the dates and weed out those which are obviously wrong.
-	my $last_start;
-	foreach (@parsed) {
-	    our ($start, $stop);
-	    local (*start, *stop) = \ ($_->[0], $_->[1]);
-	    t 'checking dates, $last_start=' . d $last_start;
-	    t '$start=' . d $start;
-	    t '$stop=' . d $stop;
+    my $url = $$p->{'url'};
 	
-  	    if (defined $start and defined $stop
-		      and Date_Cmp($start, $stop) > 0) {
-	   	# Appears to stop before it starts.  Assume the stop time
-	   	# is bogus but the start time might be okay.
+    local $SIG{__WARN__} = sub {
+    	warn "$url: $_[0]";
+    };
+
+    # Get HTML::TreeBuilder object.
+    my $t;
+    # why "tidy"? what's wrong with them?
+    #       eval { $t = get_nice_tree $url, \&tidy };
+    #
+    # page is "charset=iso-8859-1"
+    $t = get_nice_tree($url);
+    if ($@) {
+    	warn "error getting/parsing $url: $@";
+    	return;
+    }
+
+    # description is in <p> elements in <div id="prog-content"> (note: there may be >1)
+    my $_div = $t->look_down('_tag' => 'div', 'id' => 'prog-content');
+    if (not $_div) {
+    	warn "did not see 'prog-content' element, skipping page";
+    	return;
+    }
+    {
+        if ( my $_p = $_div->look_down('_tag' => 'p') ) {
+            if ( my $_s = $_p->look_down('_tag' => 'strong') ) {
+                push @{$$p->{'genres'}}, ( trim( $_s->as_text() ) );
+                $_s->detach();
+            }
+            $$p->{'desc'} = trim( $_p->as_text() );
+            $_p->detach();
+        }
+        # see if there's any more
+        if ( my $_p = $_div->look_down('_tag' => 'p') ) {
+            my $html = $_p->as_HTML();
+            $html =~ s/(<br>|<br \/>)/ /sg;    # insert spaces between paragraphs
+            $html =~ s/<.+?>//sg;              # dump the html
+            $$p->{'desc_add'} = trim( $html );
+        }
+    }
+    
+    # get the programme details box
+    $_div = $t->look_down('_tag' => 'div', 'id' => 'prog-info-content');
+    if (not $_div) {
+    	warn "did not see 'prog-info-content' element, skipping";
+    	return;
+    }
+    {
+        if ( my $_ul = $_div->look_down('_tag' => 'ul', 'id' => 'prog-info-content-colleft') ) {
+            my @_li = $_ul->look_down('_tag' => 'li');
 	   	#
-	   	undef $stop;
+            # e.g.
+            #     <li><strong>Titel:</strong>Elysium</li>
+            #     <li><strong>Zender:</strong>HBO 1</li>
+            #     <li><strong>Datum:</strong>29 april 2014</li>
+            #     <li><strong>Uitzendtijd:</strong>18:40 - 20:30 uur</li>
+            #     <li><strong>Genre:</strong>Film</li>
+            #
+            foreach my $_li (@_li) {
+                my $li = $_li->as_text();
+                
+                if ( $li =~ /Genre:(.*)/ ) {
+                    push @{$$p->{'genres'}}, $1;
 	    }
     
-	    if (defined $last_start) {
-	       if (defined $start and Date_Cmp($start, $last_start) < 0) {
-	    	   # Appears to start before previous start.
-		   undef $start;
+                if ( $li =~ /Orginele titel:(.*)/ ) {
+                    $$p->{'original_title'} = $1;
   	       }
+            }
+        }
+        
+        if ( my $_ul = $_div->look_down('_tag' => 'ul', 'id' => 'prog-info-content-colright') ) {
+            my @_li = $_ul->look_down('_tag' => 'li');
+            #
+            # e.g.
+            #     <li><strong>Jaar van premiere:</strong>2013</li>
+            #     <li><strong>Regisseur:</strong>Neill Blomkamp</li>
+            #     <li><strong>Scenario schrijver:</strong>Neill Blomkamp</li>
+            #     <li><strong>Componist:</strong>Ryan Amon, Kristian Bailey, Craig Berkey, Hennie Britton, Ricardo Cabrera, Michelle Child</li>
+            #     <li><strong>Bijzonderheden:</strong>Breedbeeld uitzending</li>
+            #     <li><strong>Acteurs:</strong>Matt Damon, Jodie Foster, Sharlto Copley, Alice Braga, Diego Luna</li>
+            #     <li><img src="http://tvgidsassets.nl/img/kijkwijzer/16_transp.png" alt="Niet voor personen tot 16 jaar"></li>
+            #
+            foreach my $_li (@_li) {
+                my $li = $_li->as_text();
 
-	       if (defined $stop and Date_Cmp($stop, $last_start) < 0) {
-		    # Stops before previous start - that's just as bad.
-		    undef $stop;
+                if ( $li =~ /Jaar.*:(.*)/ ) {
+                    $$p->{'year'} = $1;
+                    next;
 	       }
+                
+                if ( $li =~ /Regisseur.*:(.*)/ ) {
+                    @{ $$p->{'directors'} } = split(/,/, $1);
+                    next;
 	    }
-	    $last_start = $start if defined $start;
+                
+                if ( $li =~ /Acteurs.*:(.*)/ ) {
+                    @{ $$p->{'actors'} } = split(/,/, $1);
+                    next;
         }
 
-	t 'removed bad dates, now: ' . d \@parsed;
-	push @page, [ $url, $ch_xmltv_id, @parsed ];
+                if ( $li =~ /Bijzonderheden:.*Breedbeeld.*/i ) {
+                    $$p->{'widescreen'} = 1;
     }
 		
-    t 'returning tuples: ' . d \@page;
+                if ( my $_img = $_li->look_down('_tag' => 'img') ) {
+                    my $src = $_img->attr('src');
+                    if ( $src =~ /kijkwijzer\/(AL|\d{0,2})_/i ) {     # e.g. 16_transp.png, Kijkwijzer system has AL,6,9,12,16
+                        $$p->{'rating'} = uc($1);
+                        $$p->{'rating_icon'} = $src;
+                    }
+                }
+            }
+        }
+    }
 
-    return @page;
 }
 
 # Parse date strings that are in Dutch.  'Why not just call
@@ -1514,4 +842,17 @@ sub parse_dutch_date( $ ) {
     }
 }
 
+# Get the user's home directory
+sub get_default_dir {
+    my $winhome = $ENV{HOMEDRIVE} . $ENV{HOMEPATH} 
+			if defined( $ENV{HOMEDRIVE} ) 
+					and defined( $ENV{HOMEPATH} ); 
+    
+    my $home = $ENV{HOME} || $winhome || ".";
+    return $home;
+}
  	  	 
+# Set default cache dir = $HOME/.xmltv/cache
+sub get_default_cachedir {
+    return get_default_dir() . "/.xmltv/cache";
+}
