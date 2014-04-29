@@ -665,6 +665,21 @@ my @opt_components
 #       exes => [ 'grab/nl/tv_grab_nl' ],
 #       prereqs => { 'HTML::TreeBuilder' => 0 },
 #     },
+# 2014-04-29 reinstate after unbreak 
+     { name => 'tv_grab_nl',
+       blurb => 'Grabber for the Netherlands',
+       exes => [ 'grab/nl/tv_grab_nl' ],
+       prereqs => { 'HTML::TreeBuilder' => 0,
+                    'HTML::Entities' => 0,
+                    'HTTP::Cache::Transparent' => 0,
+                    'IO::File' => 0,
+                    'Date::Parse' => 0,
+                    'Date::Format' => 0,
+                    'DateTime' => 0,
+                    'Encode' => 0,
+                    'JSON::PP' => 0,
+                  },
+     },
 
 # 2008-07-12 - removed by rmeden, not getting programs for a while.
 #
