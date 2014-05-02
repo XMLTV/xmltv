@@ -42,8 +42,9 @@ package XMLTV::IMDB;
 #    = moviedb.dat directors and actors list no longer include repeated names (which mostly
 #      occured in episodic tv programs (reported by Alexy Khrabrov)
 # .9 = added keywords data
+# .10 = added plot data
 #
-our $VERSION = '0.9';
+our $VERSION = '0.10';
 
 sub new
 {
@@ -64,6 +65,7 @@ sub new
     $self->{replacePresentors}=1   if ( !defined($self->{replacePresentors}));
     $self->{replaceCommentators}=1 if ( !defined($self->{replaceCommentators}));
     $self->{replaceStarRatings}=0  if ( !defined($self->{replaceStarRatings}));
+    $self->{replacePlot}=0         if ( !defined($self->{replacePlot}));
 
     $self->{updateDates}=1        if ( !defined($self->{updateDates}));
     $self->{updateTitles}=1       if ( !defined($self->{updateTitles}));
@@ -76,6 +78,7 @@ sub new
     $self->{updatePresentors}=1   if ( !defined($self->{updatePresentors}));
     $self->{updateCommentators}=1 if ( !defined($self->{updateCommentators}));
     $self->{updateStarRatings}=1  if ( !defined($self->{updateStarRatings}));
+    $self->{updatePlot}=0         if ( !defined($self->{updatePlot}));          # default is to NOT add plot
 
     $self->{moviedbIndex}="$self->{imdbDir}/moviedb.idx";
     $self->{moviedbData}="$self->{imdbDir}/moviedb.dat";
@@ -165,7 +168,7 @@ sub checkIndexesOkay($)
 	}
 	if ( $1 == 0 && $2 == 3 ) {
 	    # 0.2 -> 0.3 upgrade requires prepStage 5 to be re-run
-	    return("imdbDir index db requires major reindexing, rerun --prepStage 2 and new prepStages 5,6,7 and 8\n");
+	    return("imdbDir index db requires major reindexing, rerun --prepStage 2 and new prepStages 5,6,7,8 and 9\n");
 	}
 	if ( $1 == 0 && $2 == 4 ) {
 	    # 0.2 -> 0.3 upgrade requires prepStage 5 to be re-run
@@ -487,7 +490,7 @@ sub getMovieIdDetails($$)
 	last if ( !m/^$id:/ );
 	chop();
 	if ( s/^$id:// ) {
-	    my ($directors, $actors, $genres, $ratingDist, $ratingVotes, $ratingRank, $keywords)=split('\t', $_);
+	    my ($directors, $actors, $genres, $ratingDist, $ratingVotes, $ratingRank, $keywords, $plot)=split('\t', $_);
 	    if ( $directors ne "<>" ) {
 		for my $name (split('\|', $directors)) {
 		    # remove (I) etc from imdb.com names (kept in place for reference)
@@ -524,12 +527,13 @@ sub getMovieIdDetails($$)
 	    if ( $genres ne "<>" ) {
 		push(@{$results->{genres}}, split('\|', $genres));
 	    }
-	    $results->{ratingDist}=$ratingDist if ( $ratingDist ne "<>" );
-	    $results->{ratingVotes}=$ratingVotes if ( $ratingVotes ne "<>" );
-	    $results->{ratingRank}=$ratingRank if ( $ratingRank ne "<>" );
 	    if ( $keywords ne "<>" ) {
 		push(@{$results->{keywords}}, split(',', $keywords));
 	    }
+	    $results->{ratingDist}=$ratingDist if ( $ratingDist ne "<>" );
+	    $results->{ratingVotes}=$ratingVotes if ( $ratingVotes ne "<>" );
+	    $results->{ratingRank}=$ratingRank if ( $ratingRank ne "<>" );
+	    $results->{plot}=$plot if ( $plot ne "<>" );
 	}
 	else {
 	    warn "lookup of movie (id=$id) resulted in garbage ($_)";
@@ -571,6 +575,7 @@ sub alternativeTitles($)
 	    push(@titles, $t);
 	}
     }
+    
     # try the and -> & conversion
     if ( $title=~m/\sand\s/io ) {
 	my $t=$title;
@@ -1135,31 +1140,6 @@ sub applyFound($$$)
 		unshift( @{$prog->{'star-rating'}}, [ $details->{ratingRank} . "/10", 'IMDB User Rating' ] );
 	    }
 	}
-    }
-
-    if ( $self->{updateCategories} ) {
-	if ( $self->{replaceCategories} ) {
-	    if ( defined($prog->{category}) ) {
-		$self->debug("replacing (all) 'category'");
-		delete($prog->{category});
-	    }
-	}
-	if ( defined($prog->{category}) ) {
-	    for my $value (@{$prog->{category}}) {
-		my $found=0;
-		#print "checking category $value->[0] with $mycategory\n";
-		for my $c (@categories) {
-		    if ( lc($c->[0]) eq lc($value->[0]) ) {
-			$found=1;
-		    }
-		}
-		if ( !$found ) {
-		    push(@categories, $value);
-		}
-	    }
-	}
-	$prog->{category}=\@categories;
-    }
 
     if ( $self->{updateKeywords} ) {
         my @keywords;
@@ -1191,6 +1171,53 @@ sub applyFound($$$)
 	$prog->{keyword}=\@keywords;
     }
 
+        if ( $self->{updatePlot} ) {
+            # plot is held as a <desc> entity
+            # if 'replacePlot' then delete all existing <desc> entities and add new
+            # else add this plot as an additional <desc> entity
+            #
+            if ( $self->{replacePlot} ) {
+                if ( defined($prog->{desc}) ) {
+                    $self->debug("replacing (all) 'desc'");
+                    delete($prog->{desc});
+                }
+            }
+            if ( defined($details->{plot}) ) {
+                # check it's not already there
+                my $found = 0;
+                for my $_desc ( @{$prog->{desc}} ) {
+                    $found = 1  if ( @{$_desc}[0] eq $details->{plot} );
+                }
+                push @{$prog->{desc}}, [ $details->{plot}, 'en' ]  if !$found;
+            }
+        }
+
+    }
+
+    if ( $self->{updateCategories} ) {
+	if ( $self->{replaceCategories} ) {
+	    if ( defined($prog->{category}) ) {
+		$self->debug("replacing (all) 'category'");
+		delete($prog->{category});
+	    }
+	}
+	if ( defined($prog->{category}) ) {
+	    for my $value (@{$prog->{category}}) {
+		my $found=0;
+		#print "checking category $value->[0] with $mycategory\n";
+		for my $c (@categories) {
+		    if ( lc($c->[0]) eq lc($value->[0]) ) {
+			$found=1;
+		    }
+		}
+		if ( !$found ) {
+		    push(@categories, $value);
+		}
+	    }
+	}
+	$prog->{category}=\@categories;
+    }
+    
     return($prog);
 }
 
@@ -1288,6 +1315,9 @@ sub getStatsLines($)
 
 1;
 
+# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
 package XMLTV::IMDB::Crunch;
 use LWP;
 
@@ -1339,11 +1369,11 @@ sub new
 	mkdir $listsDir, 0777 or die "cannot mkdir $listsDir: $!";
     }
     
-    $self->{optionalStages} = { 'keywords' => 7 };     # list of optional stages - no need to download files for these
+    $self->{optionalStages} = { 'keywords' => 7, 'plot' => 8 };     # list of optional stages - no need to download files for these
     
   CHECK_FILES:
     my %missingListFiles; # maps 'movies' to filename ...movies.gz
-    for ('movies', 'actors', 'actresses', 'directors', 'genres', 'ratings', 'keywords') {
+    for ('movies', 'actors', 'actresses', 'directors', 'genres', 'ratings', 'keywords', 'plot') {
 	my $file=$_;
 	my $filename="$listsDir/$_.list";
 	my $filenameGz="$filename.gz";
@@ -1456,7 +1486,7 @@ END
     $self->{moviedbInfo}="$self->{imdbDir}/moviedb.info";
     $self->{moviedbOffline}="$self->{imdbDir}/moviedb.offline";
 
-    $self->{stageLast} = 8;     # set the final stage in the build - i.e. the one which builds the final database
+    $self->{stageLast} = 9;     # set the final stage in the build - i.e. the one which builds the final database
 
     bless($self, $type);
     return($self);
@@ -1879,6 +1909,8 @@ sub readRatings($$$$)
 	# end is line consisting of only '-'
 	last if ( $line=~m/^\-\-\-\-\-\-\-+/o );
 
+        # e.g. New  Distribution  Votes  Rank  Title
+        #            0000000133  225568   8.9  12 Angry Men (1957)
 	if ( $line=~s/^\s+([\.|\*|\d]+)\s+(\d+)\s+(\d+)\.(\d+)\s+//o ) {
 	    $self->{movies}{$line}=[$1,$2,"$3.$4"];
 	    $count++;
@@ -1906,7 +1938,7 @@ sub readRatings($$$$)
     return($count);
 }
 
-sub readPlotKeywords($$$$)
+sub readKeywords($$$$)
 {
     my ($self, $countEstimate, $file)=@_;
     my $startTime=time();
@@ -1961,7 +1993,7 @@ sub readPlotKeywords($$$$)
 	    # there are some strange titles, fix them:
 	    $title =~ s/.*\s+{(.*)}/$1/;
 
-            # ignore anything which is an episode and not a main title (e.g. "Doctor Who (#10.22)" "(1986-09-18)" )
+            # ignore anything which is an episode and not a main title (e.g. "Doctor Who (#10.22)" or "(1986-09-18)" )
             if ( ( $title !~ m/\(#\d{1,3}\.?\d{0,5}\)/ )
               && ( $title !~ m/^\(\d{4}-\d{2}-\d{2}\)$/ ) )
             {
@@ -1992,6 +2024,108 @@ sub readPlotKeywords($$$$)
     $progress->update($countEstimate) if Have_bar;
 
     $self->status(sprintf("parsing \"keywords\" found $count titles and ".
+			  "$lineCount lines in %d seconds",time()-$startTime));
+
+    closeMaybeGunzip($file, $fh);
+    return($count);
+}
+
+sub readPlots($$$$)
+{
+    my ($self, $countEstimate, $file)=@_;
+    my $startTime=time();
+    my $lineCount=0;
+
+    my $fh = openMaybeGunzip($file) || return(-2);
+    while(<$fh>) {
+	$lineCount++;
+
+	if ( m/PLOT SUMMARIES LIST/ ) {
+	    if ( !($_=<$fh>) || !m/^===========/o ) {
+		$self->error("missing ======= after \"PLOT SUMMARIES LIST\" at line $lineCount");
+		closeMaybeGunzip($file, $fh);
+		return(-1);
+	    }
+	    if ( !($_=<$fh>) || !m/^-----------/o ) {
+		$self->error("missing ------- line after ======= at line $lineCount");
+		closeMaybeGunzip($file, $fh);
+		return(-1);
+	    }
+	    last;
+	}
+	elsif ( $lineCount > 500 ) {
+	    $self->error("$file: stopping at line $lineCount, didn't see \"PLOT SUMMARIES LIST\" line");
+	    closeMaybeGunzip($file, $fh);
+	    return(-1);
+	}
+    }
+
+    my $progress=Term::ProgressBar->new({name  => "parsing plots",
+					 count => $countEstimate,
+					 ETA   => 'linear'})
+      if Have_bar;
+
+    $progress->minor(0) if Have_bar;
+    $progress->max_update_rate(1) if Have_bar;
+    my $next_update=0;
+
+    my $count=0;
+    while(<$fh>) {
+	$lineCount++;
+	my $line=$_;
+	chomp($line);
+	next if ($line =~ m/^\s*$/);
+	my ($title, $episode) = ($line =~ m/^MV:\s(.*?)\s?({.*})?$/);
+	if ( defined($title) ) {
+            
+            # ignore anything which is an episode (e.g. "{Doctor Who (#10.22)}" )
+            if ( !defined $episode || $episode eq '' ) {
+                my $plot = '';
+                LOOP:
+                while (1) {
+                    if ( $line = <$fh> ) {
+                        $lineCount++;
+                        chomp($line);
+                        next if ($line =~ m/^\s*$/);
+                        if ( $line =~ m/PL:\s(.*)$/ ) {     # plot summary is a number of lines starting "PL:"
+                            $plot .= ($plot ne ''?' ':'') . $1;
+                        }
+                        last LOOP if ( $line =~ m/BY:\s(.*)$/ );     # the author line "BY:" signals the end of the plot summary
+                    } else {
+                        last LOOP;
+                    }
+                }
+                
+                if ( !defined($self->{movies}{$title}) ) {
+                    # ensure there's no tab chars in the plot or else the db stage will barf
+                    $plot =~ s/\t//og;
+                    $self->{movies}{$title}=$plot;
+                    # returned count is number of unique titles found
+                    $count++;
+                }
+            }
+
+            if (Have_bar) {
+                # re-adjust target so progress bar doesn't seem too wonky
+    	        if ( $count > $countEstimate ) {
+    	    	    $countEstimate = $progress->target($count+1000);
+                    $next_update=$progress->update($count);
+    	        }
+    	        elsif ( $count > $next_update ) {
+    	    	    $next_update=$progress->update($count);
+    	        }
+    	    }
+        } else {
+            # skip lines up to the next "MV:"
+            if ($line !~ m/^(---|PL:|BY:)/ ) {
+                $self->error("$file:$lineCount: unrecognized format \"$line\"");
+            }
+	    $next_update=$progress->update($count) if Have_bar;
+	}
+    }
+    $progress->update($countEstimate) if Have_bar;
+
+    $self->status(sprintf("parsing \"plots\" found $count plots and ".
 			  "$lineCount lines in %d seconds",time()-$startTime));
 
     closeMaybeGunzip($file, $fh);
@@ -2425,9 +2559,9 @@ sub invokeStage($$)
 	}
     }
     elsif ( $stage == 7 ) {
-	$self->status("parsing Plot Keywords list for stage $stage..");
+	$self->status("parsing Keywords list for stage $stage..");
 	my $countEstimate=410000;
-	my $num=$self->readPlotKeywords($countEstimate, "$self->{imdbListFiles}->{keywords}");
+	my $num=$self->readKeywords($countEstimate, "$self->{imdbListFiles}->{keywords}");
 	if ( $num < 0 ) {
 	    if ( $num == -2 ) {
 		$self->error("you need to download $self->{imdbListFiles}->{keywords} from ftp.imdb.com");
@@ -2445,6 +2579,57 @@ sub invokeStage($$)
 	{
 	    my $countEstimate=$self->dbinfoGet("db_stat_keywords_count", 0);
 	    my $progress=Term::ProgressBar->new({name  => "writing keywords",
+						 count => $countEstimate,
+						 ETA   => 'linear'})
+	      if Have_bar;
+	    $progress->minor(0) if Have_bar;
+	    $progress->max_update_rate(1) if Have_bar;
+	    my $next_update=0;
+	    
+	    open(OUT, "> $self->{imdbDir}/stage$stage.data") || die "$self->{imdbDir}/stage$stage.data:$!";
+
+	    my $count=0;
+	    for my $movie (keys %{$self->{movies}}) {
+		print OUT "$movie\t$self->{movies}->{$movie}\n";
+		
+		$count++;
+		if (Have_bar) {
+		    # re-adjust target so progress bar doesn't seem too wonky
+		    if ( $count > $countEstimate ) {
+			$countEstimate = $progress->target($count+100);
+			$next_update=$progress->update($count);
+		    }
+		    elsif ( $count > $next_update ) {
+			$next_update=$progress->update($count);
+		    }
+		}
+	    }
+	    $progress->update($countEstimate) if Have_bar;
+	    close(OUT);
+	    delete($self->{movies});
+	}
+    }
+    elsif ( $stage == 8 ) {
+	$self->status("parsing Plot list for stage $stage..");
+	my $countEstimate=222222;
+	my $num=$self->readPlots($countEstimate, "$self->{imdbListFiles}->{plot}");
+	if ( $num < 0 ) {
+	    if ( $num == -2 ) {
+		$self->error("you need to download $self->{imdbListFiles}->{plot} from ftp.imdb.com");
+	    }
+	    return(1);
+	}
+	elsif ( abs($num - $countEstimate) > $countEstimate*.05 ) {
+	    $self->status("ARG estimate of $countEstimate for plots needs updating, found $num");
+	}
+	$self->dbinfoAdd("plots_list_file",         "$self->{imdbListFiles}->{plot}");
+	$self->dbinfoAdd("plots_list_file_size", -s "$self->{imdbListFiles}->{plot}");
+	$self->dbinfoAdd("db_stat_plots_count", "$num");
+
+	$self->status("writing stage$stage data ..");
+	{
+	    my $countEstimate=$self->dbinfoGet("db_stat_plots_count", 0);
+	    my $progress=Term::ProgressBar->new({name  => "writing plots",
 						 count => $countEstimate,
 						 ETA   => 'linear'})
 	      if Have_bar;
@@ -2761,8 +2946,9 @@ sub invokeStage($$)
 	}
 
 	$self->status("merging in stage 7 data (keywords)..");
-	if ( 1 ) {
-	    my $countEstimate=$self->dbinfoGet("db_stat_keywords_count", 0);
+	#if ( 1 ) {         # this stage is optional
+        if ( -f "$self->{imdbDir}/stage7.data" ) {
+	    my $countEstimate=$self->dbinfoGet("db_stat_keywords_count", 1);  # '1' prevents the spurious "(nothing to do)" msg
 	    my $progress=Term::ProgressBar->new({name  => "merging keywords",
 						 count => $countEstimate,
 						 ETA   => 'linear'})
@@ -2816,10 +3002,70 @@ sub invokeStage($$)
 	    }
 	}
 
+	$self->status("merging in stage 8 data (plots)..");
+	#if ( 1 ) {         # this stage is optional
+        if ( -f "$self->{imdbDir}/stage8.data" ) {
+	    my $countEstimate=$self->dbinfoGet("db_stat_plots_count", 1);  # '1' prevents the spurious "(nothing to do)" msg
+	    my $progress=Term::ProgressBar->new({name  => "merging plots",
+						 count => $countEstimate,
+						 ETA   => 'linear'})
+	      if Have_bar;
+	    $progress->minor(0) if Have_bar;
+	    $progress->max_update_rate(1) if Have_bar;
+	    my $next_update=0;
+
+	    open(IN, "< $self->{imdbDir}/stage8.data") || die "$self->{imdbDir}/stage8.data:$!";
+	    while(<IN>) {
+		chop();
+		s/^([^\t]+)\t+//o;
+		my $dbkey=$1;
+		my $plot=$_;
+		if ( !defined($movies{$dbkey}) ) {
+		    $self->error("plot list references unidentified title '$1'");
+		    next;
+		}
+		$movies{$dbkey}.=$tab.$plot;
+
+		if (Have_bar) {
+		    # re-adjust target so progress bar doesn't seem too wonky
+		    if ( $. > $countEstimate ) {
+			$countEstimate = $progress->target($.+100);
+			$next_update=$progress->update($.);
+		    }
+		    elsif ( $. > $next_update ) {
+			$next_update=$progress->update($.);
+		    }
+		}
+	    }
+	    $progress->update($countEstimate) if Have_bar;
+	    close(IN);
+	}
+	if ( 1 ) {
+	    # fill in default for movies we didn't have any plot for
+	    for my $key (keys %movies) {
+		my $val=$movies{$key};
+		#plot is 7th entry
+		my $t = 0;
+		for my $i (0..5) {
+		    $t=index($val, $tab, $t);
+		    if ( $t == -1 ) {
+		    	die "Corrupt entry '$key' '$val'";
+		    }
+		    $t+=1;
+		}
+		if ( index($val, $tab, $t) == -1 ) {
+		    $movies{$key}.=$tab."<>";
+		}
+	    }
+	}
+
 	#unlink("$self->{imdbDir}/stage1.data");
 	#unlink("$self->{imdbDir}/stage2.data");
 	#unlink("$self->{imdbDir}/stage3.data");
 
+        # ---------------------------------------------------------------------------------------
+        
+        
 	#
 	# note: not all movies end up with a cast, but we include them anyway.
 	#
@@ -3066,7 +3312,7 @@ sub invokeStage($$)
 	$self->status("sanity intact :)");
     }
     else {
-	$self->error("tv_imdb: invalid stage $stage: only 1-8 are valid");
+	$self->error("tv_imdb: invalid stage $stage: only 1-".$self->{stageLast}." are valid");
 	return(1);
     }
 
@@ -3086,9 +3332,11 @@ sub crunchStage($$)
          # check all the pre-requisite stages have been run
         for (my $st=1 ; $st < $self->{stageLast}; $st++ ) {
 	if ( !$self->stageComplete($st) ) {
-                if ( ! grep { $_ == $st } values %{$self->{optionalStages}} ) {
                     #$self->error("prep stages must be run in sequence..");
 	    $self->error("prepStage $st either has never been run or failed");
+                if ( grep { $_ == $st } values %{$self->{optionalStages}} ) {
+                    $self->error("data for this stage will NOT be added");
+                } else {
 	    $self->error("rerun tv_imdb with --prepStage=$st");
 	    return(1);
 	}
