@@ -609,6 +609,15 @@ sub alternativeTitles($)
 	}
     }
 
+    # strip some punctuation
+    foreach (@titles) {
+        if ( m/[\.]/io ) {
+	    my $t=$_;
+            $t=~s/\.//gio;
+                push(@titles, $t);
+        }
+    }
+
     return(\@titles);
 }
 
