@@ -41,8 +41,9 @@ package XMLTV::IMDB;
 # .8 = updated file size est calculations
 #    = moviedb.dat directors and actors list no longer include repeated names (which mostly
 #      occured in episodic tv programs (reported by Alexy Khrabrov)
+# .9 = added keywords data
 #
-our $VERSION = '0.8';
+our $VERSION = '0.9';
 
 sub new
 {
@@ -56,6 +57,7 @@ sub new
     $self->{replaceDates}=0        if ( !defined($self->{replaceDates}));
     $self->{replaceTitles}=0       if ( !defined($self->{replaceTitles}));
     $self->{replaceCategories}=0   if ( !defined($self->{replaceCategories}));
+    $self->{replaceKeywords}=0     if ( !defined($self->{replaceKeywords}));
     $self->{replaceURLs}=0         if ( !defined($self->{replaceURLs}));
     $self->{replaceDirectors}=1    if ( !defined($self->{replaceDirectors}));
     $self->{replaceActors}=0       if ( !defined($self->{replaceActors}));
@@ -67,6 +69,7 @@ sub new
     $self->{updateTitles}=1       if ( !defined($self->{updateTitles}));
     $self->{updateCategories}=1   if ( !defined($self->{updateCategories}));
     $self->{updateCategoriesWithGenres}=1 if ( !defined($self->{updateCategoriesWithGenres}));
+    $self->{updateKeywords}=0     if ( !defined($self->{updateKeywords}));          # default is to NOT add keywords
     $self->{updateURLs}=1         if ( !defined($self->{updateURLs}));
     $self->{updateDirectors}=1    if ( !defined($self->{updateDirectors}));
     $self->{updateActors}=1       if ( !defined($self->{updateActors}));
@@ -162,7 +165,7 @@ sub checkIndexesOkay($)
 	}
 	if ( $1 == 0 && $2 == 3 ) {
 	    # 0.2 -> 0.3 upgrade requires prepStage 5 to be re-run
-	    return("imdbDir index db requires major reindexing, rerun --prepStage 2 and new prepStages 5,6 and 7\n");
+	    return("imdbDir index db requires major reindexing, rerun --prepStage 2 and new prepStages 5,6,7 and 8\n");
 	}
 	if ( $1 == 0 && $2 == 4 ) {
 	    # 0.2 -> 0.3 upgrade requires prepStage 5 to be re-run
@@ -188,7 +191,9 @@ sub basicVerificationOfIndexes($)
     $self->openMovieIndex() || return("basic verification of indexes failed\n".
 				      "database index isn't readable");
 
+    my $verbose = $self->{verbose}; $self->{verbose} = 0; 
     my $res=$self->getMovieMatches($title, $year);
+    $self->{verbose} = $verbose; undef $verbose;
     if ( !defined($res) ) {
 	$self->closeMovieIndex();
 	return("basic verification of indexes failed\n".
@@ -482,7 +487,7 @@ sub getMovieIdDetails($$)
 	last if ( !m/^$id:/ );
 	chop();
 	if ( s/^$id:// ) {
-	    my ($directors, $actors, $genres, $ratingDist, $ratingVotes, $ratingRank)=split('\t', $_);
+	    my ($directors, $actors, $genres, $ratingDist, $ratingVotes, $ratingRank, $keywords)=split('\t', $_);
 	    if ( $directors ne "<>" ) {
 		for my $name (split('\|', $directors)) {
 		    # remove (I) etc from imdb.com names (kept in place for reference)
@@ -522,6 +527,9 @@ sub getMovieIdDetails($$)
 	    $results->{ratingDist}=$ratingDist if ( $ratingDist ne "<>" );
 	    $results->{ratingVotes}=$ratingVotes if ( $ratingVotes ne "<>" );
 	    $results->{ratingRank}=$ratingRank if ( $ratingRank ne "<>" );
+	    if ( $keywords ne "<>" ) {
+		push(@{$results->{keywords}}, split(',', $keywords));
+	    }
 	}
 	else {
 	    warn "lookup of movie (id=$id) resulted in garbage ($_)";
@@ -1137,7 +1145,6 @@ sub applyFound($$$)
 	    }
 	}
 	if ( defined($prog->{category}) ) {
-	    my $found=0;
 	    for my $value (@{$prog->{category}}) {
 		my $found=0;
 		#print "checking category $value->[0] with $mycategory\n";
@@ -1152,6 +1159,36 @@ sub applyFound($$$)
 	    }
 	}
 	$prog->{category}=\@categories;
+    }
+
+    if ( $self->{updateKeywords} ) {
+        my @keywords;
+        if ( defined($details->{keywords}) ) {
+            for (@{$details->{keywords}}) {
+                push(@keywords, [$_, 'en']);
+            }
+        }
+        
+        if ( $self->{replaceKeywords} ) {
+            if ( defined($prog->{keywords}) ) {
+                $self->debug("replacing (all) 'keywords'");
+                delete($prog->{keywords});
+            }
+        }
+        if ( defined($prog->{keyword}) ) {
+	    for my $value (@{$prog->{keyword}}) {
+		my $found=0;
+		for my $k (@keywords) {
+		    if ( lc($k->[0]) eq lc($value->[0]) ) {
+			$found=1;
+		    }
+		}
+		if ( !$found ) {
+		    push(@keywords, $value);
+		}
+	    }
+	}
+	$prog->{keyword}=\@keywords;
     }
 
     return($prog);
@@ -1301,9 +1338,13 @@ sub new
     if ( ! -d $listsDir ) {
 	mkdir $listsDir, 0777 or die "cannot mkdir $listsDir: $!";
     }
+    
+    $self->{optionalStages} = { 'keywords' => 7 };     # list of optional stages - no need to download files for these
+    
   CHECK_FILES:
     my %missingListFiles; # maps 'movies' to filename ...movies.gz
-    for ('movies', 'actors', 'actresses', 'directors', 'genres', 'ratings') {
+    for ('movies', 'actors', 'actresses', 'directors', 'genres', 'ratings', 'keywords') {
+	my $file=$_;
 	my $filename="$listsDir/$_.list";
 	my $filenameGz="$filename.gz";
 	my $filenameExists = -f $filename;
@@ -1325,7 +1366,11 @@ sub new
 	if ( not $filenameExists and not $filenameGzExists ) {
 	    # Just report one of the filenames, keep the message simple.
 	    warn "$filenameGz does not exist\n";
+            if ( $self->{optionalStages}{$file} ) {
+                warn "$file will not be added to database\n";
+            } else {
 	    $missingListFiles{$_}=$filenameGz;
+	}
 	}
 	elsif ( not $filenameExists and $filenameGzExists ) {
 	    $self->{imdbListFiles}->{$_}=$filenameGz;
@@ -1410,6 +1455,8 @@ END
     $self->{moviedbData}="$self->{imdbDir}/moviedb.dat";
     $self->{moviedbInfo}="$self->{imdbDir}/moviedb.info";
     $self->{moviedbOffline}="$self->{imdbDir}/moviedb.offline";
+
+    $self->{stageLast} = 8;     # set the final stage in the build - i.e. the one which builds the final database
 
     bless($self, $type);
     return($self);
@@ -1859,6 +1906,98 @@ sub readRatings($$$$)
     return($count);
 }
 
+sub readPlotKeywords($$$$)
+{
+    my ($self, $countEstimate, $file)=@_;
+    my $startTime=time();
+    my $lineCount=0;
+
+    my $fh = openMaybeGunzip($file) || return(-2);
+    while(<$fh>) {
+	$lineCount++;
+
+	if ( m/THE KEYWORDS LIST/ ) {
+	    if ( !($_=<$fh>) || !m/^===========/o ) {
+		$self->error("missing ======= after \"THE KEYWORDS LIST\" at line $lineCount");
+		closeMaybeGunzip($file, $fh);
+		return(-1);
+	    }
+	    if ( !($_=<$fh>) || !m/^\s*$/o ) {
+		$self->error("missing empty line after ======= at line $lineCount");
+		closeMaybeGunzip($file, $fh);
+		return(-1);
+	    }
+	    if ( !($_=<$fh>) || !m/^.*\s+\S+\s*$/o ) {
+		$self->error("missing title/keyword pairs after ======= at line $lineCount");
+		closeMaybeGunzip($file, $fh);
+		return(-1);
+	    }
+	    last;
+	}
+	elsif ( $lineCount > 70000 ) {
+	    $self->error("$file: stopping at line $lineCount, didn't see \"THE KEYWORDS LIST\" line");
+	    closeMaybeGunzip($file, $fh);
+	    return(-1);
+	}
+    }
+
+    my $progress=Term::ProgressBar->new({name  => "parsing keywords",
+					 count => $countEstimate,
+					 ETA   => 'linear'})
+      if Have_bar;
+
+    $progress->minor(0) if Have_bar;
+    $progress->max_update_rate(1) if Have_bar;
+    my $next_update=0;
+
+    my $count=0;
+    while(<$fh>) {
+	$lineCount++;
+	my $line=$_;
+	chomp($line);
+	next if ($line =~ m/^\s*$/);
+	my ($title, $keyword) = ($line =~ m/^(.*)\s+(\S+)\s*$/);
+	if ( defined($title) and defined($keyword) ) {
+	    # there are some strange titles, fix them:
+	    $title =~ s/.*\s+{(.*)}/$1/;
+
+            # ignore anything which is an episode and not a main title (e.g. "Doctor Who (#10.22)" "(1986-09-18)" )
+            if ( ( $title !~ m/\(#\d{1,3}\.?\d{0,5}\)/ )
+              && ( $title !~ m/^\(\d{4}-\d{2}-\d{2}\)$/ ) )
+            {
+                if ( defined($self->{movies}{$title}) ) {
+                    $self->{movies}{$title}.=",".$keyword;
+                } else {
+                    $self->{movies}{$title}=$keyword;
+                    # returned count is number of unique titles found
+                    $count++;
+                }
+            }
+
+            if (Have_bar) {
+                # re-adjust target so progress bar doesn't seem too wonky
+    	        if ( $count > $countEstimate ) {
+    	    	    $countEstimate = $progress->target($count+1000);
+                    $next_update=$progress->update($count);
+    	        }
+    	        elsif ( $count > $next_update ) {
+    	    	    $next_update=$progress->update($count);
+    	        }
+    	    }
+        } else {
+	    $self->error("$file:$lineCount: unrecognized format \"$line\"");
+	    $next_update=$progress->update($count) if Have_bar;
+	}
+    }
+    $progress->update($countEstimate) if Have_bar;
+
+    $self->status(sprintf("parsing \"keywords\" found $count titles and ".
+			  "$lineCount lines in %d seconds",time()-$startTime));
+
+    closeMaybeGunzip($file, $fh);
+    return($count);
+}
+
 sub stageComplete($)
 {
     my ($self, $stage)=@_;
@@ -2286,9 +2425,60 @@ sub invokeStage($$)
 	}
     }
     elsif ( $stage == 7 ) {
+	$self->status("parsing Plot Keywords list for stage $stage..");
+	my $countEstimate=410000;
+	my $num=$self->readPlotKeywords($countEstimate, "$self->{imdbListFiles}->{keywords}");
+	if ( $num < 0 ) {
+	    if ( $num == -2 ) {
+		$self->error("you need to download $self->{imdbListFiles}->{keywords} from ftp.imdb.com");
+	    }
+	    return(1);
+	}
+	elsif ( abs($num - $countEstimate) > $countEstimate*.05 ) {
+	    $self->status("ARG estimate of $countEstimate for keywords needs updating, found $num");
+	}
+	$self->dbinfoAdd("keywords_list_file",         "$self->{imdbListFiles}->{keywords}");
+	$self->dbinfoAdd("keywords_list_file_size", -s "$self->{imdbListFiles}->{keywords}");
+	$self->dbinfoAdd("db_stat_keywords_count", "$num");
+
+	$self->status("writing stage$stage data ..");
+	{
+	    my $countEstimate=$self->dbinfoGet("db_stat_keywords_count", 0);
+	    my $progress=Term::ProgressBar->new({name  => "writing keywords",
+						 count => $countEstimate,
+						 ETA   => 'linear'})
+	      if Have_bar;
+	    $progress->minor(0) if Have_bar;
+	    $progress->max_update_rate(1) if Have_bar;
+	    my $next_update=0;
+	    
+	    open(OUT, "> $self->{imdbDir}/stage$stage.data") || die "$self->{imdbDir}/stage$stage.data:$!";
+
+	    my $count=0;
+	    for my $movie (keys %{$self->{movies}}) {
+		print OUT "$movie\t$self->{movies}->{$movie}\n";
+		
+		$count++;
+		if (Have_bar) {
+		    # re-adjust target so progress bar doesn't seem too wonky
+		    if ( $count > $countEstimate ) {
+			$countEstimate = $progress->target($count+100);
+			$next_update=$progress->update($count);
+		    }
+		    elsif ( $count > $next_update ) {
+			$next_update=$progress->update($count);
+		    }
+		}
+	    }
+	    $progress->update($countEstimate) if Have_bar;
+	    close(OUT);
+	    delete($self->{movies});
+	}
+    }
+    elsif ( $stage == $self->{stageLast} ) {
 	my $tab=sprintf("\t");
 
-	$self->status("indexing all previous stage's data for stage 7..");
+	$self->status("indexing all previous stage's data for stage ".$self->{stageLast}."..");
 
 	$self->status("parsing stage 1 data (movie list)..");
 	my %movies;
@@ -2570,6 +2760,62 @@ sub invokeStage($$)
 	    }
 	}
 
+	$self->status("merging in stage 7 data (keywords)..");
+	if ( 1 ) {
+	    my $countEstimate=$self->dbinfoGet("db_stat_keywords_count", 0);
+	    my $progress=Term::ProgressBar->new({name  => "merging keywords",
+						 count => $countEstimate,
+						 ETA   => 'linear'})
+	      if Have_bar;
+	    $progress->minor(0) if Have_bar;
+	    $progress->max_update_rate(1) if Have_bar;
+	    my $next_update=0;
+
+	    open(IN, "< $self->{imdbDir}/stage7.data") || die "$self->{imdbDir}/stage7.data:$!";
+	    while(<IN>) {
+		chop();
+		s/^([^\t]+)\t+//o;
+		my $dbkey=$1;
+		my $keywords=$_;
+		if ( !defined($movies{$dbkey}) ) {
+		    $self->error("keywords list references unidentified title '$1'");
+		    next;
+		}
+		$movies{$dbkey}.=$tab.$keywords;
+
+		if (Have_bar) {
+		    # re-adjust target so progress bar doesn't seem too wonky
+		    if ( $. > $countEstimate ) {
+			$countEstimate = $progress->target($.+100);
+			$next_update=$progress->update($.);
+		    }
+		    elsif ( $. > $next_update ) {
+			$next_update=$progress->update($.);
+		    }
+		}
+	    }
+	    $progress->update($countEstimate) if Have_bar;
+	    close(IN);
+	}
+	if ( 1 ) {
+	    # fill in default for movies we didn't have any keywords for
+	    for my $key (keys %movies) {
+		my $val=$movies{$key};
+		#keyword is 6th entry
+		my $t = 0;
+		for my $i (0..4) {
+		    $t=index($val, $tab, $t);
+		    if ( $t == -1 ) {
+		    	die "Corrupt entry '$key' '$val'";
+		    }
+		    $t+=1;
+		}
+		if ( index($val, $tab, $t) == -1 ) {
+		    $movies{$key}.=$tab."<>";
+		}
+	    }
+	}
+
 	#unlink("$self->{imdbDir}/stage1.data");
 	#unlink("$self->{imdbDir}/stage2.data");
 	#unlink("$self->{imdbDir}/stage3.data");
@@ -2820,7 +3066,7 @@ sub invokeStage($$)
 	$self->status("sanity intact :)");
     }
     else {
-	$self->error("tv_imdb: invalid stage $stage: only 1-5 are valid");
+	$self->error("tv_imdb: invalid stage $stage: only 1-8 are valid");
 	return(1);
     }
 
@@ -2836,13 +3082,18 @@ sub crunchStage($$)
 {
     my ($self, $stage)=@_;
 
-    for (my $st=1 ; $st < $stage ; $st++ ) {
+    if ( $stage == $self->{stageLast} ) {
+         # check all the pre-requisite stages have been run
+        for (my $st=1 ; $st < $self->{stageLast}; $st++ ) {
 	if ( !$self->stageComplete($st) ) {
-	    $self->error("prep stages must be run in sequence..");
+                if ( ! grep { $_ == $st } values %{$self->{optionalStages}} ) {
+                    #$self->error("prep stages must be run in sequence..");
 	    $self->error("prepStage $st either has never been run or failed");
 	    $self->error("rerun tv_imdb with --prepStage=$st");
 	    return(1);
 	}
+    }
+        }
     }
 
     if ( -f "$self->{moviedbInfo}" && $stage != 1 ) {
@@ -2863,7 +3114,7 @@ sub crunchStage($$)
 	}
 	else {
 	    $self->status("prep stage $stage succeeded with $self->{errorCountInLog} errors in $self->{imdbDir}/stage$stage.log");
-	    if ( $stage == 7 && $self->{errorCountInLog} > 30 && $self->{errorCountInLog} < 80 ) {
+	    if ( $stage == $self->{stageLast} && $self->{errorCountInLog} > 30 && $self->{errorCountInLog} < 80 ) {
 		$self->status("this stage commonly produces around 60 (or so) warnings because of imdb");
 		$self->status("list file inconsistancies, they can usually be safely ignored");
 	    }
