@@ -133,6 +133,14 @@ sub summarize( $$ ) {
 				 \&shorter)->[0];
 	}
 	
+	my $desc;
+	if (defined $_->{'desc'}) {
+		# No comparator, just get the first one in the preferred language (this is probably the best/shortest in most cases)
+	    $desc
+	      = XMLTV::best_name(\@PREF_LANGS, $_->{'desc'})->[0];
+	    $desc =~ tr/\t\n/ /;	# remove tabs and newlines
+	}
+	
 	if (not defined $curr_tz) {
 	    # Assume that the first item in a listing doesn't need an
 	    # explicit timezone.
@@ -166,7 +174,7 @@ sub summarize( $$ ) {
 	    $channel = $_->{channel};
 	}
 
-	push @r, [ $start_hhmm, $stop_hhmm, $title, $sub_title, $channel ];
+	push @r, [ $start_hhmm, $stop_hhmm, $title, $sub_title, $channel, $desc ];
     }
     return @r;
 }
