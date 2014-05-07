@@ -850,6 +850,17 @@ my @opt_components
 #       prereqs => { 'HTML::TreeBuilder' => 0,
 #                  }
 #     },
+# 2014-05-07 reinstate after unbreak 
+     { name => 'tv_grab_pt',
+       blurb => 'Grabber for Portugal',
+       exes => [ 'grab/pt/tv_grab_pt' ],
+       prereqs => { 'Getopt::Long'      => 0,
+                    'HTML::TreeBuilder' => 0,
+                    'HTML::Entities'    => 1.27,
+                    'HTTP::Cache::Transparent' => 0,
+                    'DateTime'          => 0,
+                    'Encode'            => 0,} 
+     },
 
      { name => 'tv_grab_pt_meo',
        blurb => 'Grabber for Portugal (MEO)',
