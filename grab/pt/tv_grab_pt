@@ -12,7 +12,8 @@ tv_grab_pt --help
 
 tv_grab_pt [--config-file FILE] --configure [--gui OPTION]
 
-tv_grab_pt [--config-file FILE] [--output FILE] [--quiet] [--icons]
+tv_grab_pt [--config-file FILE] [--output FILE] [--days N]
+           [--offset N] [--fast] [--quiet] [--icons]
 
 tv_grab_pt --list-channels
 
@@ -37,12 +38,20 @@ B<--config-file FILE> Set the name of the configuration file, the
 default is B<~/.xmltv/tv_grab_pt.conf>.  This is the file written by
 B<--configure> and read when grabbing.
 
+B<--days N> Grab N days.  The default is 7 days.
+
+B<--offset N> Start N days in the future.  The default is to start
+from today.
+
+B<--fast> Only fetch summary information for each programme. This is
+only title, start/stop times, category, episode number.
+
 B<--output FILE> Write to FILE rather than standard output.
 
 B<--quiet> Suppress the progress messages normally written to standard
 error.
 
-B<--icons> Fetches channels icons/logos
+B<--icons> Fetches channels icons/logos [deprecated - this is now the default]
 
 B<--version> Show the version of the grabber.
 
@@ -71,14 +80,17 @@ use XMLTV::Version '$Id$ ';
 use XMLTV::Capabilities qw/baseline manualconfig cache/;
 use XMLTV::Description 'Portugal';
 use Getopt::Long;
-use Date::Manip;
-use Data::Dumper;
+#use Date::Manip;
+use DateTime;
+#use Data::Dumper;
 use HTML::TreeBuilder;
 use HTML::Entities; # parse entities
+use HTTP::Cache::Transparent;
+use Encode;
 use IO::File;
 use File::Path;
 use File::Basename;
-use LWP::UserAgent;
+#use LWP::UserAgent;
 
 use XMLTV;
 use XMLTV::Memoize;
@@ -98,10 +110,11 @@ END
   ;
 
 my $DOMAIN = 'zon.pt';
+my $SOURCE_URL = "http://www.$DOMAIN";
 
 # Attributes of the root element in output.
-my $HEAD = { 'source-info-url'     => "http://$DOMAIN",
-	     'source-data-url'     => "http://www.$DOMAIN/Televisao/Programacao.aspx",
+my $HEAD = { 'source-info-url'     => "http://$DOMAIN/",
+             'source-data-url'     => "http://www.$DOMAIN/tv/guiaTV/",
 	     'generator-info-name' => 'XMLTV',
 	     'generator-info-url'  => 'http://xmltv.org/',
 	   };
@@ -119,8 +132,13 @@ our @ch_all;
 XMLTV::Memoize::check_argv('XMLTV::Get_nice::get_nice_aux');
 our ($opt_help, $opt_output,
     $opt_configure, $opt_config_file, $opt_gui, $opt_quiet,
-    $opt_list_channels,$opt_offset,$opt_days,$opt_fullinfo,$opt_icons);
+    $opt_list_channels, $opt_offset, $opt_days, $opt_fast, $opt_icons,
+	$opt_debug);
 $opt_quiet  = 0; # default
+$opt_days   = 7; # default
+$opt_offset = 0; # default
+$opt_fast   = 0; # default
+$opt_debug  = 0;
 GetOptions('help'          => \$opt_help,
 	   'configure'     => \$opt_configure,
 	   'config-file=s' => \$opt_config_file,
@@ -130,19 +148,24 @@ GetOptions('help'          => \$opt_help,
 	   'list-channels' => \$opt_list_channels,
 	   'offset=i'      => \$opt_offset,
            'days=i'        => \$opt_days,
-           'fullinfo'      => \$opt_fullinfo,
-	   'icons' 	   => \$opt_icons,
+	   'fast'          => \$opt_fast,
+	   'icons'         => \$opt_icons,         # Fetches channels icons/logos [deprecated - this is now the default]
+	   'debug'         => \$opt_debug,         # undocumented
 	  )
   or usage(0);
 usage(1) if $opt_help;
+
+# Initialise the web page cache
+HTTP::Cache::Transparent::init( { 
+    BasePath => get_default_cachedir(),
+    NoUpdate => 4*3600,         # cache time in seconds
+    MaxAge   => 24,               # flush time in hours
+    Verbose  => $opt_debug,
+} );
+
 XMLTV::Ask::init($opt_gui);
 
-# --offset and --days are ignored (we return more data than was
-# requested) but at least check the user didn't ask for something
-# impossible.
-#
-$opt_days |= 0;
-if ($opt_days > 0) { $opt_days-- }
+
 our $first_day = ($opt_offset || 0);
 our $last_day  = $first_day + $opt_days;
 die 'cannot grab more than one week ahead' if $first_day >= 7 || $last_day >= 7;
@@ -187,7 +210,7 @@ if ($mode eq 'configure') {
 
     # Ask about each channel.
     my @chs = sort keys %channels;
-    my @names = map { $channels{$_} } @chs;
+    my @names = map { $channels{$_}->{'channel-name'} } @chs;
     my @qs = map { "add channel $_?" } @names;
     my @want = ask_many_boolean(1, @qs);
     foreach (@chs) {
@@ -290,13 +313,15 @@ my @to_get;
 my $bar = new XMLTV::ProgressBar('getting listings',
 				                          scalar @channels)
   if not $opt_quiet;
+  
+# write the <channels> elements
 foreach my $ch_did (@channels) {
     die if not defined $ch_did;
 
-
-    my $ch_name=$channels{$ch_did};
-    my $channel = { id => "$ch_did.$DOMAIN",
-                    'display-name' => [ [ $ch_name ] ],
+    my $ch_name=$channels{$ch_did}->{'channel-name'};
+    my $channel = { 'id'           => $channels{$ch_did}->{'id'},
+                    'display-name' => $channels{$ch_did}->{'display-name'},
+					'icon'         => $channels{$ch_did}->{'icon'},
 		  };
     $channel->{'icon'} = [{'src' => $icons{$ch_did}}] if(defined($icons{$ch_did}));
 
@@ -306,6 +331,13 @@ foreach my $ch_did (@channels) {
 
 my $some=0;
 our $today_offset;
+
+# time limits for grab
+my $today_date = DateTime->today(time_zone => 'Europe/Lisbon');
+my $grab_start = $today_date->epoch() + ($opt_offset * 86400);
+my $grab_stop  = $grab_start + ($opt_days * 86400);
+print STDERR "\n start/end grab: $grab_start $grab_stop \n" if $opt_debug;
+				
 foreach my $ch_did (@channels) {
 	#skip legacy channels...
 	next unless $channels{$ch_did};
@@ -345,12 +377,13 @@ BEGIN {
      
         *toUTF8 = sub { return $uref->toUTF8(@_); } 
     } else { 
-        *toUTF8 = sub { my $str = $_[1]; Encode::from_to($str, $_[0], "utf-8"); return $str; } 
+        #   *toUTF8 = sub { my $str = $_[1]; Encode::from_to($str, $_[0], "utf-8"); return $str; } 
+        *toUTF8 = sub { return Encode::encode("utf-8", $_[0]); } 
     }
 }
 
 # Clean up bad characters in HTML.
-sub tidy( $ ) {
+sub _tidy( $ ) {
     for (my $s = shift) {
 	# Character 150 seems to be used for 'versus' in sporting
 	# events, but I don't know what that is in Portuguese.
@@ -358,6 +391,22 @@ sub tidy( $ ) {
 	#s/\s\226\s/ vs /g;
 	return $_;
     }
+}
+
+# Remove bad chars from an element
+sub tidy( $ ) {
+    return $_[0] if !defined $_[0];	
+    $_[0] =~ s/(\s)\xA0/$1/og;    # replace 'space-&nbsp;' with 'space'
+    $_[0] =~ s/\xA0/ /og;         # replace any remaining &nbsp; with space
+    $_[0] =~ s/\xAD//og;          # delete soft hyphens
+    return $_[0];
+}
+
+# Remove leading & trailing spaces
+sub trim( $ ) {
+    # Remove leading & trailing spaces
+    $_[0] =~ s/^\s+|\s+$//g;
+    return $_[0];
 }
 
 sub today_offset {
@@ -377,335 +426,298 @@ sub process_table {
 
     t "Getting channel $ch_xmltv_id\n";
 
-    #my $url = $HEAD->{"source-data-url"};
-    my $url = $HEAD->{"source-info-url"};
-    $url .= "/Televisao/ListaProgramas.aspx?";
-    t $url;
-    use LWP::UserAgent;
-
-    my $ua = LWP::UserAgent->new;
-    $ua->timeout(30);
-
     $ch_xmltv_id =~ /(.+?)\.zon\.pt/;
+	
+	# This seems like a useful link but I can't see how to get the channelindex
+	#   http://www.zon.pt/_layouts/EPGGetProgramsForChannels.aspx?cIndex=1&day=1&order=grelha&category=&numChannels=1
+	
+	# http://www.zon.pt/tv/guiaTV/Pages/Guia-TV-programacao.aspx?channelSigla=5
+    my $url = $HEAD->{'source-data-url'} . 'Pages/Guia-TV-programacao.aspx?channelSigla='.$ch_xmltv_id;
+	print STDERR " URL= $url \n" if $opt_debug;
+    t $url;
 
-    my @all_programs = ();
+    my $tree  = get_nice_tree($url, '', 'UTF-8');
 
-    for ( my $k = $first_day ; $k <= $last_day ; $k++ ) {
-        my @program_data = ();
-        my $ch_url_id    = $ch_xmltv_id;
+	my $programmes = {};
+	
+	if ( my $h = $tree->look_down('_tag' => 'div', 'id' => 'programs-container') ) {
+		if ( my @h2 = $h->look_down('_tag' => 'div', 'class' => qr/programs-day-list/) ) {
+			DAY:
+			foreach my $h_day (@h2) {       # schedule for a day
+				my ($daynum) = $h_day->attr('id') =~ /day(\d*)/;
+				
+				my $dt = $today_date->set_day($daynum);
+				#print STDERR "\n" . $dt->strftime("%Y%m%d%H%M%S %z") . "\n";
+				
+				next DAY if $dt->epoch() < $grab_start || $dt->epoch() >= $grab_stop;
 
-        $ch_url_id =~ s/\+/%2B/g;
-        $ch_url_id =~ s/\s/%20/g;
 
-        my $ch_url =
-            $url
-          . "cat=&channelSigla="
-          . encode_entities($ch_url_id) . "&dia="
-          . ( today_offset() + $k )
-          . "&package=9";
+				if ( my @h3 = $h_day->look_down('_tag' => 'li') ) {	     # progs for a day
+					my $j = 0;
+					PROG:
+					foreach my $h_prog (@h3) {                       # each prog
+						$j++;
 
-        my $r = $ua->get($ch_url);
+						#<li style="height:119px;">
+						#    <span style="height:55px">
+						#        <a class="series" id="71841" href="#" title="Anatomia de Grey T.9 Ep.22">
+						#            <span class="program">Anatomia de Grey T.9 Ep.22</span><br>
+						#            <span class="duration">02:19 - 03:03</span>
+						#        </a>
+						#    </span>
+						#</li>
 
-        if ( !$r->is_success ) {
-            die "Could not fetch $url ($ch_xmltv_id): " . $r->status_line;
+						my ( $p_id, $p_category, $p_title, $p_desc, $p_timespan, $p_start, $p_stop, $p_start_epoch, $p_stop_epoch, $p_episode_num );
+
+						if ( my $a = $h_prog->look_down('_tag' => 'a') ) {
+							$p_category = $a->attr('class');
+							$p_id = $a->attr('id');
+							$p_title = $a->attr('title');
+
+							if ( my $s = $a->look_down('_tag' => 'span', 'class' => 'program') ) {
+								$p_desc = tidy $s->as_text();
         }
 
-        my $data = tidy( $r->content );
+							if ( my $s = $a->look_down('_tag' => 'span', 'class' => 'duration') ) {
+								my ($start_h, $start_m, $stop_h, $stop_m) = $s->as_text() =~ /(\d\d):(\d\d)\s-\s(\d\d):(\d\d)/;
+								
+								my $start = $dt->clone();  $start->set( 'hour' => $start_h, 'minute' => $start_m );
+								my $stop  = $dt->clone();  $stop->set ( 'hour' => $stop_h,  'minute' => $stop_m  );
 
-        if ( not defined $data ) {
-            die "could not fetch $url, aborting\n";
+								if ($stop_h < $start_h) {  # stop hh < start hh = assume we've gone to the next (or previous) day
+									$start->subtract( days => 1 ) if $j == 1;	# first programme in day
+									$stop->add( days => 1 )       if $j != 1;	# not first programme in day
         }
 
-        local $SIG{__WARN__} = sub {
-            warn "$url: $_[0]";
-        };
+								$p_start = $start->strftime("%Y%m%d%H%M%S %z");
+								$p_stop  = $stop->strftime("%Y%m%d%H%M%S %z");
+								$p_start_epoch = $start->epoch();
+								$p_stop_epoch  = $stop->epoch();
+								$p_timespan = $s->as_text();
+							}
 
-        # parse the page to a document object
-        my $tree = HTML::TreeBuilder->new();
-        $tree->parse($data) or die "cannot parse content of $url\n";
-        $tree->eof;
 
-        my %month_conv = (
-            'Janeiro'   => 'Jan',
-            'Fevereiro' => 'Feb',
-            'Março'    => 'Mar',
-            'Abril'     => 'Apr',
-            'Maio'      => 'May',
-            'Junho'     => 'Jun',
-            'Julho'     => 'Jul',
-            'Agosto'    => 'Aug',
-            'Setembro'  => 'Sep',
-            'Outubro'   => 'Oct',
-            'Novembro'  => 'Nov',
-            'Dezembro'  => 'Dec',
-        );
+							# strip the SnnEnn out of the title (e.g. "Anatomia de Grey T.9 Ep.24")
+							my ($p_ser, $p_ep) = ('', '');  my $p_match;
+							if ( ($p_match, $p_ser, $p_ep) = $p_title =~ /.*(T\.(\d*)\sEp\.(\d*))/ ) {
+								$p_episode_num = --$p_ser . ' . ' . --$p_ep . ' . ';
+							} elsif ( ($p_match, $p_ep) = $p_title =~ /.*(Ep\.(\d*))/ ) {
+								$p_episode_num = ' . ' . --$p_ep . ' . ';
+							}
+							$p_title =~ s/$p_match//  if $p_match;
+							trim $p_title;
+						}
 
-        #lets get the day
-        my $span = $tree->find_by_tag_name( '_tag' => 'strong' );
-        next unless $span;    # ??
 
-        my $date = trim( $span->as_trimmed_text() );
+						next PROG if $p_start_epoch < $grab_start || $p_start_epoch >= $grab_stop;
 
-        print STDERR "$date\n" unless $opt_quiet;
+						my %prog;
+						$prog{'channel'}     = "$ch_xmltv_id.$DOMAIN";
+						$prog{'id'}          = $p_id;
+						$prog{'title'}       = $p_title;
+						$prog{'category'}    = $p_category;
+						$prog{'start'}       = $p_start;
+						$prog{'stop'}        = $p_stop;
+						$prog{'episode-num'} = $p_episode_num;
+						$prog{'timespan'}    = $p_timespan;		# not an xmltv item: used in process_details_page()
 
-        $date =~ /(\d+) (.+)$/;
-        my ( $day, $month ) = ( $1, $2 );
-        $month = $month_conv{$month};
 
-        #lets calc the year
-        my @local_time    = localtime( time() );
-        my $current_year  = $local_time[5] + 1900;
-        my $current_month = $local_time[4] + 1;
-        my $year          = $current_year;
-        if ( $month eq 'Jan' && $current_month != 1 ) {
-            $year++;
-        }
-
-        my $parsed_date =
-          ParseDate( sprintf( "%02d %3s %04d", $day, $month, $year ) );
-        die "Parse error, could not parse date" unless $parsed_date;
-        my $f_date = $parsed_date;
-        $f_date =~ s/^(\d{4})(\d{2})(\d{2}).*/$1$2$3/;
-
-        my $epgdiv = $tree->find_by_attribute( 'id',    'epgFrame' );
-        my $table  = $epgdiv->find_by_tag_name( '_tag', 'table' );
-
-        # Actually time and title are required, but we don't check that.
-        if ($table) {
-            my @trs = $table->find_by_tag_name( "_tag" => "tr" );
-
-            # Store these for later, if we want full descs
-            my @inputs = $tree->find_by_tag_name( '_tag', 'input' );
-            my %descform;
-            foreach my $input (@inputs) {
-                next unless defined $input->attr('name');
-                next if $input->attr('name') eq 'programId';
-                $descform{ $input->attr('name') } = $input->attr('value');
-            }
-
-            foreach my $tr (@trs) {
-                my @tds = $tr->find_by_tag_name( "_tag" => "td" );
-                last unless ( $tds[0] && $tds[1] );
-
-                my $time = trim( $tds[0]->as_trimmed_text() );
-                my $title =
-                  trim( $tds[1]->find_by_tag_name( "_tag" => "a" )
-                      ->as_trimmed_text() );
-                my $sub_t    = "";
-                my $episode  = "";
-                my $category = "";
-                my $desc     = "";
-
-                #Try to find if they included the subtitle in the title
-                if ( $title =~ /^(.*?)\:\#\#(.*?)$/ ) {
-                    $title = $1;
-                    $sub_t = $2;
-                    $sub_t =~ s/^\s*?(.*?)/$1/;
-                    $title =~ s/(.*?)\s*?$/$1/;
-                }
-                elsif ( $title =~ /^(.*?)\#\#(.*?)$/ ) {
-                    $title = $1;
-                    $sub_t = $2;
-                    $sub_t =~ s/^\s*?(.*?)/$1/;
-                    $title =~ s/(.*?)\s*?$/$1/;
-                }
-
-                #lets get the description
-                my $link =
-                  $tds[1]->find_by_tag_name( "_tag" => "a" )->attr('href');
-                my ($program_id) = ( $link =~ /\"(\d+)\"/ );
-
-                my %credits;
-                my $year;
-
-                if ( $program_id && $opt_fullinfo ) {
-
-                    my ( $base_url, undef ) = split( /\?/, $ch_url );
-
-                    $descform{programId} = $program_id;
-                    my $r_desc = $ua->post( $base_url, \%descform );
-
-                    my $descr = $r_desc->content();
-
-                    if ( $descr =~
-/<\/h4>.*<strong>De:<\/strong>(.*?)<\/p>\s*\n\s*<p><strong>Com:<\/strong>(.*?)<\/p>\s*\n\s*<p>(.*?)<\/p>/ms
-                      )
-                    {
-                        my $director = $1;
-                        my $actors   = $2;
-                        $desc = $3;
-
-                        $director =~ s/&nbsp;//g;
-                        my @directors = split( /,/, $director );
-                        $actors =~ s/&nbsp;//g;
-                        my @actors = split( /,/, $actors );
-                        $credits{actor}    = \@actors;
-                        $credits{director} = \@directors;
-
-                    }
-                    elsif ( $descr =~ /<\/h4>\s*\n\s*<p>(.*?)<\/p>/ms ) {
-                        $desc = $1;
+						# if user wants details then get them from the programme page
+						if (!$opt_fast) {
+							process_details_page ( $ch_xmltv_id, \%prog, $tree );
                     }
 
-                    if ( $desc =~ /\sREPLAY:\s.*tecla verde.*/ ) {
-                        $desc =~ s/\sREPLAY:\s.*//g;
+						
+						# store the programme avoiding duplicates
+						# also check for duplicate start times and set clumpidx
+						{
+							if ( defined $programmes->{ $ch_xmltv_id }->{ $p_start_epoch } ) {
+								# duplicate prog or contemporary?
+								my $dup = 0; my $_P;
+								foreach $_P ( @{ $programmes->{ $ch_xmltv_id }->{ $p_start_epoch } } ) {
+									$dup = 1  if ( $_P->{'title'} eq $prog{'title'} );	# duplicate
+								}
+								next PROG if $dup;	# ignore duplicates (go to next programme)
+								if (!$dup) { 
+									# contemporary programme so set clumpidx
+									my $numclumps = scalar @{ $programmes->{ $ch_xmltv_id }->{ $p_start_epoch } }  + 1;
+									# set (or adjust) clumpidx of existing programmes
+									my $i = 0;
+									foreach $_P ( @{ $programmes->{ $ch_xmltv_id }->{ $p_start_epoch } } ) {
+										$_P->{'clumpidx'} = "$i/$numclumps";
+										$i++;
+									}
+									# set clumpidx for new programme
+									$prog{'clumpidx'} = "$i/$numclumps";
                     }
-                    if ( $desc =~ /\s*Ano:\s*(\d{4})\.\s*$/ ) {
-                        $year = $1;
                     }
                 }
 
-                #try to find a matching category trough css classes
-                my %map = (
-                    epgFilm => 'Film',
-                    epgSer  => 'Series',
-                    epgDoc  => 'Documentary',
-                    epgDesp => 'Sports',
-                    epgNot  => 'News',
-                );
-                my $cat_class = $tds[1]->attr('class');
-                if ( $cat_class && exists( $map{$cat_class} ) ) {
-                    $category = $map{$cat_class};
-                }
+						# store the programme
+						push @{ $programmes->{ $ch_xmltv_id }->{ $p_start_epoch } }, \%prog;
 
-                $time =~ s/://g;
-                $time = sprintf( "%04d", $time );
-
-                for ($title) { s/^\s+$//; s/\s+$// }
-                my %h = (
-                    time          => $time,
-                    title         => $title,
-                    date          => $f_date,
-                    "episode-num" => $episode,
-                    subtitle      => $sub_t,
-                    category      => $category,
-                    desc          => $desc
-                );
-
-                $h{credits} = \%credits if %credits;
-                $h{year}    = $year     if $year;
-
-                push @program_data, \%h;
+					} # end each prog
+				} # end progs for each day
+			} # schedule for a day
             }
         }
 
-        if ( not @program_data ) {
+		
+	# did we get any programmes?
+	if ( scalar $programmes == 0 ) {
             warn "$url ($ch_xmltv_id) : no programmes found\n";
-            last;
-        }
-        @all_programs = ( @all_programs, @program_data );
-        $tree->delete;
+		return;
     }
 
-    return () unless scalar(@all_programs);
-
-    my $first = $all_programs[0];
+	# format the programmes ready for XMLTV::Writer 
     my @r;
-    foreach my $p (@all_programs) {
-        push @r, make_programme_hash( $ch_xmltv_id, $p, $first );
+	foreach ( keys %{$programmes} ) {
+		my $_ch_progs = $programmes->{$_};
+		foreach ( sort keys %{$_ch_progs} ) {
+			my $_dt_progs = $_ch_progs->{$_};
+			foreach (@{ $_dt_progs }) {
+				push @r, make_programme_hash( $ch_xmltv_id, $_ );
+			 }
+		}
     }
     return @r;
 }
 
-sub make_programme_hash {
-    my ( $ch_xmltv_id, $cur, $first ) = @_;
+sub process_details_page {
+    my ($ch_xmltv_id, $prog, $s_tree) = @_;
 
-    my $date = $cur->{date};
+
+    t "Getting prog details $$prog{'id'} \n";
+
+	# I don't know how much of this url is actually required, but let's try to follow it as far as poss (for stealth reasons)
+	#
+	# http://www.zon.pt/_layouts/EPGGetProgramDetails.aspx?c=SIC&p=79302&h=0&sh=03:45%20&eh=%2006:00
+	#
+	# jQuery code:
+	# channelAcronym1 = $("#channel-logo img").attr('alt');
+	# programId1 = $(this).attr('id');
+	#
+	# var hasDifferentTime = "";
+	# if (programId1 == "-2") {
+	#    hasDifferentTime = ($(this).find('.duration')).text();
+	# }
+	#
+	# var substr = ($(this).find('.duration')).text().split('-');
+	#
+	# $.get('/_layouts/EPGGetProgramDetails.aspx?c=' + channelAcronym1 + '&p=' + programId1+ '&h=' + $("#ctl00_PlaceHolderMain_channelProgr_HoursToAddOrRemove").val() + "&sh=" + substr[0] + "&eh=" + substr[1], function (data) {...});
+	#
+	my $channelAcronym1;
+	if ( my $h = $s_tree->look_down('_tag' => 'div', 'id' => 'channel-logo') ) {
+		if ( my $h2 = $h->look_down('_tag' => 'img') ) {
+			$channelAcronym1 = $h2->attr('alt');
+		}
+	}
+	my $HoursToAddOrRemove = 0;
+	if ( my $h = $s_tree->look_down('_tag' => 'input', 'id' => 'ctl00_PlaceHolderMain_channelProgr_HoursToAddOrRemove') ) {
+		$HoursToAddOrRemove = $h->attr('value');
+	}
+	my $programId1 = $$prog{'id'};
+	my ($timespan) = $$prog{'timespan'} =~ s/ /%20/g;
+	my @substr = split(/-/, $$prog{'timespan'});
+
+    my $url = $HEAD->{'source-info-url'} . '_layouts/EPGGetProgramDetails.aspx?c='.$channelAcronym1.'&p='.$programId1.'&h='.$HoursToAddOrRemove.'&sh='.$substr[0].'&eh='.$substr[1];
+	print STDERR " URL= $url \n" if $opt_debug;
+    t $url;
+
+
+	# This is what the page returns. Looks like an old school delimited list
+	#    (c.f. OnCallGetProgramDetailsComplete JS code)
+	#
+	#    Anatomia de Grey T.9 Ep.23_#|$_O drama médico mais famoso da televisão centra a sua história nas vidas profissionais e pessoais de um grupo de médicos cirurgiões e dos seus supervisores._#|$_277055_resized_352x198.jpg_#|$_02:47 _#|$_ 03:28_#|$_RTP 1_#|$_2014-05-07T02:47:00+01:00_#|$_2014-05-07T03:28:00+01:00_#|$_false
+	#
+
+    my $content = get_nice($url);
+    $content = decode('UTF-8', $content);
+	
+	my @data = split(/_#\|\$_/, $content);
+
+	# We could check the title matches what we already have but why not just trust the 'id' is correct ;-)
+	
+	$$prog{'desc'} = $data[1];		# store the description in our prog hash
+	$$prog{'icon'} = "http://images.$DOMAIN/" . $data[2];		# [2] is a uri to the programme image
+
+	return;
+    }
+
+
+# reformat the data to something acceptable to xmltv:::writer
+sub make_programme_hash {
+    my ( $ch_xmltv_id, $cur ) = @_;
 
     my %prog;
 
-    $prog{channel} = "$ch_xmltv_id.$DOMAIN";
+    $prog{channel} = $cur->{'channel'};
 
     #$prog{channel} =~ s/\s/_/g;
 
-    $prog{title} = [ [ $cur->{title}, $LANG ] ];
-    $prog{"sub-title"} = [ [ $cur->{subtitle}, $LANG ] ] if $cur->{subtitle};
-    $prog{category} = [ [ $cur->{category}, $LANG ] ] if $cur->{category};
-    $prog{"episode-num"} = $cur->{"episode-num"} if $cur->{"episode-num"};
-
-    if (   ( $cur->{time} < $first->{time} )
-        && ( $cur->{date} == $first->{date} ) )
-    {
-        t "Jumping for next day of ("
-          . $cur->{time} . ","
-          . $first->{time}
-          . ") $date...";
-        $date = nextday($date);
-        t "Got $date\n";
-    }
-
-    my $time = $date . $cur->{time} . "00";
-
-    #print STDERR "Date built = $time\n";
-
-    $prog{start} = utc_offset( $time, '+0000' );
-    t "...got $prog{start}";
-    unless ( $prog{start} ) {
-        warn "bad time string: $cur->{time}";
-        return undef;
-    }
-
-    $prog{desc} = [ [ $cur->{desc}, $LANG ] ] if $cur->{desc};
-
-    $prog{credits} = $cur->{credits} if $cur->{credits};
-    $prog{date}    = $cur->{year}    if $cur->{year};
+    $prog{'title'} = [ [ toUTF8( $cur->{'title'} ), $LANG ] ];
+    $prog{'sub-title'} = [ [ toUTF8( $cur->{'subtitle'} ), $LANG ] ] if $cur->{'subtitle'};
+    $prog{'category'} = [ [ toUTF8( $cur->{'category'} ), $LANG ] ] if $cur->{'category'};
+    $prog{'episode-num'} = [[ $cur->{'episode-num'}, 'xmltv_ns' ]] if $cur->{'episode-num'};
+    $prog{'start'} = $cur->{'start'} if $cur->{'start'};
+    $prog{'stop'} = $cur->{'stop'} if $cur->{'stop'};
+    $prog{'desc'} = [ [ toUTF8( $cur->{'desc'} ), $LANG ] ] if $cur->{'desc'};
+    $prog{'icon'} = [ { 'src' => $cur->{'icon'} } ] if $cur->{'icon'};
+    $prog{'credits'} = $cur->{'credits'} if $cur->{'credits'};
+    $prog{'date'}    = $cur->{'year'}    if $cur->{'year'};
 
     return \%prog;
 }
 
-
-# as_trimmed_text() doesn't deal with ASCII 160, non-breaking space.
-sub trim( $ ) {
-    for (my $tmp = shift) {
-	#tr/\240/ /;
-	s/^\s+//;
-	s/\s+$//;
-	return $_;
-    }
-}
-
 # get channel listing
 sub get_channels {
-    my $bar = new XMLTV::ProgressBar( 'getting list of channels', 1 )
-      if not $opt_quiet;
+    my $bar = new XMLTV::ProgressBar( 'getting list of channels', 1 )  if not $opt_quiet;
     my %channels;
-    my $url = $HEAD->{'source-data-url'};
+	
+	# retrieve channels via a dummy call to the schedule page
+	#   http://www.zon.pt/tv/guiaTV/Pages/GuiaTV.aspx
+    my $url = $HEAD->{'source-data-url'} . 'Pages/GuiaTV.aspx';
     t $url;
 
-    my $tree  = get_nice_tree $url;
-    my @menus = $tree->find_by_tag_name( "_tag" => "select" );
+    my $tree  = get_nice_tree($url, '', 'UTF-8');
 
-    foreach my $elem (@menus) {
-        my $cname = $elem->attr('name');
-        next unless $cname eq 'ctl00$Middle$channels';
-        my @ocanals = $elem->find_by_tag_name( "_tag" => "option" );
-        my $chanpos = 0;
-        foreach my $sigla (@ocanals) {
-            $channelnumbers{ $sigla->attr('value') } = $chanpos;
-            $chanpos++;
-        }
-        @ocanals = sort @ocanals;
-        foreach my $opt (@ocanals) {
-            my $channel_id = $opt->attr('value');
-
-            next if $channel_id eq 'ALL';
-
-            my $channel_name = trim( $opt->content->[0] );
-            $channel_name = toUTF8( "iso-8859-1", $channel_name );
-            $channels{$channel_id} = $channel_name;
-            push @ch_all,
+	#  <div id="channels-list-container">
+	#	<ul id="channels-list-slider">
+	#		<li><span class="channel-number">001</span>
+	#           <span class="channel-logo">
+	#              <a href='/tv/guiaTV/Pages/Guia-TV-programacao.aspx?channelSigla=5' title='RTP 1'>
+	#				<img src='/EPGChannelImages/RTP1.png' alt='logótipo RTP 1' />
+	#              </a>
+	#           </span>
+	#		</li>
+	#
+	if ( my $h = $tree->look_down('_tag' => 'div', 'id' => 'channels-list-container') ) {
+		if ( my $h2 = $h->look_down('_tag' => 'ul', 'id' => 'channels-list-slider') ) {
+			my @h3 = $h2->look_down('_tag' => 'li');
+			foreach my $elem (@h3) {
+				my ($channel_id, $channel_name, $channel_logo);
+				if ( my $h4 = $elem->look_down('_tag' => 'a') ) {
+					$channel_name = toUTF8( $h4->attr('title') );
+					($channel_id) = $h4->attr('href') =~ /channelSigla=(\d*)/;
+				}
+				if ( my $h4 = $elem->look_down('_tag' => 'img') ) {
+					$channel_logo = $SOURCE_URL . $h4->attr('src');
+				}
+				# store the channel
+				my $ch =
               {
+					'channel-name'  => $channel_name,
                 'display-name' => [ [ $channel_name, $LANG ] ],
-                'id' => "$channel_id"
+					'id'            => $channel_id.'.'.$DOMAIN,
+					'icon'          => [ { 'src' => $channel_logo } ],
               };
+				$channels{$channel_id} = $ch;
+				push @ch_all, $ch;
+				
         }    #foreach
-    }    #while
+		}
+	}
     die "no channels could be found" if not keys %channels;
-
-    #we need a token
-    my $t = $tree->find_by_attribute( 'name', '__VIEWSTATE' );
-    $token = $t->attr('value');
-    die "Could not get the token\n" unless $token;
 
     update $bar if not $opt_quiet;
     $tree->delete;
@@ -719,7 +731,7 @@ sub nextday {
     return UnixDate($n, '%Q');
 }
 
-sub get_icons {
+sub get_icons {		# deprecated
     my %icons;
     my $url= $HEAD->{"source-info-url"}."/Televisao/ListaProgramas.aspx?dia=0&package=9&cat=&channelSigla=";
     my $chan;
@@ -753,3 +765,18 @@ sub get_icons {
     return %icons;
 }
 
+
+# Get the user's home directory
+sub get_default_dir {
+    my $winhome = $ENV{HOMEDRIVE} . $ENV{HOMEPATH} 
+			if defined( $ENV{HOMEDRIVE} ) 
+					and defined( $ENV{HOMEPATH} ); 
+    
+    my $home = $ENV{HOME} || $winhome || ".";
+    return $home;
+}
+ 	  	 
+# Set default cache dir = $HOME/.xmltv/cache
+sub get_default_cachedir {
+    return get_default_dir() . "/.xmltv/cache";
+}
