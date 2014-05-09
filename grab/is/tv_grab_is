@@ -99,6 +99,7 @@ use XMLTV::Mode;
 use XMLTV::Config_file;
 use XMLTV::DST;
 use XMLTV::Get_nice;
+use XMLTV::Supplement qw/GetSupplement/;
 use XMLTV::Date;
 use XMLTV::Usage <<END
 $0: get Icelandic television listings in XMLTV format
@@ -133,6 +134,7 @@ sub process_xml_channel( $$$$$$ );
 sub process_ruv_is( $$$$$$ );
 sub process_skjarinn_is( $$$$$$ );
 sub process_stod2_and_friends( $$$$$$ );
+sub get_categories_map();
 
 
 # Get options
@@ -273,6 +275,10 @@ foreach (@config_lines) {
 
 ######################################################################
 # begin main program
+
+# Fetch map of category number to names
+my %categories;
+get_categories_map();
 
 my $now = parse_date('now');
 die if not defined $now;
@@ -457,8 +463,10 @@ sub process_xml_channel( $$$$$$ ) {
                     #}
 					# That's just too flaky so let's go "old school" for now (otherwise nightly validator fails)
 					#	print STDERR "was: ".$node."\n";
-					my %categories = ( '1'=>'children', '2'=>'series', '3'=>'news', '4'=>'educational', '5'=>'sports', '6'=>'misc', '7'=>'movie', '8'=>'culture', '9'=>'music', '11'=>'entertainment', '13'=>'news magazine' );
-					my $category = $categories{$node->firstChild->data};
+					## Now done as a Supplement as of v1.30
+                    ##  my %categories = ( '1'=>'children', '2'=>'series', '3'=>'news', '4'=>'educational', '5'=>'sports', '6'=>'misc', '7'=>'movie', '8'=>'culture', '9'=>'music', '11'=>'entertainment', '13'=>'news magazine' );
+                    # output the category name from the Supplement, else the category numeric value
+					my $category = $categories{$node->firstChild->data} || $node->firstChild->data;
 					$node->removeChildNodes();
 					$node->appendText($category);
 					#	print STDERR "now: ".$node."\n";
@@ -527,18 +535,33 @@ sub process_ruv_is ( $$$$$$ ){
             <xsl:copy-of select="." />
         </xsl:template>
 
-        <!-- Two matches for <category>. With funky lookup as explained at http://www.ibm.com/developerworks/library/x-xsltip.html#h2 -->
-        <xsl:template match="category[\@value &gt;= 1 and \@value &lt;= 9 or \@value = 11 or \@value = 13]">
+EOF
+
+     # [bilbo] following code removed in v1.30, ...
+        #<!-- Two matches for <category>. With funky lookup as explained at http://www.ibm.com/developerworks/library/x-xsltip.html#h2 -->
+        #<xsl:template match="category[\@value &gt;= 1 and \@value &lt;= 9 or \@value = 11 or \@value = 13]">
+        #    <category>
+        #        <xsl:variable name="category_value"><xsl:value-of select="\@value" /></xsl:variable>
+        #        <!-- ([bilbo] too flaky - see note above) xsl:value-of select="document('')/*/data:category/entry[\@key = \$category_value]"/-->
+        #        <xsl:value-of select="\$category_value"/>
+        #     </category>
+        #</xsl:template>
+        #<xsl:template match="category">
+        #    &lt;!-- category is no good: <xsl:value-of select="\@value" /> --&gt;
+        #</xsl:template>
+        
+     # ..and replaced with:
+     
+     $xsl_transform .= <<"EOF";       
+         <xsl:template match="category">
             <category>
                 <xsl:variable name="category_value"><xsl:value-of select="\@value" /></xsl:variable>
-                <!-- ([bilbo] too flaky - see note above) xsl:value-of select="document('')/*/data:category/entry[\@key = \$category_value]"/-->
                 <xsl:value-of select="\$category_value"/>
              </category>
         </xsl:template>
-        <xsl:template match="category">
-            &lt;!-- category is no good: <xsl:value-of select="\@value" /> --&gt;
-        </xsl:template>
+EOF
         
+     $xsl_transform .= <<"EOF";      
         <!-- Two matches for <episode> One to cut out "1 of 1", and one to change to "x:y" format -->
         <xsl:template match="episode[\@number = 1 and \@number-of-episodes = 1]">
         </xsl:template>
@@ -700,4 +723,23 @@ sub get_icon {
         return "http://www.sjonvarp.is/images/logos/".$logos{$ch_did}.".gif";
     }
     return "";
+}
+
+# Fetch the map of category numbers from the Supplement server
+sub get_categories_map () {
+    my $supplement = GetSupplement('tv_grab_is', 'category_map');
+    my @lines = split /[\r\n]+/, $supplement;
+    foreach my $line (@lines) {
+        chomp $line;  chop($line) if ($line =~ m/\r$/);  trim($line);
+        next if $line =~ /^#/ || $line eq '';
+        
+        my ($cat_num, $cat_name, $trash) = $line =~ /^(.*)==(.*?)([\s\t]*#.*)?$/;
+        $categories{$cat_num} = $cat_name;
+    }
+    #use Data::Dumper; print Dumper (\%categorymap);
+}
+
+sub trim {
+	# Remove leading & trailing spaces
+	$_[0] =~ s/^\s+|\s+$//g;       
 }
