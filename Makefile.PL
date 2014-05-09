@@ -516,6 +516,7 @@ my @opt_components
      { name => 'tv_grab_is',
        blurb => 'Grabber for Iceland',
        exes => [ 'grab/is/tv_grab_is' ],
+       share_files => { 'grab/is/category_map' => 'tv_grab_is/category_map' },
        prereqs => { 'XML::LibXSLT' => 0,
                     'XML::DOM'     => 0 } ,
      },
