@@ -33,6 +33,8 @@ use strict;
 
 package XMLTV::IMDB;
 
+use open ':encoding(iso-8859-1)';   # try to enforce file encoding (does this work in Perl <5.8.1? )
+
 #
 # HISTORY
 # .6 = what was here for the longest time
@@ -44,7 +46,7 @@ package XMLTV::IMDB;
 # .9 = added keywords data
 # .10 = added plot data
 #
-our $VERSION = '0.10';
+our $VERSION = '0.10';      # version number of database
 
 sub new
 {
@@ -156,7 +158,7 @@ sub checkIndexesOkay($)
 	return("imdbDir index db missing version information, rerun --prepStage all\n");
     }
     if ( $info->{db_version}=~m/^(\d+)\.(\d+)$/o ) {
-	if ( $1 != $major || $minor < $2 ) {
+	if ( $1 != $major || $2 < $minor ) {
 	    return("imdbDir index db requires updating, rerun --prepStage all\n");
 	}
 	if ( $1 == 0 && $2 == 1 ) {
@@ -1321,6 +1323,8 @@ sub getStatsLines($)
 package XMLTV::IMDB::Crunch;
 use LWP;
 
+use open ':encoding(iso-8859-1)';   # try to enforce file encoding (does this work in Perl <5.8.1? )
+
 # Use Term::ProgressBar if installed.
 use constant Have_bar => eval {
     require Term::ProgressBar;
@@ -1354,6 +1358,31 @@ sub new
     for ('imdbDir', 'verbose') {
 	die "invalid usage - no $_" if ( !defined($self->{$_}));
     }
+    
+    $self->{stageLast} = 9;     # set the final stage in the build - i.e. the one which builds the final database
+    $self->{stages} = { 1=>'movies', 2=>'directors', 3=>'actors', 4=>'actresses', 5=>'genres', 6=>'ratings', 7=>'keywords', 8=>'plot' };
+    $self->{optionalStages} = { 'keywords' => 7, 'plot' => 8 };     # list of optional stages - no need to download files for these
+
+    $self->{moviedbIndex}="$self->{imdbDir}/moviedb.idx";
+    $self->{moviedbData}="$self->{imdbDir}/moviedb.dat";
+    $self->{moviedbInfo}="$self->{imdbDir}/moviedb.info";
+    $self->{moviedbOffline}="$self->{imdbDir}/moviedb.offline";
+
+    bless($self, $type);
+    
+    if ( $self->{stageToRun} ne $self->{stageLast} ) {
+        # unless this is the last stage, check we have the necessary files
+        return(undef)  if ( $self->checkFiles() != 0 );
+    }
+    
+    return($self);
+}
+
+
+sub checkFiles () {
+    
+    my ($self)=@_;
+    
     if ( ! -d "$self->{imdbDir}" ) {
 	if ( $self->{downloadMissingFiles} ) {
 	    warn "creating directory $self->{imdbDir}\n";
@@ -1369,13 +1398,15 @@ sub new
 	mkdir $listsDir, 0777 or die "cannot mkdir $listsDir: $!";
     }
     
-    $self->{optionalStages} = { 'keywords' => 7, 'plot' => 8 };     # list of optional stages - no need to download files for these
-    
   CHECK_FILES:
     my %missingListFiles; # maps 'movies' to filename ...movies.gz
-    for ('movies', 'actors', 'actresses', 'directors', 'genres', 'ratings', 'keywords', 'plot') {
-	my $file=$_;
-	my $filename="$listsDir/$_.list";
+            
+    FILES_CHECK:
+    while ( my( $key, $value ) = each %{ $self->{stages} } ) {
+        # don't check *all* files - only the ones we are crunching
+        next FILES_CHECK  if ( lc($self->{stageToRun}) ne 'all' && $key != int($self->{stageToRun}) );
+	my $file=$value;
+	my $filename="$listsDir/$file.list";
 	my $filenameGz="$filename.gz";
 	my $filenameExists = -f $filename;
 	my $filenameSize = -s $filename;
@@ -1399,14 +1430,14 @@ sub new
             if ( $self->{optionalStages}{$file} ) {
                 warn "$file will not be added to database\n";
             } else {
-	    $missingListFiles{$_}=$filenameGz;
+                $missingListFiles{$file}=$filenameGz;
 	}
 	}
 	elsif ( not $filenameExists and $filenameGzExists ) {
-	    $self->{imdbListFiles}->{$_}=$filenameGz;
+	    $self->{imdbListFiles}->{$file}=$filenameGz;
 	}
 	elsif ( $filenameExists and not $filenameGzExists ) {
-	    $self->{imdbListFiles}->{$_}=$filename;
+	    $self->{imdbListFiles}->{$file}=$filename;
 	}
 	elsif ( $filenameExists and $filenameGzExists ) {
 	    die "both $filename and $filenameGz exist, remove one of them\n";
@@ -1478,18 +1509,11 @@ END
 	print STDERR "tv_imdb: requires you to download the above files from ftp.imdb.com\n";
 	print STDERR "         see http://www.imdb.com/interfaces for details\n";
         print STDERR "         or try the --download option\n";
-	return(undef);
+	#return(undef);
+        return 1;
     }
 
-    $self->{moviedbIndex}="$self->{imdbDir}/moviedb.idx";
-    $self->{moviedbData}="$self->{imdbDir}/moviedb.dat";
-    $self->{moviedbInfo}="$self->{imdbDir}/moviedb.info";
-    $self->{moviedbOffline}="$self->{imdbDir}/moviedb.offline";
-
-    $self->{stageLast} = 9;     # set the final stage in the build - i.e. the one which builds the final database
-
-    bless($self, $type);
-    return($self);
+    return 0;
 }
 
 sub redirect($$)
@@ -1529,6 +1553,13 @@ sub status($$)
     if ( $self->{verbose} ) {
 	print STDERR $_[0]."\n";
     }
+}
+
+sub withThousands ($)
+{
+    my ($val) = @_;
+    $val =~ s/(\d{1,3}?)(?=(\d{3})+$)/$1,/g;
+    return $val;
 }
 
 use XMLTV::Gunzip;
@@ -1668,8 +1699,8 @@ sub readMoviesOrGenres($$$$)
     }
     $progress->update($countEstimate) if Have_bar;
 
-    $self->status(sprintf("parsing $whichMoviesOrGenres found $count titles and ".
-			  "$lineCount lines in %d seconds",time()-$startTime));
+    $self->status(sprintf("parsing $whichMoviesOrGenres found ".withThousands($count)." titles in ".
+			  withThousands($lineCount)." lines in %d seconds",time()-$startTime));
 
     closeMaybeGunzip($file, $fh);
     return($count);
@@ -1806,7 +1837,8 @@ sub readCastOrDirectors($$$)
 	# ignore {{SUSPENDED}}
 	$line=~s/\s*\{\{SUSPENDED\}\}//o;
 
-	# ignore {Twelve Angry Men (1954)}
+  # [honir] this is wrong - this puts cast from all the episodes as though they are in the entire series!
+	# ##ignore {Twelve Angry Men (1954)}
 	$line=~s/\s*\{[^\}]+\}//o;
 
 	if ( $whatAreWeParsing < 3 ) {
@@ -1851,8 +1883,9 @@ sub readCastOrDirectors($$$)
     }
     $progress->update($castCountEstimate) if Have_bar;
 
-    $self->status(sprintf("parsing $whichCastOrDirector found $castNames names, ".
-			  "$count titles and $lineCount lines in %d seconds",time()-$startTime));
+    $self->status(sprintf("parsing $whichCastOrDirector found ".withThousands($castNames)." names, ".
+			  withThousands($count)." titles in ".withThousands($lineCount)." lines in %d seconds",time()-$startTime));
+    
     closeMaybeGunzip($file, $fh);
 
     return($castNames);
@@ -1932,8 +1965,9 @@ sub readRatings($$$$)
     }
     $progress->update($countEstimate) if Have_bar;
 
-    $self->status(sprintf("parsing Ratings found $count titles and ".
-			  "$lineCount lines in %d seconds",time()-$startTime));
+    $self->status(sprintf("parsing Ratings found ".withThousands($count)." titles in ".
+			  withThousands($lineCount)." lines in %d seconds",time()-$startTime));
+    
     closeMaybeGunzip($file, $fh);
     return($count);
 }
@@ -1990,12 +2024,11 @@ sub readKeywords($$$$)
 	next if ($line =~ m/^\s*$/);
 	my ($title, $keyword) = ($line =~ m/^(.*)\s+(\S+)\s*$/);
 	if ( defined($title) and defined($keyword) ) {
-	    # there are some strange titles, fix them:
-	    $title =~ s/.*\s+{(.*)}/$1/;
 
-            # ignore anything which is an episode and not a main title (e.g. "Doctor Who (#10.22)" or "(1986-09-18)" )
-            if ( ( $title !~ m/\(#\d{1,3}\.?\d{0,5}\)/ )
-              && ( $title !~ m/^\(\d{4}-\d{2}-\d{2}\)$/ ) )
+            my ($episode) = $title =~ m/^.*\s+(\{.*\})$/;
+            
+            # ignore anything which is an episode (e.g. "{Doctor Who (#10.22)}" )
+            if ( !defined $episode || $episode eq '' )
             {
                 if ( defined($self->{movies}{$title}) ) {
                     $self->{movies}{$title}.=",".$keyword;
@@ -2023,8 +2056,8 @@ sub readKeywords($$$$)
     }
     $progress->update($countEstimate) if Have_bar;
 
-    $self->status(sprintf("parsing \"keywords\" found $count titles and ".
-			  "$lineCount lines in %d seconds",time()-$startTime));
+    $self->status(sprintf("parsing Keywords found ".withThousands($count)." titles in ".
+			  withThousands($lineCount)." lines in %d seconds",time()-$startTime));
 
     closeMaybeGunzip($file, $fh);
     return($count);
@@ -2075,11 +2108,12 @@ sub readPlots($$$$)
 	my $line=$_;
 	chomp($line);
 	next if ($line =~ m/^\s*$/);
-	my ($title, $episode) = ($line =~ m/^MV:\s(.*?)\s?({.*})?$/);
+	my ($title, $episode) = ($line =~ m/^MV:\s(.*?)\s?(\{.*\})?$/);
 	if ( defined($title) ) {
             
             # ignore anything which is an episode (e.g. "{Doctor Who (#10.22)}" )
-            if ( !defined $episode || $episode eq '' ) {
+            if ( !defined $episode || $episode eq '' )
+            {
                 my $plot = '';
                 LOOP:
                 while (1) {
@@ -2125,8 +2159,8 @@ sub readPlots($$$$)
     }
     $progress->update($countEstimate) if Have_bar;
 
-    $self->status(sprintf("parsing \"plots\" found $count plots and ".
-			  "$lineCount lines in %d seconds",time()-$startTime));
+    $self->status(sprintf("parsing Plots found $count ".withThousands($count)." in ".
+			  withThousands($lineCount)." lines in %d seconds",time()-$startTime));
 
     closeMaybeGunzip($file, $fh);
     return($count);
@@ -2836,7 +2870,7 @@ sub invokeStage($$)
 
 	$self->status("merging in stage 5 data (genres)..");
 	if ( 1 ) {
-	    my $countEstimate=$self->dbinfoGet("db_stat_genres_count", 0);
+	    my $countEstimate=$self->dbinfoGet("db_stat_genres_count", 1);  # '1' prevents the spurious "(nothing to do)" msg
 	    my $progress=Term::ProgressBar->new({name  => "merging genres",
 						 count => $countEstimate,
 						 ETA   => 'linear'})
@@ -2889,7 +2923,7 @@ sub invokeStage($$)
 
 	$self->status("merging in stage 6 data (ratings)..");
 	if ( 1 ) {
-	    my $countEstimate=$self->dbinfoGet("db_stat_ratings_count", 0);
+	    my $countEstimate=$self->dbinfoGet("db_stat_ratings_count", 1);  # '1' prevents the spurious "(nothing to do)" msg
 	    my $progress=Term::ProgressBar->new({name  => "merging ratings",
 						 count => $countEstimate,
 						 ETA   => 'linear'})
