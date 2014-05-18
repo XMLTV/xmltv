@@ -82,6 +82,8 @@ sub new
     $self->{updateStarRatings}=1  if ( !defined($self->{updateStarRatings}));
     $self->{updatePlot}=0         if ( !defined($self->{updatePlot}));          # default is to NOT add plot
 
+    $self->{numActors}=3          if ( !defined($self->{numActors}));           # default is to add top 3 actors
+    
     $self->{moviedbIndex}="$self->{imdbDir}/moviedb.idx";
     $self->{moviedbData}="$self->{imdbDir}/moviedb.dat";
     $self->{moviedbInfo}="$self->{imdbDir}/moviedb.info";
@@ -1080,8 +1082,8 @@ sub applyFound($$$)
 	    }
 	    
 	    my @list;
-	    # add top 3 billing actors list form www.imdb.com
-	    for my $name (splice(@{$details->{actors}},0,3)) {
+	    # add top billing actors (default = 3) from www.imdb.com
+	    for my $name (splice(@{$details->{actors}},0,$self->{numActors})) {
 		push(@list, $name);
 	    }
 	    # preserve all existing actors listed if we did't already have them.
