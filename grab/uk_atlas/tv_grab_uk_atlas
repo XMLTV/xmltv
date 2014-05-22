@@ -34,6 +34,7 @@ use XMLTV::Supplement qw/GetSupplement SetSupplementRoot/;
 use XMLTV::Configure::Writer;
 use XMLTV::Ask;
 use XMLTV::Get_nice 0.005065;
+use XMLTV::Date 0.005066;
 
 use File::Path;
 use POSIX qw(strftime);
@@ -163,6 +164,21 @@ my $stoptime;
 fetch_listings();
 
 #print Dumper($programmes);
+
+# Progress Bar
+$bar->finish() && undef $bar if defined $bar;
+
+
+
+# ------------------------------------------------------------------------------------------------------------------------------------- #
+# Progress Bar :)
+$bar = new XMLTV::ProgressBar({
+  name => "Filtering duplicates",
+  count => scalar @{$programmes}
+}) unless ($opt->{quiet} || $opt->{debug});
+
+# Remove any duplicate programmes and set clumps where necessary
+filter_listings();
 
 # Progress Bar
 $bar->finish() && undef $bar if defined $bar;
@@ -626,6 +642,87 @@ sub add_programme_to_xml {
 		return;
 }
 						
+# ------------------------------------------------------------------------------------------------------------------------------------- #
+
+sub filter_listings {
+		# Given a hash ready to be fed into XMLTV writer, perform some last minute work on the programmes:
+		#   1) Remove any duplicate programmes
+		#   2) Create clumps where necessary (i.e. where programmes overlap)
+		#
+		
+		# Test scenarios (list of prog times) for clumpidx generation
+		#   1800-1830  1820-1830  1830-1900
+		#   1800-1830  1830-1835  1830-1900
+		#   1800-1830  1800-1805  1830-1900
+		#   1800-1830  1810-1815  1830-1900
+		#   1800-1830  1825-1835  1830-1900
+		#	
+		## For author's testing purposes:
+		##       require './filter_test.pl';   ($channels, $programmes) = set_test_data();
+		
+			
+		# Walk the array (note: this assumes, (i) the programmes are stored in channel+starttime order, (ii) they have stop times )
+		my ($clumpidx, $clumptot, @curr_clumps) = (0, 2, ());
+		for (my $i=0; $i<scalar @{$programmes}; $i++) {
+			my ($this, $next) = ($i, $i+1);			
+			
+			FILTER:
+			
+			# any more progs after this one?
+			last  if ($next >= scalar @{$programmes} );
+						
+			# get programme's times as epoch seconds
+			my $this_start = time_xmltv_to_epoch( @$programmes[$this]->{'start'} );
+			my $this_stop  = time_xmltv_to_epoch( @$programmes[$this]->{'stop'} );
+			my $next_start = time_xmltv_to_epoch( @$programmes[$next]->{'start'} );
+			my $next_stop  = time_xmltv_to_epoch( @$programmes[$next]->{'stop'} );
+			
+			
+			# (Task #1)
+			# Is prog a duplicate with next
+			#   (duplicate = same channel + same start & stop times + same title
+			if ( @$programmes[$next]->{'channel'}     eq @$programmes[$this]->{'channel'}
+			 &&  @$programmes[$next]->{'start'}       eq @$programmes[$this]->{'start'}
+			 &&  @$programmes[$next]->{'stop'}        eq @$programmes[$this]->{'stop'}
+			 &&  @$programmes[$next]->{'title'}[0][0] eq @$programmes[$this]->{'title'}[0][0] ) {
+					# delete the duplicate
+					splice(@{$programmes}, $next, 1);
+					goto FILTER;
+			}
+			
+			
+			# (Task #2) 
+			# Check times of next prog on this channel; is there an overlap?
+			if ( @$programmes[$next]->{'channel'} eq @$programmes[$this]->{'channel'}
+			 &&  $next_start < $this_stop ) {
+			 
+			  if ( !scalar @curr_clumps ) {
+					@$programmes[$this]->{'clumpidx'} = $clumpidx++ .'/'. $clumptot;
+					@$programmes[$next]->{'clumpidx'} = $clumpidx .'/'. $clumptot;
+					push @curr_clumps, $this;		# remember the current array index
+					
+				} else {   # current prog is already part of a clump :(   
+					# adjust rest of current clump
+					$clumptot++;
+					$clumpidx = 0;
+					foreach (@curr_clumps) {
+						@$programmes[$_]->{'clumpidx'} = $clumpidx++ .'/'. $clumptot;
+					}
+					@$programmes[$this]->{'clumpidx'} = $clumpidx++ .'/'. $clumptot;
+					@$programmes[$next]->{'clumpidx'} = $clumpidx .'/'. $clumptot;
+					push @curr_clumps, $this;		# remember the current array index
+				}
+						
+				
+			} else {
+				# reset vars ready for next pass
+			  ($clumpidx, $clumptot, @curr_clumps) = (0, 2, ());
+			}
+			
+			$bar->update if defined $bar;
+		}
+}
+# ------------------------------------------------------------------------------------------------------------------------------------- #
 						
 									
 # #############################################################################
