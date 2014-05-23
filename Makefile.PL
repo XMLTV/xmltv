@@ -943,10 +943,10 @@ my @opt_components
        exes => [ 'grab/na_dtv/tv_grab_na_dtv' ],
        prereqs => {
          'DateTime'                  => 0,
-         'DateTime::Format::ISO8601' => 0,
-         'JSON'                      => 0,
+         'HTTP::Cookies'             => 0,
+         'LWP::UserAgent'            => 0,
+         'JSON::PP'                  => 0,
          'HTML::TokeParser'          => 0,
-         'WWW::Mechanize'            => 0,
        },
      },
 
