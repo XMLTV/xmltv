@@ -21,7 +21,7 @@ tv_grab_il --description
 
 
 tv_grab_il [--config-file FILE]
-           [--days N] [--offset N]
+           [--days N] [--offset N] [--slow]
            [--output FILE] [--quiet] [--debug]
 
 tv_grab_il --configure [--config-file FILE]
@@ -59,6 +59,9 @@ standard output.
 B<--days N> When grabbing, grab N days rather than all available days.
 
 B<--offset N> Start grabbing at today + N days.  N may be negative.
+
+B<--slow> Get programme descriptions as well as title.  (Will take a
+long time with lots of channels selected.)
 
 B<--quiet> Suppress the progress-bar normally shown on standard error.
 
@@ -113,6 +116,18 @@ use XMLTV::Get_nice qw(get_nice_tree);
 use POSIX qw(strftime);
 use DateTime;
 
+
+# only used while testing the 'slow' option
+##$XMLTV::Get_nice::Delay = 0;
+##use HTTP::Cache::Transparent;
+##HTTP::Cache::Transparent::init( { 
+##    BasePath => '/root/.xmltv/cache',
+##    NoUpdate => 60*60,			# cache time in seconds
+##    MaxAge => 24,				# flush time in hours
+##    Verbose => 1,
+##} );
+
+
 my $channel_link_regexp = "\\?w=\\/[0-9]\\/\\/[0-9]*\\/\\/[A-Za-z]*\\/1";
 my $channel_link_id = "\\?w=\\/[0-9]\\/\\/([0-9]*)\\/\\/[A-Za-z]*\\/1";
 
@@ -123,7 +138,8 @@ my ($opt, $conf) = ParseOptions({
   stage_sub => \&config_stage,
   listchannels_sub => \&fetch_channels,
   version => '$Id$',
-  description => "Israel (tv.walla.co.il)"
+  description => "Israel (tv.walla.co.il)",
+  extra_options    => [qw/slow/],      # grab descriptions from sub-page
 });
 
 sub config_stage {
@@ -247,11 +263,40 @@ foreach my $channel_id (@{$conf->{channel}}) {
             }
             $show_time->set(hour => $show_hour[0], minute => $show_hour[1], second => 0);
 
-            push @{$programmes}, {
+            
+            # If user wants descriptions then get them from the sub-page
+            #  (can also get stop time while we're there!)
+            my ($start, $stop, $desc) = ('', '', ''); my $stop_time;
+            if ( defined $opt->{slow} && $opt->{slow} ) {
+              
+              if ( my $detailtree = XMLTV::Get_nice::get_nice_tree('http://tv.walla.co.il/'.$title->attr('href')) ) {
+                if ( my $table = $detailtree->look_down('_tag', 'table', 'class', 'wp-0-b') ) {   # get 1st "wp-0-b" table
+                  if ( my $td = $table->look_down('_tag', 'td', 'class', 'w2b', sub{ !$_[0]->look_down('_tag', 'h2') } ) ) {
+                    ($start, $stop) = $td->as_text() =~ /(\d\d:\d\d).*(\d\d:\d\d)/;
+                  }
+                  if ( my $td = $table->look_down('_tag', 'td', 'class', 'w3') ) {
+                    $desc = $td->as_text();
+                  }
+                }
+              }
+              if ( $stop ne '' ) {
+                my @stop_hour = split(/:/, $stop);
+                $stop_time = $show_time->clone();
+                $stop_time->add (days => 1)  if ( $stop_hour[0] < $show_hour[0] );  # assumes prog not last > 24hours!
+                $stop_time->set(hour => $stop_hour[0], minute => $stop_hour[1], second => 0);
+              }
+              
+            }
+            
+            my $prog= {
               start => $show_time->strftime("%Y%m%d%H%M%S %z"),
               title => [[ encode( 'utf-8', decode( 'windows-1255', $title->as_text())), 'he']],
               channel => $channel_id
             };
+            $prog->{'stop'} = $stop_time->strftime("%Y%m%d%H%M%S %z")  if defined $stop_time;
+            $prog->{'desc'} = [[ encode( 'utf-8', decode( 'windows-1255', $desc)), 'he']]  if $desc ne '';
+            push @{$programmes}, $prog;
+            
           }
 
           # Add this channel to the finalized XML
