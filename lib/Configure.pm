@@ -3,7 +3,8 @@ package XMLTV::Configure;
 # use version number for feature detection:
 # 0.005065 : can use 'constant' in write_string()
 # 0.005065 : comments in config file not restricted to starting in first column
-our $VERSION = 0.005065;
+# 0.005066 : make writes to the config-file atomic
+our $VERSION = 0.005066;
 
 BEGIN {
     use Exporter   ();
@@ -115,8 +116,12 @@ sub SaveConfig
 {
     my( $conf, $config_file ) = @_;
     
-    open OUT, "> $config_file" 
-	or die "Failed to open $config_file for writing.";
+    # Test if configuration file is writeable
+    if (-f $config_file && !(-w $config_file)) { die "Cannot write to $config_file"; }
+ 
+    # Create temporary configuration file.
+    open OUT, "> $config_file.TMP" 
+	or die "Failed to open $config_file.TMP for writing.";
 
     foreach my $key (keys %{$conf})
     {
@@ -140,6 +145,9 @@ sub SaveConfig
     }
 
     close OUT;
+    
+    # Store temporary configuration file
+    rename "$config_file.TMP", $config_file or die "Failed to write to $config_file";  
 }
 
 =item Configure
@@ -172,24 +180,30 @@ sub Configure
     
     my $nextstage = 'start';
     
-    # Clear the configuration file.
-    open OUT, "> $conffile" or die "Failed to write to $conffile";
+    # Test if configuration file is writeable
+    if (-f $conffile && !(-w $conffile)) { die "Cannot write to $conffile"; }
+ 
+    # Create temporary configuration file.
+    open OUT, "> $conffile.TMP" or die "Failed to write to $conffile.TMP";
     close OUT;
     
     do
     {
-	my $stage = &$stagesub( $nextstage, LoadConfig( $conffile ) );
+	my $stage = &$stagesub( $nextstage, LoadConfig( "$conffile.TMP" ) );
 	$nextstage = configure_stage( $stage, $conffile, $lang );
     } while ($nextstage ne "select-channels" );
 
     # No more nextstage. Let the user select channels. Do not present
     # channel selection if the configuration is using lineups where
     # channels are determined automatically
-    my $conf = LoadConfig( $conffile );
+    my $conf = LoadConfig( "$conffile.TMP" );
     if (! exists $conf->{lineup}) {
         my $channels = &$listsub( $conf, $opt );
         select_channels( $channels, $conffile, $lang );
     }
+    
+    # Store temporary configuration file
+    rename "$conffile.TMP", $conffile or die "Failed to write to $conffile";
 }
 
 sub configure_stage
@@ -198,8 +212,8 @@ sub configure_stage
 
     my $nextstage = undef;
 
-    open OUT, ">> $conffile" 
-	or die "Failed to open $conffile for writing";
+    open OUT, ">> $conffile.TMP" 
+	or die "Failed to open $conffile.TMP for writing";
 
     my $xml = XML::LibXML->new;
     my $doc = $xml->parse_string($stage);
@@ -295,8 +309,8 @@ sub select_channels
 {
     my( $channels,  $conffile, $lang ) = @_;
 
-    open OUT, ">> $conffile" 
-	or die "Failed to open $conffile for writing";
+    open OUT, ">> $conffile.TMP" 
+	or die "Failed to open $conffile.TMP for writing";
 
     my $xml = XML::LibXML->new;
     my $doc;
