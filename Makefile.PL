@@ -950,6 +950,20 @@ my @opt_components
        },
      },
 
+     { name => 'tv_grab_tr',
+       blurb => 'Grabber for Turkey (Digiturk)',
+       exes => [ 'grab/tr/tv_grab_tr' ],
+       prereqs => { 'HTTP::Cache::Transparent' => 1.0,
+                    'LWP::UserAgent'  => 0,
+                    'HTTP::Cookies'   => 0,
+                    'DateTime'        => 0,
+                    'Date::Parse'     => 0,
+                    'Encode'          => 0,
+                    'URI::Escape'     => 0,
+                    'File::Path'      => 0,
+                  },
+     },
+
     );
 
 # Now we need to prompt about each optional component.  The style of
