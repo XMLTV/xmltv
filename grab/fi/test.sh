@@ -97,22 +97,22 @@ diff t_fi_1_2.sorted.xml t_fi_1_2-2.sorted.xml > t_fi__1_2.diff
 check_log t_fi__1_2.diff
 
 #
-# Modified test run with 9 days and modified test.conf
+# Modified test run with 7 days and modified test.conf
 #
 perl -pe 's/^#channel\s+/channel /' <${script_dir}/test.conf >${test_dir}/test.conf
-perl -I ${xmltv_lib} ${script_file} --config-file ${test_dir}/test.conf --offset 1 --days 9 --cache  t_fi_cache  >t_fi_full_10.xml --quiet 2>t_fi_full.log
-validate_xml t_fi_full_10.xml
-for d in $(seq 1 9); do
+perl -I ${xmltv_lib} ${script_file} --config-file ${test_dir}/test.conf --offset 1 --days 7 --cache  t_fi_cache  >t_fi_full_7.xml --quiet 2>t_fi_full.log
+validate_xml t_fi_full_7.xml
+for d in $(seq 1 7); do
     perl -I ${xmltv_lib} ${script_file} --config-file ${test_dir}/test.conf --offset $d --days 1 --cache  t_fi_cache  >t_fi_single_$d.xml --quiet 2>>t_fi_single.log
 done
-${xmltv_script}/tv_cat t_fi_full_10.xml --output /dev/null 2>t_fi_output.log
-${xmltv_script}/tv_sort --duplicate-error t_fi_full_10.xml --output t_fi_full_10.sorted.xml 2>>t_fi_output.log
+${xmltv_script}/tv_cat t_fi_full_7.xml --output /dev/null 2>t_fi_output.log
+${xmltv_script}/tv_sort --duplicate-error t_fi_full_7.xml --output t_fi_full_7.sorted.xml 2>>t_fi_output.log
 check_log t_fi_output.log
-${xmltv_script}/tv_cat t_fi_single_*.xml --output t_fi_full_10-2.xml 2>t_fi_output-2.log
-${xmltv_script}/tv_sort --duplicate-error t_fi_full_10-2.xml --output t_fi_full_10-2.sorted.xml 2>>t_fi_output-2.log
+${xmltv_script}/tv_cat t_fi_single_*.xml --output t_fi_full_7-2.xml 2>t_fi_output-2.log
+${xmltv_script}/tv_sort --duplicate-error t_fi_full_7-2.xml --output t_fi_full_7-2.sorted.xml 2>>t_fi_output-2.log
 check_log t_fi_output-2.log
-diff t_fi_full_10.sorted.xml t_fi_full_10-2.sorted.xml >t_fi__10.diff
-check_log t_fi__10.diff
+diff t_fi_full_7.sorted.xml t_fi_full_7-2.sorted.xml >t_fi__7.diff
+check_log t_fi__7.diff
 
 #
 # All tests done

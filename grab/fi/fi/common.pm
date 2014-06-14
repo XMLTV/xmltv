@@ -94,10 +94,11 @@ sub fetchRaw($;$$) {
 }
 
 # Fetch URL as parsed HTML::TreeBuilder
-sub fetchTree($;$$) {
-  my($url, $encoding, $nofail) = @_;
+sub fetchTree($;$$$) {
+  my($url, $encoding, $nofail, $unknown) = @_;
   my $content = fetchRaw($url, $encoding, $nofail);
   my $tree = HTML::TreeBuilder->new();
+  $tree->ignore_unknown(!$unknown);
   local $SIG{__WARN__} = sub { carp("fetchTree(): $_[0]") };
   $tree->parse($content) or croak("fetchTree() parse failure for '$url'");
   $tree->eof;

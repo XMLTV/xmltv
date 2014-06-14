@@ -136,9 +136,7 @@ sub grab {
   $group   =~ s/-/_/g;
 
   # Fetch & parse HTML
-  my $root = fetchTree("http://tv.hs.fi/home/grid?group=${group}&date=" .
-		       sprintf("%04d-%02d-%02d",
-			       $today->year(), $today->month(), $today->day()));
+  my $root = fetchTree("http://tv.hs.fi/home/grid?group=${group}&date=" . $today->ymdd());
   if ($root) {
     my @objects;
 

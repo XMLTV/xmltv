@@ -27,6 +27,7 @@ sub _new {
 	      month => $month,
 	      year  => $year,
 	      ymd   => sprintf("%04d%02d%02d", $year, $month, $day),
+	      ymdd  => sprintf("%04d-%02d-%02d", $year, $month, $day),
 	      dmy   => sprintf("%02d.%02d.%04d", $day, $month, $year),
 	     };
 
@@ -39,6 +40,7 @@ sub dmy   { $_[0]->{dmy}   };
 sub month { $_[0]->{month} };
 sub year  { $_[0]->{year}  };
 sub ymd   { $_[0]->{ymd}   };
+sub ymdd  { $_[0]->{ymdd}  };
 
 # class methods
 sub generate {
