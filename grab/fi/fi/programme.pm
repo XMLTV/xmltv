@@ -110,12 +110,12 @@ sub _epoch_to_xmltv_time($) {
 
   # Unfortunately strftime()'s %z is not portable...
   #
-  # return(strftime("%Y%m%d%H%M00 %z", localtime($time));
+  # return(strftime("%Y%m%d%H%M%S %z", localtime($time));
   #
   # ...so we have to roll our own:
   #
   my @time = localtime($time); #               is_dst
-  return(strftime("%Y%m%d%H%M00 +0", @time) . ($time[8] ? "3": "2") . "00");
+  return(strftime("%Y%m%d%H%M%S +0", @time) . ($time[8] ? "3": "2") . "00");
 }
 
 # Configuration data

@@ -100,6 +100,7 @@ sub grab {
     #            <div class="program-title">
     #              ...
     #              <a class="link-grey" href="...">Suunnistuksen Jukolan viesti</a>
+    #              <span class="label movie">Elokuva</span>
     #              ...
     #            </div>
     #          </div>
@@ -124,30 +125,40 @@ sub grab {
 	    foreach my $programme (@programmes) {
 	      my $start = $programme->look_down("class", "dtstart");
 	      my $end   = $programme->look_down("class", "dtend");
-	      my $title = $programme->look_down("class", "program-title");
+	      my $title  = $programme->look_down("class", "program-title");
 	      my $desc  = $programme->look_down("class", "program-desc");
 
 	      if ($start && $end && $title && $desc) {
 		$start = $date->parse($start->attr("datetime")) ? undef : $date->secs_since_1970_GMT();
 		$end   = $date->parse($end->attr("datetime"))   ? undef : $date->secs_since_1970_GMT();
-		$title = $title->as_text();
-		$desc  = $desc->find("p");
 
-		$title =~ s/^\s+//;
-		$title =~ s/\s+$//;
+		my $link     = $title->find("a");
+		my $category = $title->look_down("class" => "label movie") ? "elokuvat" : undef;
 
-		if ($start && $end && length($title)) {
-		  $desc  = $desc ? $desc->as_text() : "";
-		  $desc  =~ s/^\s+//;
-		  $desc  =~ s/\s+$//;
+		# NOTE: entries with same start and end time are invalid
+		if ($start && $end && $link && ($start != $end)) {
 
-		  debug(3, "List entry $channel ($start -> $end) $title");
-		  debug(4, $desc) if $desc;
+		  $title = $link->as_text();
+		  $title =~ s/^\s+//;
+		  $title =~ s/\s+$//;
 
-		  # Create program object
-		  my $object = fi::programme->new($id, $code, $title, $start, $end);
-		  $object->description($desc);
-		  push(@objects, $object);
+		  if (length($title)) {
+
+		    $desc = $desc->find("p");
+		    $desc = $desc ? $desc->as_text() : "";
+		    $desc =~ s/^\s+//;
+		    $desc =~ s/\s+$//;
+
+		    debug(3, "List entry $channel ($start -> $end) $title");
+		    debug(4, $desc);
+		    debug(4, $category) if defined $category;
+
+		    # Create program object
+		    my $object = fi::programme->new($id, $code, $title, $start, $end);
+		    $object->category($category);
+		    $object->description($desc);
+		    push(@objects, $object);
+		  }
 		}
 	      }
 	    }
