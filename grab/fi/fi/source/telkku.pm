@@ -95,36 +95,32 @@ sub channels {
     # In order to reduce website traffic, we only try this once
     $ids{__DUMMY_ID_THAT_NEVER_MATCHES__}++;
 
-    # Fetch & parse HTML
+    # Fetch & parse HTML (do not ignore HTML5 <section>)
     # This is entirely optional, so please don't abort on failure...
-    my $root = fetchTree("http://www.telkku.com/movie", undef, 1);
+    my $root = fetchTree("http://www.telkku.com/movie", undef, 1, 1);
     if ($root) {
       my $test;
 
       #
       # Document structure for movie entries:
       #
-      # <div id="movieItems">
-      #   ...
-      #   <div class="movieItem">
-      #     <span class="heading">
-      #       <a href="http://www.telkku.fi/program/show/2011100211009">Aikuinen nainen</a>
-      #     </span>
-      #     ...
-      #   </div>
-      #   ...
-      # </div>
+      #  <li class="l-embed theme-hr program">
+      #    ...
+      #    <section class="l-embed__bd program__content">
+      #      <a href="http://www.telkku.com/program/show/2014061910151">
+      #        ...
+      #      </a>
+      #    </section>
+      #  </li>
       #
-      if (my @list = $root->look_down("class" => "movieItem")) {
+      if (my @list = $root->look_down("class" => qr/program__content/)) {
 	debug(2, "Source telkku.com found " . scalar(@list) . " movies");
 	foreach my $list_entry (@list) {
-	  if (my $heading = $list_entry->look_down("class" => "heading")) {
-	    if (my $link = $heading->find("a")) {
-	      my $href = $link->attr("href");
-	      if (defined($href) && length($href)) {
-		debug(3, "movie ID: " . $href);
+	  if (my $link = $list_entry->find("a")) {
+	    my $href = $link->attr("href");
+	    if (defined($href) && length($href)) {
+	      debug(3, "movie ID: " . $href);
 		$ids{$href}++;
-	      }
 	    }
 	  }
 	}
