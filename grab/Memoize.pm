@@ -74,8 +74,9 @@ sub check_argv( @ ) {
     require POSIX;
     require Memoize;
     require DB_File;
-    my @tie_args = ('DB_File', $filename,
-		    POSIX::O_RDWR() | POSIX::O_CREAT(), 0666);
+    # Annoyingly tie(%cache, @tie_args) doesn't work
+    #my @tie_args = ('DB_File', $filename,
+    #		    POSIX::O_RDWR() | POSIX::O_CREAT(), 0666);
 
     # $from_caller is a sub which converts a function name into one
     # seen from the caller's namespace.  Namespaces do not nest, so if
@@ -98,7 +99,15 @@ sub check_argv( @ ) {
     foreach (@_) {
 	my $r = Memoize::memoize($from_caller->($_),
 				 SCALAR_CACHE => [ HASH => \%cache ],
-				 LIST_CACHE => 'MERGE');
+				 #
+				 # There seems to be a regression in latest Perl
+				 # or Memoize that causes 'MERGE' to break tied
+				 # variables. As no user of this module calls
+				 # memoized functions in list context, we can
+				 # simply replace it with 'FAULT'.
+				 #
+				 #LIST_CACHE => 'MERGE');
+				 LIST_CACHE => 'FAULT');
 	die "could not memoize $_" if not $r;
 	push @r, $r;
     }
