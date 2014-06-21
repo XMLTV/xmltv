@@ -113,6 +113,7 @@ sub channels {
       #    </section>
       #  </li>
       #
+      debug(2, "Source telkku.com provided movie data");
       if (my @list = $root->look_down("class" => qr/program__content/)) {
 	debug(2, "Source telkku.com found " . scalar(@list) . " movies");
 	foreach my $list_entry (@list) {

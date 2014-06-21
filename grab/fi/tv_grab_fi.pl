@@ -17,6 +17,7 @@ package main;
 
 # Perl core modules
 use Getopt::Long;
+use List::Util qw(shuffle);
 use Pod::Usage;
 
 # CUT CODE START
@@ -88,6 +89,7 @@ if (GetOptions(\%Option,
 	       "gui:s",
 	       "help|h|?",
 	       "list-channels",
+	       "no-randomize",
 	       "offset=i",
 	       "output=s",
 	       "quiet",
@@ -346,34 +348,49 @@ sub doGrab() {
   # Create XMLTV writer
   my $writer = _createXMLTVWriter();
 
-  # For each channel and each day
+  # Generate task list with one task per channel and day
+  my @tasklist;
+  foreach my $id (sort keys %channels) {
+    for (my $i = 1; $i < $#{ $dates }; $i++) {
+      push(@tasklist, [$id,
+		       @{ $dates }[$i - 1..$i + 1],
+		       $Option{offset} + $i - 1]);
+    }
+  }
+
+  # Randomize the task list in order to create a random access pattern
+  # NOTE: if you use only one source, then this is basically a no-op
+  if (not $Option{'no-randomize'}) {
+    debug(1, "Randomizing task list");
+    @tasklist = shuffle(@tasklist);
+  }
+
+  # For each entry in the task list
   my %seen;
   my @programmes;
-  _createProgressBar("getting listings", keys(%channels) * (@{ $dates } - 2));
-  foreach my $id (sort keys %channels) {
-    debug(1, "XMLTV channel ID: $id");
-    for (my $i = 1; $i < $#{ $dates }; $i++) {
-      debug(1, "Fetching day $dates->[$i]");
-      foreach my $source (@sources) {
-	if (my $programmes = $source->grab($id,
-					   @{ $dates }[$i - 1..$i + 1],
-					   $Option{offset} + $i - 1)) {
+  _createProgressBar("getting listings", @tasklist);
+  foreach my $task (@tasklist) {
+    my($id, $yesterday, $today, $tomorrow, $offset) = @{$task};
+    debug(1, "XMLTV channel ID '$id' fetching day $today");
+    foreach my $source (@sources) {
+      if (my $programmes = $source->grab($id,
+					 $yesterday, $today, $tomorrow,
+					 $offset)) {
 
-	  if (@{ $programmes }) {
-	    # Add channel ID & name (once)
-	    _addChannel($writer, $id, $channels{$id},
-			$programmes->[0]->language())
-	      unless $seen{$id}++;
+	if (@{ $programmes }) {
+	  # Add channel ID & name (once)
+	  _addChannel($writer, $id, $channels{$id},
+		      $programmes->[0]->language())
+	    unless $seen{$id}++;
 
-	    # Add programmes to list
-	    push(@programmes, @{ $programmes });
-	  } elsif ($Option{'test-mode'}) {
-	    die "test failure: source '" . $source->description . "' didn't retrieve any programmes for '$id'!\n";
-	  }
+	  # Add programmes to list
+	  push(@programmes, @{ $programmes });
+	} elsif ($Option{'test-mode'}) {
+	  die "test failure: source '" . $source->description . "' didn't retrieve any programmes for '$id'!\n";
 	}
       }
-      _updateProgressBar();
     }
+    _updateProgressBar();
   }
   _destroyProgressBar();
 
@@ -403,6 +420,7 @@ tv_grab_fi [--cache E<lt>FILEE<gt>]
            [--config-file E<lt>FILEE<gt>]
            [--days E<lt>NE<gt>]
            [--gui [E<lt>OPTIONE<gt>]]
+           [--no-randomize]
            [--offset E<lt>NE<gt>]
            [--output E<lt>FILEE<gt>]
            [--quiet]
@@ -536,6 +554,14 @@ Grab C<N> days of TV data.
 
 Default is 14 days.
 
+=item B<--no-randomize>
+
+Grab TV data in deterministic order, i.e. first fetch channel 1, days 1 to N,
+then channel 2, and so on.
+
+Default is to use a random access pattern. If you only grab TV data from one
+source then the randomizing is a no-op.
+
 =item B<--offset C<N>>
 
 Grab TV data starting at C<N> days in the future.
@@ -602,7 +628,7 @@ L<xmltv>.
 
 =over
 
-=item Stefan Becker C<stefan dot becker at nokia dot com>
+=item Stefan Becker C<chemobejk at gmail dot com>
 
 =item Ville Ahonen C<ville dot ahonen at iki dot fi>
 

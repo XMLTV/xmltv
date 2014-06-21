@@ -42,6 +42,9 @@ for arg in $*; do
 	merge)
 	    merge_script=1
             ;;
+	norandomize)
+	    debug="$debug --no-randomize"
+	    ;;
 	reuse)
 	    preserve_directory=1
 	    ;;
