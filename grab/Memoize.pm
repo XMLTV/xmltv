@@ -100,11 +100,15 @@ sub check_argv( @ ) {
 	my $r = Memoize::memoize($from_caller->($_),
 				 SCALAR_CACHE => [ HASH => \%cache ],
 				 #
-				 # There seems to be a regression in latest Perl
-				 # or Memoize that causes 'MERGE' to break tied
-				 # variables. As no user of this module calls
-				 # memoized functions in list context, we can
-				 # simply replace it with 'FAULT'.
+				 # Memoize 1.03 broke tied SCALAR_CACHE with
+				 # together with LIST_CACHE => 'MERGE'. See
+				 # bug report on CPAN:
+				 #
+				 #  https://rt.cpan.org/Public/Bug/Display.html?id=91927
+				 #
+				 # As no user of this module calls memoized
+				 # functions in list context, we can simply
+				 # replace it with 'FAULT'.
 				 #
 				 #LIST_CACHE => 'MERGE');
 				 LIST_CACHE => 'FAULT');
