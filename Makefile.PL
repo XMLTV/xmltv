@@ -179,6 +179,7 @@ my %prereqs
      'Memoize'     => 0,
      'Storable'    => 2.04,
      'File::Slurp' => 0,
+	 'XML::TreePP' => 0,
     );
 
 # Files which are run to generate source code.
@@ -860,6 +861,7 @@ my @opt_components
                     'HTML::Entities'    => 1.27,
                     'HTTP::Cache::Transparent' => 0,
                     'DateTime'          => 0,
+					'Unicode::UTF8simple' => 0,
                     'Encode'            => 0,} 
      },
 

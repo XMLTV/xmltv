@@ -16,34 +16,21 @@ use File::Spec;
 #
 print '-nologo
 -force
--add="XMLTV::Ask::Term;XMLTV::Ask::Tk"
--add="XMLTV::ProgressBar::Term;XMLTV::ProgressBar::Tk;XMLTV::ProgressBar::None;"
--add="XMLTV::GUI"
--add="Class::MethodMaker::scalar"
--add "DateTime::Locale::en_US"
--add "DateTime::TimeZone::Asia::Jerusalem"
--add "DateTime::TimeZone::Asia::Kolkata"
--add "DateTime::TimeZone::America::New_York"
--add "DateTime::TimeZone::America::Chicago"
--add "DateTime::TimeZone::America::Denver"
--add "DateTime::TimeZone::America::Los_Angeles"
--add "DateTime::TimeZone::Europe::Amsterdam"
--add "DateTime::TimeZone::Europe::Berlin"
--add "DateTime::TimeZone::Europe::Copenhagen"
--add "DateTime::TimeZone::Europe::Helsinki"
--add "DateTime::TimeZone::Europe::London"
--add "DateTime::TimeZone::Europe::Lisbon"
--add "DateTime::TimeZone::Europe::Madrid"
--add "DateTime::TimeZone::Europe::Paris"
--add "DateTime::TimeZone::Europe::Rome"
--add "DateTime::TimeZone::Europe::Vienna"
--add "DateTime::TimeZone::Europe::Zurich"
--add="Tk::ProgressBar"
--trim="Net::FTP::A"
--trim="Apache::Const;Apache::RequestIO;DIME::Payload;MIME::Entity;Apache::RequestRec;DIME::Message;I18N::Langinfo"
--trim="Apache2::RequestUtil;APR::Table;Apache2::Const;Apache2::RequestRec;Apache2::RequestIO"
--trim="File::BSDGlob;HTTP::Lite;Tie::IxHash;Jcode"
--trim=DateTime::Format
+-add=XMLTV::
+-add=Date::Manip::
+-add DateTime::
+-add Params::Validate::**
+-bind=libexpat-1_.dll[file=C:\strawberry\c\bin\libexpat-1_.dll,extract]
+-bind=libxml2-2_.dll[file=C:\strawberry\c\bin\libxml2-2_.dll,extract]
+-bind=libiconv-2_.dll[file=C:\strawberry\c\bin\libiconv-2_.dll,extract]
+-bind=liblzma-5_.dll[file=C:\strawberry\c\bin\liblzma-5_.dll,extract]
+-bind=zlib1_.dll[file=C:\strawberry\c\bin\zlib1_.dll,extract]
+-trim=Class::MethodMaker::Scalar
+-trim=Class::MethodMaker::Engine
+-trim=JSON::PP58
+-trim=Test::Builder::IO::Scalar;
+-trim=Win32::Console
+-bind=libgcc_x86_470.dll[file=C:\strawberry\perl\bin\libgcc_x86_470.dll,extract]
 -info CompanyName="XMLTV Project http://www.xmltv.org"
 -info FileDescription="EXE bundle of XMLTV tools to manage TV Listings"
 -info InternalName=xmltv.exe
