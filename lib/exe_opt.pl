@@ -20,6 +20,7 @@ print '-nologo
 -add=Date::Manip::
 -add DateTime::
 -add Params::Validate::**
+-add Date::Language::
 -bind=libexpat-1_.dll[file=C:\strawberry\c\bin\libexpat-1_.dll,extract]
 -bind=libxml2-2_.dll[file=C:\strawberry\c\bin\libxml2-2_.dll,extract]
 -bind=libiconv-2_.dll[file=C:\strawberry\c\bin\libiconv-2_.dll,extract]
