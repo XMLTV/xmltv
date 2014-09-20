@@ -38,6 +38,7 @@ print '-nologo
 -info OriginalFilename=xmltv.exe
 -info ProductName=xmltv
 -info LegalCopyright="GNU General Public License http://www.gnu.org/licenses/gpl.txt"
+-icon xmltv_logo.ico
 ';
 
 #
