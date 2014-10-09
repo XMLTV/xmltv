@@ -50,21 +50,23 @@ Currently configured backends are (in default order):
 
 =over
 
+=item B<mediaset>  - grabs data from www.mediaset.it
+
 =item B<skylife>  - grabs data from www.skylife.it
-
-=item B<mtvit>    - grabs data from www.mtv.it
-
-=item B<boingtv>  - grabs data from www.boingtv.it
-
-=item B<sitcom1>  - grabs data from www.sitcom1.it
-
-=item B<raisat>   - grabs data from www.risat.it
 
 =item B<raiit>    - grabs data from www.rai.it
 
-=item B<iris>     - grabs data from www.iris.it
+=item B<mediaset_guidatv>  - grabs data from www.mediaset.it/guidatv
 
 =item B<mediasetpremium>  - grabs data from www.mediasetpremium.it
+
+=item B<iris>     - grabs data from www.iris.it
+
+=item B<boingtv>  - grabs data from www.boingtv.it
+
+=item B<mtvit>    - grabs data from www.mtv.it
+
+=item B<la7>    - grabs data from www.la7.it
 
 
 =back

@@ -150,7 +150,7 @@ my $MAX_DAYS=7;
 my $LANG="it";
 my $date_today = UnixDate("today", '%Y-%m-%d');
 
-my @default_backends = ('mediaset', 'skylife', 'raiit', 'mediasetpremium', 'iris', 'boingtv', 'mtvit', 'la7');
+my @default_backends = ('mediaset', 'skylife', 'raiit', 'mediaset_guidatv', 'mediasetpremium', 'iris', 'boingtv', 'mtvit', 'la7');
 
 
 my %channels; #to store display names
@@ -283,6 +283,16 @@ my %backend_info
        channel_list_sub => \&mediaset_get_channels_list,
      },
 
+     'mediaset_guidatv' =>
+     { domain => 'mediaset_guidatv.it',
+       base_chan => 'http://www.mediaset.it/guidatv/palinsesto.xml',
+       base_data => 'http://www.mediaset.it/guidatv/palinsesto.xml',
+       rturl => "http://www.mediaset.it/guidatv/palinsesto.xml",
+       needs_login => 0,
+       needs_cookies => 0,
+       fetch_data_sub =>   \&mediaset_guidatv_fetch_data,
+       channel_list_sub => \&mediaset_guidatv_get_channels_list,
+     },
 
     );
 
@@ -3025,3 +3035,295 @@ sub mediaset_fetch_data {
         return (1, @programmes);
     }
 }
+
+###############################
+# mediaset_guidatv  functions #
+###############################
+
+####################################################
+# mediaset_guidatv_get_channels_list
+sub mediaset_guidatv_get_channels_list {
+
+    ###############################################
+    # l'unico url che ho trovato che contiene l'elenco di tutti i canali e' 
+    # http://www.mediaset.it/guidatv/palinsesto.xml
+    # pero' e' un file di circa 2.5 mega, visto che questa funzione viene chiamata ad ogni
+    # esecuzione del grabber preferisco fare anche qui una finta funzione che mi
+    # ritorna un valore fisso
+    #
+    ## [honir] Don't like hard-coding variable data like this, so commented out
+    ##    
+    if (0) {
+    
+    my %chan_hash;
+
+    %chan_hash = ("BBC Knowledge", "EB",
+                  "Boing", "KB",
+                  "Canale 5", "C5",
+                  "Cartoonito", "LA",
+                  "Cartoon Network", "KN",
+                  "Discovery World", "ED",
+                  "Disney", "DY",
+                  "Disney Junior", "KP",
+                  "Eurosport 2", "EF",
+                  "Eurosport", "EE",
+                  "Fox Sports", "0F",
+                  "Fox Sports Plus", "0P",
+                  "Iris", "KI",
+                  "Italia 1", "I1",
+                  "Joi", "KJ",
+                  "La5", "KA",
+                  "Mediaset Extra", "KQ",
+                  "Mediaset Italia 2", "I2",
+                  "Mya", "KD",
+                  "Premium Action", "KS",
+                  "Premium Calcio", "KC",
+                  "Premium Cinema", "KE",
+                  "Premium Cinema Comedy", "LC",
+                  "Premium Cinema Emotion", "KO",
+                  "Premium Cinema Energy", "KG",
+                  "Premium Crime", "LR",
+                  "Retequattro", "R4",
+                  "Studio Universal", "KR",
+                  "TgCom24", "TG24",
+                  "Top Crime", "LT"
+      );
+
+    foreach (keys %chan_hash) {
+        my $xmltv_id = xmltv_chanid('mediaset_guidatv', $_);
+#  warn $_."chan_hash-------------------";
+#  warn $xmltv_id."xmltv_id-------------------";
+        $backend_info{mediaset_guidatv}{site_ids}{$xmltv_id}{site_id} = $_;
+        }
+    return %chan_hash;
+    
+    }
+    ################################################ fine fake sub
+    
+    
+    my %chan_hash;
+    
+    my $url = $backend_info{mediaset_guidatv}{base_chan};
+    warn ($DEF_LANG eq 'eng' ?
+                      "VERBOSE: Getting channel list from $url\n" :
+                      "VERBOSE: Scarico la lista dei canali da $url\n") if ($opt_verbose);
+ 
+    my $content;
+    eval { $content = get_nice($url); };
+      if ($@) {   #get_nice has died
+          warn ($DEF_LANG eq 'eng' ? 
+                        "VERBOSE: Cannot get mediaset_guidatv's channel list ($url). Site \\n" : 
+                        "VERBOSE: Non sono riuscito a prendere la lista dei canali di mediaset_guidatv ($url). Il sito non funziona?\n") unless ($opt_quiet);
+          return ();
+      }
+
+    #split and parse
+    my @events = split /<evento/, $content;
+    foreach my $e (@events) {
+      my ($c) = ( $e =~ /<channel>(.*?)<\/channel>/ );
+      my ($n) = ( $e =~ /<channelDescription>(.*?)<\/channelDescription>/ );
+      ($n) = ( $n =~ /<!\[CDATA\[(.*)\]\]>/ ) if defined $n;
+      
+      next if (not defined $n);
+      my $name = tidy($n);
+      next if defined $chan_hash{$name};
+      
+      $chan_hash{$name} = "$c";
+      
+      #update backend info, in case this is a new channel not in channel_ids
+      my $xmltv_id = xmltv_chanid('mediaset_guidatv', $name);
+      $backend_info{mediaset_guidatv}{site_ids}{$xmltv_id}{site_id} = $name;
+      $backend_info{mediaset_guidatv}{site_ids}{$xmltv_id}{chanid} = $chan_hash{$name};                
+   }
+
+  return %chan_hash;
+}
+
+
+####################################################
+# mediaset_guidatv_fetch_data
+# 2 parameters: xmltv_id of channel 
+#               day offset
+# returns an error or an array of data
+
+sub mediaset_guidatv_fetch_data {
+    my ($xmltv_id, $offset) = @_;
+    my $content;
+
+    my $site_id = $backend_info{mediaset_guidatv}{site_ids}{$xmltv_id}{site_id};
+#	warn $site_id."site_id-----------------\n";
+    if (not defined $site_id) {
+        warn ($DEF_LANG eq 'eng' ?
+                         "VERBOSE: \tThis site doesn't know about $xmltv_id!\n" :
+                         "VERBOSE: \tQuesto sito non sa niente di $xmltv_id!\n" ) if ($opt_verbose);
+        return (1, ());
+    }
+
+    my %chan = %{$backend_info{mediaset_guidatv}{channels}};
+    my $channel_name  = $backend_info{mediaset_guidatv}{site_ids}{$xmltv_id}{site_id};
+#	warn "test-".$channel_name."channel_name-----------------\n";
+    my $channel_num = $chan{$channel_name};
+#	warn $channel_num."channel_num-----------------\n";
+#	warn $chan{"Canale 5"}."channel_num Canale 5-----------------\n";
+#	warn $chan{"Retequattro"}."channel_num Rete 4-----------------\n";
+#	warn $chan{"Cartoonito"}."channel_num Cartoonito-----------------\n";
+    # build url to grab"
+
+    if (not defined $channel_num) {
+                # if we get here it means that the site should have the channel (it's in channel_ids)
+                # but for some reason we are missing it's site id (probably the site is down)
+                # we return an error so that another backend will by used, if possible
+        warn ($DEF_LANG eq 'eng' ?
+                          "VERBOSE: \tThis site appears to be down!\n" :
+                          "VERBOSE: \tQuesto sito non sembra funzionare!!\n") if ($opt_verbose);
+        return (1, ());
+        }
+
+    my $date_grab = &DateCalc("today","+ ".$offset." days");
+
+
+    die ($DEF_LANG eq 'eng' ? 'date calculation failed' : 'errore di calcolo di data') if not defined $date_grab;
+    $date_grab = UnixDate($date_grab, '%Y%m%d');
+    my $date_grab2 = UnixDate($date_grab, '%Y-%m-%d');
+#    warn $date_grab2;
+    my $url = $backend_info{mediaset_guidatv}{base_data};
+
+    #to trick memoize into not caching data with add a string to the url, based on time, with hourly resolution
+    #so if we redownload data within 5 minutes (we are within the same run) it comes from the cache
+    #but if we download it tomorrow it doesn't.
+    #this makes sense if you use the --cache option and you want to cache only the --slow data, to speed up things 
+    #when you grab data every two-three days, but you don't want to miss schedule changes
+    #this string is ignored by the server
+    if ($opt_cache_slow) {
+            my $cachestring = "?pippo=".UnixDate("today","%Y%m%d%H");
+                $url.=$cachestring;
+        }
+    warn ($DEF_LANG eq 'eng' ?
+                  "VERBOSE: fetching $url\n" :
+                  "VERBOSE: scarico $url\n") if ($opt_verbose);
+
+    eval { $content=get_nice($url) };
+    if ($@) {   #get_nice has died
+        warn ($DEF_LANG eq 'eng' ?
+                          "VERBOSE: Error fetching $url channel $xmltv_id day $offset backend mediaset_guidatv\n" :
+                          "VERBOSE: Errore nello scaricare $url, canale $xmltv_id, giorno $offset, fonte mediaset_guidatv\n") if ($opt_verbose);
+
+        # Indicate to the caller that we had problems
+        return (1, ());
+    }
+
+    my @programmes = ();
+    warn "VERBOSE: parsing...\n" if ($opt_verbose);
+
+    #split and parse
+    my @p = split /<programmazione/, $content;
+	foreach my $pr (@p) {
+		next unless $pr=~/$date_grab2/;#cerca la programmazione del giorno selezionato
+#		next if $pr=~/<data>/;
+#		next if $pr=~/<listaeventi>/;
+#               warn $pr."-----------------\n";
+#               warn $date_grab2."-----------------\n";
+#               warn "|$1|$2|$3|$4|$5|\n";
+		my @lines = split /<evento/, $pr;
+		my %programme = ();
+                my ($title, $time_start, $time_end, $guidatv_channel_num, $rerun, $first, $id, $anno, $nazione,
+                    $desc, $epnum, $subtitle, $category, $rating, $audio, $doppioaudio, $sottotitoli);
+		my $lastline;
+                foreach my $l(@lines) {
+			next unless $l=~/<channel>$channel_num<\/channel>/;
+#                        next if ($l=~/anno\/|paese\/|linkScheda|trafficLight\/|orafine|\!--sort|\!-- canale|\/durata|\/prg|\/canale|\/giorno|\/palinsesto/);
+#                        if ($l=~/<title><\!\[CDATA\[(.*?)\]\]<\/title>/){
+                        if ($l=~/<displayTitle><!\[CDATA\[(.*?)\]\]><\/displayTitle>/){
+                                $title=$1;
+#                                warn "titolo: $title\n";
+                        }
+			if ($l=~/<title><!\[CDATA\[(.*?)\]\]><\/title>/){
+                                $subtitle=$1;
+#                                warn "sottotitolo: $subtitle\n";
+                        }
+			if ($l=~/<startTime>(.*?)<\/startTime>/){
+                                $time_start=$1;
+#                                warn "time_start: $time_start\n";
+                        }
+                        if ($l=~/<endTime>(.*?)<\/endTime>/){
+                                $time_end=$1;
+#                                warn "time_end: $time_end\n";
+                        }
+			if ($l=~/<channel>(.*?)<\/channel>/){
+                                $guidatv_channel_num=$1;
+#                                warn "channel_num: $guidatv_channel_num\n";
+                        }
+			if ($l=~/<genere> ?(.*?)<\/genere>/){
+                                $category=$1;
+#                                warn "category: $category\n";
+                        }
+			else {
+#                                warn "linea sconosciuta !!$l!! \n";
+                        }
+                        $lastline = $l;
+
+		        $time_end=~s/:/\./; $time_start=~s/:/\./;
+        		my $next_day_end = 0; my $next_day_start = 0;
+	      		if ($time_end < 6) {
+        	            $next_day_end = 1;
+                  	}
+		        if ($time_start < 6) {
+                	    $next_day_start = 1;
+	                    $next_day_end = 1;
+        	        }
+		        $time_end=~s/\./:/; $time_start=~s/\./:/;
+                	$programme{stop}=xmltv_date($time_end, $offset + $next_day_end);
+
+
+	                # Three mandatory fields: title, start, channel.
+        	        if (not defined $title) {
+                	        warn ($DEF_LANG eq 'eng' ? 'no title found, skipping programme' : 'titolo non trovato, salto');
+                        	next;
+	                }
+        	                $programme{title}=[[tidy($title), $LANG] ];
+                	if (not defined $time_start) {
+                        	warn ($DEF_LANG eq 'eng' ? "no start time for title $title, skipping programme" : "nessun orario di inizio per $title, salto");
+	                        next;
+        	        }
+                	#$time_start=~s/://;
+	                $programme{start}=xmltv_date($time_start, $offset + $next_day_start);
+        	        if (not defined $xmltv_id) {
+                	        warn ($DEF_LANG eq 'eng' ? "no channel for programme $title at $time_start, skipping programme" : "canale non trovato per $title alle $time_start, salto");
+                        	next;
+	                }
+        	        $programme{channel}=$xmltv_id;
+                	$programme{title} = [[tidy($title), $LANG] ] if (defined $title);
+	                $programme{date}= $anno if (defined $anno);
+        	        $programme{premiere} = ['prima TV', $LANG ] if(defined $first and $first ne 'No');
+                	#non mi e' chiaro come funziona
+	                #$programme{audio}= ['stereo', tidy($audio)] if (defined $audio);
+        	        $programme{rating}=[[tidy($rating), $LANG ]] if (defined $rating);
+                	$programme{category}=[[tidy($category), $LANG ]] if (defined $category and $category ne '');
+
+	                #$programme{'sub-title'}=[[$subtitle, $LANG] ] if (defined $subtitle and $subtitle ne '');
+        	        #push@{$programme->{'episode-num'}}, [$strseason, 'onscreen'] if ($strseason);
+                	#push@{$programme->{'episode-num'}}, [(defined $season ? ($season-1) : '').".".(defined $episode ? ($episode-1) : '').".0/1", 'xmltv_ns'] if ($strseason);  
+
+	                push (@{$programme{country}}, [$nazione, $LANG]) if ($nazione and $nazione ne '--');
+        	        $programme{desc}=[[tidy($desc), $LANG ]] if (defined $desc and $desc ne '');
+
+                	#put info in array
+	                push @programmes, {%programme};
+
+
+        	        }
+                next unless $title;
+
+
+	}
+
+    if (scalar @programmes) {
+        return (0, @programmes);
+    }
+    else {
+        # there is a number of reasons why we could get an empty array.
+        # so we return an error 
+        return (1, @programmes);
+    }
+}
+
