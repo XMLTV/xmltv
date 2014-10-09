@@ -139,7 +139,7 @@ I'm sure this list is not complete. Let me know if you encounter additional prob
 
 use strict;
 use warnings;
-use LWP::Simple qw($ua getstore);
+use LWP::Simple qw($ua getstore is_success);
 use Archive::Zip;
 use File::Temp qw/ tempdir /;
 use XML::Twig;
@@ -281,7 +281,7 @@ my $start_stop_parser =
 
 # do all the work.
 prepareinclude($conf,$opt);
-our @xmlfiles = downloadepg($opt->{days},$opt->{offset},$pin);
+our @xmlfiles = downloadepg($opt->{days}, $opt->{offset}, $pin);
 exit 1 unless @xmlfiles;
 processxml(@xmlfiles);
 
@@ -308,10 +308,14 @@ sub downloadepg {
         # get file name from content-disposition header
         warn "url=$url\n" if $opt->{debug};
         my $response = $ua->request(GET $url);
-        if ($response->{'_headers'}{'x-epgdata-packageavailable'} == 1) {
-            my $filename  = sanitize($response->{'_headers'}{'content-disposition'});
-            $expiry_date  = $response->{'_headers'}{'x-epgdata-timeout'};
-            $channelgroup = sanitize($response->{'_headers'}{'x-epgdata-channelgroup'});
+        if (!$response->is_success) {
+            warn "Unable to retrieve data from URL $url: " . $response->message . ' (' . $response->code . ')';
+            return [];
+        }
+        if ($response->header('x-epgdata-packageavailable') eq '1') {
+            my $filename  = sanitize($response->header('content-disposition'));
+            $expiry_date  = $response->header('x-epgdata-timeout');
+            $channelgroup = sanitize($response->header('x-epgdata-channelgroup'));
             $filename     =~  s/^.*=//;
             ($country)    = ($filename =~ /[^_]*_[^_]*_([^_]*)_[^_]*/) unless $country; # format: xyz########_########_de_qy.zip
 
@@ -338,9 +342,10 @@ sub prepareinclude {
     my $pin = $conf->{pin}->[0];
     my $includeurl = "http://www.epgdata.com/index.php?action=sendInclude&iOEM=&pin=$pin&dataType=xml";
     warn "Downloading include zip file\n" unless $opt->{quiet};
-    getstore($includeurl, $tmp . 'includezip');
-    my @zipfiles=($tmp . 'includezip');
-    unzip(@zipfiles);
+    if (is_success(getstore($includeurl, $tmp . 'includezip'))) {
+        my @zipfiles=($tmp . 'includezip');
+        unzip(@zipfiles);
+    }
 }
 
 # returns list of *.xml files
@@ -607,7 +612,10 @@ sub list_channels {
     my ($conf, $opt) = @_;
     my $pin = $conf->{pin}->[0];
     # make sure we know $channelgroup
-    downloadepg('1','0',$pin);
+    downloadepg('1', '0', $pin);
+    if (!$channelgroup) {
+        return '';
+    }
     prepareinclude($conf, $opt);
     # borrowed from http://www.xmltwig.com/xmltwig/ex_fm1
     $channels->parsefile($tmp . 'channel_' . $channelgroup . '.xml');
