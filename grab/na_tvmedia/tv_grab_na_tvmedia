@@ -1,0 +1,229 @@
+#!/usr/bin/perl -w
+
+=pod
+
+=head1 NAME
+
+tv_grab_na_tvmedia - Grab TV listings for North America.
+
+=head1 SYNOPSIS
+
+tv_grab_na_tvmedia --help
+
+tv_grab_na_tvmedia --configure [--config-file FILE]
+
+tv_grab_na_tvmedia [--config-file FILE] [--root-url URL]
+                 [--days N] [--offset N]
+                 [--output FILE] [--quiet]
+
+tv_grab_na_tvmedia --list-channels [--config-file FILE]
+                 [--output FILE] [--quiet]
+                 
+                
+=head1 DESCRIPTION
+
+Outputs TV listings in XMLTV format for stations
+available in North America. Data is provided by TVMedia Inc.
+
+The grabber requires an _active_ subscription to XMLTVListings.com, as well as at least one lineup selected from your account page.
+Then you can run B<tv_grab_na_tvmedia --configure> to set your API key and which lineup you want to receive.
+
+Then running B<tv_grab_na_tvmedia> with no arguments will get listings for
+all the channels you in your lineup, as you configured on XMLTVListings.com
+
+=head1 OPTIONS
+
+B<--configure> Prompt for which stations to download and write the
+configuration file.
+
+B<--config-file FILE> Set the name of the configuration file, the
+default is B<~/.xmltv/tv_grab_na_tvmedia.conf>. This is the file written by
+B<--configure> and read when grabbing.
+
+B<--output FILE> When grabbing, write output to FILE rather than
+standard output.
+
+B<--days N> When grabbing, grab N days rather than 5.
+
+B<--offset N> Start grabbing at today + N days. Also supports negative offset for past listings.
+
+B<--quiet> Only print error-messages on STDERR.
+
+B<--debug> Provide more information on progress to stderr to help in
+debugging.
+
+B<--list-channels> Output a list of all channels that data is available
+                      for. The list is in xmltv-format.
+
+B<--capabilities> Show which capabilities the grabber supports. For more
+information, see L<http://wiki.xmltv.org/index.php/XmltvCapabilities>
+
+B<--version> Show the version of the grabber.
+
+B<--help> Print a help message and exit.
+
+=head1 ERROR HANDLING
+
+If the grabber fails to download data, it will print an
+errormessage to STDERR and then exit with a status code of 1 to indicate
+that the data is missing.
+
+=head1 CREDITS
+
+Grabber written by Matthew April on behalf of TVMedia.ca
+This documentation copied from tv_grab_cz,
+This code modified from tv_grab_cz, by Mattias Holmlund, mattias -at- holmlund -dot- se.
+
+=head1 BUGS
+
+None known.
+
+=cut
+
+use strict;
+use XMLTV::Configure::Writer;
+use XMLTV::Options qw/ParseOptions/;
+use XML::LibXML;
+use LWP::Simple;
+
+# config vars
+my $loginURL = "https://www.xmltvlistings.com/account/";
+my $webroot = "http://www.xmltvlistings.com/xmltv/";
+
+my( $opt, $conf ) = ParseOptions( {
+     grabber_name => "tv_grab_na_tvmedia",
+     capabilities => [qw/baseline manualconfig apiconfig/],
+     stage_sub => \&config_stage,
+     listchannels_sub => \&list_channels,
+     version => '$Id$',
+     description => "North America (XMLTVListings.com by TVMedia)",
+} );
+
+# make URL
+my $url = buildURL( 'get', $conf, $opt );
+
+# fetch data
+my $res = get( $url );
+
+# validate XML
+my $parser = new XML::LibXML;
+eval { $parser->parse_string( $res )->is_valid };
+
+if ($@) {
+	#XML invalid - assume error and print $res to STDERR
+	print STDERR "Invalid XML: $res \n";
+	exit 1;
+} else {
+	# XML Valid, print to STDOUT and let XMLTV::Options handle it
+	print $res;
+	exit 0;
+}
+
+sub config_stage
+{
+     my( $stage, $conf ) = @_;
+	 my $result;
+	 
+	 my $writer = new XMLTV::Configure::Writer( OUTPUT => \$result, encoding => 'iso-8859-1' );
+	 
+     if( $stage eq 'start' ) {
+		 $writer->start( { grabber => 'tv_grab_na_tvmedia' } );
+		 $writer->write_string( {
+			  id => 'apikey',
+			  title => [ [ 'API Key', 'en' ] ],
+			  description => [
+				[ "API Key found on your account dashboard page ($loginURL)", 'en' ] 
+			  ]
+		  } );
+		  
+		  $writer->end( 'two' );
+	  } elsif( $stage eq 'two' ) {
+		$writer->start( { grabber => 'tv_grab_na_tvmedia' } );
+		
+		my $parser = new XML::LibXML;
+		
+		# fetch XML lineup tree
+		my $raw = get( $webroot . 'get_lineups/' . $conf->{'apikey'}->[0] );
+		
+		if( !defined $raw ) {
+			die 'request failed';
+		}
+		
+		my $xmlTree = $parser->parse_string( $raw );
+		my $root = $xmlTree->getDocumentElement();
+		
+		# get each lineup element
+		my @kids = $root->childNodes();
+		my $size = @kids;
+		
+		if( $size == 0 ) {
+			die "You have no lineups associated with your API Key, or your key is invalid. Please login to ($loginURL) and select at least one lineup before continuing.";
+		}
+		
+		$writer->start_selectone( {
+			id => 'lineup',
+			title => [ [ 'Lineup', 'en' ] ],
+			description => [ [ "Choose one of your lineups. You can add or modify lineups from your account page ($loginURL)", 'en' ] ],
+		} );
+		
+		# create option for each lineup element
+		foreach my $child (@kids)
+		{
+			my $lineupName = $child -> textContent;
+			my $lineupId = $child -> getAttribute('id');
+			
+			$writer->write_option( {
+				value => $lineupId,
+				text=> => [ [ $lineupName, 'en' ] ]
+			} );
+		}
+		
+		$writer->end_selectone();
+		$writer->end( 'select-channels' );
+		
+		
+	  } else {
+		die "Unknown stage $stage";
+	  }
+	
+     return $result;
+}
+
+# Return a string containing an xml-document with <channel>-elements
+# for all available channels of selected lineup
+sub list_channels
+{
+	# $opt hold command line parameters, if any
+	my( $conf, $opt ) = @_;
+	
+	my $url = buildURL( 'get_channels', $conf, $opt );
+	
+	# fetch data
+	my $data = get( $url );
+	
+	# return XML string
+	return $data;
+}
+
+# build API URL for a given action
+sub buildURL
+{
+	
+	my( $action, $conf, $opt ) = @_;
+	
+	my $url = $webroot . "$action/" . $conf->{apikey}->[0] . "/" . $conf->{lineup}->[0];
+	
+	if( defined $opt->{days} ) {
+		# append days
+		$url .= "/" . $opt->{days};
+	}
+
+	if( defined $opt->{days} && defined $opt->{offset} ) {
+		# append offset
+		$url .= "/" . $opt->{offset};
+	}
+	
+	# return XML string
+	return $url;
+	
+}

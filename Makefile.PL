@@ -941,7 +941,7 @@ my @opt_components
 # rmeden 2011-06-12 not working
 # dekarl 2012-01-05 fixed by #3163183
      { name => 'tv_grab_na_dtv',
-       blurb => 'Grabber for DirecTV in North America',
+       blurb => 'Grabber for North America (DirecTV)',
        exes => [ 'grab/na_dtv/tv_grab_na_dtv' ],
        prereqs => {
          'DateTime'                  => 0,
@@ -965,7 +965,17 @@ my @opt_components
                     'File::Path'      => 0,
                   },
      },
+     
+# honir 2014-10-10 added new grabber from Matthew April <mapril@tvmedia.ca>
+     { name => 'tv_grab_na_tvmedia',
+       blurb => 'Grabber for North America (TVMedia)',
+       exes => [ 'grab/na_tvmedia/tv_grab_na_tvmedia' ],
+       prereqs => { 'XML::LibXML'  => 0,
+                    'LWP::Simple'  => 0,
+                  },
+     },
 
+     
     );
 
 # Now we need to prompt about each optional component.  The style of
