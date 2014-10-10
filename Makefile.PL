@@ -570,6 +570,14 @@ my @opt_components
        grab_need_share => [ 'na_dd' ],
      },
 
+     { name     => 'tv_grab_na_tvmedia',
+       blurb => '$$ Grabber for North America-tvmedia.ca',
+       exes     => [ 'grab/na_tvmedia/tv_grab_na_tvmedia' ],
+       prereqs => { 'encode' => 0,
+                    'LWP::Simple' => 0,
+				  },
+     },
+
 # 2013-02-02 disabled after site changes broke grabber (no <IMG> tags!)
 #     { name     => 'tv_grab_na_icons',
 #       blurb    => 'Grabber for North American Channel Icons',
