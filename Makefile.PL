@@ -472,18 +472,19 @@ my @opt_components
                     'Pod::Usage'      => 0, },
      },
 
-     { name => 'tv_grab_uk_guardian',
-       blurb => 'Grabber for UK and Ireland using The Guardian website',
-       exes => [ 'grab/uk_guardian/tv_grab_uk_guardian' ],
-       share_files => {
-            'grab/uk_guardian/tv_grab_uk_guardian.map.conf'
-                => 'tv_grab_uk_guardian/tv_grab_uk_guardian.map.conf',
-       },
-       prereqs => { 'HTTP::Cache::Transparent' => 1.0,
-                    'DateTime'        => 0,
-                    'File::Path'      => 0,
-                    'Encode'          => 0, },
-     },
+# [bilbo_uk] The Guardian have removed their online tv listings service @ 1/Oct/14
+#     { name => 'tv_grab_uk_guardian',
+#       blurb => 'Grabber for UK and Ireland using The Guardian website',
+#       exes => [ 'grab/uk_guardian/tv_grab_uk_guardian' ],
+#       share_files => {
+#            'grab/uk_guardian/tv_grab_uk_guardian.map.conf'
+#                => 'tv_grab_uk_guardian/tv_grab_uk_guardian.map.conf',
+#       },
+#       prereqs => { 'HTTP::Cache::Transparent' => 1.0,
+#                    'DateTime'        => 0,
+#                    'File::Path'      => 0,
+#                    'Encode'          => 0, },
+#     },
 
      { name => 'tv_grab_uk_tvguide',
        blurb => 'Grabber for UK and Ireland using TV Guide website',
@@ -966,7 +967,7 @@ my @opt_components
                   },
      },
      
-# honir 2014-10-10 added new grabber from Matthew April <mapril@tvmedia.ca>
+# bilbo_uk 2014-10-10 added new grabber from Matthew April <mapril@tvmedia.ca>
      { name => 'tv_grab_na_tvmedia',
        blurb => 'Grabber for North America (TVMedia)',
        exes => [ 'grab/na_tvmedia/tv_grab_na_tvmedia' ],
