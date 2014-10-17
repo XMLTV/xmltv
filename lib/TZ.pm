@@ -113,7 +113,7 @@ sub tz_to_num( $ ) {
     my $base = parse_date("$date_str UTC");
     t "parsed '$date_str UTC' as $base";
     my $d = parse_date("$date_str $tz");
-    t "parsed '$date_str $tz' as $base";
+    t "parsed '$date_str $tz' as $d";
     my $err;
     my $delta = DateCalc($d, $base, \$err);
     die "error code from DateCalc: $err" if defined $err;
