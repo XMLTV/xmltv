@@ -462,9 +462,11 @@ for (my $i = $opt_offset; $i < $opt_offset + $opt_days; $i++) {
 
 		# array slice returns 'undef' for values oustide the array
 		my @slice = @channels[$j..$j+$numtoprocess-1];
-		my @schedule = process_table( $i, \@slice );   # $i is the day number (0...) to fetch
-		foreach (@schedule) {
-			$writer->write_programme($_);
+		my $schedule = process_table( $i, \@slice );   # $i is the day number (0...) to fetch
+		foreach my $c ( keys %{$schedule} ) {
+			foreach my $t ( keys %{$schedule->{$c}} ) {
+				$writer->write_programme( $schedule->{$c}->{$t} );
+			}
 		}
 	}
 
@@ -507,6 +509,7 @@ sub process_table {
     my ($day, $chanstoprocess) = @_;
 		
     # Get the programme schedule for the selected channels for the param day
+		my %r;
 		
 		# First we need the container for the Location 
     #   https://buscador.cablevisionfibertel.com.ar/index.aspx?cl=136
@@ -536,11 +539,11 @@ sub process_table {
     #    <input type="hidden" name="ctl00$ContGral$daySelected" id="ContGral_daySelected" value="0" />
 		#    
 		$url = $urlRoot.'TVGridWS/TvGridWS.asmx/ReloadGrid';
-    my $clasDigId = $tree->look_down( '_tag' => 'input', 'id' => 'ContGral_digClasId' )->attr('value');
-    my $daySel = $tree->look_down( '_tag' => 'input', 'id' => 'ContGral_daySelected' )->attr('value');
-    my $digHd = $tree->look_down( '_tag' => 'input', 'id' => 'ContGral_digHd' )->attr('value') ne 'true' ? 1 : 2;
-		my $idsSignalText1 = $tree->look_down( '_tag' => 'input', 'id' => 'ContGral_idsChanels' )->attr('value');
-		my $sintoniaSignal = $tree->look_down( '_tag' => 'input', 'id' => 'ContGral_sintoniaChanels' )->attr('value');
+    my $clasDigId = $tree->look_down( '_tag' => 'input', 'id' => 'digClasId' )->attr('value');
+    my $daySel = $tree->look_down( '_tag' => 'input', 'id' => 'daySelected' )->attr('value');
+    my $digHd = $tree->look_down( '_tag' => 'input', 'id' => 'digHd' )->attr('value') ne 'true' ? 1 : 2;
+		my $idsSignalText1 = $tree->look_down( '_tag' => 'input', 'id' => 'idsChanels' )->attr('value');
+		my $sintoniaSignal = $tree->look_down( '_tag' => 'input', 'id' => 'sintoniaChanels' )->attr('value');
 
     #	   <input type="hidden" name="ctl00$ContGral$idsChanels" id="ContGral_idsChanels" 
  		#         value="772,192,477,96,175,35,36,6,292,40,229,18,223,84,153,978,136,226,76,2292,77,45,33,15,37,22,19,366,11,164,17,178,9,57" />
@@ -561,41 +564,47 @@ sub process_table {
 			$idsSignalText1_1 .= ($idsSignalText1_1 ne '' ? ',' : '') . $tvIdsHash{$_};
 		}
 		
-		my $vars = [ "daySel"=>$daySel, "clasDigId"=>$clasDigId, "signalsIdsReceived"=>$idsSignalText1_1.'|'.$sintoniaSignal_1, "digHd"=>$digHd, "hourSel"=>1, "sitio"=>"" ];
-		#use Data::Dumper; print STDERR Dumper($vars);
-    $page = fetch_url($url, 'post', $vars); 
-    die $page if $page =~ /^Status:/;  	 
-    #store_page($page);
+		# 2014-10-19 site now only returns a 4 hour window
+		for (my $i = 1; $i <= 7; $i++) {
 		
-		use XML::Parser;
-		my $xml = XML::Parser->new(Style => 'Tree')->parse($page);
-		my $html = $xml->[1]->[2];
-		#print Dumper($html);
-		my $res_tree = HTML::TreeBuilder->new_from_content($html);
-		#print Dumper($res_tree);
-		undef $xml; undef $html;
-		
-		
-    my @progs = $res_tree->look_down( '_tag' => 'div', 'class' => 'programa' );
-		die 'no programmes found' if !scalar @progs;
-		#print Dumper(@progs);
-		#print STDERR "\nprogs found ".scalar @progs."\n";
-		
-		my @r;
-		foreach my $cur (@progs) {
-      my $p = make_programme_hash($cur, \%webIdsHash, \%tvIdsHash);
-			next if (defined $p && $p eq 'false');
-			if (not $p) {
-					require Data::Dumper;
-					my $d = Data::Dumper::Dumper($cur);
-					warn "cannot write programme on day $day:\n$d\n";
-			}
+			my $vars = [ "daySel"=>$daySel, "clasDigId"=>$clasDigId, "signalsIdsReceived"=>$idsSignalText1_1.'|'.$sintoniaSignal_1, "digHd"=>$digHd, "hourSel"=>$i, "sitio"=>"" ];
+			#use Data::Dumper; print STDERR Dumper($vars);
+			$page = fetch_url($url, 'post', $vars); 
+			die $page if $page =~ /^Status:/;  	 
+			#store_page($page);
 			
-			else {
-					push @r, $p;
+			use XML::Parser;
+			my $xml = XML::Parser->new(Style => 'Tree')->parse($page);
+			my $html = $xml->[1]->[2];
+			#print Dumper($html);
+			my $res_tree = HTML::TreeBuilder->new_from_content($html);
+			#print Dumper($res_tree);
+			undef $xml; undef $html;
+			
+			
+			my @progs = $res_tree->look_down( '_tag' => 'div', 'class' => 'programa' );
+			die 'no programmes found' if !scalar @progs;
+			#print Dumper(@progs);
+			#print STDERR "\nprogs found ".scalar @progs."\n";
+			
+
+			foreach my $cur (@progs) {
+				my $p = make_programme_hash($cur, \%webIdsHash, \%tvIdsHash);
+				next if (defined $p && $p eq 'false');
+				if (not $p) {
+						require Data::Dumper;
+						my $d = Data::Dumper::Dumper($cur);
+						warn "cannot write programme on day $day:\n$d\n";
+				}
+				
+				else {
+						$r{ $p->{'channel'} }{ $p->{'start'} } = $p;		# prevent duplicates
+				}
 			}
+		
 		}
-		return @r;
+
+		return \%r;
 }
 
 # Hashes the program for future saving in XMLTV format
@@ -630,31 +639,95 @@ sub make_programme_hash {
 			#   </div>
 			# </div>
 		
+		  # As at 2014-10-19:
+			#	<div id="accordion33892" class="programa" style="width: 204px; left: 2652px; height: 50px; display: block; ">
+			#		<div id="programaInterno" class="programaInterno" style="display: none; "></div>
+			#		<div class="title" onmouseover="pintarCanal(292);" onmouseout="despintarCanal();" style="">
+			#			<span>Visión 7 - Mediodía</span><br>
+			#		</div>
+			#	</div>
+			#
+			# Programme details needs a separate ajax call ! (sheesh these JS programmers crack me up; just because you *can* do something via ajax doesn't mean 
+			#                                                                   to say you *should* - technology gone mad!)
+			# 		
+      #        <img class="imgAcordeon" src="https://buscador.cablevisionfibertel.com.ar/imagesFilms/charlie_and_the_chocolate_factory1.jpg_h.jpg" />	
+			#			<div class="contenedorDatosAcordeon">
+			#				<span class="category">Noticias</span>
+			#				<span class="dataProgram">Argentina  Con Agustina Díaz, Roberto Gómez Ragozza</span>
+			#				<span class="sinopsisShort">El noticiero de la TV Pública refleja la actualidad desde una visión federal y latinoamericana, que defiende el interés 
+			#                   comunitario. Visión Siete es sinónimo de noticias para todos.</span>
+			#				<div class="diaGrilla">lunes 20 de octubre | 13:00:00Hs | Duración: 60min</div>
+			#				<a alt="Mas info" title="Mas info" rel="#overlay_ficha" href="FichaContent.aspx?id=33892&amp;idSig=292" class="masinfoGrid"></a>
+			#				<a alt="Agendar en Gmail" title="Agendar en Gmail" href="https://www.google.com/calendar/render?action=TEMPLATE&amp;text=Ver Visión 7 -  
+			#                   Mediodía&amp;dates=20141020T160000Z/20141020T170000Z&amp;details=El noticiero de la TV Pública refleja la actualidad desde una visión federal 
+			#                   y latinoamericana, que defiende el interés comunitario. Visión Siete es sinónimo de noticias para todos.&amp;sf=true&amp;output=xml" 
+			#                   target="_blank" class="agendar"></a>
+			#				<a alt="Compartir en Facebook" title="Compartir en Facebook" target="_blank" class="facebook" 
+			#                   href="http://www.facebook.com/sharer.php?s=100&amp;p[url]=http%3A//clientes.cablevisionfibertel.com.ar%2fBuscador"></a>
+			#				<a alt="Compartir en Twitter" title="Compartir en Twitter" target="_blank" 
+			#                   href="https://twitter.com/share?url=https://clientes.cablevisionfibertel.com.ar/Buscador&amp;text=&amp;count=none" class="twitter" 
+			#                   data-lang="es"></a>
+			#			</div>
+			#
+		
 		my $cur;
 		my %temp;
-		$temp{'title'} = $prog->look_down( '_tag' => 'span', 'class' => 'title' );
-		if (!defined $temp{'title'}) {			# empty div
-			return 'false';
+		$temp{'title'} = $prog->look_down( '_tag' => 'div', 'class' => 'title' );
+		if (!defined $temp{'title'}) {			# empty div... try span
+			$temp{'title'} = $prog->look_down( '_tag' => 'span', 'class' => 'title' );
+			if (!defined $temp{'title'}) {			# empty span
+				return 'false';
+			}
 		}
+				
+		my $url = $urlRoot.'TVGridWS/TvGridWS.asmx/GetProgramDataAcordeon';
+    my $idSignal = $prog->parent->attr('idsignal');
+    my $idEvent = $prog->attr('id');
+    $idEvent =~ s/accordion//;
+		
+		my $vars = [ "idEvent"=>$idEvent, "idSignal"=>$idSignal, "sitio"=>"" ];
+		#use Data::Dumper; print STDERR Dumper($vars);
+    my $page = fetch_url($url, 'post', $vars); 
+    die $page if $page =~ /^Status:/;  	 
+    #store_page($page);
+		
+		use XML::Parser;
+		my $xml = XML::Parser->new(Style => 'Tree')->parse($page);
+		my $html = $xml->[1]->[2];
+		#print Dumper($html);
+		my $res_tree = HTML::TreeBuilder->new_from_content($html);
+		#print Dumper($res_tree);
+		undef $xml; undef $html;		
+		
 		$temp{'ch'} = $temp{'title'}->attr('onmouseover');
-		$temp{'start'} = $prog->look_down( '_tag' => 'div', 'class' => 'diaGrilla' );
-		$temp{'duration'} = $prog->look_down( '_tag' => 'div', 'class' => 'duracionGrilla' );
 		$temp{'series'} = $temp{'title'}->look_down( '_tag' => 'span', 'class' => 'titleSeason' );
 		$temp{'episode'} = $temp{'title'}->look_down( '_tag' => 'span', 'class' => 'titleChapter' );
-		$temp{'data'} = $prog->look_down( '_tag' => 'span', 'class' => 'dataProgram' );
-		$temp{'desc'} = $prog->look_down( '_tag' => 'span', 'class' => 'sinopsisShort' );
-		$temp{'category'} = $prog->look_down( '_tag' => 'span', 'class' => 'category' );
-		$temp{'rating'} = $prog->look_down( '_tag' => 'img', 'class' => 'chapaParentalProgram' );
 		
-		$cur->{'title'} = $temp{'title'}->as_text;		
-		$cur->{'start'} = $temp{'start'}->as_text;
-		$cur->{'duration'} = $temp{'duration'}->as_text;
+		$temp{'start'} = $res_tree->look_down( '_tag' => 'div', 'class' => 'diaGrilla' );
+		$temp{'duration'} = $res_tree->look_down( '_tag' => 'div', 'class' => 'duracionGrilla' );
+		$temp{'data'} = $res_tree->look_down( '_tag' => 'span', 'class' => 'dataProgram' );
+		$temp{'desc'} = $res_tree->look_down( '_tag' => 'span', 'class' => 'sinopsisShort' );
+		$temp{'category'} = $res_tree->look_down( '_tag' => 'span', 'class' => 'category' );
+		$temp{'rating'} = $res_tree->look_down( '_tag' => 'img', 'class' => 'chapaParentalProgram' );
+		
+		$cur->{'title'} = $temp{'title'}->as_text;
+		if ($temp{'duration'}) { 		# pre 2014-10-19 format just in case!
+			$cur->{'start'} = $temp{'start'}->as_text;
+			$cur->{'duration'} = $temp{'duration'}->as_text;
+		} else {
+			my @s = split(/\|/, $temp{'start'}->as_text);  # e.g. "lunes 20 de octubre | 13:00:00Hs | Duración: 60min"
+			if (scalar @s) {
+				$cur->{'start'} = $s[0] . (defined $s[1] ? ' '.$s[1] : '');
+				$cur->{'start'} =~ s/\|//;
+				$cur->{'duration'} = (defined $s[2] ? $s[2] : '');
+			}  # else barf
+		}
 		$cur->{'desc'} = $temp{'desc'}->as_text if $temp{'desc'};
 		$cur->{'category'} = $temp{'category'}->as_text if $temp{'category'};
-		
+	
 		if (defined $temp{'series'}) {
 			my $seriestext = $temp{'series'}->as_text;
-			$seriestext =~ s/Temporada:\s//;
+			$seriestext =~ s/(Temporada:|T:)\s//;
 			if ($seriestext =~ /^(\d+)$/ ) {
 				$cur->{'series'} = $1  if $1 ne '';
 			} elsif ($seriestext ne '') {
@@ -665,7 +738,7 @@ sub make_programme_hash {
 		
 		if (defined $temp{'episode'}) {
 			my $episodetext = $temp{'episode'}->as_text;
-			$episodetext =~ s/Episodio:\s//;
+			$episodetext =~ s/(Episodio:|E:)\s//;
 			if ($episodetext =~ /^(\d+)/ ) {
 				$cur->{'episode'} = $1  if $1 ne '';
 				if ( $episodetext =~ /^(\d+) - (.*)$/ ) { 
@@ -962,7 +1035,7 @@ sub get_channels {
     #store_page($page);
     my $tree = get_tree($page); $page = undef;
     
-    my $selectlist = $tree->look_down( '_tag' => 'select', 'id' => 'OpcionesGrilla_ChannelChoice' );
+    my $selectlist = $tree->look_down( '_tag' => 'select', 'id' => 'ChannelChoice' );
     die 'Cannot find channels list' if !$selectlist;
     my @selectoptions = $selectlist->look_down( '_tag' => 'option' );
 		
@@ -972,8 +1045,8 @@ sub get_channels {
 		#    <input type="hidden" name="ctl00$ContGral$sintoniaChanels" id="ContGral_sintoniaChanels"
     #         value="7,8,9,10,11,12,13,14,15,16,17,18,19,20,20,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38" />
     #	
-		my @webIds = split(/,/, $tree->look_down( '_tag' => 'input', 'id' => 'ContGral_idsChanels' )->attr('value') );
-		my @tvIds = split(/,/, $tree->look_down( '_tag' => 'input', 'id' => 'ContGral_sintoniaChanels' )->attr('value') );	
+		my @webIds = split(/,/, $tree->look_down( '_tag' => 'input', 'id' => 'idsChanels' )->attr('value') );
+		my @tvIds = split(/,/, $tree->look_down( '_tag' => 'input', 'id' => 'sintoniaChanels' )->attr('value') );	
 		my %webIds;
     for (my $i=0; $i<scalar @webIds; $i++) {
 			$webIds{$webIds[$i]} = $tvIds[$i];
