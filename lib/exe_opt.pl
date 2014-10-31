@@ -21,6 +21,9 @@ print '-nologo
 -add DateTime::
 -add Params::Validate::**
 -add Date::Language::
+-add Class::MethodMaker::
+-add Class::MethodMaker::Engine
+-add arybase
 -bind=libexpat-1_.dll[file=C:\strawberry\c\bin\libexpat-1_.dll,extract]
 -bind=libxml2-2_.dll[file=C:\strawberry\c\bin\libxml2-2_.dll,extract]
 -bind=libiconv-2_.dll[file=C:\strawberry\c\bin\libiconv-2_.dll,extract]
