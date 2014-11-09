@@ -9,7 +9,9 @@ our @EXPORT = qw(close_bar);
 sub new {
         
         my $class = shift;
-        
+		$ENV{LINES}=24   unless exists $ENV{LINES};
+		$ENV{COLUMNS}=80 unless exists $ENV{COLUMNS};
+		
         return Term::ProgressBar->new(@_);
         
 }
