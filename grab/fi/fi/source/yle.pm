@@ -33,7 +33,7 @@ sub channels {
   foreach my $code ("fi", "sv") {
 
     # Fetch & parse HTML
-    my $root = fetchTree("http://ohjelmaopas.yle.fi/tv/lang/$code?previousUrl=/tv/opas");
+    my $root = fetchTree("http://ohjelmaopas.yle.fi/lang/$code?path=tv/opas");
     if ($root) {
 
       #
@@ -80,7 +80,7 @@ sub grab {
   return unless my($channel, $code) = ($id =~ /^([^.]+)\.([^.]+)\.yle\.fi$/);
 
   # Fetch & parse HTML (do not ignore HTML5 <time>)
-  my $root = fetchTree("http://ohjelmaopas.yle.fi/tv/lang/$code?previousUrl=/tv/opas&t=" . $today->ymdd(),
+	my $root = fetchTree("http://ohjelmaopas.yle.fi/lang/$code?path=tv/opas&t=" . $today->ymdd(),
 		       undef, undef, 1);
   if ($root) {
     my @objects;
