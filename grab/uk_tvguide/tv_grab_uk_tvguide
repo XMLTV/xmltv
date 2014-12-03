@@ -55,9 +55,9 @@ my $VERSION 								= $_version;
 my $GRABBER_NAME 						= 'tv_grab_uk_tvguide';
 my $GRABBER_DESC 						= 'UK - TV Guide (tvguide.co.uk)';
 my $GRABBER_URL 						= 'http://wiki.xmltv.org/index.php/XMLTVProject';
-my $ROOT_URL                = 'http://www.tvguide.co.uk/';
+my $ROOT_URL                = 'http://my.tvguide.co.uk/';
 my $SOURCE_NAME							= 'TV Guide UK';
-my $SOURCE_URL							= 'http://www.tvguide.co.uk/';
+my $SOURCE_URL							= 'http://my.tvguide.co.uk/';
 #
 my $generator_info_name 		= $GRABBER_NAME;
 my $generator_info_url 			= $GRABBER_URL;
@@ -75,6 +75,7 @@ my ($opt, $conf) = ParseOptions({
 			listchannels_sub 	=> \&fetch_channels,
 			version 					=> $VERSION,
 			description 			=> $GRABBER_DESC,
+			extra_options			=> [qw/nodetailspage/],
 });
 
 #print Dumper($conf); exit;
@@ -242,9 +243,16 @@ sub fetch_listings {
 							#    <a href="javascript:popupshow('http://www.tvguide.co.uk/detail/1889599/94819598/saturday-kitchen-live');" target="_blank" ...
 							# 2014-04-02 site changed
 							#    <a href="http://www.tvguide.co.uk/detail/138990373/88745969/breakfast" target="_blank"...
+							# 2014-11-26 site changed
+							#    <a href="http://watch.tvguide.co.uk/engage/2057116/103685857-fake_britain" target="_blank"...
 							#
 							#  my $webdetails = $show->look_down('_tag' => 'a', 'href' => qr/javascript:popup/);
-							my $webdetails = $show->look_down('_tag' => 'a', 'href' => qr/\/detail\//);
+							
+							# 2014-12-03 The new website seems a bit flakey with these details pages, often returning a 500 Server Error
+							#    Here's an option to disable the details pages  (  --nodetailspage )
+						if (!$opt->{nodetailspage}) {
+							
+							my $webdetails = $show->look_down('_tag' => 'a', 'href' => qr/\/engage\//);
 							my $href = $webdetails->attr('href');
 							#    my ($id) = $href =~ /javascript:popup\((\d*)\);/;
 							#    $url = $ROOT_URL . 'detail.asp?id=' . $id;
@@ -255,107 +263,54 @@ sub fetch_listings {
 							# Fetch the page
 							my $treedetail = XMLTV::Get_nice::get_nice_tree($url, \&utf8);
 							
-							# 	<table border="0" cellpadding="0" style="background:black;border-collapse: collapse;background-image: url(http://i.g8.tv/logobackgrounds/857.jpg); background-repeat: no-repeat;" width="677" height="258px" id="table3" >		
-					
-							my $showdetail = $treedetail->look_down('_tag' => 'table', 'border' => '0', 'cellpadding' => '0', 'style' => qr/background:\s*black;border-collapse:\s*collapse;/);						
+							my $showdetail = $treedetail->look_down('_tag' => 'div', 'id' => 'content-engage');						
 							#	$showdetail->dump;
 							
 							if ($showdetail) {
 								# Details page contains Director names and a better list of Actors
 								
-								# Whitespace between the <span>s stops right() working so we'll try a different approach.  All the data we want are in <span> tags, so we'll
-								#	extract them into a new tree
-								my (@spans) = $showdetail->as_HTML =~ /(<span.*?\/span>)/g;
-								my $spans = join('', @spans);
-								my $treespans = HTML::TreeBuilder->new_from_content($spans);
-								# $treespans->dump;
+								if ( my ($cast) = $showdetail->look_down('_tag' => 'div', 'class' => qr/castoverlay/) ) {
 								
-								# v---- this code is geting ugly... should convert it an array-based loop   ###########
+									# Get the cast and extract them into a new tree
+									my @lis = $cast->look_down('_tag' => 'li');		
 								
-								# director
-								# 	<span class="role">Director</span> <span class="actor">Anthony Page</span></a><br>
-								my $showdirector = $treespans->look_down('_tag' => 'span', 'class' => 'role', sub { $_[0]->as_text =~ /^Director/ } );
-								if ($showdirector) {
-									$showdirector = $showdirector->right;
-									#$showdirector = $showdirector->right if ($showdirector->tag eq 'a');
-									if ($showdirector->tag eq 'span' && $showdirector->attr('class') eq 'actor') {
-										if ($showdirector->as_text) {
-											foreach ( split(', ', $showdirector->as_text) ) {
-												push @{$prog{'credits'}{'director'}}, encode('utf-8', $_);
-											}
+									LOOP:
+									foreach my $person (@lis) {
+										#    <div>Don Sharp </div><div class="partname">Director</div>
+										#    <div>Antonio Banderas</div>  <div class='partname' >Ahmed Ibn Fahdlan</div>
+										#
+										my ($name, $role);
+										if ( my ($_name) = $person->look_down('_tag' => 'div') ) {
+											$name = $_name->as_text;
 										}
-									}
-									$showdirector->detach;
-								}
-								
-								#	producer
-								my $showproducer = $treespans->look_down('_tag' => 'span', 'class' => 'role', sub { $_[0]->as_text =~ /^Producer/ } );
-								if ($showproducer) {
-									$showproducer = $showproducer->right;
-									#$showproducer = $showproducer->right if ($showproducer->tag eq 'a');
-									if ($showproducer->tag eq 'span' && $showproducer->attr('class') eq 'actor') {
-										if ($showproducer->as_text) {
-											foreach ( split(', ', $showproducer->as_text) ) {
-												push @{$prog{'credits'}{'producer'}}, encode('utf-8', $_);
-											}
+										if ( my ($_role) = $person->look_down('_tag' => 'div', 'class' => 'partname') ) {
+											$role = $_role->as_text;
 										}
-									}
-									$showproducer->detach;
+										#	drop the "Executive Director" & "Executive Producer"   - any others we should drop?
+										next LOOP  if ( $role =~ /^(Executive Director|Executive Producer)/ );
+
+										# map the website role to an xmltv role
+										my %xmltvroles = ( 'Director'=>'director', 'Producer'=>'producer', 'Series Producer'=>'producer', 'Writer'=>'writer', 'Co-Director'=>'director', 'Presenter'=>'presenter', 'Commentator'=>'commentator', 'Guest'=>'guest' );
+										
+										my $credit;
+										if (exists $xmltvroles{$role}) {
+											$credit = $xmltvroles{$role};
 								} else {
-									$showproducer = $treespans->look_down('_tag' => 'span', 'class' => 'role', sub { $_[0]->as_text =~ /^Series Producer/ } );
-									if ($showproducer) {
-										$showproducer = $showproducer->right;
-										#$showproducer = $showproducer->right if ($showproducer->tag eq 'a');
-										if ($showproducer->tag eq 'span' && $showproducer->attr('class') eq 'actor') {
-											if ($showproducer->as_text) {
-												foreach ( split(', ', $showproducer->as_text) ) {
-													push @{$prog{'credits'}{'producer'}}, encode('utf-8', $_);
-												}
-											}
-										}
-										$showproducer->detach;
-									}
+											$credit = 'actor';
 								}
 								
-								#	 writer
-								my $showwriter = $treespans->look_down('_tag' => 'span', 'class' => 'role', sub { $_[0]->as_text =~ /^Writer/ } );
-								if ($showwriter) {
-									$showwriter = $showwriter->right;
-									#$showwriter = $showwriter->right if ($showwriter->tag eq 'a');
-									if ($showwriter->tag eq 'span' && $showwriter->attr('class') eq 'actor') {
-										if ($showwriter->as_text) {
-											foreach ( split(', ', $showwriter->as_text) ) {
-												push @{$prog{'credits'}{'writer'}}, encode('utf-8', $_);
-											}
-										}
-									}
-									$showwriter->detach;
+										if ($credit eq 'actor' && defined $role) {
+											push @{$prog{'credits'}{$credit}}, [ encode('utf-8', $name), encode('utf-8', $role) ];
+										} else {
+											push @{$prog{'credits'}{$credit}}, encode('utf-8', $name);
 								}
 								
-								#	drop the "Series Producer" (if it's still present)
-								$showproducer = $treespans->look_down('_tag' => 'span', 'class' => 'role', sub { $_[0]->as_text =~ /^Series Producer/ } );
-								if ($showproducer) { 
-									$showproducer = $showproducer->right;
-									$showproducer->detach; 
 								}
 								
-								#	drop the "Executive Producer"
-								$showproducer = $treespans->look_down('_tag' => 'span', 'class' => 'role', sub { $_[0]->as_text =~ /^Executive Producer/ } );
-								if ($showproducer) { 
-									$showproducer = $showproducer->right;
-									$showproducer->detach; 
-								}
-								
-								#		all the "role" left should be Actors
-								my @showactors = $treespans->look_down('_tag' => 'span', 'class' => 'actor');
-								if (scalar @showactors > 0) {
-									foreach my $showactor (@showactors) {
-										if ($showactor->as_text ne '(IMDB)') { 	# ignore IMDB link spans
-											push @{$prog{'credits'}{'actor'}}, encode('utf-8', $showactor->as_text);
-										}
-									}
-								}
-								
+									
+									# removed after site changed 2014-11-26
+									if (0) {  my ($treespans);
+									
 								#	rating 		i.e. "Certificate"
 								my $showcertificate = $treespans->look_down('_tag' => 'span', 'class' => 'tvchannel', sub { $_[0]->as_text =~ /Certificate/ } );
 								if ($showcertificate) {
@@ -426,9 +381,14 @@ sub fetch_listings {
 									}
 								}
 								
+									}
+									
+									
+									undef @lis;
 								
-								undef $treespans;
+								}
 							}	# end showdetail
+						}
 								
 								
 							# channel
@@ -517,11 +477,11 @@ sub fetch_listings {
 								push @{$prog{'subtitles'}}, {'type' => 'teletext'};
 								$showflags->detach;
 							}
-							$showflags = $show->look_down('_tag' => 'span', 'class' => 'tvchannel', sub { $_[0]->as_text =~ /Audio Described/ } );
-							if ($showflags) {
-								push @{$prog{'subtitles'}}, {'type' => 'deaf-signed'};
-								$showflags->detach;
-							}
+							#$showflags = $show->look_down('_tag' => 'span', 'class' => 'tvchannel', sub { $_[0]->as_text =~ /Audio Described/ } );
+							#if ($showflags) {
+							#	push @{$prog{'subtitles'}}, {'type' => 'deaf-signed'};    <-- Audio Described is not deaf-signed
+							#	$showflags->detach;
+							#}
 							$showflags = $show->look_down('_tag' => 'span', 'class' => 'tvchannel', sub { $_[0]->as_text =~ /Repeat/ } );
 							if ($showflags) {
 	#	push @{$prog{'previously-shown'}}, {};
@@ -566,7 +526,11 @@ sub fetch_listings {
 							# 	<span class="tvchannel">The Fabulous Buchannon Boys</span>
 							my $showeptitle = $show->look_down('_tag' => 'span', 'class' => 'tvchannel');
 							if ($showeptitle) {
+							  if ($showeptitle->as_text =~ /\(?Premiere\)?/) {
+									$prog{'premiere'} = [];
+							  } else {									
 								$prog{'sub-title'} = [[ encode('utf-8', $showeptitle->as_text), 'en' ]];
+								}
 								$showeptitle->detach;
 							}
 						
