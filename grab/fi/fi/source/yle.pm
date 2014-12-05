@@ -12,7 +12,7 @@
 package fi::source::yle;
 use strict;
 use warnings;
-use Date::Manip::Date;
+use Date::Manip;
 
 BEGIN {
   our $ENABLED = 1;
@@ -38,7 +38,7 @@ sub channels {
   foreach my $code (sort keys %languages) {
 
     # Fetch & parse HTML
-    my $root = fetchTree("http://$languages{$code}.yle.fi/tv/opas");
+    my $root = fetchTree("http://$languages{$code}.yle.fi/tv/opas", 'UTF-8');
     if ($root) {
 
       #
@@ -86,10 +86,9 @@ sub grab {
 
   # Fetch & parse HTML (do not ignore HTML5 <time>)
   my $root = fetchTree("http://$languages{$code}.yle.fi/tv/opas?t=" . $today->ymdd(),
-		       undef, undef, 1);
+		       'UTF-8', undef, 1);
   if ($root) {
     my @objects;
-    my $date = Date::Manip::Date->new();
 
     #
     # Each programme can be found in a separate <li> node
@@ -134,8 +133,8 @@ sub grab {
 	      my $desc  = $programme->look_down("class", "program-desc");
 
 	      if ($start && $end && $title && $desc) {
-		$start = $date->parse($start->attr("datetime")) ? undef : $date->secs_since_1970_GMT();
-		$end   = $date->parse($end->attr("datetime"))   ? undef : $date->secs_since_1970_GMT();
+		$start = UnixDate($start->attr("datetime"),qw/%s/);
+		$end   = UnixDate($end->attr("datetime"),qw/%s/);
 
 		my $link     = $title->find("a");
 		my $category = $title->look_down("class" => "label movie") ? "elokuvat" : undef;
