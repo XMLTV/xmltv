@@ -75,7 +75,7 @@ sub fetchRaw($;$$) {
 
       unless ($@) {
 	  # Everything is OK
-	  $content = decode($encoding || "utf8", $content);    # Note: 'utf8' is NOT the same as 'UTF-8' !
+	  $content = decode($encoding || "utf8", $content);    # Note: 'utf8' is NOT the same as 'utf-8' !
 	  last RETRY;
       } elsif (($@ =~ /error: 500 Timeout/) && $retries--) {
 	  # Let's try this one more time
