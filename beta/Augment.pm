@@ -24,7 +24,7 @@ series/episode numbers from the programme"s title, sub-title or description.
 
 User-defined rules use the content of a "rules" file which allows programmes
 matching certain user-defined criteria to be corrected/enhanced with the user
-data suplied (e.g. adding/changing categories for all episodes of "Horizon",
+data supplied (e.g. adding/changing categories for all episodes of "Horizon",
 or fixing misspellings in titles, etc.)
 
 
@@ -285,7 +285,7 @@ sub augmentProgramme () {
 	# We process titles if the user has
 	# not explicitly disabled title processing during configuration
 	# and we have supplement data to process programmes against.
-	$self->process_title_fixups($prog);
+	$self->process_user_rules($prog);
 	
 	
 	# Tidy <title> text after title processing
@@ -1151,11 +1151,11 @@ sub make_episode_from_part_numbers () {
 }
 
 
-=item B<process_title_fixups>
+=item B<process_user_rules>
 
 Rule #user
 
-Process programme against user-defined title fixups
+Process programme against user-defined fixups
 
 The individual rules each have their own option to run or not; consider this like an on/off switch for all of them. I.e. if this option is off then no user rules will be run (irrespective of any other option flags).
 
@@ -1165,7 +1165,7 @@ The individual rules each have their own option to run or not; consider this lik
 #
 # Process programme against user-defined title fixups
 #
-sub process_title_fixups () {
+sub process_user_rules () {
 	my ($self, $prog) = @_;
 	my $me = self();
 	if ( ! $self->{'options_all'} && ! $self->{'options'}{$me} ) { return 0; }
@@ -1194,8 +1194,8 @@ sub process_title_fixups () {
 	_d(4,'_Prog, before title fixups:',dd(4,$_prog));
 	
 	
-	# TODO : the user rules are not processed in numerical - there's no clues in
-	#        uk_rt grabber (on whch this class is based) as to why the following
+	# TODO : the user rules are not processed in numerical order - there's no clues
+	#        in uk_rt grabber (on whch this class is based) as to why the following
 	#        order was chosen or even if it matters (since most of the rules are
 	#        not cumulative)
 	
