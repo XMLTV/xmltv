@@ -572,6 +572,7 @@ sub alternativeTitles($)
     my @titles;
 
     push(@titles, $title);
+    
     # try the & -> and conversion
     if ( $title=~m/\&/o ) {
 	my $t=$title;
@@ -589,7 +590,8 @@ sub alternativeTitles($)
     }
 
     # try the "Columbo: Columbo cries Wolf" -> "Columbo cries Wolf" conversion
-    foreach (@titles) {
+    my @orig_titles=@titles;
+    foreach (@orig_titles) {
         if ( m/^[^:]+:.+$/io ) {
 	    my $t=$_;
             while ( $t=~s/^[^:]+:\s*(.+)\s*$/$1/io ) {
@@ -599,7 +601,8 @@ sub alternativeTitles($)
     }
 
     # Place the articles last
-    foreach (@titles) {
+    @orig_titles=@titles;
+    foreach (@orig_titles) {
         if ( m/^(The|A|Une|Les|Los|Las|L\'|Le|La|El|Das|De|Het|Een)\s+(.*)$/io ) {
 	    my $t=$_;
             $t=~s/^(The|A|Une|Les|Los|Las|L\'|Le|La|El|Das|De|Het|Een)\s+(.*)$/$2, $1/iog;
@@ -608,7 +611,8 @@ sub alternativeTitles($)
     }
 
     # convert all the special language characters
-    foreach (@titles) {
+    @orig_titles=@titles;
+    foreach (@orig_titles) {
 	if ( m/[ÀÁÂÃÄÅàáâãäåÈÉÊËèéêëÌÍÎÏìíîïÒÓÔÕÖØòóôõöøÙÚÛÜùúûüÆæÇçÑñßİıÿ]/io ) {
 	    my $t=$_;
 	    $t=~s/[ÀÁÂÃÄÅàáâãäå]/a/gio;
@@ -627,14 +631,9 @@ sub alternativeTitles($)
     }
 
     # strip some punctuation
-    foreach (@titles) {
-        if ( m/[\.]/io ) {
-	    my $t=$_;
-            $t=~s/\.//gio;
-                push(@titles, $t);
-        }
+    for (my $i=0; $i<scalar(@titles) ; $i++) {
+	$titles[$i]=~s/\.//gio;
     }
-
     return(\@titles);
 }
 
@@ -2596,6 +2595,12 @@ sub invokeStage($$)
     }
     elsif ( $stage == 7 ) {
 	$self->status("parsing Keywords list for stage $stage..");
+	
+	if ( !defined($self->{imdbListFiles}->{keywords}) ) {
+	    $self->status("no keywords file downloaded, see --with-keywords details in documentation");
+	    return(0);
+	}
+	
 	my $countEstimate=410000;
 	my $num=$self->readKeywords($countEstimate, "$self->{imdbListFiles}->{keywords}");
 	if ( $num < 0 ) {
@@ -2647,6 +2652,12 @@ sub invokeStage($$)
     }
     elsif ( $stage == 8 ) {
 	$self->status("parsing Plot list for stage $stage..");
+	
+	if ( !defined($self->{imdbListFiles}->{plot}) ) {
+	    $self->status("no plot file downloaded, see --with-plot details in documentation");
+	    return(0);
+	}
+	
 	my $countEstimate=222222;
 	my $num=$self->readPlots($countEstimate, "$self->{imdbListFiles}->{plot}");
 	if ( $num < 0 ) {
@@ -2962,6 +2973,7 @@ sub invokeStage($$)
 	    $progress->update($countEstimate) if Have_bar;
 	    close(IN);
 	}
+
 	if ( 1 ) {
 	    # fill in placeholder if no genres were found
 	    for my $key (keys %movies) {
@@ -3019,6 +3031,7 @@ sub invokeStage($$)
 	    $progress->update($countEstimate) if Have_bar;
 	    close(IN);
 	}
+
 	if ( 1 ) {
 	    # fill in default for movies we didn't have any keywords for
 	    for my $key (keys %movies) {
