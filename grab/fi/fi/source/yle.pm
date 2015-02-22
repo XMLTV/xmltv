@@ -133,8 +133,8 @@ sub grab {
 	      my $desc  = $programme->look_down("class", "program-desc");
 
 	      if ($start && $end && $title && $desc) {
-		$start = UnixDate($start->attr("datetime"),qw/%s/);
-		$end   = UnixDate($end->attr("datetime"),qw/%s/);
+		$start = UnixDate($start->attr("datetime"), "%s");
+		$end   = UnixDate($end->attr("datetime"),   "%s");
 
 		my $link     = $title->find("a");
 		my $category = $title->look_down("class" => "label movie") ? "elokuvat" : undef;
