@@ -162,7 +162,8 @@ sub get_nice_aux( $ ) {
         $errors{$url} = $r->status_line;
         return undef;
     } else {
-        return $r->content;
+        # De-compress, if necessary, but skip character set conversions
+        return $r->decoded_content(charset => 'none');
     }
 
 }
