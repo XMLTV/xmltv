@@ -38,7 +38,7 @@ sub channels {
   foreach my $code (sort keys %languages) {
 
     # Fetch & parse HTML
-    my $root = fetchTree("http://$languages{$code}.yle.fi/tv/opas", 'UTF-8');
+    my $root = fetchTree("http://$languages{$code}.yle.fi/tv/opas", "utf-8-strict");
     if ($root) {
 
       #
@@ -86,7 +86,7 @@ sub grab {
 
   # Fetch & parse HTML (do not ignore HTML5 <time>)
   my $root = fetchTree("http://$languages{$code}.yle.fi/tv/opas?t=" . $today->ymdd(),
-		       'UTF-8', undef, 1);
+		       "utf-8-strict", undef, 1);
   if ($root) {
     my @objects;
 
