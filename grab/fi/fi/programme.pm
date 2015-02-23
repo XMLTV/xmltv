@@ -124,6 +124,10 @@ my %series_title;
 my @title_map;
 my $title_strip_parental;
 
+# Common regular expressions
+# ($left, $special, $right) = ($description =~ $match_description)
+my $match_description = qr/^\s*([^.!?]+[.!?])([.!?]+\s+)?\s*(.*)/;
+
 sub dump {
   my($self, $writer) = @_;
   my $language    = $self->{language};
@@ -216,7 +220,7 @@ sub dump {
   #
   elsif ((defined $description)               &&
 	 (exists $series_description{$title}) &&
-	 (($left, $special, $right) = ($description =~ /^\s*([^.!?]+[.!?])([.!?]+\s+)?\s*(.*)/))) {
+	 (($left, $special, $right) = ($description =~ $match_description))) {
     # Check for "Kausi <season>. Jakso <episode>/<# of episodes>. <sub-title>...."
     if (my($desc_season, $desc_episode, $remainder) =
 	($description =~ m,^Kausi\s+(\d+)\.\s+Jakso\s+(\d+)(?:/\d+)?\.\s*(.*)$,)) {
@@ -224,7 +228,16 @@ sub dump {
 	$episode = $desc_episode;
 
 	# Repeat the above match on remaining description
-	($left, $special, $right) = ($remainder =~ /^\s*([^.!?]+[.!?])([.!?]+\s+)?\s*(.*)/);
+	($left, $special, $right) = ($remainder =~ $match_description);
+
+    # Check for "Kausi <season>, <episode>/<# of episodes>. <sub-title>...."
+    } elsif (($desc_season, $desc_episode, $remainder) =
+	($description =~ m!^Kausi\s+(\d+),\s+(\d+)(?:/\d+)?\.\s*(.*)$!)) {
+	$season  = $desc_season;
+	$episode = $desc_episode;
+
+	# Repeat the above match on remaining description
+	($left, $special, $right) = ($remainder =~ $match_description);
     }
     unless (defined $special) {
       # We only remove period from episode title, preserve others
