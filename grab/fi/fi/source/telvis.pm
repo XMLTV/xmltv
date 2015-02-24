@@ -29,7 +29,8 @@ sub channels {
   my %channels;
 
   # Fetch & parse HTML
-  my $root = fetchTree("http://www.telvis.fi/tvohjelmat/?vw=channel");
+  my $root = fetchTree("http://www.telvis.fi/tvohjelmat/?vw=channel",
+		       "iso-8859-1");
   if ($root) {
 
     #

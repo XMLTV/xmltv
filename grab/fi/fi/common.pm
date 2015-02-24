@@ -48,13 +48,13 @@ use XMLTV::Get_nice;
   sub setDebug($) {
     if (($debug) = @_) {
       # Debug messages may contain Unicode
-      binmode(STDERR, ":utf8");
+      binmode(STDERR, ":encoding(utf-8)");
       debug(1, "Debug level set to $debug.");
     }
   }
 }
 
-# Fetch URL as UTF8 encoded string
+# Fetch URL as UTF-8 encoded string
 sub fetchRaw($;$$) {
   my($url, $encoding, $nofail) = @_;
   debug(2, "Fetching URL '$url'");
@@ -75,10 +75,8 @@ sub fetchRaw($;$$) {
 
       unless ($@) {
 	  # Everything is OK
-	  # NOTE: "utf8"  means "Perl's historic notion of UTF-8"
-	  #       "utf-8" means "utf-8-strict" which is NOT the same!
-	  #       (see Encode man page)
-	  $content = decode($encoding || "utf8", $content);
+	  # NOTE: utf-8 means "strict UTF-8 standard encoding"
+	  $content = decode($encoding || "utf-8", $content);
 	  last RETRY;
       } elsif (($@ =~ /error: 500 Timeout/) && $retries--) {
 	  # Let's try this one more time
