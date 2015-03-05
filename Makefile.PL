@@ -875,11 +875,12 @@ my @opt_components
                   },
      },
 
-     { name => 'tv_grab_za',
-       blurb => 'Grabber for South Africa',
-       exes => [ 'grab/za/tv_grab_za' ],
-       prereqs => { 'HTML::TreeBuilder' => 0,
-                    'HTML::Entities' => 1.27 } },
+# honir 2015-03-05 hasn't worked since 2014-11-19 - source site permanently broken
+#     { name => 'tv_grab_za',
+#       blurb => 'Grabber for South Africa',
+#       exes => [ 'grab/za/tv_grab_za' ],
+#       prereqs => { 'HTML::TreeBuilder' => 0,
+#                    'HTML::Entities' => 1.27 } },
 
      { name => 'tv_grab_eu_epgdata',
        blurb => '$$ Grabber for some European countries (epgdata.com)',
