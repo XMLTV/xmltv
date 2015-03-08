@@ -590,10 +590,10 @@ sub alternativeTitles($)
     }
 
     # try the "Columbo: Columbo cries Wolf" -> "Columbo cries Wolf" conversion
-    my @orig_titles=@titles;
-    foreach (@orig_titles) {
-        if ( m/^[^:]+:.+$/io ) {
-	    my $t=$_;
+    my $max=scalar(@titles);
+    for (my $i=0; $i<$max ; $i++) {
+	my $t=$titles[$i];
+        if ( $t=~m/^[^:]+:.+$/io ) {
             while ( $t=~s/^[^:]+:\s*(.+)\s*$/$1/io ) {
                 push(@titles, $t);
             }
@@ -601,20 +601,24 @@ sub alternativeTitles($)
     }
 
     # Place the articles last
-    @orig_titles=@titles;
-    foreach (@orig_titles) {
-        if ( m/^(The|A|Une|Les|Los|Las|L\'|Le|La|El|Das|De|Het|Een)\s+(.*)$/io ) {
-	    my $t=$_;
+    $max=scalar(@titles);
+    for (my $i=0; $i<$max ; $i++) {
+	my $t=$titles[$i];
+        if ( $t=~m/^(The|A|Une|Les|Los|Las|L\'|Le|La|El|Das|De|Het|Een)\s+(.*)$/io ) {
             $t=~s/^(The|A|Une|Les|Los|Las|L\'|Le|La|El|Das|De|Het|Een)\s+(.*)$/$2, $1/iog;
+            push(@titles, $t);
+        }
+        if ( $t=~m/^(.+),\s*(The|A|Une|Les|Los|Las|L\'|Le|La|El|Das|De|Het|Een)$/io ) {
+            $t=~s/^(.+),\s*(The|A|Une|Les|Los|Las|L\'|Le|La|El|Das|De|Het|Een)$/$2 $1/iog;
             push(@titles, $t);
         }
     }
 
     # convert all the special language characters
-    @orig_titles=@titles;
-    foreach (@orig_titles) {
-	if ( m/[ÀÁÂÃÄÅàáâãäåÈÉÊËèéêëÌÍÎÏìíîïÒÓÔÕÖØòóôõöøÙÚÛÜùúûüÆæÇçÑñßÝýÿ]/io ) {
-	    my $t=$_;
+    $max=scalar(@titles);
+    for (my $i=0; $i<$max ; $i++) {
+	my $t=$titles[$i];
+	if ( $t=~m/[ÀÁÂÃÄÅàáâãäåÈÉÊËèéêëÌÍÎÏìíîïÒÓÔÕÖØòóôõöøÙÚÛÜùúûüÆæÇçÑñßÝýÿ]/io ) {
 	    $t=~s/[ÀÁÂÃÄÅàáâãäå]/a/gio;
 	    $t=~s/[ÈÉÊËèéêë]/e/gio;
 	    $t=~s/[ÌÍÎÏìíîï]/i/gio;
@@ -625,14 +629,19 @@ sub alternativeTitles($)
 	    $t=~s/[Ññ]/n/gio;
 	    $t=~s/[ß]/ss/gio;
 	    $t=~s/[Ýýÿ]/y/gio;
-	    $t=~s/[Â¿]//gio;
+	    $t=~s/[¿]//gio;
 	    push(@titles, $t);
 	}
     }
 
-    # strip some punctuation
-    for (my $i=0; $i<scalar(@titles) ; $i++) {
-	$titles[$i]=~s/\.//gio;
+    # optional later possible titles include removing the '.' from titles
+    # ie "Project V.I.P.E.R." matching imdb "Project VIPER"
+    $max=scalar(@titles);
+    for (my $i=0; $i<$max ; $i++) {
+	my $t=$titles[$i];
+	if ( $t=~s/\.//go ) {
+	    push(@titles,$t);
+	}
     }
     return(\@titles);
 }
@@ -642,7 +651,7 @@ sub findMovieInfo($$$$)
     my ($self, $title, $year, $exact)=@_;
 
     my @titles=@{alternativeTitles($title)};
-	
+
     if ( $exact == 1 ) {
 	# try an exact match first :)
 	for my $mytitle ( @titles ) {
@@ -1991,11 +2000,6 @@ sub readKeywords($$$$)
 	    }
 	    if ( !($_=<$fh>) || !m/^\s*$/o ) {
 		$self->error("missing empty line after ======= at line $lineCount");
-		closeMaybeGunzip($file, $fh);
-		return(-1);
-	    }
-	    if ( !($_=<$fh>) || !m/^.*\s+\S+\s*$/o ) {
-		$self->error("missing title/keyword pairs after ======= at line $lineCount");
 		closeMaybeGunzip($file, $fh);
 		return(-1);
 	    }
