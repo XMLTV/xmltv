@@ -32,8 +32,8 @@ GetOptions('tests-dir=s' => \$tests_dir, 'cmds-dir=s' => \$cmds_dir,
   or usage(0);
 usage(0) if @ARGV;
 
-#my $tmpDir = tempdir(CLEANUP => 1);
-my $tmpDir = "/tmp/jv1"; mkdir($tmpDir);
+my $tmpDir = tempdir(CLEANUP => 1);
+#my $tmpDir = "/tmp/jv1"; mkdir($tmpDir);
 
 system("/bin/cp -rp $tests_dir/lists $tmpDir/");
 
