@@ -1377,6 +1377,11 @@ sub new
     $self->{moviedbData}="$self->{imdbDir}/moviedb.dat";
     $self->{moviedbInfo}="$self->{imdbDir}/moviedb.info";
     $self->{moviedbOffline}="$self->{imdbDir}/moviedb.offline";
+    
+    # only leave progress bar on if its available
+    if ( !Have_bar ) {
+	$self->{showProgressBar}=0;
+    }
 
     bless($self, $type);
     
@@ -1638,10 +1643,10 @@ sub readMoviesOrGenres($$$$)
     my $progress=Term::ProgressBar->new({name  => "parsing $whichMoviesOrGenres",
 					 count => $countEstimate,
 					 ETA   => 'linear'})
-      if Have_bar;
+	if ( $self->{showProgressBar} );
 
-    $progress->minor(0) if Have_bar;
-    $progress->max_update_rate(1) if Have_bar;
+    $progress->minor(0) if ($self->{showProgressBar});
+    $progress->max_update_rate(1) if ($self->{showProgressBar});
     my $next_update=0;
 
     my $count=0;
@@ -1691,7 +1696,7 @@ sub readMoviesOrGenres($$$$)
 		$count++;
 	    }
 	
-	    if (Have_bar) {
+	    if ( $self->{showProgressBar} ) {
 		# re-adjust target so progress bar doesn't seem too wonky
 		if ( $count > $countEstimate ) {
 		    $countEstimate = $progress->target($count+1000);
@@ -1704,10 +1709,10 @@ sub readMoviesOrGenres($$$$)
 	}
 	else {
 	    $self->error("$file:$lineCount: unrecognized format (missing tab)");
-	    $next_update=$progress->update($count) if Have_bar;
+	    $next_update=$progress->update($count) if ($self->{showProgressBar});
 	}
     }
-    $progress->update($countEstimate) if Have_bar;
+    $progress->update($countEstimate) if ($self->{showProgressBar});
 
     $self->status(sprintf("parsing $whichMoviesOrGenres found ".withThousands($count)." titles in ".
 			  withThousands($lineCount)." lines in %d seconds",time()-$startTime));
@@ -1745,9 +1750,9 @@ sub readCastOrDirectors($$$)
     my $progress=Term::ProgressBar->new({name  => "parsing $whichCastOrDirector",
 					 count => $castCountEstimate,
 					 ETA   => 'linear'})
-      if Have_bar;
-    $progress->minor(0) if Have_bar;
-    $progress->max_update_rate(1) if Have_bar;
+      if ($self->{showProgressBar});
+    $progress->minor(0) if ($self->{showProgressBar});
+    $progress->max_update_rate(1) if ($self->{showProgressBar});
     my $next_update=0;
     while(<$fh>) {
 	$lineCount++;
@@ -1799,7 +1804,7 @@ sub readCastOrDirectors($$$)
 	    $cur_name=$1;
 	    $castNames++;
 
-	    if (Have_bar) {
+	    if ( $self->{showProgressBar} ) {
 		# re-adjust target so progress bar doesn't seem too wonky
 		if ( $castNames > $castCountEstimate ) {
 		    $castCountEstimate = $progress->target($castNames+100);
@@ -1891,7 +1896,7 @@ sub readCastOrDirectors($$$)
 	}
 	$count++;
     }
-    $progress->update($castCountEstimate) if Have_bar;
+    $progress->update($castCountEstimate) if ($self->{showProgressBar});
 
     $self->status(sprintf("parsing $whichCastOrDirector found ".withThousands($castNames)." names, ".
 			  withThousands($count)." titles in ".withThousands($lineCount)." lines in %d seconds",time()-$startTime));
@@ -1933,10 +1938,10 @@ sub readRatings($$$$)
     my $progress=Term::ProgressBar->new({name  => "parsing Ratings",
 					 count => $countEstimate,
 					 ETA   => 'linear'})
-      if Have_bar;
+      if ($self->{showProgressBar});
 
-    $progress->minor(0) if Have_bar;
-    $progress->max_update_rate(1) if Have_bar;
+    $progress->minor(0) if ($self->{showProgressBar});
+    $progress->max_update_rate(1) if ($self->{showProgressBar});
     my $next_update=0;
 
     my $count=0;
@@ -1957,7 +1962,7 @@ sub readRatings($$$$)
 	if ( $line=~s/^\s+([\.|\*|\d]+)\s+(\d+)\s+(\d+)\.(\d+)\s+//o ) {
 	    $self->{movies}{$line}=[$1,$2,"$3.$4"];
 	    $count++;
-	    if (Have_bar) {
+	    if ( $self->{showProgressBar} ) {
 		# re-adjust target so progress bar doesn't seem too wonky
 		if ( $count > $countEstimate ) {
 		    $countEstimate = $progress->target($count+1000);
@@ -1970,10 +1975,10 @@ sub readRatings($$$$)
 	}
 	else {
 	    $self->error("$file:$lineCount: unrecognized format");
-	    $next_update=$progress->update($count) if Have_bar;
+	    $next_update=$progress->update($count) if ($self->{showProgressBar});
 	}
     }
-    $progress->update($countEstimate) if Have_bar;
+    $progress->update($countEstimate) if ($self->{showProgressBar});
 
     $self->status(sprintf("parsing Ratings found ".withThousands($count)." titles in ".
 			  withThousands($lineCount)." lines in %d seconds",time()-$startTime));
@@ -2015,10 +2020,10 @@ sub readKeywords($$$$)
     my $progress=Term::ProgressBar->new({name  => "parsing keywords",
 					 count => $countEstimate,
 					 ETA   => 'linear'})
-      if Have_bar;
+      if ($self->{showProgressBar});
 
-    $progress->minor(0) if Have_bar;
-    $progress->max_update_rate(1) if Have_bar;
+    $progress->minor(0) if ($self->{showProgressBar});
+    $progress->max_update_rate(1) if ($self->{showProgressBar});
     my $next_update=0;
 
     my $count=0;
@@ -2044,7 +2049,7 @@ sub readKeywords($$$$)
                 }
             }
 
-            if (Have_bar) {
+            if ( $self->{showProgressBar} ) {
                 # re-adjust target so progress bar doesn't seem too wonky
     	        if ( $count > $countEstimate ) {
     	    	    $countEstimate = $progress->target($count+1000);
@@ -2056,10 +2061,10 @@ sub readKeywords($$$$)
     	    }
         } else {
 	    $self->error("$file:$lineCount: unrecognized format \"$line\"");
-	    $next_update=$progress->update($count) if Have_bar;
+	    $next_update=$progress->update($count) if ($self->{showProgressBar});
 	}
     }
-    $progress->update($countEstimate) if Have_bar;
+    $progress->update($countEstimate) if ($self->{showProgressBar});
 
     $self->status(sprintf("parsing Keywords found ".withThousands($count)." titles in ".
 			  withThousands($lineCount)." lines in %d seconds",time()-$startTime));
@@ -2101,10 +2106,10 @@ sub readPlots($$$$)
     my $progress=Term::ProgressBar->new({name  => "parsing plots",
 					 count => $countEstimate,
 					 ETA   => 'linear'})
-      if Have_bar;
+      if ($self->{showProgressBar});
 
-    $progress->minor(0) if Have_bar;
-    $progress->max_update_rate(1) if Have_bar;
+    $progress->minor(0) if ($self->{showProgressBar});
+    $progress->max_update_rate(1) if ($self->{showProgressBar});
     my $next_update=0;
 
     my $count=0;
@@ -2144,7 +2149,7 @@ sub readPlots($$$$)
                 }
             }
 
-            if (Have_bar) {
+            if ( $self->{showProgressBar} ) {
                 # re-adjust target so progress bar doesn't seem too wonky
     	        if ( $count > $countEstimate ) {
     	    	    $countEstimate = $progress->target($count+1000);
@@ -2159,10 +2164,10 @@ sub readPlots($$$$)
             if ($line !~ m/^(---|PL:|BY:)/ ) {
                 $self->error("$file:$lineCount: unrecognized format \"$line\"");
             }
-	    $next_update=$progress->update($count) if Have_bar;
+	    $next_update=$progress->update($count) if ($self->{showProgressBar});
 	}
     }
-    $progress->update($countEstimate) if Have_bar;
+    $progress->update($countEstimate) if ($self->{showProgressBar});
 
     $self->status(sprintf("parsing Plots found $count ".withThousands($count)." in ".
 			  withThousands($lineCount)." lines in %d seconds",time()-$startTime));
@@ -2301,9 +2306,9 @@ sub invokeStage($$)
 	    my $progress=Term::ProgressBar->new({name  => "writing titles",
 						 count => $countEstimate,
 						 ETA   => 'linear'})
-	      if Have_bar;
-	    $progress->minor(0) if Have_bar;
-	    $progress->max_update_rate(1) if Have_bar;
+	      if ($self->{showProgressBar});
+	    $progress->minor(0) if ($self->{showProgressBar});
+	    $progress->max_update_rate(1) if ($self->{showProgressBar});
 	    my $next_update=0;
 	    
 	    open(OUT, "> $self->{imdbDir}/stage$stage.data") || die "$self->{imdbDir}/stage$stage.data:$!";
@@ -2312,7 +2317,7 @@ sub invokeStage($$)
 		print OUT "$movie\n";
 		
 		$count++;
-		if (Have_bar) {
+		if ($self->{showProgressBar}) {
 		    # re-adjust target so progress bar doesn't seem too wonky
 		    if ( $count > $countEstimate ) {
 			$countEstimate = $progress->target($count+100);
@@ -2323,7 +2328,7 @@ sub invokeStage($$)
 		    }
 		}
 	    }
-	    $progress->update($countEstimate) if Have_bar;
+	    $progress->update($countEstimate) if ($self->{showProgressBar});
 	    close(OUT);
 	    delete($self->{movies});
 	}
@@ -2352,9 +2357,9 @@ sub invokeStage($$)
 	    my $progress=Term::ProgressBar->new({name  => "writing directors",
 						 count => $countEstimate,
 						 ETA   => 'linear'})
-	      if Have_bar;
-	    $progress->minor(0) if Have_bar;
-	    $progress->max_update_rate(1) if Have_bar;
+	      if ($self->{showProgressBar});
+	    $progress->minor(0) if ($self->{showProgressBar});
+	    $progress->max_update_rate(1) if ($self->{showProgressBar});
 	    my $next_update=0;
 	
 	    my $count=0;
@@ -2377,7 +2382,7 @@ sub invokeStage($$)
 		print OUT "$key\t$value\n";
 		
 		$count++;
-		if (Have_bar) {
+		if ($self->{showProgressBar}) {
 		    # re-adjust target so progress bar doesn't seem too wonky
 		    if ( $count > $countEstimate ) {
 			$countEstimate = $progress->target($count+100);
@@ -2388,7 +2393,7 @@ sub invokeStage($$)
 		    }
 		}
 	    }
-	    $progress->update($countEstimate) if Have_bar;
+	    $progress->update($countEstimate) if ($self->{showProgressBar});
 	    close(OUT);
 	    delete($self->{movies});
 	}
@@ -2419,9 +2424,9 @@ sub invokeStage($$)
 	    my $progress=Term::ProgressBar->new({name  => "writing actors",
 						 count => $countEstimate,
 						 ETA   => 'linear'})
-	      if Have_bar;
-	    $progress->minor(0) if Have_bar;
-	    $progress->max_update_rate(1) if Have_bar;
+	      if ($self->{showProgressBar});
+	    $progress->minor(0) if ($self->{showProgressBar});
+	    $progress->max_update_rate(1) if ($self->{showProgressBar});
 	    my $next_update=0;
 	    
 	    my $count=0;
@@ -2430,7 +2435,7 @@ sub invokeStage($$)
 		print OUT "$key\t$self->{movies}{$key}\n";
 		
 		$count++;
-		if (Have_bar) {
+		if ($self->{showProgressBar}) {
 		    # re-adjust target so progress bar doesn't seem too wonky
 		    if ( $count > $countEstimate ) {
 			$countEstimate = $progress->target($count+100);
@@ -2441,7 +2446,7 @@ sub invokeStage($$)
 		    }
 		}
 	    }
-	    $progress->update($countEstimate) if Have_bar;
+	    $progress->update($countEstimate) if ($self->{showProgressBar});
 	    close(OUT);
 	    delete($self->{movies});
 	}
@@ -2469,9 +2474,9 @@ sub invokeStage($$)
 	    my $progress=Term::ProgressBar->new({name  => "writing actresses",
 						 count => $countEstimate,
 						 ETA   => 'linear'})
-	      if Have_bar;
-	    $progress->minor(0) if Have_bar;
-	    $progress->max_update_rate(1) if Have_bar;
+	      if ($self->{showProgressBar});
+	    $progress->minor(0) if ($self->{showProgressBar});
+	    $progress->max_update_rate(1) if ($self->{showProgressBar});
 	    my $next_update=0;
 	    
 	    my $count=0;
@@ -2479,7 +2484,7 @@ sub invokeStage($$)
 	    for my $key (keys %{$self->{movies}}) {
 		print OUT "$key\t$self->{movies}{$key}\n";
 		$count++;
-		if (Have_bar) {
+		if ($self->{showProgressBar}) {
 		    # re-adjust target so progress bar doesn't seem too wonky
 		    if ( $count > $countEstimate ) {
 			$countEstimate = $progress->target($count+100);
@@ -2490,7 +2495,7 @@ sub invokeStage($$)
 		    }
 		}
 	    }
-	    $progress->update($countEstimate) if Have_bar;
+	    $progress->update($countEstimate) if ($self->{showProgressBar});
 	    close(OUT);
 	    delete($self->{movies});
 	}
@@ -2519,9 +2524,9 @@ sub invokeStage($$)
 	    my $progress=Term::ProgressBar->new({name  => "writing genres",
 						 count => $countEstimate,
 						 ETA   => 'linear'})
-	      if Have_bar;
-	    $progress->minor(0) if Have_bar;
-	    $progress->max_update_rate(1) if Have_bar;
+	      if ($self->{showProgressBar});
+	    $progress->minor(0) if ($self->{showProgressBar});
+	    $progress->max_update_rate(1) if ($self->{showProgressBar});
 	    my $next_update=0;
 	    
 	    open(OUT, "> $self->{imdbDir}/stage$stage.data") || die "$self->{imdbDir}/stage$stage.data:$!";
@@ -2530,7 +2535,7 @@ sub invokeStage($$)
 		print OUT "$movie\t$self->{movies}->{$movie}\n";
 		
 		$count++;
-		if (Have_bar) {
+		if ($self->{showProgressBar}) {
 		    # re-adjust target so progress bar doesn't seem too wonky
 		    if ( $count > $countEstimate ) {
 			$countEstimate = $progress->target($count+100);
@@ -2541,7 +2546,7 @@ sub invokeStage($$)
 		    }
 		}
 	    }
-	    $progress->update($countEstimate) if Have_bar;
+	    $progress->update($countEstimate) if ($self->{showProgressBar});
 	    close(OUT);
 	    delete($self->{movies});
 	}
@@ -2569,9 +2574,9 @@ sub invokeStage($$)
 	    my $progress=Term::ProgressBar->new({name  => "writing ratings",
 						 count => $countEstimate,
 						 ETA   => 'linear'})
-	      if Have_bar;
-	    $progress->minor(0) if Have_bar;
-	    $progress->max_update_rate(1) if Have_bar;
+	      if ($self->{showProgressBar});
+	    $progress->minor(0) if ($self->{showProgressBar});
+	    $progress->max_update_rate(1) if ($self->{showProgressBar});
 	    my $next_update=0;
 	    
 	    open(OUT, "> $self->{imdbDir}/stage$stage.data") || die "$self->{imdbDir}/stage$stage.data:$!";
@@ -2581,7 +2586,7 @@ sub invokeStage($$)
 		print OUT "$movie\t$value[0]\t$value[1]\t$value[2]\n";
 		
 		$count++;
-		if (Have_bar) {
+		if ($self->{showProgressBar}) {
 		    # re-adjust target so progress bar doesn't seem too wonky
 		    if ( $count > $countEstimate ) {
 			$countEstimate = $progress->target($count+100);
@@ -2592,7 +2597,7 @@ sub invokeStage($$)
 		    }
 		}
 	    }
-	    $progress->update($countEstimate) if Have_bar;
+	    $progress->update($countEstimate) if ($self->{showProgressBar});
 	    close(OUT);
 	    delete($self->{movies});
 	}
@@ -2626,9 +2631,9 @@ sub invokeStage($$)
 	    my $progress=Term::ProgressBar->new({name  => "writing keywords",
 						 count => $countEstimate,
 						 ETA   => 'linear'})
-	      if Have_bar;
-	    $progress->minor(0) if Have_bar;
-	    $progress->max_update_rate(1) if Have_bar;
+	      if ($self->{showProgressBar});
+	    $progress->minor(0) if ($self->{showProgressBar});
+	    $progress->max_update_rate(1) if ($self->{showProgressBar});
 	    my $next_update=0;
 	    
 	    open(OUT, "> $self->{imdbDir}/stage$stage.data") || die "$self->{imdbDir}/stage$stage.data:$!";
@@ -2638,7 +2643,7 @@ sub invokeStage($$)
 		print OUT "$movie\t$self->{movies}->{$movie}\n";
 		
 		$count++;
-		if (Have_bar) {
+		if ($self->{showProgressBar}) {
 		    # re-adjust target so progress bar doesn't seem too wonky
 		    if ( $count > $countEstimate ) {
 			$countEstimate = $progress->target($count+100);
@@ -2649,7 +2654,7 @@ sub invokeStage($$)
 		    }
 		}
 	    }
-	    $progress->update($countEstimate) if Have_bar;
+	    $progress->update($countEstimate) if ($self->{showProgressBar});
 	    close(OUT);
 	    delete($self->{movies});
 	}
@@ -2683,9 +2688,9 @@ sub invokeStage($$)
 	    my $progress=Term::ProgressBar->new({name  => "writing plots",
 						 count => $countEstimate,
 						 ETA   => 'linear'})
-	      if Have_bar;
-	    $progress->minor(0) if Have_bar;
-	    $progress->max_update_rate(1) if Have_bar;
+	      if ($self->{showProgressBar});
+	    $progress->minor(0) if ($self->{showProgressBar});
+	    $progress->max_update_rate(1) if ($self->{showProgressBar});
 	    my $next_update=0;
 	    
 	    open(OUT, "> $self->{imdbDir}/stage$stage.data") || die "$self->{imdbDir}/stage$stage.data:$!";
@@ -2695,7 +2700,7 @@ sub invokeStage($$)
 		print OUT "$movie\t$self->{movies}->{$movie}\n";
 		
 		$count++;
-		if (Have_bar) {
+		if ($self->{showProgressBar}) {
 		    # re-adjust target so progress bar doesn't seem too wonky
 		    if ( $count > $countEstimate ) {
 			$countEstimate = $progress->target($count+100);
@@ -2706,7 +2711,7 @@ sub invokeStage($$)
 		    }
 		}
 	    }
-	    $progress->update($countEstimate) if Have_bar;
+	    $progress->update($countEstimate) if ($self->{showProgressBar});
 	    close(OUT);
 	    delete($self->{movies});
 	}
@@ -2723,9 +2728,9 @@ sub invokeStage($$)
 	    my $progress=Term::ProgressBar->new({name  => "reading titles",
 						 count => $countEstimate,
 						 ETA   => 'linear'})
-	      if Have_bar;
-	    $progress->minor(0) if Have_bar;
-	    $progress->max_update_rate(1) if Have_bar;
+	      if ($self->{showProgressBar});
+	    $progress->minor(0) if ($self->{showProgressBar});
+	    $progress->max_update_rate(1) if ($self->{showProgressBar});
 	    my $next_update=0;
 	    
 	    open(IN, "< $self->{imdbDir}/stage1.data") || die "$self->{imdbDir}/stage1.data:$!";
@@ -2733,7 +2738,7 @@ sub invokeStage($$)
 		chop();
 		$movies{$_}="";
 		
-		if (Have_bar) {
+		if ($self->{showProgressBar}) {
 		    # re-adjust target so progress bar doesn't seem too wonky
 		    if ( $. > $countEstimate ) {
 			$countEstimate = $progress->target($.+100);
@@ -2745,7 +2750,7 @@ sub invokeStage($$)
 		}
 	    }
 	    close(IN);
-	    $progress->update($countEstimate) if Have_bar;
+	    $progress->update($countEstimate) if ($self->{showProgressBar});
 	}
 
 	$self->status("merging in stage 2 data (directors)..");
@@ -2754,9 +2759,9 @@ sub invokeStage($$)
 	    my $progress=Term::ProgressBar->new({name  => "merging directors",
 						 count => $countEstimate,
 						 ETA   => 'linear'})
-	      if Have_bar;
-	    $progress->minor(0) if Have_bar;
-	    $progress->max_update_rate(1) if Have_bar;
+	      if ($self->{showProgressBar});
+	    $progress->minor(0) if ($self->{showProgressBar});
+	    $progress->max_update_rate(1) if ($self->{showProgressBar});
 	    my $next_update=0;
 
 	    open(IN, "< $self->{imdbDir}/stage2.data") || die "$self->{imdbDir}/stage2.data:$!";
@@ -2769,7 +2774,7 @@ sub invokeStage($$)
 		}
 		$movies{$1}=$_;
 
-		if (Have_bar) {
+		if ($self->{showProgressBar}) {
 		    # re-adjust target so progress bar doesn't seem too wonky
 		    if ( $. > $countEstimate ) {
 			$countEstimate = $progress->target($.+100);
@@ -2780,7 +2785,7 @@ sub invokeStage($$)
 		    }
 		}
 	    }
-	    $progress->update($countEstimate) if Have_bar;
+	    $progress->update($countEstimate) if ($self->{showProgressBar});
 	    close(IN);
 	}
 
@@ -2799,9 +2804,9 @@ sub invokeStage($$)
 	    my $progress=Term::ProgressBar->new({name  => "merging actors",
 						 count => $countEstimate,
 						 ETA   => 'linear'})
-	      if Have_bar;
-	    $progress->minor(0) if Have_bar;
-	    $progress->max_update_rate(1) if Have_bar;
+	      if ($self->{showProgressBar});
+	    $progress->minor(0) if ($self->{showProgressBar});
+	    $progress->max_update_rate(1) if ($self->{showProgressBar});
 	    my $next_update=0;
 
 	    open(IN, "< $self->{imdbDir}/stage3.data") || die "$self->{imdbDir}/stage3.data:$!";
@@ -2820,7 +2825,7 @@ sub invokeStage($$)
 		else {
 		    $movies{$dbkey}=$val.$tab.$_;
 		}
-		if (Have_bar) {
+		if ($self->{showProgressBar}) {
 		    # re-adjust target so progress bar doesn't seem too wonky
 		    if ( $. > $countEstimate ) {
 			$countEstimate = $progress->target($.+100);
@@ -2831,7 +2836,7 @@ sub invokeStage($$)
 		    }
 		}
 	    }
-	    $progress->update($countEstimate) if Have_bar;
+	    $progress->update($countEstimate) if ($self->{showProgressBar});
 	    close(IN);
 	}
 	    
@@ -2841,9 +2846,9 @@ sub invokeStage($$)
 	    my $progress=Term::ProgressBar->new({name  => "merging actresses",
 						 count => $countEstimate,
 						 ETA   => 'linear'})
-	      if Have_bar;
-	    $progress->minor(0) if Have_bar;
-	    $progress->max_update_rate(1) if Have_bar;
+	      if ($self->{showProgressBar});
+	    $progress->minor(0) if ($self->{showProgressBar});
+	    $progress->max_update_rate(1) if ($self->{showProgressBar});
 	    my $next_update=0;
 
 	    open(IN, "< $self->{imdbDir}/stage4.data") || die "$self->{imdbDir}/stage4.data:$!";
@@ -2862,7 +2867,7 @@ sub invokeStage($$)
 		else {
 		    $movies{$dbkey}=$val.$tab.$_;
 		}
-		if (Have_bar) {
+		if ($self->{showProgressBar}) {
 		    # re-adjust target so progress bar doesn't seem too wonky
 		    if ( $. > $countEstimate ) {
 			$countEstimate = $progress->target($.+100);
@@ -2873,7 +2878,7 @@ sub invokeStage($$)
 		    }
 		}
 	    }
-	    $progress->update($countEstimate) if Have_bar;
+	    $progress->update($countEstimate) if ($self->{showProgressBar});
 	    close(IN);
 	}
 	if ( 1 ) {
@@ -2891,9 +2896,9 @@ sub invokeStage($$)
 	    my $progress=Term::ProgressBar->new({name  => "merging genres",
 						 count => $countEstimate,
 						 ETA   => 'linear'})
-	      if Have_bar;
-	    $progress->minor(0) if Have_bar;
-	    $progress->max_update_rate(1) if Have_bar;
+	      if ($self->{showProgressBar});
+	    $progress->minor(0) if ($self->{showProgressBar});
+	    $progress->max_update_rate(1) if ($self->{showProgressBar});
 	    my $next_update=0;
 
 	    open(IN, "< $self->{imdbDir}/stage5.data") || die "$self->{imdbDir}/stage5.data:$!";
@@ -2909,7 +2914,7 @@ sub invokeStage($$)
 		}
 		$movies{$dbkey}.=$tab.$genres;
 
-		if (Have_bar) {
+		if ($self->{showProgressBar}) {
 		    # re-adjust target so progress bar doesn't seem too wonky
 		    if ( $. > $countEstimate ) {
 			$countEstimate = $progress->target($.+100);
@@ -2920,7 +2925,7 @@ sub invokeStage($$)
 		    }
 		}
 	    }
-	    $progress->update($countEstimate) if Have_bar;
+	    $progress->update($countEstimate) if ($self->{showProgressBar});
 	    close(IN);
 	}
 
@@ -2944,9 +2949,9 @@ sub invokeStage($$)
 	    my $progress=Term::ProgressBar->new({name  => "merging ratings",
 						 count => $countEstimate,
 						 ETA   => 'linear'})
-	      if Have_bar;
-	    $progress->minor(0) if Have_bar;
-	    $progress->max_update_rate(1) if Have_bar;
+	      if ($self->{showProgressBar});
+	    $progress->minor(0) if ($self->{showProgressBar});
+	    $progress->max_update_rate(1) if ($self->{showProgressBar});
 	    my $next_update=0;
 
 	    open(IN, "< $self->{imdbDir}/stage6.data") || die "$self->{imdbDir}/stage6.data:$!";
@@ -2963,7 +2968,7 @@ sub invokeStage($$)
 		}
 		$movies{$dbkey}.=$tab.$ratingDist.$tab.$ratingVotes.$tab.$ratingRank;
 
-		if (Have_bar) {
+		if ($self->{showProgressBar}) {
 		    # re-adjust target so progress bar doesn't seem too wonky
 		    if ( $. > $countEstimate ) {
 			$countEstimate = $progress->target($.+100);
@@ -2974,7 +2979,7 @@ sub invokeStage($$)
 		    }
 		}
 	    }
-	    $progress->update($countEstimate) if Have_bar;
+	    $progress->update($countEstimate) if ($self->{showProgressBar});
 	    close(IN);
 	}
 
@@ -3004,9 +3009,9 @@ sub invokeStage($$)
 	    my $progress=Term::ProgressBar->new({name  => "merging keywords",
 						 count => $countEstimate,
 						 ETA   => 'linear'})
-	      if Have_bar;
-	    $progress->minor(0) if Have_bar;
-	    $progress->max_update_rate(1) if Have_bar;
+	      if ($self->{showProgressBar});
+	    $progress->minor(0) if ($self->{showProgressBar});
+	    $progress->max_update_rate(1) if ($self->{showProgressBar});
 	    my $next_update=0;
 
 	    open(IN, "< $self->{imdbDir}/stage7.data") || die "$self->{imdbDir}/stage7.data:$!";
@@ -3021,7 +3026,7 @@ sub invokeStage($$)
 		}
 		$movies{$dbkey}.=$tab.$keywords;
 
-		if (Have_bar) {
+		if ($self->{showProgressBar}) {
 		    # re-adjust target so progress bar doesn't seem too wonky
 		    if ( $. > $countEstimate ) {
 			$countEstimate = $progress->target($.+100);
@@ -3032,7 +3037,7 @@ sub invokeStage($$)
 		    }
 		}
 	    }
-	    $progress->update($countEstimate) if Have_bar;
+	    $progress->update($countEstimate) if ($self->{showProgressBar});
 	    close(IN);
 	}
 
@@ -3062,9 +3067,9 @@ sub invokeStage($$)
 	    my $progress=Term::ProgressBar->new({name  => "merging plots",
 						 count => $countEstimate,
 						 ETA   => 'linear'})
-	      if Have_bar;
-	    $progress->minor(0) if Have_bar;
-	    $progress->max_update_rate(1) if Have_bar;
+	      if ($self->{showProgressBar});
+	    $progress->minor(0) if ($self->{showProgressBar});
+	    $progress->max_update_rate(1) if ($self->{showProgressBar});
 	    my $next_update=0;
 
 	    open(IN, "< $self->{imdbDir}/stage8.data") || die "$self->{imdbDir}/stage8.data:$!";
@@ -3079,7 +3084,7 @@ sub invokeStage($$)
 		}
 		$movies{$dbkey}.=$tab.$plot;
 
-		if (Have_bar) {
+		if ($self->{showProgressBar}) {
 		    # re-adjust target so progress bar doesn't seem too wonky
 		    if ( $. > $countEstimate ) {
 			$countEstimate = $progress->target($.+100);
@@ -3090,7 +3095,7 @@ sub invokeStage($$)
 		    }
 		}
 	    }
-	    $progress->update($countEstimate) if Have_bar;
+	    $progress->update($countEstimate) if ($self->{showProgressBar});
 	    close(IN);
 	}
 	if ( 1 ) {
@@ -3129,9 +3134,9 @@ sub invokeStage($$)
 	    my $progress=Term::ProgressBar->new({name  => "computing index",
 						 count => $countEstimate,
 						 ETA   => 'linear'})
-	      if Have_bar;
-	    $progress->minor(0) if Have_bar;
-	    $progress->max_update_rate(1) if Have_bar;
+	      if ($self->{showProgressBar});
+	    $progress->minor(0) if ($self->{showProgressBar});
+	    $progress->max_update_rate(1) if ($self->{showProgressBar});
 	    my $next_update=0;
 	    
 	    my $count=0;
@@ -3212,7 +3217,7 @@ sub invokeStage($$)
 		$nmovies{$hashkey}=$dbkey.$tab.$year.$tab.$qualifier.$tab.delete($movies{$key});
 		$count++;
 
-		if (Have_bar) {
+		if ($self->{showProgressBar}) {
 		    # re-adjust target so progress bar doesn't seem too wonky
 		    if ( $count > $countEstimate ) {
 			$countEstimate = $progress->target($count+100);
@@ -3223,7 +3228,7 @@ sub invokeStage($$)
 		    }
 		}
 	    }
-	    $progress->update($countEstimate) if Have_bar;
+	    $progress->update($countEstimate) if ($self->{showProgressBar});
 
 	    if ( scalar(keys %movies) != 0 ) {
 		die "what happened, we have keys left ?";
@@ -3236,9 +3241,9 @@ sub invokeStage($$)
 	    my $progress=Term::ProgressBar->new({name  => "writing database",
 						 count => $countEstimate,
 						 ETA   => 'linear'})
-	      if Have_bar;
-	    $progress->minor(0) if Have_bar;
-	    $progress->max_update_rate(1) if Have_bar;
+	      if ($self->{showProgressBar});
+	    $progress->minor(0) if ($self->{showProgressBar});
+	    $progress->max_update_rate(1) if ($self->{showProgressBar});
 	    my $next_update=0;
 	    
 	    open(IDX, "> $self->{moviedbIndex}") || die "$self->{moviedbIndex}:$!";
@@ -3305,7 +3310,7 @@ sub invokeStage($$)
 		print IDX $key."\t".$dbkey."\t".$year."\t".$qualifier."\t".$lineno."\n";
 		print DAT $lineno.":".$details."\t".join($tab, @rest)."\n";
 
-		if (Have_bar) {
+		if ($self->{showProgressBar}) {
 		    # re-adjust target so progress bar doesn't seem too wonky
 		    if ( $count > $countEstimate ) {
 			$countEstimate = $progress->target($count+100);
@@ -3316,7 +3321,7 @@ sub invokeStage($$)
 		    }
 		}
 	    }
-	    $progress->update($countEstimate) if Have_bar;
+	    $progress->update($countEstimate) if ($self->{showProgressBar});
 	    close(DAT);
 	    close(IDX);
 	}
