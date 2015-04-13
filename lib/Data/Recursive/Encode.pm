@@ -100,21 +100,21 @@ __END__
 
 =head1 NAME
 
-Data::Recursive::Encode - Encode/Decode Values In A Structure
+XMLTV::Data::Recursive::Encode - Encode/Decode Values In A Structure
 
 =head1 SYNOPSIS
 
-    use Data::Recursive::Encode;
+    use XMLTV::Data::Recursive::Encode;
 
-    Data::Recursive::Encode->decode('euc-jp', $data);
-    Data::Recursive::Encode->encode('euc-jp', $data);
-    Data::Recursive::Encode->decode_utf8($data);
-    Data::Recursive::Encode->encode_utf8($data);
-    Data::Recursive::Encode->from_to($data, $from_enc, $to_enc[, $check]);
+    XMLTV::Data::Recursive::Encode->decode('euc-jp', $data);
+    XMLTV::Data::Recursive::Encode->encode('euc-jp', $data);
+    XMLTV::Data::Recursive::Encode->decode_utf8($data);
+    XMLTV::Data::Recursive::Encode->encode_utf8($data);
+    XMLTV::Data::Recursive::Encode->from_to($data, $from_enc, $to_enc[, $check]);
 
 =head1 DESCRIPTION
 
-Data::Recursive::Encode visits each node of a structure, and returns a new
+XMLTV::Data::Recursive::Encode visits each node of a structure, and returns a new
 structure with each node's encoding (or similar action). If you ever wished
 to do a bulk encode/decode of the contents of a structure, then this
 module may help you.
@@ -125,35 +125,35 @@ module may help you.
 
 =item decode
 
-    my $ret = Data::Recursive::Encode->decode($encoding, $data, [CHECK]);
+    my $ret = XMLTV::Data::Recursive::Encode->decode($encoding, $data, [CHECK]);
 
 Returns a structure containing nodes which are decoded from the specified
 encoding.
 
 =item encode
 
-    my $ret = Data::Recursive::Encode->encode($encoding, $data, [CHECK]);
+    my $ret = XMLTV::Data::Recursive::Encode->encode($encoding, $data, [CHECK]);
 
 Returns a structure containing nodes which are encoded to the specified
 encoding.
 
 =item decode_utf8
 
-    my $ret = Data::Recursive::Encode->decode_utf8($data, [CHECK]);
+    my $ret = XMLTV::Data::Recursive::Encode->decode_utf8($data, [CHECK]);
 
 Returns a structure containing nodes which have been processed through
 decode_utf8.
 
 =item encode_utf8
 
-    my $ret = Data::Recursive::Encode->encode_utf8($data);
+    my $ret = XMLTV::Data::Recursive::Encode->encode_utf8($data);
 
 Returns a structure containing nodes which have been processed through
 encode_utf8.
 
 =item from_to
 
-    my $ret = Data::Recursive::Encode->from_to($data, FROM_ENC, TO_ENC[, CHECK]);
+    my $ret = XMLTV::Data::Recursive::Encode->from_to($data, FROM_ENC, TO_ENC[, CHECK]);
 
 Returns a structure containing nodes which have been processed through
 from_to.
