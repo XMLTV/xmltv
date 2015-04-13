@@ -817,6 +817,15 @@ my @opt_components
                     'HTTP::Cache::Transparent' => 0, },
      },
 
+     { name => 'tv_grab_eu_dotmedia',
+       blurb => 'Grabber for Europe (xmltv.se / dotmedia)',
+       exes => [ 'grab/eu_dotmedia/tv_grab_eu_dotmedia' ],
+       prereqs => { 'XML::LibXML'    => 0,
+                    'Compress::Zlib' => 0,
+                    'IO::Stringy'    => 0,
+                    'HTTP::Cache::Transparent' => 0, },
+     },
+
      { name => 'tv_grab_fr',
        blurb => 'Grabber for France',
        exes => [ 'grab/fr/tv_grab_fr' ],
