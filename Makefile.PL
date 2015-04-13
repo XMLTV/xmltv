@@ -47,7 +47,7 @@ to the xmltv-users mailing list so we can try to work around the bug.
 At present the only known fix is to upgrade to a newer perl version
 such as 5.6.1 or 5.8.3.
 END
-  ;
+;
 }
 
 # A couple of undocumented options to help with building the Windows
@@ -120,7 +120,7 @@ my @exes
        filter/tv_imdb
        filter/tv_remove_some_overlapping
        filter/tv_count
-			 filter/tv_merge
+       filter/tv_merge
        tools/tv_validate_grabber
        tools/tv_validate_file
        tools/tv_find_grabbers
@@ -179,7 +179,7 @@ my %prereqs
      'Memoize'     => 0,
      'Storable'    => 2.04,
      'File::Slurp' => 0,
-	 'XML::TreePP' => 0,
+     'XML::TreePP' => 0,
     );
 
 # Files which are run to generate source code.
@@ -258,9 +258,9 @@ recommended you run 'make distclean' to clear out old built files
 before generating a new Makefile.
 
 END
-  ;
+;
     if (! ask(0, "Do you wish to continue anyway?", 0)) {
-	exit(1);
+        exit(1);
     }
 }
 
@@ -355,7 +355,7 @@ my @opt_components
 #       exes => [ 'grab/dtv_la/tv_grab_dtv_la' ],
 #       prereqs => { 'HTML::TreeBuilder' => 0,
 #                    'HTML::Form'    => 0 } },
-# 2014-04-21 reinstate after unbreak 
+# 2014-04-21 reinstate after unbreak
      { name => 'tv_grab_dtv_la',
        blurb => 'Grabber for Latin America & Caribbean',
        exes => [ 'grab/dtv_la/tv_grab_dtv_la' ],
@@ -365,8 +365,8 @@ my @opt_components
                     'JSON::PP'          => 0,
                     'Date::Manip'       => 0,
                     'Date::Parse'       => 0,
-                    'Date::Language'    => 0, } 
-	},
+                    'Date::Language'    => 0, }
+     },
 
      { name => 'tv_grab_uk_rt',
        blurb => 'Grabber for UK and Ireland (Radio Times)',
@@ -621,7 +621,7 @@ my @opt_components
 #                     'XML::LibXML' => 0,
 #          },
 #     },
-# 2014-04-13 reinstate after unbreak 
+# 2014-04-13 reinstate after unbreak
      { name     => 'tv_grab_fi_sv',
        blurb    => 'Grabber for Finland (Swedish)',
        exes     => [ 'grab/fi_sv/tv_grab_fi_sv' ],
@@ -668,7 +668,7 @@ my @opt_components
 #       exes => [ 'grab/nl/tv_grab_nl' ],
 #       prereqs => { 'HTML::TreeBuilder' => 0 },
 #     },
-# 2014-04-29 reinstate after unbreak 
+# 2014-04-29 reinstate after unbreak
      { name => 'tv_grab_nl',
        blurb => 'Grabber for the Netherlands',
        exes => [ 'grab/nl/tv_grab_nl' ],
@@ -834,7 +834,7 @@ my @opt_components
        blurb => 'Grabber for France (Kazer)',
        exes => [ 'grab/fr_kazer/tv_grab_fr_kazer' ],
        prereqs => { 'IO::Uncompress::Unzip' => 0 },
-       },
+     },
 
 #
 # depreciate tv_grab_no as it is no longer supported (per author, cwattengard@gmail.com)
@@ -853,7 +853,7 @@ my @opt_components
 #       prereqs => { 'HTML::TreeBuilder' => 0,
 #                  }
 #     },
-# 2014-05-07 reinstate after unbreak 
+# 2014-05-07 reinstate after unbreak
      { name => 'tv_grab_pt',
        blurb => 'Grabber for Portugal',
        exes => [ 'grab/pt/tv_grab_pt' ],
@@ -862,8 +862,8 @@ my @opt_components
                     'HTML::Entities'    => 1.27,
                     'HTTP::Cache::Transparent' => 0,
                     'DateTime'          => 0,
-					'Unicode::UTF8simple' => 0,
-                    'Encode'            => 0,} 
+                    'Unicode::UTF8simple' => 0,
+                    'Encode'            => 0,}
      },
 
      { name => 'tv_grab_pt_meo',
@@ -967,7 +967,7 @@ my @opt_components
                     'File::Path'      => 0,
                   },
      },
-     
+
 # bilbo_uk 2014-10-10 added new grabber from Matthew April <mapril@tvmedia.ca>
      { name => 'tv_grab_na_tvmedia',
        blurb => 'Grabber for North America (TVMedia)',
@@ -977,7 +977,7 @@ my @opt_components
                   },
      },
 
-     
+
     );
 
 # Now we need to prompt about each optional component.  The style of
@@ -1032,7 +1032,7 @@ are installed by default; here you choose grabbers for different
 countries and front-ends for managing listings.
 
 END
-      ;
+;
 
     my %by_name;
     foreach (@opt_components) {
@@ -1258,7 +1258,7 @@ sub MY::constants {
     my $inherited = shift->SUPER::constants(@_);
     die if not keys %::extra_constants;
     foreach (sort keys %::extra_constants) {
-	$inherited .= "$_ = $::extra_constants{$_}\n";
+        $inherited .= "$_ = $::extra_constants{$_}\n";
     }
     return $inherited;
 }
@@ -1295,7 +1295,7 @@ $target ::
                 \$(INST_$uc) \$(INSTALL$uc)
 
 END
-  ;
+;
         $extra =~ s/ {8}/\t/g;
         $inherited .= $extra;
     }
@@ -1372,9 +1372,9 @@ windows_dist ::
 	perl -ne "BEGIN { print qq'\n=pod\n\n' } print if (/^The format options are:/ .. /^=/) and not /^=/" <$location/doc/man/date_formats.txt.tmp >$location/doc/man/date_formats.txt.tmp.1
 	pod2text <$location/doc/man/date_formats.txt.tmp.1 >>$location/doc/man/date_formats.txt
 	perl -MExtUtils::Command -e rm_f $location/doc/man/date_formats.txt.tmp*
-        # Don't use $(INSTALLBIN), it seems to disregard PREFIX passed
-        # to 'make'.
-        #
+	# Don't use $(INSTALLBIN), it seems to disregard PREFIX passed
+	# to 'make'.
+	#
 	perl -MExtUtils::Command -e rm_rf $location/bin/ $location/lib/ $(INSTMANDIR) $(INSTALLMAN3DIR)
 	perl -MExtUtils::Command -e cp xmltv.dtd $location
 	perl -MExtUtils::Command -e cp xmltv-lineups.xsd $location
@@ -1434,7 +1434,7 @@ sub MY::installbin {
 	\@\$(EQUALIZE_TIMESTAMP) \$(PERL_INC)/perl.h \$(INST_$uc)/$dir/.exists
 	-\@\$(CHMOD) \$(PERM_RWX) \$(INST_$uc)/$dir
 END
-  ;
+;
             }
             my $dir_exists = "\$(INST_$uc)/" . join('/', @dirs) . '/.exists';
             $dir_exists =~ tr!/!/!s;
@@ -1445,7 +1445,7 @@ END
 	perl -MExtUtils::Command -e cp $src \$(INST_$uc)/$inst_pos
 	-\@\$(CHMOD) \$(PERM_RW) \$(INST_$uc)/$inst_pos
 END
-              ;
+;
             $extra =~ s/ {8}/\t/g;
             $inherited .= $extra;
         }
