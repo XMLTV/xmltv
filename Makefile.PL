@@ -193,14 +193,15 @@ my %pl_files = ('filter/tv_grep.PL' => 'filter/tv_grep',
 # Some tools which are generated from .PL files need the share/
 # directory passed as an extra argument.
 #
-my @need_share = ( 'tools/tv_validate_file',
-                   'tools/tv_validate_grabber',
-                   'lib/Supplement.pm',
-                   );
+my @need_share = ('tools/tv_validate_file',
+                  'tools/tv_validate_grabber',
+                  'lib/Supplement.pm',
+                 );
 
 # Files to be installed in the system-wide share/ directory.
 my %share_files = ('xmltv.dtd' => 'xmltv.dtd',
-                   'xmltv-lineups.xsd' => 'xmltv-lineups.xsd');
+                   'xmltv-lineups.xsd' => 'xmltv-lineups.xsd',
+                  );
 
 # Files which 'make clean' should remove, but doesn't by default, so
 # we have to patch it.
@@ -208,7 +209,9 @@ my %share_files = ('xmltv.dtd' => 'xmltv.dtd',
 my @to_clean = ('filter/tv_grep',
                 'tools/tv_validate_file',
                 'tools/tv_validate_grabber',
-                'lib/XMLTV.pm', 'lib/Supplement.pm');
+                'lib/XMLTV.pm',
+                'lib/Supplement.pm',
+               );
 
 # Extra dependencies to add to the Makefile.
 my @deps = ('filter/tv_grep' => [ qw(filter/tv_grep.in pm_to_blib) ],
@@ -216,7 +219,7 @@ my @deps = ('filter/tv_grep' => [ qw(filter/tv_grep.in pm_to_blib) ],
             'tools/tv_validate_grabber' => [ qw(tools/tv_validate_grabber.in) ],
             'lib/XMLTV.pm' => [ 'lib/XMLTV.pm.in' ],
             'lib/Supplement.pm' => [ 'lib/Supplement.pm.in' ],
-            );
+           );
 
 # Some grabbers which are generated from .PL files need the share/
 # directory passed as an extra argument.
@@ -279,7 +282,8 @@ my @opt_components
                     'HTTP::Cookies'     => 0,
                     'LWP::UserAgent'    => 0,
                     'JSON::PP'          => 0,
-                    'Date::Language'    => 0, } },
+                    'Date::Language'    => 0, },
+     },
 
 # Disabled 2006-04-12 since it doesn't provide data anymore.
 #     { name     => 'tv_grab_au',
@@ -345,8 +349,8 @@ my @opt_components
 #          share_files => { 'grab/ch_search/channel_ids'
 #                   => 'tv_grab_ch_search/channel_ids' },
            grab_need_share => [ 'ch_search' ],
-           prereqs  => { 'HTML::Entities' => 1.27,
-                'HTML::TreeBuilder' => 0 },
+           prereqs  => { 'HTML::Entities'    => 1.27,
+                         'HTML::TreeBuilder' => 0, },
      },
 
 # rmeden 2012-06-11 broken since 2010
@@ -365,7 +369,7 @@ my @opt_components
                     'JSON::PP'          => 0,
                     'Date::Manip'       => 0,
                     'Date::Parse'       => 0,
-                    'Date::Language'    => 0, }
+                    'Date::Language'    => 0, },
      },
 
      { name => 'tv_grab_uk_rt',
@@ -421,16 +425,15 @@ my @opt_components
             'grab/uk_rt/lineups/freesat.map'
                 => 'tv_grab_uk_rt/lineups/freesat.map',
             'grab/uk_rt/lineups/saorview.map'
-                => 'tv_grab_uk_rt/lineups/saorview.map',
-       },
+                => 'tv_grab_uk_rt/lineups/saorview.map', },
        prereqs => { 'HTTP::Cache::Transparent' => 1.0,
-                    'IO::Stringy'    => 0,
-                    'LWP::UserAgent' => 0,
-                    'DateTime'       => 0,
+                    'IO::Stringy'        => 0,
+                    'LWP::UserAgent'     => 0,
+                    'DateTime'           => 0,
                     'DateTime::Duration' => 0,
                     'DateTime::TimeZone' => 0,
-                    'HTML::Entities' => 1.27,
-                    'XML::LibXML' => 0, },
+                    'HTML::Entities'     => 1.27,
+                    'XML::LibXML'        => 0, },
      },
 
      { name => 'tv_grab_uk_bleb',
@@ -441,7 +444,7 @@ my @opt_components
        to_clean => [ 'grab/uk_bleb/tv_grab_uk_bleb' ],
        deps => [ 'grab/uk_bleb/tv_grab_uk_bleb' => [ 'grab/uk_bleb/tv_grab_uk_bleb.in' ] ],
        grab_need_share => [ 'uk_bleb' ],
-       prereqs => { 'IO::Stringy' => 0, 'Archive::Zip' => 0 },
+       prereqs => { 'IO::Stringy' => 0, 'Archive::Zip' => 0, },
      },
 
      { name => 'tv_grab_uk_atlas',
@@ -457,8 +460,7 @@ my @opt_components
             'grab/uk_atlas/tv_grab_uk_atlas.map.channels.conf'
                 => 'tv_grab_uk_atlas/tv_grab_uk_atlas.map.channels.conf',
             'grab/uk_atlas/cgi-bin/getatlas.pl'
-                => 'tv_grab_uk_atlas/cgi-bin/getatlas.pl',
-       },
+                => 'tv_grab_uk_atlas/cgi-bin/getatlas.pl', },
        prereqs => { 'HTTP::Cache::Transparent' => 1.0,
                     'LWP::UserAgent'  => 0,
                     'HTTP::Cookies'   => 0,
@@ -520,7 +522,7 @@ my @opt_components
        exes => [ 'grab/is/tv_grab_is' ],
        share_files => { 'grab/is/category_map' => 'tv_grab_is/category_map' },
        prereqs => { 'XML::LibXSLT' => 0,
-                    'XML::DOM'     => 0 } ,
+                    'XML::DOM'     => 0, },
      },
 
      { name => 'tv_grab_it',
@@ -544,10 +546,10 @@ my @opt_components
        to_clean => [ 'grab/it_dvb/tv_grab_it_dvb' ],
        deps => [ 'grab/it_dvb/tv_grab_it_dvb' => [ 'grab/it_dvb/tv_grab_it_dvb.in' ] ],
        grab_need_share => [ 'it_dvb' ],
-       prereqs => { 'Data::Dump' => 0,
-                    'IO::Select' => 0,
-                    'Linux::DVB' => 0,
-                    'Time::HiRes' => 0 } ,
+       prereqs => { 'Data::Dump'  => 0,
+                    'IO::Select'  => 0,
+                    'Linux::DVB'  => 0,
+                    'Time::HiRes' => 0, } ,
      },
 
 # 2013-05-13 xmltv feed disabled by What's On due to TOS violations. It may come back
@@ -565,9 +567,9 @@ my @opt_components
        pl_files => { 'grab/na_dd/tv_grab_na_dd.PL' => 'grab/na_dd/tv_grab_na_dd' },
        deps     => [ 'grab/na_dd/tv_grab_na_dd' => [ 'grab/na_dd/tv_grab_na_dd.in' ] ],
        to_clean => [ 'grab/na_dd/tv_grab_na_dd' ],
-       prereqs => { 'SOAP::Lite' => 0.67,
-                            'Term::ReadKey' => 0,
-                     'XML::Twig' => 3.28,                           },
+       prereqs => { 'SOAP::Lite'    => 0.67,
+                    'Term::ReadKey' => 0,
+                    'XML::Twig'     => 3.28, },
        grab_need_share => [ 'na_dd' ],
      },
 
@@ -606,8 +608,7 @@ my @opt_components
        to_clean => [ 'grab/fi/tv_grab_fi' ],
        prereqs  => {
                     'HTML::TreeBuilder' => 0,
-                    'Time::Local'       => 0,
-                   },
+                    'Time::Local'       => 0, },
      },
 
 # 2012-03-16 no longer works and maintainer suggests to use _fi now which was extended to
@@ -625,11 +626,9 @@ my @opt_components
      { name     => 'tv_grab_fi_sv',
        blurb    => 'Grabber for Finland (Swedish)',
        exes     => [ 'grab/fi_sv/tv_grab_fi_sv' ],
-       prereqs  => {
-                     'DateTime'    => 0,
+       prereqs  => { 'DateTime'   => 0,
                      'IO::Scalar' => 0,
-                     'HTML::TreeBuilder' => 0,
-          },
+                     'HTML::TreeBuilder' => 0, },
      },
 
 # 2009-03-08 removed due to breakage after source site changes
@@ -654,7 +653,8 @@ my @opt_components
      { name => 'tv_grab_es_laguiatv',
        blurb => 'Alternative grabber for Spain',
        exes => [ 'grab/es_laguiatv/tv_grab_es_laguiatv' ],
-       prereqs => { 'HTML::TreeBuilder' => 0 } },
+       prereqs => { 'HTML::TreeBuilder' => 0, },
+     },
 
 # rmeden 2012-06-11 broken since 2012-03-29
 #     { name => 'tv_grab_es_miguiatv',
@@ -672,16 +672,15 @@ my @opt_components
      { name => 'tv_grab_nl',
        blurb => 'Grabber for the Netherlands',
        exes => [ 'grab/nl/tv_grab_nl' ],
-       prereqs => { 'HTML::TreeBuilder' => 0,
-                    'HTML::Entities' => 0,
-                    'HTTP::Cache::Transparent' => 0,
-                    'IO::File' => 0,
-                    'Date::Parse' => 0,
+       prereqs => { 'HTTP::Cache::Transparent' => 0,
+                    'HTML::TreeBuilder' => 0,
+                    'HTML::Entities'    => 0,
+                    'IO::File'     => 0,
+                    'Date::Parse'  => 0,
                     'Date::Format' => 0,
-                    'DateTime' => 0,
-                    'Encode' => 0,
-                    'JSON::PP' => 0,
-                  },
+                    'DateTime'     => 0,
+                    'Encode'       => 0,
+                    'JSON::PP'     => 0, },
      },
 
 # 2008-07-12 - removed by rmeden, not getting programs for a while.
@@ -706,7 +705,8 @@ my @opt_components
        deps => [ 'grab/huro/tv_grab_huro'
                  => [ 'grab/huro/tv_grab_huro.in' ] ],
        grab_need_share => [ 'huro' ],
-       prereqs => { 'HTML::TreeBuilder' => 0 } },
+       prereqs => { 'HTML::TreeBuilder' => 0 },
+     },
 
 # 2008-07-22 - removed by rmeden, website changes, won't be fixed
 #     { name => 'tv_grab_dk',
@@ -731,12 +731,11 @@ my @opt_components
      { name => 'tv_grab_dk_dr',
        blurb => 'Grabber for Denmark (dr.dk)',
        exes => [ 'grab/dk_dr/tv_grab_dk_dr' ],
-       prereqs => { 'Data::Dumper' => 0,
+       prereqs => { 'Data::Dumper'   => 0,
                     'LWP::UserAgent' => 0,
-                    'IO::Scalar' => 0,
-                    'DateTime' => 0,
-                    'JSON' => 0,
-                  },
+                    'IO::Scalar'     => 0,
+                    'DateTime'       => 0,
+                    'JSON'           => 0, },
      },
 
 #
@@ -756,11 +755,10 @@ my @opt_components
        to_clean => [ 'grab/se_swedb/tv_grab_se_swedb' ],
        deps => [ 'grab/se_swedb/tv_grab_se_swedb'
                  => [ 'grab/se_swedb/tv_grab_se_swedb.in' ] ],
-       prereqs => { 'XML::LibXML' => 0,
+       prereqs => { 'XML::LibXML'    => 0,
                     'Compress::Zlib' => 0,
-                    'IO::Stringy' => 0,
-                    'HTTP::Cache::Transparent' => 0,
-                  },
+                    'IO::Stringy'    => 0,
+                    'HTTP::Cache::Transparent' => 0, },
      },
 
      { name => 'tv_grab_hr',
@@ -771,11 +769,10 @@ my @opt_components
        to_clean => [ 'grab/hr/tv_grab_hr' ],
        deps => [ 'grab/hr/tv_grab_hr'
                  => [ 'grab/se_swedb/tv_grab_se_swedb.in' ] ],
-       prereqs => { 'XML::LibXML' => 0,
+       prereqs => { 'XML::LibXML'    => 0,
                     'Compress::Zlib' => 0,
-                    'IO::Stringy' => 0,
-                    'HTTP::Cache::Transparent' => 0,
-                  },
+                    'IO::Stringy'    => 0,
+                    'HTTP::Cache::Transparent' => 0, },
      },
 
      { name => 'tv_grab_no_gfeed',
@@ -786,11 +783,10 @@ my @opt_components
        to_clean => [ 'grab/no_gfeed/tv_grab_no_gfeed' ],
        deps => [ 'grab/no_gfeed/tv_grab_no_gfeed'
                  => [ 'grab/se_swedb/tv_grab_se_swedb.in' ] ],
-       prereqs => { 'XML::LibXML' => 0,
+       prereqs => { 'XML::LibXML'    => 0,
                     'Compress::Zlib' => 0,
-                    'IO::Stringy' => 0,
-                    'HTTP::Cache::Transparent' => 0,
-                  },
+                    'IO::Stringy'    => 0,
+                    'HTTP::Cache::Transparent' => 0, },
      },
 
      { name => 'tv_grab_eu_egon',
@@ -801,11 +797,10 @@ my @opt_components
        to_clean => [ 'grab/eu_egon/tv_grab_eu_egon' ],
        deps => [ 'grab/eu_egon/tv_grab_eu_egon'
                  => [ 'grab/se_swedb/tv_grab_se_swedb.in' ] ],
-       prereqs => { 'XML::LibXML' => 0,
+       prereqs => { 'XML::LibXML'    => 0,
                     'Compress::Zlib' => 0,
-                    'IO::Stringy' => 0,
-                    'HTTP::Cache::Transparent' => 0,
-                  },
+                    'IO::Stringy'    => 0,
+                    'HTTP::Cache::Transparent' => 0, },
      },
 
      { name => 'tv_grab_se_tvzon',
@@ -816,24 +811,23 @@ my @opt_components
        to_clean => [ 'grab/se_tvzon/tv_grab_se_tvzon' ],
        deps => [ 'grab/se_tvzon/tv_grab_se_tvzon'
                  => [ 'grab/se_swedb/tv_grab_se_swedb.in' ] ],
-       prereqs => { 'XML::LibXML' => 0,
+       prereqs => { 'XML::LibXML'    => 0,
                     'Compress::Zlib' => 0,
-                    'IO::Stringy' => 0,
-                    'HTTP::Cache::Transparent' => 0,
-                  },
+                    'IO::Stringy'    => 0,
+                    'HTTP::Cache::Transparent' => 0, },
      },
 
      { name => 'tv_grab_fr',
        blurb => 'Grabber for France',
        exes => [ 'grab/fr/tv_grab_fr' ],
-       prereqs => { 'HTML::Entities' => 1.27,
-                    'HTML::TreeBuilder' => 0 },
+       prereqs => { 'HTML::Entities'    => 1.27,
+                    'HTML::TreeBuilder' => 0, },
      },
 
      { name => 'tv_grab_fr_kazer',
        blurb => 'Grabber for France (Kazer)',
        exes => [ 'grab/fr_kazer/tv_grab_fr_kazer' ],
-       prereqs => { 'IO::Uncompress::Unzip' => 0 },
+       prereqs => { 'IO::Uncompress::Unzip' => 0, },
      },
 
 #
@@ -869,10 +863,9 @@ my @opt_components
      { name => 'tv_grab_pt_meo',
        blurb => 'Grabber for Portugal (MEO)',
        exes => [ 'grab/pt_meo/tv_grab_pt_meo' ],
-       prereqs => { 'DateTime' => 0,
+       prereqs => { 'DateTime'    => 0,
                     'XML::LibXML' => 0,
-                    'LWP' => 0,
-                  },
+                    'LWP'         => 0, },
      },
 
 # honir 2015-03-05 hasn't worked since 2014-11-19 - source site permanently broken
@@ -886,12 +879,12 @@ my @opt_components
        blurb => '$$ Grabber for some European countries (epgdata.com)',
        exes => [ 'grab/eu_epgdata/tv_grab_eu_epgdata' ],
        share_files => { 'grab/eu_epgdata/channel_ids' => 'tv_grab_eu_epgdata/channel_ids' },
-       prereqs => { 'XML::Twig' => 0,
-                    'Archive::Zip' => 0,
+       prereqs => { 'XML::Twig'      => 0,
+                    'Archive::Zip'   => 0,
                     'HTML::Entities' => 0,
-                    'LWP::Simple' => 0,
-                    'File::Temp' => 0,
-                    'DateTime::Format::Strptime' => 0 },
+                    'LWP::Simple'    => 0,
+                    'File::Temp'     => 0,
+                    'DateTime::Format::Strptime' => 0, },
      },
 
 
@@ -899,7 +892,8 @@ my @opt_components
      { name => 'tv_grab_combiner',
        blurb => 'Grabber that combines data from other grabbers',
        exes => [ 'grab/combiner/tv_grab_combiner' ],
-       prereqs => { 'XML::LibXML' => 0 } },
+       prereqs => { 'XML::LibXML' => 0, },
+     },
 
      { name => 'tv_check',
        blurb => 'Program to report exceptions and changes in a schedule',
@@ -909,12 +903,12 @@ my @opt_components
                     choose/tv_check/tv_check_doc.jpg
                    ) ],
        prereqs => { 'Tk' => 0,
-                    'Tk::TableMatrix' => 0,
-                  } },
+                    'Tk::TableMatrix' => 0, }
+     },
 
      { name => 'tv_pick_cgi',
        blurb => 'CGI program to filter listings (to install manually)',
-       prereqs => { 'CGI' => 0 },
+       prereqs => { 'CGI' => 0, },
        type => 'run',
      },
 
@@ -946,37 +940,33 @@ my @opt_components
        blurb => 'Grabber for North America (DirecTV)',
        exes => [ 'grab/na_dtv/tv_grab_na_dtv' ],
        prereqs => {
-         'DateTime'                  => 0,
-         'HTTP::Cookies'             => 0,
-         'LWP::UserAgent'            => 0,
-         'JSON::PP'                  => 0,
-         'HTML::TokeParser'          => 0,
-       },
+         'DateTime'         => 0,
+         'HTTP::Cookies'    => 0,
+         'LWP::UserAgent'   => 0,
+         'JSON::PP'         => 0,
+         'HTML::TokeParser' => 0, },
      },
 
      { name => 'tv_grab_tr',
        blurb => 'Grabber for Turkey (Digiturk)',
        exes => [ 'grab/tr/tv_grab_tr' ],
        prereqs => { 'HTTP::Cache::Transparent' => 1.0,
-                    'LWP::UserAgent'  => 0,
-                    'HTTP::Cookies'   => 0,
-                    'DateTime'        => 0,
-                    'Date::Parse'     => 0,
-                    'Encode'          => 0,
-                    'URI::Escape'     => 0,
-                    'File::Path'      => 0,
-                  },
+                    'LWP::UserAgent' => 0,
+                    'HTTP::Cookies'  => 0,
+                    'DateTime'       => 0,
+                    'Date::Parse'    => 0,
+                    'Encode'         => 0,
+                    'URI::Escape'    => 0,
+                    'File::Path'     => 0, },
      },
 
 # bilbo_uk 2014-10-10 added new grabber from Matthew April <mapril@tvmedia.ca>
      { name => 'tv_grab_na_tvmedia',
        blurb => 'Grabber for North America (TVMedia)',
        exes => [ 'grab/na_tvmedia/tv_grab_na_tvmedia' ],
-       prereqs => { 'XML::LibXML'  => 0,
-                    'LWP::Simple'  => 0,
-                  },
+       prereqs => { 'XML::LibXML' => 0,
+                    'LWP::Simple' => 0, },
      },
-
 
     );
 
@@ -1250,7 +1240,7 @@ WriteMakefile
    'PM'            => \%pm,
    'PREREQ_PM'     => \%prereqs,
     # No special parameters for 'make clean' or 'make dist'
-);
+  );
 
 
 sub MY::constants {
