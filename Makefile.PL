@@ -856,8 +856,7 @@ my @opt_components
                     'HTML::Entities'    => 1.27,
                     'HTTP::Cache::Transparent' => 0,
                     'DateTime'          => 0,
-                    'Unicode::UTF8simple' => 0,
-                    'Encode'            => 0,}
+                    'Encode'            => 0, },
      },
 
      { name => 'tv_grab_pt_meo',
