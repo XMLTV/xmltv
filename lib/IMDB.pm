@@ -2010,7 +2010,7 @@ sub readKeywords($$$$)
 	    }
 	    last;
 	}
-	elsif ( $lineCount > 70000 ) {
+	elsif ( $lineCount > 100000 ) {
 	    $self->error("$file: stopping at line $lineCount, didn't see \"THE KEYWORDS LIST\" line");
 	    closeMaybeGunzip($file, $fh);
 	    return(-1);
@@ -2610,7 +2610,7 @@ sub invokeStage($$)
 	    return(0);
 	}
 	
-	my $countEstimate=410000;
+	my $countEstimate=5630000;
 	my $num=$self->readKeywords($countEstimate, "$self->{imdbListFiles}->{keywords}");
 	if ( $num < 0 ) {
 	    if ( $num == -2 ) {
