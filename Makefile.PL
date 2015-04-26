@@ -598,7 +598,6 @@ my @opt_components
                          'grab/fi/fi/programmeStartOnly.pm',
                          'grab/fi/fi/source/foxtv.pm',
                          'grab/fi/fi/source/iltapulu.pm',
-                         'grab/fi/fi/source/mtv3.pm',
                          'grab/fi/fi/source/telkku.pm',
                          'grab/fi/fi/source/telvis.pm',
                          'grab/fi/fi/source/yle.pm',
