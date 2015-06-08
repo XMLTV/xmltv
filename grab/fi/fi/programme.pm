@@ -221,6 +221,8 @@ sub dump {
   elsif ((defined $description)               &&
 	 (exists $series_description{$title}) &&
 	 (($left, $special, $right) = ($description =~ $match_description))) {
+    my $desc_subtitle;
+
     # Check for "Kausi <season>. Jakso <episode>/<# of episodes>. <sub-title>...."
     if (my($desc_season, $desc_episode, $remainder) =
 	($description =~ m,^Kausi\s+(\d+)\.\s+Jakso\s+(\d+)(?:/\d+)?\.\s*(.*)$,)) {
@@ -238,6 +240,16 @@ sub dump {
 
 	# Repeat the above match on remaining description
 	($left, $special, $right) = ($remainder =~ $match_description);
+    # Check for "<sub-title>. Kausi <season>, <episode>/<# of episodes>...."
+    } elsif (($desc_subtitle, $desc_season, $desc_episode, $remainder) =
+	     ($description =~ m!^(.+)\s+Kausi\s+(\d+),\s+(\d+)(?:/\d+)?\.\s*(.*)$!)) {
+	$left    = $desc_subtitle;
+	$season  = $desc_season;
+	$episode = $desc_episode;
+
+	# Remainder is already the final episode description
+	$right = $remainder;
+	undef $special;
     }
     unless (defined $special) {
       # We only remove period from episode title, preserve others
