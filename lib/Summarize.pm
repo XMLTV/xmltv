@@ -4,9 +4,17 @@ use strict;
 use base 'Exporter';
 our @EXPORT = ();
 our @EXPORT_OK = qw(summarize);
-use Date::Manip; Date_Init('TZ=UTC');
+use Date::Manip;
 use XMLTV;
 use XMLTV::TZ qw(gettz ParseDate_PreservingTZ);
+
+BEGIN {
+    if (int(Date::Manip::DateManipVersion) >= 6) {
+	Date::Manip::Date_Init("SetDate=now,UTC");
+    } else {
+	Date::Manip::Date_Init("TZ=UTC");
+    }
+}
 
 =pod
 
