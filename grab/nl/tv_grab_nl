@@ -457,7 +457,7 @@ sub dedupepreserve( @ ) {
     # Remove duplicates from an array preserving the original sequence
     my (@unique, %seen) = ((),());
     foreach ( @_ ) {
-      next if $seen{ $_ }++;
+      next if $seen{ lc( $_ ) }++;
       push @unique, $_;
     	        }
     return @unique;
@@ -596,8 +596,8 @@ sub get_programmes( $$$ ) {
 
         #print STDERR "$tz : $p->{'start_epoch'} \n";
     	
-        push @{$p->{'genres'}}, $_p->{'genre'}  if ($_p->{'genre'} ne '');  # (e.g. Film) - put before soort
-        push @{$p->{'genres'}}, $_p->{'soort'}  if ($_p->{'soort'} ne '');
+        push @{$p->{'genres'}}, trim( $_p->{'genre'} )  if ($_p->{'genre'} ne '');  # (e.g. Film) - put before soort
+        push @{$p->{'genres'}}, trim( $_p->{'soort'} )  if ($_p->{'soort'} ne '');
 			
         $p->{'url'}         = "http://www.tvgids.nl/programma/".$p->{'db_id'};
 	
@@ -690,14 +690,14 @@ sub process_details_page( $ ) {
     my $url = $$p->{'url'};
 	
     local $SIG{__WARN__} = sub {
-    	warn "$url: $_[0]";
+    	warn "$url: $_[0]" unless (defined $_[0] && $_[0] =~ /^Parsing of undecoded UTF-/);
     };
 
     # Get HTML::TreeBuilder object.
     my $t;
     #       eval { $t = get_nice_tree $url, \&tidypage };
     #
-    # page is "charset=iso-8859-1"
+    # page is "charset=iso-8859-1" but sometimes contains UTF-8 !
     $t = get_nice_tree($url);
     if ($@) {
     	warn "error getting/parsing $url: $@";
@@ -712,8 +712,9 @@ sub process_details_page( $ ) {
     }
     {
         if ( my $_p = $_div->look_down('_tag' => 'p') ) {
-            if ( my $_s = $_p->look_down('_tag' => 'strong') ) {
-                push @{$$p->{'genres'}}, ( trim( $_s->as_text() ) );
+            if ( my $_s = $_p->look_down('_tag' => 'span', 'class' => qr/articleblock/ ) ) {
+                # are there ever >1 genres here?
+                push @{$$p->{'genres'}}, ( ucfirst(lc( trim( $_s->as_text() ) )) );
                 $_s->detach();
             }
             $$p->{'desc'} = trim( tidy( $_p->as_text() ) );
@@ -728,16 +729,17 @@ sub process_details_page( $ ) {
         }
     }
     
-    # get the programme details box
-    $_div = $t->look_down('_tag' => 'div', 'id' => 'prog-info-content');
+    # get the programme details
+    $_div = $t->look_down('_tag' => 'div', 'class' => 'programmering_details');
     if (not $_div) {
-    	warn "did not see 'prog-info-content' element, skipping";
-    	return;
+        warn "did not see 'programmering_details' element, skipping";
+        return;
     }
     {
-        if ( my $_ul = $_div->look_down('_tag' => 'ul', 'id' => 'prog-info-content-colleft') ) {
+        if ( my $_ul = $_div->look_down('_tag' => 'ul') ) {
             my @_li = $_ul->look_down('_tag' => 'li');
-	   	#
+            #
+            # DEPRECATED
             # e.g.
             #     <li><strong>Titel:</strong>Elysium</li>
             #     <li><strong>Zender:</strong>HBO 1</li>
@@ -750,17 +752,25 @@ sub process_details_page( $ ) {
                 
                 if ( $li =~ /Genre:(.*)/ ) {
                     push @{$$p->{'genres'}}, $1;
-	    }
+                }
     
                 if ( $li =~ /Orginele titel:(.*)/ ) {
                     $$p->{'original_title'} = $1;
-  	       }
+                }
             }
         }
+    }
         
-        if ( my $_ul = $_div->look_down('_tag' => 'ul', 'id' => 'prog-info-content-colright') ) {
+    $_div = $t->look_down('_tag' => 'div', 'class' => 'programmering_info_detail');
+    if (not $_div) {
+        warn "did not see 'programmering_info_detail' element, skipping";
+        return;
+    }
+    { 
+        if ( my $_ul = $_div->look_down('_tag' => 'ul') ) {
             my @_li = $_ul->look_down('_tag' => 'li');
             #
+            # DEPRECATED
             # e.g.
             #     <li><strong>Jaar van premiere:</strong>2013</li>
             #     <li><strong>Regisseur:</strong>Neill Blomkamp</li>
@@ -776,22 +786,22 @@ sub process_details_page( $ ) {
                 if ( $li =~ /Jaar.*:(.*)/ ) {
                     $$p->{'year'} = $1;
                     next;
-	       }
+                }
                 
                 if ( $li =~ /Regisseur.*:(.*)/ ) {
                     @{ $$p->{'directors'} } = split(/,/, $1);
                     next;
-	    }
+                }
                 
                 if ( $li =~ /Acteurs.*:(.*)/ ) {
                     @{ $$p->{'actors'} } = split(/,/, $1);
                     next;
-        }
+                }
 
                 if ( $li =~ /Bijzonderheden:.*Breedbeeld.*/i ) {
                     $$p->{'widescreen'} = 1;
-    }
-		
+                }
+
                 if ( my $_img = $_li->look_down('_tag' => 'img') ) {
                     my $src = $_img->attr('src');
                     if ( $src =~ /kijkwijzer\/(AL|\d{0,2})_/i ) {     # e.g. 16_transp.png, Kijkwijzer system has AL,6,9,12,16
