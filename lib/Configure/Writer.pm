@@ -22,6 +22,10 @@ use XML::Writer 0.600;
 use base 'XML::Writer';
 use Carp;
 
+=pod
+
+=encoding utf8
+
 =head1 NAME
 
 XMLTV::Configure::Writer - Configuration file writer for XMLTV grabbers
