@@ -124,7 +124,7 @@ this grabber doesnE<39>t die if it cannot find any data, but returns an
 empty (or optionally containing just warnings) xml file instead.
 
 The backendsE<39> data quality differs a lot. For example, mytv was very
-basic, yet complete and uses the least amount of bandwith. Skytv has a
+basic, yet complete and uses the least amount of bandwidth. Skytv has a
 lot of channels, but unless you use it with the --slow option the data
 is not very good (and in this case i would be VERY slow). wfactory is a 
 good overall site if you donE<39>t need the whole sky package.
