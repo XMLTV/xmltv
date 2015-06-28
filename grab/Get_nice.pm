@@ -38,6 +38,7 @@ our $VERSION = 0.005066;
 
 use base 'Exporter';
 our @EXPORT = qw(get_nice get_nice_tree get_nice_xml get_nice_json error_msg);
+use Encode qw(decode);
 use LWP::UserAgent;
 use XMLTV;
 our $Delay = 5; # in seconds
@@ -78,9 +79,10 @@ sub get_nice_tree( $;$$ ) {
     my $content = get_nice $uri;
     $content = $filter->($content) if $filter;
     if ($codepage) {
-      # (note: HTML::Parser->utf8_mode is only available Perl 5.8) 
-      require Encode; import Encode;
-      $content = decode($codepage, $content);
+        $content = decode($codepage, $content);
+    }
+    else {
+        $content = decode('UTF-8', $content);
     }
     my $t = HTML::TreeBuilder->new();
 		$t->ignore_unknown(!$IncludeUnknownTags);
@@ -101,8 +103,10 @@ sub get_nice_xml( $;$$ ) {
     my $content = get_nice $uri;
     $content = $filter->($content) if $filter;
     if ($codepage) {
-      require Encode; import Encode;
       $content = decode($codepage, $content);
+    }
+    else {
+      $content = decode('UTF-8', $content);
     }
     my $t = XML::Parser->new(Style => 'Tree')->parse($content) or die "cannot parse content of $uri\n";
     return $t;
