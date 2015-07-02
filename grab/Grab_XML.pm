@@ -333,6 +333,25 @@ sub go( $ ) {
 	update $bar if not $opt_quiet;
     }
     $bar->finish() if not $opt_quiet;
+
+    # Ensure unique programme elements
+    #
+    # Process list of programmes in reverse order to prefer latest
+    # occurence of a duplicated programme entry. Duplicates are
+    # determined based upon a combination of start time, stop time
+    # and channel.
+    #
+    # Splice logic based on http://stackoverflow.com/a/14191738
+    #
+    my $xmltv_data = XMLTV::cat(@listingses);
+    my @progs = reverse @{$xmltv_data->[3]};
+    my %seen_progs;
+    my @dupe_indexes = reverse(grep { $seen_progs{ $progs[$_]->{start} . "|" . $progs[$_]->{stop} . "|" . $progs[$_]->{channel} }++ } 0..$#progs);
+    foreach my $item (@dupe_indexes) {
+	splice (@progs,$item,1);
+    }
+    $xmltv_data->[3] = [reverse @progs];
+
     my %w_args = ();
     if (defined $opt_output) {
 	my $fh = new IO::File ">$opt_output";
