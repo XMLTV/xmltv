@@ -366,7 +366,7 @@ sub go( $ ) {
 	XMLTV::write_data($l, %w_args);
     }
     else {
-	XMLTV::write_data(XMLTV::cat(@listingses), %w_args);
+	XMLTV::write_data($xmltv_data, %w_args);
     }
 }
 
