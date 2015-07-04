@@ -873,13 +873,15 @@ sub extract_numbering () {
 		#	Episode 2/4
 		#
 		# I'm not convinced we should be matching things like "1." - can we be sure this is an ep number?
+		#	e.g. should not match --v
+		#	    {Premier League Years~~~1999/00}
 		);
 	if ( $prog->{$elem} =~
 		
 			# note we insist on the "/" unless the title is just "number." or "number,"
 			# this is to avoid false matching on "1984" but even here we will falsely match "1984."
 			#
-			s/^[\(\[]*(\d+)\s*(?:\/|[\.,]$)(\d*)[\.,]?[\)\]]*\s?(?:[\s\.,:;-]+\s*|\s*$)//i
+			s/^[\(\[]*(?!(?:19|20)\d\d)(\d+)\s*(?:\/|[\.,]$)(\d*)[\.,]?[\)\]]*\s?(?:[\s\.,:;-]+\s*|\s*$)//i
 		)
 	{
 		_d(4,"\t matched 'leading episode' regex");
@@ -916,9 +918,12 @@ sub extract_numbering () {
 		#	go 24.
 		#	24
 		#	1984
+		# 2015/16
+		# 2015/2016 could theoretically be ok but statistically unlikely
+		#   (although 2015/3000 could be ok but the likes of Eastenders don't have a 'total' so again this is unlikely)
 		);
 	if ( $prog->{$elem} =~
-			s/(?:^|[\s\(\[]+)s?(\d+)\s*[\/e]+\s*(\d+)[\s\.,]?[\)\]]*[\s\.]*$//i
+			s/(?:^|[\s\(\[]+)s?(?!(?:19|20)\d\d)(\d+)\s*[\/e]+\s*(\d+)[\s\.,]?[\)\]]*[\s\.]*$//i
 		)
 	{
 		_d(4,"\t matched 'trailing episode' regex");
@@ -1058,9 +1063,12 @@ sub extract_numbering () {
 		#	Pt 2
 		#	Pt 2/3
 		#	Pt. 3
+		#
+		#	should not match --v
+		#	Burnley v Preston North End: 2006/07
 		);
 	if ( $prog->{$elem} =~
-			s/(?:[\s\.,:;-]*\(?(?:part|pt\.?)\s*(\d+|${lang_words})\s*(?:(?:\/|of)\s*(\d+|${lang_words}))?\)?|:\s*(\d+))[\s\.,:;-]*/ /i
+			s/(?:[\s\.,:;-]*\(?(?:part|pt\.?)\s*(?!(?:19|20))(\d+|${lang_words})\s*(?:(?:\/|of)\s*(\d+|${lang_words}))?\)?|:\s*(\d+))[\s\.,:;-]*$/ /i
 		)
 	{
 		_d(4,"\t matched 'part' regex");
@@ -3203,9 +3211,9 @@ sub printInfo () {
 			$self->print_audit( $k, $v );
 		}
 		
-		l("\n".'++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++'."\n\n");
-		
 	}
+	
+	l("\n".'++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++'."\n\n");
 }
 
 
