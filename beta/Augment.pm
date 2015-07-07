@@ -1296,7 +1296,7 @@ Remove specified non-title text from <title>.
   If title starts with text + separator, then it will be removed from the title
   "separator" can be any of :;-
 
-  rule: 1!Python Night
+  rule: 1|Python Night
   in : "Python Night: Monty Python - Live at the Hollywood Bowl / "
   out: "Monty Python - Live at the Hollywood Bowl / "
 
@@ -1352,7 +1352,7 @@ Promote demoted title from <sub-title> to <title>.
   If title matches, and sub-title starts with text then remove matching text from sub-title and move it into the title.
   Any text after 'separator' in the sub-title is preserved. 'separator' can be any of .,:;-
 
-  rule: 11!Blackadder~Blackadder II
+  rule: 11|Blackadder~Blackadder II
   in : "Blackadder / Blackadder II: Potato"
   out: "Blackadder II / Potato"
 
@@ -1420,7 +1420,7 @@ Replace specified <title> / <sub-title> with title/episode pair supplied using <
 
   If title & sub-title match supplied data, then replace <title> and <sub-title> with new data supplied.
 
-  rule: 10!Which Doctor~~Gunsmoke~Which Doctor~Festus and Doc go fishing, but are captured by a family that is feuding with the Haggens.
+  rule: 10|Which Doctor~~Gunsmoke~Which Doctor~Festus and Doc go fishing, but are captured by a family that is feuding with the Haggens.
   in : "Which Doctor / " desc> = "  Festus and Doc go fishing, but are captured by a family that is feuding with the Haggens. ..."
   out: "Gunsmoke / Which Doctor"
   
@@ -1513,11 +1513,11 @@ Replace specified <title> / <sub-title> with title/episode pair supplied.
 
   If title & sub-title match supplied data, then replace <title> and <sub-title> with new data supplied.
 
-  rule: 8!Top Gear USA Special~Detroit~Top Gear~USA Special
+  rule: 8|Top Gear USA Special~Detroit~Top Gear~USA Special
   in : "Top Gear USA Special / Detroit"
   out: "Top Gear / USA Special"
   
-  rule: 8!Top Gear USA Special~~Top Gear~USA Special
+  rule: 8|Top Gear USA Special~~Top Gear~USA Special
   in : "Top Gear USA Special / "
   out: "Top Gear / USA Special"
     or
@@ -1606,7 +1606,7 @@ Extract sub-title from <title>.
   If title starts with text + separator, then the text after it will be moved into the sub-title
   "separator" can be any of :;-
 
-  rule: 2!Blackadder II
+  rule: 2|Blackadder II
   in : "Blackadder II: Potato / "
   out: "Blackadder II / Potato"
 
@@ -1700,7 +1700,7 @@ Extract sub-title from <title>.
   If title ends with separator + text, then the text before it will be moved into the sub-title
   "separator" can be any of :;-
 
-  rule: 3!Storyville
+  rule: 3|Storyville
   in : "Kings of Pastry :Storyville / "
   out: "Storyville / Kings of Pastry"
 
@@ -1797,7 +1797,7 @@ Reverse <title> and <sub-title>
 
   If sub-title matches the rule's text, then swap the title and sub-title
 
-  rule: 4!Storyville
+  rule: 4|Storyville
   in : "Kings of Pastry / Storyville"
   out: "Storyville / Kings of Pastry"
 
@@ -1860,7 +1860,7 @@ Replace <title> with supplied text.
 
   If title matches the rule's text, then use the replacement text supplied
 
-  rule: 5!A Time Team Special~Time Team
+  rule: 5|A Time Team Special~Time Team
   in : "A Time Team Special / Doncaster"
   out: "Time Team / Doncaster"
 
@@ -1928,7 +1928,7 @@ Remove specified text from <sub-title> for a given <title>.
   then it will be removed from the sub-title.
   "separator" can be any of .,:;- and is optional.
 
-  rule: 13!Time Team~A Time Team Special
+  rule: 13|Time Team~A Time Team Special
   in : "Time Team / Doncaster : A Time Team Special "
   out: "Time Team / Doncaster"
 
@@ -1989,7 +1989,7 @@ Replace <sub-title> with supplied text.
 
   If sub-title matches the rule's text, then use the replacement text supplied
 
-  rule: 7!Time Team~Time Team Special: Doncaster~Doncaster
+  rule: 7|Time Team~Time Team Special: Doncaster~Doncaster
   in : "Time Team / Time Team Special: Doncaster"
   out: "Time Team / Doncaster"
 
@@ -2051,7 +2051,7 @@ Replace <sub-title> with supplied text when the <desc> matches that given.
 
   If sub-title matches the rule's text, then use the replacement text supplied
 
-  rule: 9!Heroes of Comedy~The Goons~The series celebrating great British comics pays tribute to the Goons.
+  rule: 9|Heroes of Comedy~The Goons~The series celebrating great British comics pays tribute to the Goons.
   in : "Heroes of Comedy / "
   out: "Heroes of Comedy / The Goons"
     or
@@ -2124,7 +2124,7 @@ Replace <category> with supplied text.
   If title matches the rule's text, then use the replacement category(-ies) supplied
   (note ALL existing categories are replaced)
 
-  rule: 6!Antiques Roadshow~Entertainment~Arts~Shopping
+  rule: 6|Antiques Roadshow~Entertainment~Arts~Shopping
   in : "Antiques Roadshow / " category "Reality"
   out: "Antiques Roadshow / " category "Entertainment" + "Arts" + "Shopping"
 
@@ -2205,7 +2205,7 @@ Replace "Film"/"Films" <category> with supplied text.
   If title matches the rule's text and the prog has category "Film" or "Films", then use the replacement category(-ies) supplied
   (note ALL categories are replaced, not just "Film")
 
-  rule: 12!The Hobbit Special~Entertainment~Interview
+  rule: 12|The Hobbit Special~Entertainment~Interview
   in : "The Hobbit Special / " category "Film" + "Drama"
   out: "The Hobbit Special / " category "Entertainment" + "Interview"
 
@@ -2299,11 +2299,11 @@ Replace <category> with supplied value(s).
   If category matches one found in the prog, then replace it with the category(-ies) supplied
   (note any other categories are left alone)
 
-  rule: 14Soccer~Football
+  rule: 14|Soccer~Football
   in : "Leeds v Arsenal" category "Soccer"
   out: "Leeds v Arsenal" category "Soccer"
   
-  rule: 14!Adventure/War~Action Adventure~War
+  rule: 14|Adventure/War~Action Adventure~War
   in : "Leeds v Arsenal" category "Adventure/War"
   out: "Leeds v Arsenal" category "Action Adventure" + "War"
 
@@ -3637,7 +3637,7 @@ __END__
 Geoff Westcott, honir.at.gmail.dot.com, Dec. 2014.
 
 This code is based on the "fixup" method/code defined in tv_grab_uk_rt grabber
-and credit is given to that graber"s authors: Ed Avis and Nick Morrott.
+and credit is given to the author Nick Morrott.
 
 =cut
 
