@@ -73,8 +73,7 @@ if ($full) {
     push @cmds,
       (
        [ [ 'tv_grep', '--channel', 'xyz', '--or', '--channel', 'b' ], 1 ],
-       [ [ 'tv_grep', '--channel', 'xyz',
-	   '--or', '--not', '--channel', 'b'                       ], 1 ],
+       [ [ 'tv_grep', '--channel', 'xyz', '--or', '--not', '--channel', 'b' ], 1 ],
        [ [ 'tv_grep', '--previously-shown', ''                     ], 1 ],
        [ [ 'tv_grep', 'a'                                          ], 1 ],
        [ [ 'tv_grep', '--category', 'b'                            ], 1 ],
