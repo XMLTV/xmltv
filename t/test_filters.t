@@ -361,7 +361,7 @@ foreach my $pair (@cmds) {
 		my $twice_out = "$base.twice_out";
 		my $twice_err = "$base.twice_err";
 		$to_unlink{$twice_out} = $to_unlink{$twice_err} = undef;
-		
+
 		my $twice_okay = run(\@cmd, [ $out ], $twice_out, $twice_err);
 		# assume: if $twice_okay then -e $twice_out.
 

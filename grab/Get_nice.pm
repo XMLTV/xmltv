@@ -10,11 +10,11 @@
 # maximum delay - on average the sleep will be half that.
 #
 #This random delay will be between 0 and 5 ($Delay) seconds. This means
-# some sites will complain you're grabbing too fast (since 20% of your 
-# grabs will be less than 1 second apart). To introduce a minimum delay 
+# some sites will complain you're grabbing too fast (since 20% of your
+# grabs will be less than 1 second apart). To introduce a minimum delay
 # set $XMLTV::Get_nice::MinDelay to a value in seconds.
-# This will be added to $Delay to derive the actual delay used. 
-# E.g. Delay = 5 and MinDelay = 3, then the actual delay will be 
+# This will be added to $Delay to derive the actual delay used.
+# E.g. Delay = 5 and MinDelay = 3, then the actual delay will be
 # between 3 and 8 seconds,
 #
 # get_nice() is the function to call, however
@@ -67,7 +67,7 @@ sub get_nice( $ ) {
     return scalar get_nice_aux($_[0]);
 }
 
-# Fetch page and return as HTML::Tree object.   
+# Fetch page and return as HTML::Tree object.
 # Optional arguments:
 # i) a function to put the page data through (eg, to clean up bad
 # characters) before parsing.
@@ -91,7 +91,7 @@ sub get_nice_tree( $;$$ ) {
     return $t;
 }
 
-# Fetch page and return as XML::Parser 'Tree' object.  
+# Fetch page and return as XML::Parser 'Tree' object.
 # Optional arguments:
 # i) a function to put the page data through (eg, to clean up bad
 # characters) before parsing.
@@ -112,7 +112,7 @@ sub get_nice_xml( $;$$ ) {
     return $t;
 }
 
-# Fetch page and return as JSON::PP object.  
+# Fetch page and return as JSON::PP object.
 # Optional arguments:
 # i) a function to put the page data through (eg, to clean up bad
 # characters) before parsing.
@@ -155,7 +155,7 @@ sub get_nice_aux( $ ) {
 
 		# expose the response object for those grabbers which need to process the headers, status code, etc.
 		$Response = $r;
-		
+
     if ($r->is_error) {
         # At the moment download failures seem rare, so the script dies if
         # any page cannot be fetched.  We could later change this routine

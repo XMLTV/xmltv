@@ -110,7 +110,7 @@ INPUT: foreach my $input (@inputs) {
 		$start =~ /^\d{4}(\d{2})/
 		  or die "$f:$.: don't understand start time $start\n";
 		my $month = $1;
-	
+
 		/channel="(.+?)"/ or die "$f:$.: no channel\n";
 		my $channel = $1;
 		$used_channel{$channel} = 1;

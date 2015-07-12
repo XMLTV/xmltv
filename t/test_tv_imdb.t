@@ -65,7 +65,7 @@ if ($r) {
     warn "@cmd failed: $status, $sig, $core\n";
     print "not ok 1\n";
     exit(1);
-    
+
 }
 print "ok 1\n";
 

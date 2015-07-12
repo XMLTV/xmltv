@@ -24,10 +24,10 @@ sub uninstall( % ) {
 	next if not -e $from;
 	my $to = $h{$from};
 	print "uninstalling contents of $from from $to\n";
-	find(sub { 
+	find(sub {
 		 for ($File::Find::name) {
 #		     return if not -f; # why doesn't this work?
-		     
+
 		     # The behaviour of File::Find seems different
 		     # under 5.005.
 		     #
