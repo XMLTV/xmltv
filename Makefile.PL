@@ -121,6 +121,7 @@ my @exes
        filter/tv_remove_some_overlapping
        filter/tv_count
        filter/tv_merge
+       filter/tv_augment
        tools/tv_validate_grabber
        tools/tv_validate_file
        tools/tv_find_grabbers
@@ -155,6 +156,7 @@ my %pm
      'lib/ValidateGrabber.pm'     => '$(INST_LIBDIR)/XMLTV/ValidateGrabber.pm',
      'lib/PreferredMethod.pm'     => '$(INST_LIBDIR)/XMLTV/PreferredMethod.pm',
      'lib/Data/Recursive/Encode.pm' => '$(INST_LIBDIR)/XMLTV/Data/Recursive/Encode.pm',
+     'lib/Augment.pm'             => '$(INST_LIBDIR)/XMLTV/Augment.pm',
      'filter/Grep.pm'             => '$(INST_LIBDIR)/XMLTV/Grep.pm',
      'grab/Memoize.pm'            => '$(INST_LIBDIR)/XMLTV/Memoize.pm',
      'grab/Grab_XML.pm'           => '$(INST_LIBDIR)/XMLTV/Grab_XML.pm',
@@ -201,6 +203,8 @@ my @need_share = ('tools/tv_validate_file',
 # Files to be installed in the system-wide share/ directory.
 my %share_files = ('xmltv.dtd' => 'xmltv.dtd',
                    'xmltv-lineups.xsd' => 'xmltv-lineups.xsd',
+                   'filter/augment/augment.conf' => 'tv_augment/augment.conf',
+                   'filter/augment/augment.rules' => 'tv_augment/augment.rules',
                   );
 
 # Files which 'make clean' should remove, but doesn't by default, so
