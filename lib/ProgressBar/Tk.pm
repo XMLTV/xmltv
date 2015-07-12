@@ -54,12 +54,12 @@ sub _init {
     $top_frame->Label(-text => $params{name})->pack;
 
     my $tk_progressbar = $middle_frame->ProgressBar(
-          -width => 20,
-          -height => 300,
-          -from => 0,
-          -to => $params{count},
-          -variable => \$unused
-          )->pack( -fill=>"x", -pady => 24, -padx => 8 );
+        -width => 20,
+        -height => 300,
+        -from => 0,
+        -to => $params{count},
+        -variable => \$unused
+        )->pack( -fill=>"x", -pady => 24, -padx => 8 );
 
     $self->{main_window} = $main_window;
     $self->{tk_progressbar} = $tk_progressbar;
