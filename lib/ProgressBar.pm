@@ -11,12 +11,12 @@ use XMLTV::GUI;
 BEGIN {
     eval { require Log::TraceMessages };
     if ($@) {
-         *t = sub {};
-         *d = sub { '' };
+        *t = sub {};
+        *d = sub { '' };
     }
     else {
-         *t = \&Log::TraceMessages::t;
-         *d = \&Log::TraceMessages::d;
+        *t = \&Log::TraceMessages::t;
+        *d = \&Log::TraceMessages::d;
     }
 }
 
@@ -31,13 +31,13 @@ sub init( $ ) {
     my $gui_type = XMLTV::GUI::get_gui_type($opt_gui);
 
     if ($gui_type eq 'term') {
-         $real_class = 'XMLTV::ProgressBar::None';
+        $real_class = 'XMLTV::ProgressBar::None';
     } elsif ($gui_type eq 'term+progressbar') {
-         $real_class = 'XMLTV::ProgressBar::Term';
+        $real_class = 'XMLTV::ProgressBar::Term';
     } elsif ($gui_type eq 'tk') {
-         $real_class = 'XMLTV::ProgressBar::Tk';
+        $real_class = 'XMLTV::ProgressBar::Tk';
     } else {
-         die "Unknown gui type: '$gui_type'.";
+        die "Unknown gui type: '$gui_type'.";
     }
 }
 
@@ -75,7 +75,7 @@ sub finish {
 
     # Only does anything for the GUI ones.
     if ($real_class eq 'XMLTV::ProgressBar::Tk') {
-         return $bar->finish();
+        return $bar->finish();
     }
 }
 
