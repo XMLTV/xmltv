@@ -296,6 +296,19 @@ my @opt_components
 #       grab_need_share => [ 'au' ],
 #     },
 
+# 2008-11-09 disabled after ident string was blocked
+#     { name => 'tv_grab_be',
+#       blurb => 'Grabber for Belgium and Luxemburg',
+#       exes => [ 'grab/be/tv_grab_be' ],
+#       pl_files => { 'grab/be/tv_grab_be.PL' => 'grab/be/tv_grab_be' },
+#       share_files => { 'grab/be/channel_ids_fr' => 'tv_grab_be/channel_ids_fr',
+#                        'grab/be/channel_ids_nl' => 'tv_grab_be/channel_ids_nl' },
+#       to_clean => [ 'grab/be/tv_grab_be' ],
+#       deps => [ 'grab/be/tv_grab_be' => [ 'grab/be/tv_grab_be.in' ] ],
+#       grab_need_share => [ 'be' ],
+#       prereqs => { 'HTML::Entities' => 1.27 } ,
+#     },
+
 #     { name => 'tv_grab_br',
 #       blurb => 'Grabber for Brazil',
 #       exes => [ 'grab/br/tv_grab_br' ],
@@ -353,13 +366,22 @@ my @opt_components
                          'HTML::TreeBuilder' => 0, },
      },
 
-# rmeden 2012-06-11 broken since 2010
-#     { name => 'tv_grab_dtv_la',
-#       blurb => 'Grabber for Latin America',
-#       exes => [ 'grab/dtv_la/tv_grab_dtv_la' ],
-#       prereqs => { 'HTML::TreeBuilder' => 0,
-#                    'HTML::Form'    => 0 } },
-# 2014-04-21 reinstate after unbreak
+# 2008-07-22 - removed by rmeden, website changes, won't be fixed
+#     { name => 'tv_grab_dk',
+#       blurb => 'Grabber for Denmark',
+#       exes => [ 'grab/dk/tv_grab_dk' ],
+#       prereqs => { 'HTML::TreeBuilder' => 0 } },
+
+     { name => 'tv_grab_dk_dr',
+       blurb => 'Grabber for Denmark (dr.dk)',
+       exes => [ 'grab/dk_dr/tv_grab_dk_dr' ],
+       prereqs => { 'Data::Dumper'   => 0,
+                    'LWP::UserAgent' => 0,
+                    'IO::Scalar'     => 0,
+                    'DateTime'       => 0,
+                    'JSON'           => 0, },
+     },
+
      { name => 'tv_grab_dtv_la',
        blurb => 'Grabber for Latin America & Caribbean',
        exes => [ 'grab/dtv_la/tv_grab_dtv_la' ],
@@ -371,6 +393,417 @@ my @opt_components
                     'Date::Parse'       => 0,
                     'Date::Language'    => 0, },
      },
+
+# rmeden 2012-06-11 broken since 2011-11-25
+#     { name => 'tv_grab_ee',
+#       blurb => 'Grabber for Estonia',
+#       exes => [ 'grab/ee/tv_grab_ee' ],
+#       prereqs => { 'LWP::Simple' => 0 } },
+
+# 2009-03-08 removed due to breakage after source site changes
+#     { name => 'tv_grab_es',
+#       blurb => 'Grabber for Spain - Analogic Terrestrial/Cable',
+#       exes => [ 'grab/es/tv_grab_es' ],
+#       prereqs => { 'HTML::TreeBuilder' => 0 } },
+
+# tv_grab_es_digital no longer functioning due to site changes
+#     { name => 'tv_grab_es_digital',
+#       blurb => 'Grabber for Spain - Digital Satellite (D+)',
+#       exes => [ 'grab/es_digital/tv_grab_es_digital' ],
+#       prereqs => { 'HTML::TreeBuilder' => 0 } },
+
+     { name => 'tv_grab_es_laguiatv',
+       blurb => 'Alternative grabber for Spain',
+       exes => [ 'grab/es_laguiatv/tv_grab_es_laguiatv' ],
+       prereqs => { 'HTML::TreeBuilder' => 0, },
+     },
+
+# rmeden 2012-06-11 broken since 2012-03-29
+#     { name => 'tv_grab_es_miguiatv',
+#       blurb => 'Alternative grabber for Spain using miguiatv.com',
+#       exes => [ 'grab/es_miguiatv/tv_grab_es_miguiatv' ],
+#       prereqs => { 'HTML::TreeBuilder' => 0 } },#
+
+     { name => 'tv_grab_eu_dotmedia',
+       blurb => 'Grabber for Europe (xmltv.se / dotmedia)',
+       exes => [ 'grab/eu_dotmedia/tv_grab_eu_dotmedia' ],
+       prereqs => { 'XML::LibXML'    => 0,
+                    'Compress::Zlib' => 0,
+                    'IO::Stringy'    => 0,
+                    'HTTP::Cache::Transparent' => 0, },
+     },
+
+     { name => 'tv_grab_eu_egon',
+       blurb => 'Grabber for german speaking area (Egon zappt)',
+       exes => [ 'grab/eu_egon/tv_grab_eu_egon' ],
+       pl_files => { 'grab/eu_egon/tv_grab_eu_egon.PL'
+                     => 'grab/eu_egon/tv_grab_eu_egon' },
+       to_clean => [ 'grab/eu_egon/tv_grab_eu_egon' ],
+       deps => [ 'grab/eu_egon/tv_grab_eu_egon'
+                 => [ 'grab/se_swedb/tv_grab_se_swedb.in' ] ],
+       prereqs => { 'XML::LibXML'    => 0,
+                    'Compress::Zlib' => 0,
+                    'IO::Stringy'    => 0,
+                    'HTTP::Cache::Transparent' => 0, },
+     },
+
+     { name => 'tv_grab_eu_epgdata',
+       blurb => '$$ Grabber for some European countries (epgdata.com)',
+       exes => [ 'grab/eu_epgdata/tv_grab_eu_epgdata' ],
+       share_files => { 'grab/eu_epgdata/channel_ids' => 'tv_grab_eu_epgdata/channel_ids' },
+       prereqs => { 'XML::Twig'      => 0,
+                    'Archive::Zip'   => 0,
+                    'HTML::Entities' => 0,
+                    'LWP::Simple'    => 0,
+                    'File::Temp'     => 0,
+                    'DateTime::Format::Strptime' => 0, },
+     },
+
+     { name     => 'tv_grab_fi',
+       blurb    => 'Grabber for Finland',
+       exes     => [ 'grab/fi/tv_grab_fi' ],
+       deps     => [
+                     'grab/fi/tv_grab_fi' => [
+                         'grab/fi/tv_grab_fi.pl',
+                         'grab/fi/fi/common.pm',
+                         'grab/fi/fi/day.pm',
+                         'grab/fi/fi/programme.pm',
+                         'grab/fi/fi/programmeStartOnly.pm',
+                         'grab/fi/fi/source/foxtv.pm',
+                         'grab/fi/fi/source/iltapulu.pm',
+                         'grab/fi/fi/source/telkku.pm',
+                         'grab/fi/fi/source/telvis.pm',
+                         'grab/fi/fi/source/yle.pm',
+                     ],
+                   ],
+       pl_files => { 'grab/fi/merge.PL' => 'grab/fi/tv_grab_fi' },
+       to_clean => [ 'grab/fi/tv_grab_fi' ],
+       prereqs  => {
+                    'HTML::TreeBuilder' => 0,
+                    'Time::Local'       => 0, },
+     },
+
+     { name     => 'tv_grab_fi_sv',
+       blurb    => 'Grabber for Finland (Swedish)',
+       exes     => [ 'grab/fi_sv/tv_grab_fi_sv' ],
+       prereqs  => { 'DateTime'   => 0,
+                     'IO::Scalar' => 0,
+                     'HTML::TreeBuilder' => 0, },
+     },
+
+     { name => 'tv_grab_fr',
+       blurb => 'Grabber for France',
+       exes => [ 'grab/fr/tv_grab_fr' ],
+       prereqs => { 'HTML::Entities'    => 1.27,
+                    'HTML::TreeBuilder' => 0, },
+     },
+
+     { name => 'tv_grab_fr_kazer',
+       blurb => 'Grabber for France (Kazer)',
+       exes => [ 'grab/fr_kazer/tv_grab_fr_kazer' ],
+       prereqs => { 'IO::Uncompress::Unzip' => 0, },
+     },
+
+     { name => 'tv_grab_hr',
+       blurb => 'Grabber for Croatia',
+       exes => [ 'grab/hr/tv_grab_hr' ],
+       pl_files => { 'grab/hr/tv_grab_hr.PL'
+                     => 'grab/hr/tv_grab_hr' },
+       to_clean => [ 'grab/hr/tv_grab_hr' ],
+       deps => [ 'grab/hr/tv_grab_hr'
+                 => [ 'grab/se_swedb/tv_grab_se_swedb.in' ] ],
+       prereqs => { 'XML::LibXML'    => 0,
+                    'Compress::Zlib' => 0,
+                    'IO::Stringy'    => 0,
+                    'HTTP::Cache::Transparent' => 0, },
+     },
+
+     { name => 'tv_grab_huro',
+       blurb => 'Grabber for Hungary, Romania, Slovakia, Czech Republic',
+       exes => [ 'grab/huro/tv_grab_huro' ],
+       pl_files => { 'grab/huro/tv_grab_huro.PL'
+                     => 'grab/huro/tv_grab_huro' },
+       share_files => { 'grab/huro/jobmap' => 'tv_grab_huro/jobmap',
+                        'grab/huro/catmap.hu' => 'tv_grab_huro/catmap.hu',
+                        'grab/huro/catmap.ro' => 'tv_grab_huro/catmap.ro',
+                        'grab/huro/catmap.sk' => 'tv_grab_huro/catmap.sk',
+                        'grab/huro/catmap.cz' => 'tv_grab_huro/catmap.cz',
+                     },
+       to_clean => [ 'grab/huro/tv_grab_huro' ],
+       deps => [ 'grab/huro/tv_grab_huro'
+                 => [ 'grab/huro/tv_grab_huro.in' ] ],
+       grab_need_share => [ 'huro' ],
+       prereqs => { 'HTML::TreeBuilder' => 0 },
+     },
+
+     { name => 'tv_grab_il',
+       blurb => 'Grabber for Israel',
+       exes => [ 'grab/il/tv_grab_il' ],
+     },
+
+# 2013-05-13 xmltv feed disabled by What's On due to TOS violations. It may come back
+#     { name     => 'tv_grab_in',
+#       blurb => 'Grabber for India (zipazap.com)',
+#       exes     => [ 'grab/in/tv_grab_in' ],
+#       prereqs => { 'XML::LibXML' => 0,
+#                    'IO::Scalar' => 0,
+#                  },
+#     },
+
+     { name => 'tv_grab_is',
+       blurb => 'Grabber for Iceland',
+       exes => [ 'grab/is/tv_grab_is' ],
+       share_files => { 'grab/is/category_map' => 'tv_grab_is/category_map' },
+       prereqs => { 'XML::LibXSLT' => 0,
+                    'XML::DOM'     => 0, },
+     },
+
+     { name => 'tv_grab_it',
+       blurb => 'Grabber for Italy',
+       exes => [ 'grab/it/tv_grab_it' ],
+       pl_files => { 'grab/it/tv_grab_it.PL' => 'grab/it/tv_grab_it' },
+       share_files => { 'grab/it/channel_ids' => 'tv_grab_it/channel_ids' },
+       to_clean => [ 'grab/it/tv_grab_it', 'grab/it/tv_grab_it.in2' ],
+       deps => [ 'grab/it/tv_grab_it' => [ 'grab/it/tv_grab_it.in' ] ],
+       grab_need_share => [ 'it' ],
+     },
+
+     { name => 'tv_grab_it_dvb',
+       blurb => 'Grabber for Italy from DVB-S stream',
+       exes => [ 'grab/it_dvb/tv_grab_it_dvb' ],
+       pl_files => { 'grab/it_dvb/tv_grab_it_dvb.PL' => 'grab/it_dvb/tv_grab_it_dvb' },
+       share_files => { 'grab/it_dvb/channel_ids' => 'tv_grab_it_dvb/channel_ids',
+                        'grab/it_dvb/sky_it.dict' => 'tv_grab_it_dvb/sky_it.dict',
+                        'grab/it_dvb/sky_it.themes' => 'tv_grab_it_dvb/sky_it.themes',
+                   },
+       to_clean => [ 'grab/it_dvb/tv_grab_it_dvb' ],
+       deps => [ 'grab/it_dvb/tv_grab_it_dvb' => [ 'grab/it_dvb/tv_grab_it_dvb.in' ] ],
+       grab_need_share => [ 'it_dvb' ],
+       prereqs => { 'Data::Dump'  => 0,
+                    'IO::Select'  => 0,
+                    'Linux::DVB'  => 0,
+                    'Time::HiRes' => 0, } ,
+     },
+
+# 2009-03-05 rmeden - source site seems to be blocking our agent string
+#     { name => 'tv_grab_jp',
+#       blurb => 'Grabber for Japan',
+#       exes => [ 'grab/jp/tv_grab_jp' ],
+#       prereqs => { 'HTML::TreeBuilder' => 0,
+#                    'Text::Kakasi' => 0 },
+#     },
+
+     { name     => 'tv_grab_na_dd',
+       blurb => '$$ Grabber for North America-schedulesdirect.org',
+       exes     => [ 'grab/na_dd/tv_grab_na_dd' ],
+       pl_files => { 'grab/na_dd/tv_grab_na_dd.PL' => 'grab/na_dd/tv_grab_na_dd' },
+       deps     => [ 'grab/na_dd/tv_grab_na_dd' => [ 'grab/na_dd/tv_grab_na_dd.in' ] ],
+       to_clean => [ 'grab/na_dd/tv_grab_na_dd' ],
+       prereqs => { 'SOAP::Lite'    => 0.67,
+                    'Term::ReadKey' => 0,
+                    'XML::Twig'     => 3.28, },
+       grab_need_share => [ 'na_dd' ],
+     },
+
+     { name => 'tv_grab_na_dtv',
+       blurb => 'Grabber for North America (DirecTV)',
+       exes => [ 'grab/na_dtv/tv_grab_na_dtv' ],
+       prereqs => {
+         'DateTime'         => 0,
+         'HTTP::Cookies'    => 0,
+         'LWP::UserAgent'   => 0,
+         'JSON::PP'         => 0,
+         'HTML::TokeParser' => 0, },
+     },
+
+# 2013-02-02 disabled after site changes broke grabber (no <IMG> tags!)
+#     { name     => 'tv_grab_na_icons',
+#       blurb    => 'Grabber for North American Channel Icons',
+#       exes     => [ 'grab/na_icons/tv_grab_na_icons' ],
+#       deps     => [ 'grab/na_icons/tv_grab_na_icons' => [ 'grab/na_icons/tv_grab_na_icons.in' ] ],
+#       pl_files => { 'grab/na_icons/tv_grab_na_icons.PL' => 'grab/na_icons/tv_grab_na_icons' },
+#       to_clean => [ 'grab/na_icons/tv_grab_na_icons' ],
+#       prereqs  => { 'HTML::TreeBuilder' => 0,
+#                     'XML::Twig'         => 3.28,
+#                     'WWW::Mechanize' => 1.02 },
+#       grab_need_share => [ 'na_icons' ],
+#     },
+
+     { name => 'tv_grab_na_tvmedia',
+       blurb => 'Grabber for North America (TVMedia)',
+       exes => [ 'grab/na_tvmedia/tv_grab_na_tvmedia' ],
+       prereqs => { 'XML::LibXML' => 0,
+                    'LWP::Simple' => 0, },
+     },
+
+# rmeden 2008-02-13 disabled after site changes broke grabber
+#    { name => 'tv_grab_nc',
+#      blurb => 'Grabber for Nouvelle Caledonie Island (France)',
+#      exes => [ 'grab/nc/tv_grab_nc' ],
+#      prereqs => { 'HTML::TreeBuilder' => 0 ,
+#                   'HTML::Entities'    => 0 } },
+
+     { name => 'tv_grab_nl',
+       blurb => 'Grabber for the Netherlands',
+       exes => [ 'grab/nl/tv_grab_nl' ],
+       prereqs => { 'HTTP::Cache::Transparent' => 0,
+                    'HTML::TreeBuilder' => 0,
+                    'HTML::Entities'    => 0,
+                    'IO::File'     => 0,
+                    'Date::Parse'  => 0,
+                    'Date::Format' => 0,
+                    'DateTime'     => 0,
+                    'Encode'       => 0,
+                    'JSON::PP'     => 0, },
+     },
+
+# 2008-07-12 - removed by rmeden, not getting programs for a while.
+#     { name => 'tv_grab_nl_wolf',
+#       blurb => 'Alternative grabber for the Netherlands',
+#       exes => [ 'grab/nl_wolf/tv_grab_nl_wolf' ],
+#       prereqs => { 'HTML::TreeBuilder' => 0 } },
+
+# depreciate tv_grab_no as it is no longer supported (per author, cwattengard@gmail.com)
+# has been replaced by tv_grab_no_gfeed
+#
+#     { name => 'tv_grab_no',
+#       blurb => 'Grabber for Norway',
+#       exes => [ 'grab/no/tv_grab_no' ],
+#       prereqs => { 'HTML::Entities' => 1.27 },
+#     },
+
+     { name => 'tv_grab_no_gfeed',
+       blurb => 'Grabber for Norway (gfeed.info)',
+       exes => [ 'grab/no_gfeed/tv_grab_no_gfeed' ],
+       pl_files => { 'grab/no_gfeed/tv_grab_no_gfeed.PL'
+                     => 'grab/no_gfeed/tv_grab_no_gfeed' },
+       to_clean => [ 'grab/no_gfeed/tv_grab_no_gfeed' ],
+       deps => [ 'grab/no_gfeed/tv_grab_no_gfeed'
+                 => [ 'grab/se_swedb/tv_grab_se_swedb.in' ] ],
+       prereqs => { 'XML::LibXML'    => 0,
+                    'Compress::Zlib' => 0,
+                    'IO::Stringy'    => 0,
+                    'HTTP::Cache::Transparent' => 0, },
+     },
+
+     { name => 'tv_grab_pt',
+       blurb => 'Grabber for Portugal',
+       exes => [ 'grab/pt/tv_grab_pt' ],
+       prereqs => { 'Getopt::Long'      => 0,
+                    'HTML::TreeBuilder' => 0,
+                    'HTML::Entities'    => 1.27,
+                    'HTTP::Cache::Transparent' => 0,
+                    'DateTime'          => 0,
+                    'Encode'            => 0, },
+     },
+
+     { name => 'tv_grab_pt_meo',
+       blurb => 'Grabber for Portugal (MEO)',
+       exes => [ 'grab/pt_meo/tv_grab_pt_meo' ],
+       prereqs => { 'DateTime'    => 0,
+                    'XML::LibXML' => 0,
+                    'LWP'         => 0, },
+     },
+
+# rmeden 2011-06-12 not working
+#    { name => 'tv_grab_re',
+#       blurb => 'Grabber for Reunion Island (France)',
+#       exes => [ 'grab/re/tv_grab_re' ],
+#       prereqs => { 'HTML::TreeBuilder' => 0 ,
+#                    'HTML::Entities'    => 0 } },
+
+     { name => 'tv_grab_se_swedb',
+       blurb => 'Grabber for Sweden',
+       exes => [ 'grab/se_swedb/tv_grab_se_swedb' ],
+       pl_files => { 'grab/se_swedb/tv_grab_se_swedb.PL'
+                     => 'grab/se_swedb/tv_grab_se_swedb' },
+       to_clean => [ 'grab/se_swedb/tv_grab_se_swedb' ],
+       deps => [ 'grab/se_swedb/tv_grab_se_swedb'
+                 => [ 'grab/se_swedb/tv_grab_se_swedb.in' ] ],
+       prereqs => { 'XML::LibXML'    => 0,
+                    'Compress::Zlib' => 0,
+                    'IO::Stringy'    => 0,
+                    'HTTP::Cache::Transparent' => 0, },
+     },
+
+     { name => 'tv_grab_se_tvzon',
+       blurb => 'Grabber for Sweden (tvzon.se)',
+       exes => [ 'grab/se_tvzon/tv_grab_se_tvzon' ],
+       pl_files => { 'grab/se_tvzon/tv_grab_se_tvzon.PL'
+                     => 'grab/se_tvzon/tv_grab_se_tvzon' },
+       to_clean => [ 'grab/se_tvzon/tv_grab_se_tvzon' ],
+       deps => [ 'grab/se_tvzon/tv_grab_se_tvzon'
+                 => [ 'grab/se_swedb/tv_grab_se_swedb.in' ] ],
+       prereqs => { 'XML::LibXML'    => 0,
+                    'Compress::Zlib' => 0,
+                    'IO::Stringy'    => 0,
+                    'HTTP::Cache::Transparent' => 0, },
+     },
+
+     { name => 'tv_grab_tr',
+       blurb => 'Grabber for Turkey (Digiturk)',
+       exes => [ 'grab/tr/tv_grab_tr' ],
+       prereqs => { 'HTTP::Cache::Transparent' => 1.0,
+                    'LWP::UserAgent' => 0,
+                    'HTTP::Cookies'  => 0,
+                    'DateTime'       => 0,
+                    'Date::Parse'    => 0,
+                    'Encode'         => 0,
+                    'URI::Escape'    => 0,
+                    'File::Path'     => 0, },
+     },
+
+     { name => 'tv_grab_uk_atlas',
+       blurb => 'Fast grabber for UK and Ireland using Atlas database',
+       exes => [ 'grab/uk_atlas/tv_grab_uk_atlas' ],
+       share_files => {
+            'grab/uk_atlas/tv_grab_uk_atlas.user.map.conf'
+                => 'tv_grab_uk_atlas/tv_grab_uk_atlas.user.map.conf',
+            'grab/uk_atlas/tv_grab_uk_atlas.pa.genres.conf'
+                => 'tv_grab_uk_atlas/tv_grab_uk_atlas.pa.genres.conf',
+            'grab/uk_atlas/tv_grab_uk_atlas.map.genres.conf'
+                => 'tv_grab_uk_atlas/tv_grab_uk_atlas.map.genres.conf',
+            'grab/uk_atlas/tv_grab_uk_atlas.map.channels.conf'
+                => 'tv_grab_uk_atlas/tv_grab_uk_atlas.map.channels.conf',
+            'grab/uk_atlas/cgi-bin/getatlas.pl'
+                => 'tv_grab_uk_atlas/cgi-bin/getatlas.pl', },
+       prereqs => { 'HTTP::Cache::Transparent' => 1.0,
+                    'LWP::UserAgent'  => 0,
+                    'HTTP::Cookies'   => 0,
+                    'JSON::PP'        => 0,
+                    'DateTime'        => 0,
+                    'Date::Parse'     => 0,
+                    'Encode'          => 0,
+                    'URI::Escape'     => 0,
+                    'File::Path'      => 0,
+                    'Data::Dumper'    => 0,
+                    'Pod::Usage'      => 0, },
+     },
+
+     { name => 'tv_grab_uk_bleb',
+       blurb => 'Fast alternative grabber for the UK',
+       exes => [ 'grab/uk_bleb/tv_grab_uk_bleb' ],
+       pl_files => { 'grab/uk_bleb/tv_grab_uk_bleb.PL' => 'grab/uk_bleb/tv_grab_uk_bleb' },
+       share_files => { 'grab/uk_bleb/icon_urls' => 'tv_grab_uk_bleb/icon_urls' },
+       to_clean => [ 'grab/uk_bleb/tv_grab_uk_bleb' ],
+       deps => [ 'grab/uk_bleb/tv_grab_uk_bleb' => [ 'grab/uk_bleb/tv_grab_uk_bleb.in' ] ],
+       grab_need_share => [ 'uk_bleb' ],
+       prereqs => { 'IO::Stringy' => 0, 'Archive::Zip' => 0, },
+     },
+
+# [bilbo_uk] The Guardian have removed their online tv listings service @ 1/Oct/14
+#     { name => 'tv_grab_uk_guardian',
+#       blurb => 'Grabber for UK and Ireland using The Guardian website',
+#       exes => [ 'grab/uk_guardian/tv_grab_uk_guardian' ],
+#       share_files => {
+#            'grab/uk_guardian/tv_grab_uk_guardian.map.conf'
+#                => 'tv_grab_uk_guardian/tv_grab_uk_guardian.map.conf',
+#       },
+#       prereqs => { 'HTTP::Cache::Transparent' => 1.0,
+#                    'DateTime'        => 0,
+#                    'File::Path'      => 0,
+#                    'Encode'          => 0, },
+#     },
 
      { name => 'tv_grab_uk_rt',
        blurb => 'Grabber for UK and Ireland (Radio Times)',
@@ -436,58 +869,6 @@ my @opt_components
                     'XML::LibXML'        => 0, },
      },
 
-     { name => 'tv_grab_uk_bleb',
-       blurb => 'Fast alternative grabber for the UK',
-       exes => [ 'grab/uk_bleb/tv_grab_uk_bleb' ],
-       pl_files => { 'grab/uk_bleb/tv_grab_uk_bleb.PL' => 'grab/uk_bleb/tv_grab_uk_bleb' },
-       share_files => { 'grab/uk_bleb/icon_urls' => 'tv_grab_uk_bleb/icon_urls' },
-       to_clean => [ 'grab/uk_bleb/tv_grab_uk_bleb' ],
-       deps => [ 'grab/uk_bleb/tv_grab_uk_bleb' => [ 'grab/uk_bleb/tv_grab_uk_bleb.in' ] ],
-       grab_need_share => [ 'uk_bleb' ],
-       prereqs => { 'IO::Stringy' => 0, 'Archive::Zip' => 0, },
-     },
-
-     { name => 'tv_grab_uk_atlas',
-       blurb => 'Fast grabber for UK and Ireland using Atlas database',
-       exes => [ 'grab/uk_atlas/tv_grab_uk_atlas' ],
-       share_files => {
-            'grab/uk_atlas/tv_grab_uk_atlas.user.map.conf'
-                => 'tv_grab_uk_atlas/tv_grab_uk_atlas.user.map.conf',
-            'grab/uk_atlas/tv_grab_uk_atlas.pa.genres.conf'
-                => 'tv_grab_uk_atlas/tv_grab_uk_atlas.pa.genres.conf',
-            'grab/uk_atlas/tv_grab_uk_atlas.map.genres.conf'
-                => 'tv_grab_uk_atlas/tv_grab_uk_atlas.map.genres.conf',
-            'grab/uk_atlas/tv_grab_uk_atlas.map.channels.conf'
-                => 'tv_grab_uk_atlas/tv_grab_uk_atlas.map.channels.conf',
-            'grab/uk_atlas/cgi-bin/getatlas.pl'
-                => 'tv_grab_uk_atlas/cgi-bin/getatlas.pl', },
-       prereqs => { 'HTTP::Cache::Transparent' => 1.0,
-                    'LWP::UserAgent'  => 0,
-                    'HTTP::Cookies'   => 0,
-                    'JSON::PP'        => 0,
-                    'DateTime'        => 0,
-                    'Date::Parse'     => 0,
-                    'Encode'          => 0,
-                    'URI::Escape'     => 0,
-                    'File::Path'      => 0,
-                    'Data::Dumper'    => 0,
-                    'Pod::Usage'      => 0, },
-     },
-
-# [bilbo_uk] The Guardian have removed their online tv listings service @ 1/Oct/14
-#     { name => 'tv_grab_uk_guardian',
-#       blurb => 'Grabber for UK and Ireland using The Guardian website',
-#       exes => [ 'grab/uk_guardian/tv_grab_uk_guardian' ],
-#       share_files => {
-#            'grab/uk_guardian/tv_grab_uk_guardian.map.conf'
-#                => 'tv_grab_uk_guardian/tv_grab_uk_guardian.map.conf',
-#       },
-#       prereqs => { 'HTTP::Cache::Transparent' => 1.0,
-#                    'DateTime'        => 0,
-#                    'File::Path'      => 0,
-#                    'Encode'          => 0, },
-#     },
-
      { name => 'tv_grab_uk_tvguide',
        blurb => 'Grabber for UK and Ireland using TV Guide website',
        exes => [ 'grab/uk_tvguide/tv_grab_uk_tvguide' ],
@@ -504,403 +885,12 @@ my @opt_components
                     'Data::Dumper'    => 0, },
      },
 
-# 2008-11-09 disabled after ident string was blocked
-#     { name => 'tv_grab_be',
-#       blurb => 'Grabber for Belgium and Luxemburg',
-#       exes => [ 'grab/be/tv_grab_be' ],
-#       pl_files => { 'grab/be/tv_grab_be.PL' => 'grab/be/tv_grab_be' },
-#       share_files => { 'grab/be/channel_ids_fr' => 'tv_grab_be/channel_ids_fr',
-#                        'grab/be/channel_ids_nl' => 'tv_grab_be/channel_ids_nl' },
-#       to_clean => [ 'grab/be/tv_grab_be' ],
-#       deps => [ 'grab/be/tv_grab_be' => [ 'grab/be/tv_grab_be.in' ] ],
-#       grab_need_share => [ 'be' ],
-#       prereqs => { 'HTML::Entities' => 1.27 } ,
-#     },
-
-     { name => 'tv_grab_is',
-       blurb => 'Grabber for Iceland',
-       exes => [ 'grab/is/tv_grab_is' ],
-       share_files => { 'grab/is/category_map' => 'tv_grab_is/category_map' },
-       prereqs => { 'XML::LibXSLT' => 0,
-                    'XML::DOM'     => 0, },
-     },
-
-     { name => 'tv_grab_it',
-       blurb => 'Grabber for Italy',
-       exes => [ 'grab/it/tv_grab_it' ],
-       pl_files => { 'grab/it/tv_grab_it.PL' => 'grab/it/tv_grab_it' },
-       share_files => { 'grab/it/channel_ids' => 'tv_grab_it/channel_ids' },
-       to_clean => [ 'grab/it/tv_grab_it', 'grab/it/tv_grab_it.in2' ],
-       deps => [ 'grab/it/tv_grab_it' => [ 'grab/it/tv_grab_it.in' ] ],
-       grab_need_share => [ 'it' ],
-     },
-
-     { name => 'tv_grab_it_dvb',
-       blurb => 'Grabber for Italy from DVB-S stream',
-       exes => [ 'grab/it_dvb/tv_grab_it_dvb' ],
-       pl_files => { 'grab/it_dvb/tv_grab_it_dvb.PL' => 'grab/it_dvb/tv_grab_it_dvb' },
-       share_files => { 'grab/it_dvb/channel_ids' => 'tv_grab_it_dvb/channel_ids',
-                        'grab/it_dvb/sky_it.dict' => 'tv_grab_it_dvb/sky_it.dict',
-                        'grab/it_dvb/sky_it.themes' => 'tv_grab_it_dvb/sky_it.themes',
-                   },
-       to_clean => [ 'grab/it_dvb/tv_grab_it_dvb' ],
-       deps => [ 'grab/it_dvb/tv_grab_it_dvb' => [ 'grab/it_dvb/tv_grab_it_dvb.in' ] ],
-       grab_need_share => [ 'it_dvb' ],
-       prereqs => { 'Data::Dump'  => 0,
-                    'IO::Select'  => 0,
-                    'Linux::DVB'  => 0,
-                    'Time::HiRes' => 0, } ,
-     },
-
-# 2013-05-13 xmltv feed disabled by What's On due to TOS violations. It may come back
-#     { name     => 'tv_grab_in',
-#       blurb => 'Grabber for India (zipazap.com)',
-#       exes     => [ 'grab/in/tv_grab_in' ],
-#       prereqs => { 'XML::LibXML' => 0,
-#                    'IO::Scalar' => 0,
-#                  },
-#     },
-
-     { name     => 'tv_grab_na_dd',
-       blurb => '$$ Grabber for North America-schedulesdirect.org',
-       exes     => [ 'grab/na_dd/tv_grab_na_dd' ],
-       pl_files => { 'grab/na_dd/tv_grab_na_dd.PL' => 'grab/na_dd/tv_grab_na_dd' },
-       deps     => [ 'grab/na_dd/tv_grab_na_dd' => [ 'grab/na_dd/tv_grab_na_dd.in' ] ],
-       to_clean => [ 'grab/na_dd/tv_grab_na_dd' ],
-       prereqs => { 'SOAP::Lite'    => 0.67,
-                    'Term::ReadKey' => 0,
-                    'XML::Twig'     => 3.28, },
-       grab_need_share => [ 'na_dd' ],
-     },
-
-# 2013-02-02 disabled after site changes broke grabber (no <IMG> tags!)
-#     { name     => 'tv_grab_na_icons',
-#       blurb    => 'Grabber for North American Channel Icons',
-#       exes     => [ 'grab/na_icons/tv_grab_na_icons' ],
-#       deps     => [ 'grab/na_icons/tv_grab_na_icons' => [ 'grab/na_icons/tv_grab_na_icons.in' ] ],
-#       pl_files => { 'grab/na_icons/tv_grab_na_icons.PL' => 'grab/na_icons/tv_grab_na_icons' },
-#       to_clean => [ 'grab/na_icons/tv_grab_na_icons' ],
-#       prereqs  => { 'HTML::TreeBuilder' => 0,
-#                     'XML::Twig'         => 3.28,
-#                     'WWW::Mechanize' => 1.02 },
-#       grab_need_share => [ 'na_icons' ],
-#     },
-
-     { name     => 'tv_grab_fi',
-       blurb    => 'Grabber for Finland',
-       exes     => [ 'grab/fi/tv_grab_fi' ],
-       deps     => [
-                     'grab/fi/tv_grab_fi' => [
-                         'grab/fi/tv_grab_fi.pl',
-                         'grab/fi/fi/common.pm',
-                         'grab/fi/fi/day.pm',
-                         'grab/fi/fi/programme.pm',
-                         'grab/fi/fi/programmeStartOnly.pm',
-                         'grab/fi/fi/source/foxtv.pm',
-                         'grab/fi/fi/source/iltapulu.pm',
-                         'grab/fi/fi/source/telkku.pm',
-                         'grab/fi/fi/source/telvis.pm',
-                         'grab/fi/fi/source/yle.pm',
-                     ],
-                   ],
-       pl_files => { 'grab/fi/merge.PL' => 'grab/fi/tv_grab_fi' },
-       to_clean => [ 'grab/fi/tv_grab_fi' ],
-       prereqs  => {
-                    'HTML::TreeBuilder' => 0,
-                    'Time::Local'       => 0, },
-     },
-
-# 2012-03-16 no longer works and maintainer suggests to use _fi now which was extended to
-# provide the swedish guide earlier
-#     { name     => 'tv_grab_fi_sv',
-#       blurb    => 'Grabber for Finland (Swedish)',
-#       exes     => [ 'grab/fi_sv/tv_grab_fi_sv' ],
-#       prereqs  => {
-#                     'DateTime'    => 0,
-#                     'IO::Stringy' => 0,
-#                     'XML::LibXML' => 0,
-#          },
-#     },
-# 2014-04-13 reinstate after unbreak
-     { name     => 'tv_grab_fi_sv',
-       blurb    => 'Grabber for Finland (Swedish)',
-       exes     => [ 'grab/fi_sv/tv_grab_fi_sv' ],
-       prereqs  => { 'DateTime'   => 0,
-                     'IO::Scalar' => 0,
-                     'HTML::TreeBuilder' => 0, },
-     },
-
-# 2009-03-08 removed due to breakage after source site changes
-#     { name => 'tv_grab_es',
-#       blurb => 'Grabber for Spain - Analogic Terrestrial/Cable',
-#       exes => [ 'grab/es/tv_grab_es' ],
-#       prereqs => { 'HTML::TreeBuilder' => 0 } },
-
-     { name => 'tv_grab_il',
-       blurb => 'Grabber for Israel',
-       exes => [ 'grab/il/tv_grab_il' ],
-     },
-#
-#
-# tv_grab_es_digital no longer functioning due to site changes
-#
-#     { name => 'tv_grab_es_digital',
-#       blurb => 'Grabber for Spain - Digital Satellite (D+)',
-#       exes => [ 'grab/es_digital/tv_grab_es_digital' ],
-#       prereqs => { 'HTML::TreeBuilder' => 0 } },
-
-     { name => 'tv_grab_es_laguiatv',
-       blurb => 'Alternative grabber for Spain',
-       exes => [ 'grab/es_laguiatv/tv_grab_es_laguiatv' ],
-       prereqs => { 'HTML::TreeBuilder' => 0, },
-     },
-
-# rmeden 2012-06-11 broken since 2012-03-29
-#     { name => 'tv_grab_es_miguiatv',
-#       blurb => 'Alternative grabber for Spain using miguiatv.com',
-#       exes => [ 'grab/es_miguiatv/tv_grab_es_miguiatv' ],
-#       prereqs => { 'HTML::TreeBuilder' => 0 } },#
-
-# rmeden 2012-06-11 hasn't worked since 2012-03-06 community switch to python
-#            { name => 'tv_grab_nl',
-#       blurb => 'Grabber for the Netherlands',
-#       exes => [ 'grab/nl/tv_grab_nl' ],
-#       prereqs => { 'HTML::TreeBuilder' => 0 },
-#     },
-# 2014-04-29 reinstate after unbreak
-     { name => 'tv_grab_nl',
-       blurb => 'Grabber for the Netherlands',
-       exes => [ 'grab/nl/tv_grab_nl' ],
-       prereqs => { 'HTTP::Cache::Transparent' => 0,
-                    'HTML::TreeBuilder' => 0,
-                    'HTML::Entities'    => 0,
-                    'IO::File'     => 0,
-                    'Date::Parse'  => 0,
-                    'Date::Format' => 0,
-                    'DateTime'     => 0,
-                    'Encode'       => 0,
-                    'JSON::PP'     => 0, },
-     },
-
-# 2008-07-12 - removed by rmeden, not getting programs for a while.
-#
-#     { name => 'tv_grab_nl_wolf',
-#       blurb => 'Alternative grabber for the Netherlands',
-#       exes => [ 'grab/nl_wolf/tv_grab_nl_wolf' ],
-#       prereqs => { 'HTML::TreeBuilder' => 0 } },
-
-     { name => 'tv_grab_huro',
-       blurb => 'Grabber for Hungary, Romania, Slovakia, Czech Republic',
-       exes => [ 'grab/huro/tv_grab_huro' ],
-       pl_files => { 'grab/huro/tv_grab_huro.PL'
-                     => 'grab/huro/tv_grab_huro' },
-       share_files => { 'grab/huro/jobmap' => 'tv_grab_huro/jobmap',
-                        'grab/huro/catmap.hu' => 'tv_grab_huro/catmap.hu',
-                        'grab/huro/catmap.ro' => 'tv_grab_huro/catmap.ro',
-                        'grab/huro/catmap.sk' => 'tv_grab_huro/catmap.sk',
-                        'grab/huro/catmap.cz' => 'tv_grab_huro/catmap.cz',
-                     },
-       to_clean => [ 'grab/huro/tv_grab_huro' ],
-       deps => [ 'grab/huro/tv_grab_huro'
-                 => [ 'grab/huro/tv_grab_huro.in' ] ],
-       grab_need_share => [ 'huro' ],
-       prereqs => { 'HTML::TreeBuilder' => 0 },
-     },
-
-# 2008-07-22 - removed by rmeden, website changes, won't be fixed
-#     { name => 'tv_grab_dk',
-#       blurb => 'Grabber for Denmark',
-#       exes => [ 'grab/dk/tv_grab_dk' ],
-#       prereqs => { 'HTML::TreeBuilder' => 0 } },
-
-# 2013-12-10 - removed by rmeden, lots of site changes
-#     { name => 'tv_grab_dk_dr',
-#       blurb => 'Grabber for Denmark (dr.dk)',
-#       exes => [ 'grab/dk_dr/tv_grab_dk_dr' ],
-#       prereqs => { 'Data::Dumper' => 0,
-#                    'DateTime::Locale' => 0,
-#                    'IO::Stringy' => 0,
-#                    'Parse::RecDescent' => 0,
-#                    'LWP::Simple' => 0,
-#                    'DateTime' => 0,
-#                  },
-#     },
-
-# 2014-01-04 - added by bilbo_uk, replacement grabber
-     { name => 'tv_grab_dk_dr',
-       blurb => 'Grabber for Denmark (dr.dk)',
-       exes => [ 'grab/dk_dr/tv_grab_dk_dr' ],
-       prereqs => { 'Data::Dumper'   => 0,
-                    'LWP::UserAgent' => 0,
-                    'IO::Scalar'     => 0,
-                    'DateTime'       => 0,
-                    'JSON'           => 0, },
-     },
-
-#
-# 2009-03-05 rmeden - source site seems to be blocking our agent string
-#
-#{ name => 'tv_grab_jp',
-#  blurb => 'Grabber for Japan',
-#  exes => [ 'grab/jp/tv_grab_jp' ],
-#  prereqs => { 'HTML::TreeBuilder' => 0,
-#               'Text::Kakasi' => 0 } },
-
-     { name => 'tv_grab_se_swedb',
-       blurb => 'Grabber for Sweden',
-       exes => [ 'grab/se_swedb/tv_grab_se_swedb' ],
-       pl_files => { 'grab/se_swedb/tv_grab_se_swedb.PL'
-                     => 'grab/se_swedb/tv_grab_se_swedb' },
-       to_clean => [ 'grab/se_swedb/tv_grab_se_swedb' ],
-       deps => [ 'grab/se_swedb/tv_grab_se_swedb'
-                 => [ 'grab/se_swedb/tv_grab_se_swedb.in' ] ],
-       prereqs => { 'XML::LibXML'    => 0,
-                    'Compress::Zlib' => 0,
-                    'IO::Stringy'    => 0,
-                    'HTTP::Cache::Transparent' => 0, },
-     },
-
-     { name => 'tv_grab_hr',
-       blurb => 'Grabber for Croatia',
-       exes => [ 'grab/hr/tv_grab_hr' ],
-       pl_files => { 'grab/hr/tv_grab_hr.PL'
-                     => 'grab/hr/tv_grab_hr' },
-       to_clean => [ 'grab/hr/tv_grab_hr' ],
-       deps => [ 'grab/hr/tv_grab_hr'
-                 => [ 'grab/se_swedb/tv_grab_se_swedb.in' ] ],
-       prereqs => { 'XML::LibXML'    => 0,
-                    'Compress::Zlib' => 0,
-                    'IO::Stringy'    => 0,
-                    'HTTP::Cache::Transparent' => 0, },
-     },
-
-     { name => 'tv_grab_no_gfeed',
-       blurb => 'Grabber for Norway (gfeed.info)',
-       exes => [ 'grab/no_gfeed/tv_grab_no_gfeed' ],
-       pl_files => { 'grab/no_gfeed/tv_grab_no_gfeed.PL'
-                     => 'grab/no_gfeed/tv_grab_no_gfeed' },
-       to_clean => [ 'grab/no_gfeed/tv_grab_no_gfeed' ],
-       deps => [ 'grab/no_gfeed/tv_grab_no_gfeed'
-                 => [ 'grab/se_swedb/tv_grab_se_swedb.in' ] ],
-       prereqs => { 'XML::LibXML'    => 0,
-                    'Compress::Zlib' => 0,
-                    'IO::Stringy'    => 0,
-                    'HTTP::Cache::Transparent' => 0, },
-     },
-
-     { name => 'tv_grab_eu_egon',
-       blurb => 'Grabber for german speaking area (Egon zappt)',
-       exes => [ 'grab/eu_egon/tv_grab_eu_egon' ],
-       pl_files => { 'grab/eu_egon/tv_grab_eu_egon.PL'
-                     => 'grab/eu_egon/tv_grab_eu_egon' },
-       to_clean => [ 'grab/eu_egon/tv_grab_eu_egon' ],
-       deps => [ 'grab/eu_egon/tv_grab_eu_egon'
-                 => [ 'grab/se_swedb/tv_grab_se_swedb.in' ] ],
-       prereqs => { 'XML::LibXML'    => 0,
-                    'Compress::Zlib' => 0,
-                    'IO::Stringy'    => 0,
-                    'HTTP::Cache::Transparent' => 0, },
-     },
-
-     { name => 'tv_grab_se_tvzon',
-       blurb => 'Grabber for Sweden (tvzon.se)',
-       exes => [ 'grab/se_tvzon/tv_grab_se_tvzon' ],
-       pl_files => { 'grab/se_tvzon/tv_grab_se_tvzon.PL'
-                     => 'grab/se_tvzon/tv_grab_se_tvzon' },
-       to_clean => [ 'grab/se_tvzon/tv_grab_se_tvzon' ],
-       deps => [ 'grab/se_tvzon/tv_grab_se_tvzon'
-                 => [ 'grab/se_swedb/tv_grab_se_swedb.in' ] ],
-       prereqs => { 'XML::LibXML'    => 0,
-                    'Compress::Zlib' => 0,
-                    'IO::Stringy'    => 0,
-                    'HTTP::Cache::Transparent' => 0, },
-     },
-
-     { name => 'tv_grab_eu_dotmedia',
-       blurb => 'Grabber for Europe (xmltv.se / dotmedia)',
-       exes => [ 'grab/eu_dotmedia/tv_grab_eu_dotmedia' ],
-       prereqs => { 'XML::LibXML'    => 0,
-                    'Compress::Zlib' => 0,
-                    'IO::Stringy'    => 0,
-                    'HTTP::Cache::Transparent' => 0, },
-     },
-
-     { name => 'tv_grab_fr',
-       blurb => 'Grabber for France',
-       exes => [ 'grab/fr/tv_grab_fr' ],
-       prereqs => { 'HTML::Entities'    => 1.27,
-                    'HTML::TreeBuilder' => 0, },
-     },
-
-     { name => 'tv_grab_fr_kazer',
-       blurb => 'Grabber for France (Kazer)',
-       exes => [ 'grab/fr_kazer/tv_grab_fr_kazer' ],
-       prereqs => { 'IO::Uncompress::Unzip' => 0, },
-     },
-
-#
-# depreciate tv_grab_no as it is no longer supported (per author, cwattengard@gmail.com)
-# has been replaced by tv_grab_no_gfeed
-#
-#     { name => 'tv_grab_no',
-#       blurb => 'Grabber for Norway',
-#       exes => [ 'grab/no/tv_grab_no' ],
-#       prereqs => { 'HTML::Entities' => 1.27 },
-#     },
-
-# rmeden 2012-06-11 hasn't worked since 2012-01-30
-#     { name => 'tv_grab_pt',
-#       blurb => 'Grabber for Portugal',
-#       exes => [ 'grab/pt/tv_grab_pt' ],
-#       prereqs => { 'HTML::TreeBuilder' => 0,
-#                  }
-#     },
-# 2014-05-07 reinstate after unbreak
-     { name => 'tv_grab_pt',
-       blurb => 'Grabber for Portugal',
-       exes => [ 'grab/pt/tv_grab_pt' ],
-       prereqs => { 'Getopt::Long'      => 0,
-                    'HTML::TreeBuilder' => 0,
-                    'HTML::Entities'    => 1.27,
-                    'HTTP::Cache::Transparent' => 0,
-                    'DateTime'          => 0,
-                    'Encode'            => 0, },
-     },
-
-     { name => 'tv_grab_pt_meo',
-       blurb => 'Grabber for Portugal (MEO)',
-       exes => [ 'grab/pt_meo/tv_grab_pt_meo' ],
-       prereqs => { 'DateTime'    => 0,
-                    'XML::LibXML' => 0,
-                    'LWP'         => 0, },
-     },
-
 # honir 2015-03-05 hasn't worked since 2014-11-19 - source site permanently broken
 #     { name => 'tv_grab_za',
 #       blurb => 'Grabber for South Africa',
 #       exes => [ 'grab/za/tv_grab_za' ],
 #       prereqs => { 'HTML::TreeBuilder' => 0,
 #                    'HTML::Entities' => 1.27 } },
-
-     { name => 'tv_grab_eu_epgdata',
-       blurb => '$$ Grabber for some European countries (epgdata.com)',
-       exes => [ 'grab/eu_epgdata/tv_grab_eu_epgdata' ],
-       share_files => { 'grab/eu_epgdata/channel_ids' => 'tv_grab_eu_epgdata/channel_ids' },
-       prereqs => { 'XML::Twig'      => 0,
-                    'Archive::Zip'   => 0,
-                    'HTML::Entities' => 0,
-                    'LWP::Simple'    => 0,
-                    'File::Temp'     => 0,
-                    'DateTime::Format::Strptime' => 0, },
-     },
-
-
-
-     { name => 'tv_grab_combiner',
-       blurb => 'Grabber that combines data from other grabbers',
-       exes => [ 'grab/combiner/tv_grab_combiner' ],
-       prereqs => { 'XML::LibXML' => 0, },
-     },
 
      { name => 'tv_check',
        blurb => 'Program to report exceptions and changes in a schedule',
@@ -913,66 +903,16 @@ my @opt_components
                     'Tk::TableMatrix' => 0, }
      },
 
+     { name => 'tv_grab_combiner',
+       blurb => 'Grabber that combines data from other grabbers',
+       exes => [ 'grab/combiner/tv_grab_combiner' ],
+       prereqs => { 'XML::LibXML' => 0, },
+     },
+
      { name => 'tv_pick_cgi',
        blurb => 'CGI program to filter listings (to install manually)',
        prereqs => { 'CGI' => 0, },
        type => 'run',
-     },
-
-# rmeden 2012-06-11 broken since 2011-11-25
-#     { name => 'tv_grab_ee',
-#       blurb => 'Grabber for Estonia',
-#       exes => [ 'grab/ee/tv_grab_ee' ],
-#       prereqs => { 'LWP::Simple' => 0 } },
-
-# rmeden 2011-06-12 not working
-#    { name => 'tv_grab_re',
-#       blurb => 'Grabber for Reunion Island (France)',
-#       exes => [ 'grab/re/tv_grab_re' ],
-#       prereqs => { 'HTML::TreeBuilder' => 0 ,
-#                    'HTML::Entities'    => 0 } },
-
-# rmeden 2008-02-13
-# not working due to site changes
-# disabling
-#    { name => 'tv_grab_nc',
-#      blurb => 'Grabber for Nouvelle Caledonie Island (France)',
-#      exes => [ 'grab/nc/tv_grab_nc' ],
-#      prereqs => { 'HTML::TreeBuilder' => 0 ,
-#                   'HTML::Entities'    => 0 } },
-
-# rmeden 2011-06-12 not working
-# dekarl 2012-01-05 fixed by #3163183
-     { name => 'tv_grab_na_dtv',
-       blurb => 'Grabber for North America (DirecTV)',
-       exes => [ 'grab/na_dtv/tv_grab_na_dtv' ],
-       prereqs => {
-         'DateTime'         => 0,
-         'HTTP::Cookies'    => 0,
-         'LWP::UserAgent'   => 0,
-         'JSON::PP'         => 0,
-         'HTML::TokeParser' => 0, },
-     },
-
-     { name => 'tv_grab_tr',
-       blurb => 'Grabber for Turkey (Digiturk)',
-       exes => [ 'grab/tr/tv_grab_tr' ],
-       prereqs => { 'HTTP::Cache::Transparent' => 1.0,
-                    'LWP::UserAgent' => 0,
-                    'HTTP::Cookies'  => 0,
-                    'DateTime'       => 0,
-                    'Date::Parse'    => 0,
-                    'Encode'         => 0,
-                    'URI::Escape'    => 0,
-                    'File::Path'     => 0, },
-     },
-
-# bilbo_uk 2014-10-10 added new grabber from Matthew April <mapril@tvmedia.ca>
-     { name => 'tv_grab_na_tvmedia',
-       blurb => 'Grabber for North America (TVMedia)',
-       exes => [ 'grab/na_tvmedia/tv_grab_na_tvmedia' ],
-       prereqs => { 'XML::LibXML' => 0,
-                    'LWP::Simple' => 0, },
      },
 
     );
