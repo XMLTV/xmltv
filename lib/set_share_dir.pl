@@ -19,10 +19,10 @@ sub set_share_dir( $$$ ) {
     while (<$in_fh>) {
 	# Perl
 	s/^my \$SHARE_DIR =.*/my \$SHARE_DIR='$share_dir'; \# by $0/ && $seen++;
-	
+
 	# Python
 	s/^SHARE_DIR\s*=\s*None$/SHARE_DIR='$share_dir' \# by $0/ && $seen++;
-	
+
 	print $out_fh $_;
     }
     if ($seen == 0) {

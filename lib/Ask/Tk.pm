@@ -20,7 +20,7 @@ use Tk;
 
 my $main_window;
 my $top_frame;
-my $middle_frame; 
+my $middle_frame;
 my $bottom_frame;
 my $mid_bottom_frame;
 
@@ -36,9 +36,9 @@ sub ask( $$$ ) {
         my $show = shift;
 
         my $textbox;
-        
+
         $main_window = MainWindow->new;
-        
+
         $main_window->title("Question");
         $main_window->minsize(qw(400 250));
         $main_window->geometry('+250+150');
@@ -46,18 +46,18 @@ sub ask( $$$ ) {
         $top_frame    = $main_window->Frame()->pack;
         $middle_frame = $main_window->Frame()->pack;
         $bottom_frame = $main_window->Frame()->pack(-side => 'bottom');
-	
+
         $top_frame->Label(-height => 2)->pack;
-	
+
         $top_frame->Label(-text => $question)->pack;
 
         my $ans;
-        
+
         $bottom_frame->Button(-text    => "OK",
 			  -command => sub {$ans = $textbox->get(); $main_window->destroy;},
 			  -width    => 10
 			 )->pack(-padx => 2, -pady => 4);
-        
+
         if (defined $show) {
             $textbox = $middle_frame->Entry(-show => $show)->pack();
         }
@@ -65,7 +65,7 @@ sub ask( $$$ ) {
             $textbox = $middle_frame->Entry()->pack();
         }
         MainLoop();
-	
+
         return $ans;
 }
 
@@ -109,9 +109,9 @@ sub ask_choice( $$$@ ) {
 #
 sub ask_boolean( $$$ ) {
         shift;
-        my ($text, $default) = @_;	
+        my ($text, $default) = @_;
         t "asking question $text, default $default";
-	
+
         $main_window = MainWindow->new;
 
         $main_window->title('Question');
@@ -121,22 +121,22 @@ sub ask_boolean( $$$ ) {
         $top_frame    = $main_window->Frame()->pack;
         $middle_frame = $main_window->Frame()->pack;
         $bottom_frame = $main_window->Frame()->pack(-side => 'bottom');
-	
+
         $top_frame->Label(-height => 2)->pack;
         $top_frame->Label(-text => $text)->pack;
-	
+
         my $ans = 0;
-  
+
         $bottom_frame->Button(-text    => "Yes",
 			  -command => sub { $ans = 1; $main_window->destroy; },
 			  -width => 10,
 			 )->pack(-side => 'left', -padx => 2, -pady => 4);
-	
+
         $bottom_frame->Button(-text    => "No",
 			  -command => sub { $ans = 0; $main_window->destroy; },
 			  -width => 10
 			 )->pack(-side => 'left', -padx => 2, -pady => 4);
-	
+
         MainLoop();
 
         return $ans;
@@ -168,13 +168,13 @@ sub _ask_choices( $$$@ ) {
         my @options = @_;
 
         return if not @options;
-	
+
         my $select_all_button;
         my $select_none_button;
 
         my $listbox;
         my $i;
-	
+
         $main_window = MainWindow->new;
 
         $main_window->title('Question');
@@ -183,7 +183,7 @@ sub _ask_choices( $$$@ ) {
 
         $top_frame    = $main_window->Frame()->pack;
         $middle_frame = $main_window->Frame()->pack(-fill => 'both');
-	
+
         $top_frame->Label(-height => 2)->pack;
 
         $top_frame->Label(-text => $question)->pack;
@@ -191,22 +191,22 @@ sub _ask_choices( $$$@ ) {
         $listbox = $middle_frame->ScrlListbox();
 
         $listbox->insert(0, @options);
-	
+
         if ($allowedMany) {
                 $listbox->configure( -selectmode => 'multiple' );
-		
+
                 if ($default) {
                         $listbox->selectionSet( 0, 'end' );
                 }
-		
+
                 $mid_bottom_frame = $main_window->Frame()->pack();
-	
+
 	        $select_all_button = $mid_bottom_frame->Button
                         (-text => 'Select All',
                         -command => sub { $listbox->selectionSet(0, 1000) },
                         -width => 10,
                         )->pack(-side => 'left');
-	
+
 	        $select_none_button = $mid_bottom_frame->Button
                         (-text => 'Select None',
                         -command => sub { $listbox->selectionClear(0, 1000) },
@@ -217,18 +217,18 @@ sub _ask_choices( $$$@ ) {
                 $listbox->configure(-selectmode => 'single');
                 $listbox->selectionSet(_index_array($default, @options));
         }
-	
+
         $listbox->pack(-fill => 'x', -padx => '5', -pady => '2');
-	
+
         $bottom_frame = $main_window->Frame()->pack(-side => 'bottom');
-	
+
         my @cursel;
-  
+
         $bottom_frame->Button(-text    => 'OK',
 			  -command => sub { @cursel = $listbox->curselection; $main_window->destroy; },
 			  -width    => 10,
 			 )->pack(-padx => 2, -pady => 4);
-        
+
         MainLoop();
 
         if ($allowedMany) {
@@ -246,7 +246,7 @@ sub _ask_choices( $$$@ ) {
                         $i++;
                 }
 
-                return @choices;	
+                return @choices;
         }
         else {
                 my $ans = $options[$cursel[0]];
@@ -261,7 +261,7 @@ sub _ask_choices( $$$@ ) {
 sub say( $$ ) {
         shift;
         my $question = shift;
-	
+
         $main_window = MainWindow->new;
 
         $main_window->title("Information");
@@ -271,15 +271,15 @@ sub say( $$ ) {
         $top_frame    = $main_window->Frame()->pack;
         $middle_frame = $main_window->Frame()->pack;
         $bottom_frame = $main_window->Frame()->pack(-side => 'bottom');
-	
+
         $top_frame->Label(-height => 2)->pack;
         $top_frame->Label(-text => $question)->pack;
-	
+
         $bottom_frame->Button(-text    => "OK",
 			  -command => sub { $main_window->destroy; },
 			  -width    => 10,
 			 )->pack(-padx => 2, -pady => 4);
-	
+
         MainLoop();
 }
 
@@ -293,11 +293,11 @@ sub _index_array($@)
 {
         my $s=shift;
         my @array = @_;
-	
+
         for (my $i = 0; $i < $#array; $i++) {
                 return $i if $array[$i] eq $s;
         }
-	
+
         return -1;
 }
 

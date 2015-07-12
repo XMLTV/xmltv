@@ -259,7 +259,7 @@ sub fix_clumps( $$$ ) {
 	t 'split into one or more programmes';
 	@new = sort by_date @$new;
 	nuke_from_rel($rel, $orig);
-	
+
 	if (@relatives) {
 	    # Find where the original programme slotted into the clump
 	    # and insert the new programmes there.

@@ -83,11 +83,11 @@ sub offset_to_gmt($) {
 			$tz = "etc/gmt";
 		} else {
 			$tz = "etc/gmt$1$2";
-		}	
+		}
 	}
 	return $tz;
 }
-		
+
 
 # tz_to_num()
 #

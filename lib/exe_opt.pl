@@ -59,7 +59,7 @@ foreach $dir (@Encoding_Path) {
        print "-bind=XML/Parser/Encodings/${file}[file=$dir/${file},extract]\n";
     }
 }
-       
+
 #
 # put date in file version field
 #

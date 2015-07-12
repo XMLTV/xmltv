@@ -5,7 +5,7 @@ use strict;
 BEGIN {
     use Exporter   ();
     our (@ISA, @EXPORT, @EXPORT_OK, %EXPORT_TAGS);
-    
+
     @ISA         = qw(Exporter);
     @EXPORT      = qw( );
     %EXPORT_TAGS = ( );     # eg: TAG => [ qw!name1 name2! ],
@@ -27,7 +27,7 @@ XMLTV::ValidateFile - Validates an XMLTV file
 
 =head1 DESCRIPTION
 
-Utility library that validates that a file is correct according to 
+Utility library that validates that a file is correct according to
 http://wiki.xmltv.org/index.php/XMLTVFormat.
 
 
@@ -48,10 +48,10 @@ LoadDtd must be called before ValidateFile can be called.
 
 =cut
 
-sub LoadDtd { 
+sub LoadDtd {
     my( $dtd_file ) = @_;
 
-    my $dtd_str = read_file($dtd_file) 
+    my $dtd_str = read_file($dtd_file)
 	or die "Failed to read $dtd_file";
 
     $dtd = XML::LibXML::Dtd->parse_string($dtd_str);
@@ -64,7 +64,7 @@ that it contains valid information. ValidateFile takes a filename as parameter
 and optionally also a day and an offset and prints error messages to STDERR.
 
 ValidateFile returns a list of errors that it found with the file. Each
-error takes the form of a keyword:  
+error takes the form of a keyword:
 
 ValidateFile checks the following:
 
@@ -92,12 +92,12 @@ No programme entries were found in the file.
 
 =item channelnoprogramme
 
-There are no programme entries for one of the channels listed with a 
+There are no programme entries for one of the channels listed with a
 channel-entry.
 
 =item invalidid
 
-An xmltvid does not look like a proper id, i.e. it does not  match 
+An xmltvid does not look like a proper id, i.e. it does not  match
 /^[-a-zA-Z0-9]+(\.[-a-zA-Z0-9]+)+$/.
 
 =item noid
@@ -142,11 +142,11 @@ The file is encoded in utf-8 but contains characters that look strange.
 
 If no errors are found, an empty list is returned.
 
-=cut 
+=cut
 
 my %errors;
 my %timezoneerrors;
-  
+
 sub ValidateFile {
     my( $file ) = @_;
 
@@ -163,15 +163,15 @@ sub ValidateFile {
     %errors = ();
 
     my $doc;
-    
+
     eval { $doc = $parser->parse_file( $file ); };
-    
+
     if ( $@ ) {
 	w( "The file is not well-formed xml:\n$@ ", 'notwell');
 	return (keys %errors);
     }
-    
-    eval { $doc->validate( $dtd ) };  
+
+    eval { $doc->validate( $dtd ) };
     if ( $@ ) {
 	w( "The file is not valid according to the xmltv dtd:\n $@",
 	   'notvalid' );
@@ -185,28 +185,28 @@ sub ValidateFile {
     }
     verify_entities( $file );
 
-    my $w = sub { 
+    my $w = sub {
 	my( $p, $msg, $id ) = @_;
 	w( "Line " . $p->line_number() . " $msg", $id );
     };
-    
+
     my %channels;
-    
+
     my $ns = $doc->find( "//channel" );
 
     foreach my $ch ($ns->get_nodelist) {
 	my $channelid = $ch->findvalue('@id');
 	my $display_name = $ch->findvalue('display-name/text()');
-	
+
 	$w->( $ch, "Invalid channel-id '$channelid'", 'invalidid' )
 	    if $channelid !~ /^[-a-zA-Z0-9]+(\.[-a-zA-Z0-9]+)+$/;
-	
+
 	$w->( $ch, "Duplicate channel-tag for '$channelid'", 'duplicateid' )
 	    if defined( $channels{$channelid} );
-	
+
 	$channels{$channelid} = 0;
     }
-    
+
     $ns = $doc->find( "//programme" );
     if ($ns->size() == 0) {
 	w( "No programme entries found.", 'noprogrammes' );
@@ -231,34 +231,34 @@ sub ValidateFile {
 	}
 
 	$channels{$channelid}++;
-	
-	$w->( $p, "Empty title", 'emptytitle' )    
+
+	$w->( $p, "Empty title", 'emptytitle' )
 	    if $title =~ /^\s*$/;
 
-	$w->( $p, "Empty description", 'emptydescription' )    
+	$w->( $p, "Empty description", 'emptydescription' )
 	    if defined($desc) and $desc =~ /^\s*$/;
-	
+
 	$w->( $p, "Invalid start-time '$start'", 'badstart' )
 	    if not verify_time( $start );
-	
+
 	$w->( $p, "Invalid stop-time '$stop'", 'badstop' )
 	    if $stop ne "" and not verify_time( $stop );
 
 	if( $xmltv_episode =~ /\S/ ) {
 	    $w->($p, "Invalid episode-number '$xmltv_episode'", 'badepisode' )
-		if $xmltv_episode !~ /^\s*\d* (\s* \/ \s*\d+)? \s* \. 
-		                       \s*\d* (\s* \/ \s*\d+)? \s* \. 
-		                       \s*\d* (\s* \/ \s*\d+)? \s* $/x; 
+		if $xmltv_episode !~ /^\s*\d* (\s* \/ \s*\d+)? \s* \.
+		                       \s*\d* (\s* \/ \s*\d+)? \s* \.
+		                       \s*\d* (\s* \/ \s*\d+)? \s* $/x;
 	}
     }
 
     foreach my $channel (keys %channels) {
 	if ($channels{$channel} == 0) {
-	    w( "No programme entries found for $channel", 
+	    w( "No programme entries found for $channel",
 	       'channelnoprogramme' );
 	}
     }
-    
+
     return (keys %errors);
 }
 
@@ -287,7 +287,7 @@ sub verify_time
 	    return 0;
 	}
     }
-    
+
     return 1;
 }
 
@@ -462,17 +462,17 @@ sub w {
     print "$msg\n";
     $errors{$id}++ if defined $id;
 }
-    
+
 
 1;
 
-=back 
+=back
 
 =head1 BUGS
 
 It is currently necessary to specify the path to the xmltv dtd-file.
 This should not be necessary.
-   
+
 =head1 COPYRIGHT
 
 Copyright (C) 2006 Mattias Holmlund.

@@ -34,7 +34,7 @@ sub say( $$ );
 #   question text
 # Returns the text entered by the user.
 sub ask( $$ )
-{       
+{
         shift;
         my $prompt = shift;
         chomp $prompt;
@@ -55,8 +55,8 @@ sub ask( $$ )
 #   question text
 # Returns the text entered by the user.
 sub ask_password( $$ )
-{       
-    
+{
+
         shift;
         my $prompt = shift;
         chomp $prompt;

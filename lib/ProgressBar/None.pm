@@ -11,9 +11,9 @@ sub new {
         unless (ref($args)) {
                 $args = { 'name' => $args };
         }
-        
+
         print STDERR $args->{"name"} . "\n";
-        
+
         return bless $self, $class;
 }
 

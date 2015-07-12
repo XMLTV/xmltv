@@ -85,7 +85,7 @@ if ($cmd eq 'tv_grab_na_dd',
     unless (grep(/^--share/i,@ARGV))  # don't add our --share if one supplied
     {
         my $dir = dirname(PerlApp::exe()); # get full program path
-        $dir =~ s!\\!/!g;      # use / not \   
+        $dir =~ s!\\!/!g;      # use / not \
 #       die "EXE path contains spaces.  This is known to cause problems.\nPlease move xmltv.exe to a different directory\n" if $dir =~ / /;
         $dir .= "/share/xmltv";
     	unless (-d $dir )
@@ -115,7 +115,7 @@ if ($cmd eq 'exec')
    exit 1 if length($@);
    exit 0;
 }
-  
+
 #
 # scan through attached files and execute program if found
 #
@@ -124,7 +124,7 @@ foreach my $exe (split(/ /,$files))
 {
     next unless length($exe)>3; #ignore trash
     $_=$exe;
-    s!^.+/!!g;   
+    s!^.+/!!g;
     $cmds{$_}=1;  # build command list (just in case)
 
     next unless $cmd eq $_;
@@ -155,7 +155,7 @@ print STDERR "Valid commands are:\n";
 @cmds=sort keys %cmds;
 $rows = int($#cmds / 3)+1;
 
-map {$_='' unless defined $_} @cmds[0..($rows*3+2)];    
+map {$_='' unless defined $_} @cmds[0..($rows*3+2)];
 unshift @cmds,undef;
 
 foreach (1..$rows)

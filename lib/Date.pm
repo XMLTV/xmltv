@@ -88,7 +88,7 @@ sub parse_date( $ ) {
 	croak "cannot parse date '$raw'" if not $parsed;
 	return $parsed;
     }
-	
+
     my $best_distance;
     my $best;
     foreach (@poss) {
@@ -133,7 +133,7 @@ sub time_xmltv_to_iso ( $ )
 
 =head1 C<time_iso_to_xmltv()>
 
-Converts an ISO time e.g. "2014-04-12T09:00:00.000+03:00" 
+Converts an ISO time e.g. "2014-04-12T09:00:00.000+03:00"
 to XMLTV format, i.e.  "20140412090000 +0300"
 
 Argument is string time to convert.
@@ -167,13 +167,13 @@ sub time_xmltv_to_epoch ( $;$ )
 {
 		my $time = shift;
 		my $ignoreoffset = shift;		# set to 1 to ignore tz offset (i.e. 'local' epoch; else will get utc)
-		
-		my ($y, $m, $d, $h, $i, $s, $t, $th, $tm) = $time =~ 
+
+		my ($y, $m, $d, $h, $i, $s, $t, $th, $tm) = $time =~
 		  m/^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})\s([\+-])(\d{2})(\d{2})$/;
 		$y -= 1900; $m -= 1;	# re-base for mktime()
 		use POSIX qw(mktime);
 		my $epoch = POSIX::mktime($s, $i, $h, $d, $m, $y);
-		
+
 		if (!defined $ignoreoffset || !$ignoreoffset) {
 			# note this isn't exact since it doesn't account for leap seconds, etc
 			my $offset = ($th * 3600) + ($tm * 60);
@@ -181,7 +181,7 @@ sub time_xmltv_to_epoch ( $;$ )
 			$epoch -= $offset  if $t eq '+';
 		}
 		return $epoch;
-		
+
 }
 
 
@@ -203,13 +203,13 @@ sub time_iso_to_epoch ( $;$ )
 {
 		my $time = shift;
 		my $ignoreoffset = shift;		# set to 1 to ignore tz offset (i.e. 'local' epoch; else will get utc)
-		
+
 		my ($y, $m, $d, $h, $i, $s, $ms, $t, $th, $tm) = $time =~
 		  m/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})\.(\d{3})([\+-])(\d{2}):(\d{2})$/;
 		$y -= 1900; $m -= 1;	# re-base for mktime()
 		use POSIX qw(mktime);
 		my $epoch = POSIX::mktime($s, $i, $h, $d, $m, $y);
-		
+
 		if (!defined $ignoreoffset || !$ignoreoffset) {
 			# note this isn't exact since it doesn't account for leap seconds, etc
 			my $offset = ($th * 3600) + ($tm * 60);

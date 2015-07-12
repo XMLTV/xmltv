@@ -10,7 +10,7 @@ our $VERSION = 0.005065;
 BEGIN {
     use Exporter   ();
     our (@ISA, @EXPORT, @EXPORT_OK, %EXPORT_TAGS);
-    
+
     @ISA         = qw(Exporter);
     @EXPORT      = qw( );
     %EXPORT_TAGS = ( );     # eg: TAG => [ qw!name1 name2! ],
@@ -43,30 +43,30 @@ Utility class that helps grabbers write configuration descriptions.
                                              encoding => 'iso-8859-1' );
   $writer->start( { grabber => 'tv_grab_xxx' } );
   $writer->write_string( {
-    id => 'username', 
+    id => 'username',
     title => [ [ 'Username', 'en' ],
                [ 'Användarnamn', 'sv' ] ],
     description => [ [ 'The username for logging in to DataDirect.', 'en' ],
                      [ 'Användarnamn hos DataDirect', 'sv' ] ],
     } );
   $writer->start_selectone( {
-    id => 'lineup', 
+    id => 'lineup',
     title => [ [ 'Lineup', 'en' ],
                [ 'Programpaket', 'sv' ] ],
     description => [ [ 'The lineup of channels for your region.', 'en' ],
                      [ 'Programpaket för din region', 'sv' ] ],
     } );
 
-  $writer->write_option( { 
+  $writer->write_option( {
     value=>'eastcoast',
     text=> => [ [ 'East Coast', 'en' ],
-                [ 'Östkusten', 'sv' ] ] 
+                [ 'Östkusten', 'sv' ] ]
   } );
 
-  $writer->write_option( { 
+  $writer->write_option( {
     value=>'westcoast',
     text=> => [ [ 'West Coast', 'en' ],
-                [ 'Västkusten', 'sv' ] ] 
+                [ 'Västkusten', 'sv' ] ]
   } );
 
   $writer->end_selectone();
@@ -90,7 +90,7 @@ sub new {
     my $encoding = delete $args{encoding};
     my $self = $class->SUPER::new(DATA_MODE => 1, DATA_INDENT => 2, %args);
     bless($self, $class);
-    
+
     if (defined $encoding) {
 	$self->xmlDecl($encoding);
     }
@@ -117,7 +117,7 @@ sub new {
 
 =item start()
 
-Write the start of the <xmltvconfiguration> element.  Parameter is 
+Write the start of the <xmltvconfiguration> element.  Parameter is
 a hashref which gives the attributes of this element.
 
 =cut
@@ -126,21 +126,21 @@ sub start {
     my $self = shift;
     die 'usage: XMLTV::Writer->start(hashref of attrs)' if @_ != 1;
     my $attrs = shift;
-    
+
     $self->{xmltv_state} eq 'new'
 	or croak 'cannot call start() more than once on XMLTV::Writer';
-    
+
     $self->startTag( 'xmltvconfiguration', %{$attrs} );
     $self->{xmltv_state}='root';
 }
 
 =item write_string()
-    
+
 Write a <string> element. Parameter is a hashref with the data for the
 element:
 
   $writer->write_string( {
-    id => 'username', 
+    id => 'username',
     title => [ [ 'Username', 'en' ],
                [ 'Användarnamn', 'sv' ] ],
     description => [ [ 'The username for logging in to DataDirect.', 'en' ],
@@ -148,17 +148,17 @@ element:
     default => "",
     } );
 
-		
+
 To add a constant use 'constant' key:
 	If constant value is empty then revert to 'ask' procedure.
 
   $writer->write_string( {
-    id => 'version', 
+    id => 'version',
     title => [ [ 'Version number', 'en' ] ],
     description => [ [ 'Automatically added version number - no user input', 'en' ] ],
     constant => '123',
     } );
-		
+
 =back
 
 =cut
@@ -200,27 +200,27 @@ sub write_string_tag {
     my %ch = %$ch; # make a copy
     my $id = delete $ch{id};
     die "missing 'id' in string" if not defined $id;
-    
+
     my %h = ( id => $id );
     my $default = delete $ch{default};
-    
+
     $h{default} = $default if defined $default;
-		
-    my $constant = delete $ch{constant};  
+
+    my $constant = delete $ch{constant};
     $h{constant} = $constant if defined $constant;
-    
+
     $self->startTag( $tag, %h );
-    
+
     my $titles = delete $ch{title};
     die "missing 'title' in string" if not defined $titles;
-    
+
     $self->write_lang_tag( 'title', $titles );
-    
+
     my $descriptions = delete $ch{description};
     die "missing 'description' in string" if not defined $descriptions;
-    
+
     $self->write_lang_tag( 'description', $descriptions );
-    
+
     $self->endTag( $tag )
     }
 
@@ -248,7 +248,7 @@ sub start_select {
     my ($self, $tag, $ch) = @_;
     croak 'undef parameter hash passed' if not defined $ch;
     croak "expected a hashref, got: $ch" if ref $ch ne 'HASH';
-    
+
     for ($self->{xmltv_state}) {
 	if ($_ eq 'new') {
 	    croak 'must call start() on XMLTV::Configure::Writer first';
@@ -271,35 +271,35 @@ sub start_select {
     my %ch = %$ch; # make a copy
     my $id = delete $ch{id};
     die "missing 'id' in $tag" if not defined $id;
-    
+
     my %h = ( id => $id );
     my $default = delete $ch{default};
-    
+
     $h{default} = $default if defined $default;
-    
+
     $self->startTag( $tag, %h );
-    
+
     my $titles = delete $ch{title};
     die "missing 'title' in string" if not defined $titles;
-    
+
     $self->write_lang_tag( 'title', $titles );
-    
+
     my $descriptions = delete $ch{description};
     die "missing 'description' in string" if not defined $descriptions;
-    
+
     $self->write_lang_tag( 'description', $descriptions );
-    
+
     $self->{xmltv_state} = $tag;
 }
 
 sub end_select {
     my( $self, $tag ) = @_;
-    
+
     if( $self->{xmltv_state} ne $tag )
     {
 	croak "cannot write end-tag for $tag without a matching start-tag";
     }
-    
+
     $self->endTag( $tag );
     $self->{xmltv_state} = 'root';
 }
@@ -307,7 +307,7 @@ sub end_select {
 sub write_option {
     my $self = shift;
     my( $data ) = @_;
-    
+
     for ($self->{xmltv_state}) {
 	if ($_ eq 'new') {
 	    croak 'must call start() on XMLTV::Configure::Writer first';
@@ -326,14 +326,14 @@ sub write_option {
 	}
 	else { die }
     }
-    
+
     my $value = delete $data->{value};
     croak "Missing value for option-tag" unless defined $value;
-    
+
     $self->startTag( 'option', value => $value );
     $self->write_lang_tag( 'text', $data->{text} );
     $self->endTag( 'option' );
-    
+
 }
 
 sub write_lang_tag

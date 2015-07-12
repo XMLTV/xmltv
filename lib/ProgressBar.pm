@@ -4,7 +4,7 @@
 #
 
 package XMLTV::ProgressBar;
-use strict;        
+use strict;
 use XMLTV::GUI;
 
 # Use Log::TraceMessages if installed.
@@ -26,10 +26,10 @@ my $bar;
 # Must be called before we use this module if we want to use a gui.
 sub init( $ ) {
      my $opt_gui = shift;
-     
-     # Ask the XMLTV::GUI module for the graphics type we will use  
+
+     # Ask the XMLTV::GUI module for the graphics type we will use
      my $gui_type = XMLTV::GUI::get_gui_type($opt_gui);
-     
+
      if ($gui_type eq 'term') {
           $real_class = 'XMLTV::ProgressBar::None';
      } elsif ($gui_type eq 'term+progressbar') {
@@ -49,14 +49,14 @@ sub init( $ ) {
 # ignored in some of the implementations.
 sub new {
      my $class = shift;
-     
+
      ((my $real_class_path = $real_class.".pm") =~ s/::/\//g);
-     
+
      require $real_class_path;
      import $real_class_path;
-     
+
      $bar = $real_class->new(@_);
-     
+
      my $self = {};
      return bless $self, $class;
 }
@@ -75,7 +75,7 @@ sub finish {
 
      # Only does anything for the GUI ones.
      if ($real_class eq 'XMLTV::ProgressBar::Tk') {
-          return $bar->finish();    
+          return $bar->finish();
      }
 }
 

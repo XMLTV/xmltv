@@ -118,7 +118,7 @@ sub summarize( $$ ) {
 	$start = ParseDate_PreservingTZ($_->{start});
 	$start_tz = gettz($_->{start}) || 'UTC';
 	$start_hhmm = UnixDate($start, '%R');
-	
+
 	my ($stop, $stop_tz, $stop_hhmm);
 	if (defined $_->{stop}) {
 	    $stop = ParseDate_PreservingTZ($_->{stop});
@@ -140,7 +140,7 @@ sub summarize( $$ ) {
 	      = XMLTV::best_name(\@PREF_LANGS, $_->{'sub-title'},
 				 \&shorter)->[0];
 	}
-	
+
 	my $desc;
 	if (defined $_->{'desc'}) {
 		# No comparator, just get the first one in the preferred language (this is probably the best/shortest in most cases)
@@ -148,7 +148,7 @@ sub summarize( $$ ) {
 	      = XMLTV::best_name(\@PREF_LANGS, $_->{'desc'})->[0];
 	    $desc =~ tr/\t\n/ /;	# remove tabs and newlines
 	}
-	
+
 	if (not defined $curr_tz) {
 	    # Assume that the first item in a listing doesn't need an
 	    # explicit timezone.
@@ -164,7 +164,7 @@ sub summarize( $$ ) {
 	    $stop_hhmm .= " $stop_tz" if defined $stop_hhmm;
 	    undef $curr_tz;
 	}
-	
+
 	unless (defined $stop_tz and $start_tz ne $stop_tz) {
 	    # The programme probably starts and stops in the same TZ -
 	    # we can assume that this is the one to use from now on.

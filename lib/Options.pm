@@ -174,7 +174,7 @@ ParseOptions handles the following options automatically without returning:
 
 =item --description
 
-=item --preferredmethod 
+=item --preferredmethod
 
 Handled automatically if the preferredmethod capability has been set and
 the preferredmethod option has been specified in the call to ParseOptions.
@@ -288,9 +288,9 @@ version of the grabber.
 
 =item list_lineups_sub
 
-Optional. A coderef that takes an option hash as returned by ParseOptions 
-as a parameter, and returns an xml-string containing a list of all the 
-channel lineups for which the grabber can deliver data. 
+Optional. A coderef that takes an option hash as returned by ParseOptions
+as a parameter, and returns an xml-string containing a list of all the
+channel lineups for which the grabber can deliver data.
 The xml-string shall follow the xmltv-lineups.xsd schema.
 
 =item get_lineup_sub
@@ -300,7 +300,7 @@ lineup. The xml-string shall follow the xmltv-lineups.xsd schema.
 
 =item preferredmethod
 
-Optional. A value to return when the grabber is called with the 
+Optional. A value to return when the grabber is called with the
 --preferredmethod parameter. Example:
 
   my( $opt, $conf ) = ParseOptions( {
@@ -341,7 +341,7 @@ sub ParseOptions
     my $opt={};
     my $capabilities = {};
 
-    foreach my $cap (keys %{cap_options}) 
+    foreach my $cap (keys %{cap_options})
     {
 	$capabilities->{$cap} = 0;
     }
@@ -370,19 +370,19 @@ sub ParseOptions
 	    my @known = sort keys %cap_options;
 	    croak "Unknown capability $cap (known: @known)";
 	}
-	
+
 	push( @optdef, @{$cap_options{$cap}} );
 	hash_push( $opt, $cap_defaults{$cap} );
 	$capabilities->{$cap} = 1;
     }
 
-    if( $capabilities->{preferredmethod} 
+    if( $capabilities->{preferredmethod}
 	and not exists($p->{preferredmethod}) )
     {
 	croak "You must specify which preferredmethod to use";
     }
 
-    if( exists($p->{preferredmethod}) 
+    if( exists($p->{preferredmethod})
 	and not $capabilities->{preferredmethod} )
     {
 	croak "You must include the capability preferredmethod to specify " .
@@ -444,7 +444,7 @@ sub ParseOptions
         require Pod::Text;
         Pod::Text->new (sentence => 0, margin => 2, width => 78)->parse_from_file($0);
       }
-      else 
+      else
       {
         require Pod::Usage; import Pod::Usage; pod2usage(-verbose => 2);
       }
@@ -461,7 +461,7 @@ sub ParseOptions
 	    print STDERR "Cannot write to $opt->{output}.\n";
 	    exit 1;
 	}
-	
+
         # Redirect default output to STDOUT
 	select( STDOUT );
     }
@@ -493,7 +493,7 @@ sub ParseOptions
 	    print STDERR "You need to start configuration with the 'start' stage.\n";
 	    exit 1;
 	}
-	
+
 	if( $opt->{stage} eq 'select-channels' )
 	{
 	    my $chanxml = &{$p->{listchannels_sub}}($conf, $opt);
@@ -515,9 +515,9 @@ sub ParseOptions
 		"the channels.\n";
 	    exit 1;
 	}
-	
+
 	print &{$p->{listchannels_sub}}($conf,$opt);
-	
+
 	exit 0;
     }
 
@@ -539,7 +539,7 @@ sub ParseOptions
 	print STDERR "You need to configure the grabber by running it with --configure \n";
 	exit 1;
     }
-	
+
     return ($opt, $conf);
 }
 
@@ -554,7 +554,7 @@ sub PrintUsage
 $gn --help
 
 $gn --info
-	
+
 $gn --version
 
 $gn --capabilities

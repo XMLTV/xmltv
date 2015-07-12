@@ -35,7 +35,7 @@ sub import( $$ ) {
 	}
     }
     return if not $seen;
-    
+
     print $method . "\n";
     exit();
 }

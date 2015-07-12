@@ -9,7 +9,7 @@ our $VERSION = 0.005066;
 BEGIN {
     use Exporter   ();
     our (@ISA, @EXPORT, @EXPORT_OK, %EXPORT_TAGS);
-    
+
     @ISA         = qw(Exporter);
     @EXPORT      = qw( );
     %EXPORT_TAGS = ( );     # eg: TAG => [ qw!name1 name2! ],
@@ -59,7 +59,7 @@ in an entry named after the key with a prefix of 'no_'. See
 the channel and no_channel entry in the example. They are the
 result of a selectmany with id=channel.
 
-The configuration file must be in the format described in 
+The configuration file must be in the format described in
 the file "ConfigurationFiles.txt". If the file does not
 exist or if the format is wrong, LoadConfig returns undef.
 
@@ -68,18 +68,18 @@ exist or if the format is wrong, LoadConfig returns undef.
 sub LoadConfig
 {
     my( $config_file ) = @_;
-    
+
     my $data = {};
-    
+
     open IN, "< $config_file" or return undef;
-    
+
     foreach my $line (<IN>)
     {
 	$line =~ tr/\n\r//d;
 	next if $line =~ /^\s*$/;
 	next if $line =~ /^\s*#/;
-        
-	# Only accept lines with key=value or key!value. 
+
+	# Only accept lines with key=value or key!value.
 	# No white-space is allowed before
 	# the equal-sign. White-space after the equal-sign is considered
 	# part of the value, except for white-space at the end of the line
@@ -96,7 +96,7 @@ sub LoadConfig
 	    push @{$data->{"no_$key"}}, $value;
 	}
     }
-    
+
     close IN;
     return $data;
 }
@@ -115,12 +115,12 @@ is done by the Configure-method.
 sub SaveConfig
 {
     my( $conf, $config_file ) = @_;
-    
+
     # Test if configuration file is writeable
     if (-f $config_file && !(-w $config_file)) { die "Cannot write to $config_file"; }
- 
+
     # Create temporary configuration file.
-    open OUT, "> $config_file.TMP" 
+    open OUT, "> $config_file.TMP"
 	or die "Failed to open $config_file.TMP for writing.";
 
     foreach my $key (keys %{$conf})
@@ -145,21 +145,21 @@ sub SaveConfig
     }
 
     close OUT;
-    
+
     # Store temporary configuration file
-    rename "$config_file.TMP", $config_file or die "Failed to write to $config_file";  
+    rename "$config_file.TMP", $config_file or die "Failed to write to $config_file";
 }
 
 =item Configure
 
-Generates a configuration file for the grabber. 
+Generates a configuration file for the grabber.
 
 Takes three parameters: stagesub, listsub and the name of the configuration
 file.
 
 stagesub shall be a coderef that takes a stage-name or undef
-and a configuration hashref as a parameter and returns an 
-xml-string that describes the configuration necessary for that stage. 
+and a configuration hashref as a parameter and returns an
+xml-string that describes the configuration necessary for that stage.
 The xml-string shall follow the xmltv-configuration.dtd.
 
 listsub shall be a coderef that takes a configuration hash as returned
@@ -174,19 +174,19 @@ shall not use any channel-configuration from the hashref.
 sub Configure
 {
     my( $stagesub, $listsub, $conffile, $opt ) = @_;
-    
+
     # How can we read the language from the environment?
-    my $lang = 'en'; 
-    
+    my $lang = 'en';
+
     my $nextstage = 'start';
-    
+
     # Test if configuration file is writeable
     if (-f $conffile && !(-w $conffile)) { die "Cannot write to $conffile"; }
- 
+
     # Create temporary configuration file.
     open OUT, "> $conffile.TMP" or die "Failed to write to $conffile.TMP";
     close OUT;
-    
+
     do
     {
 	my $stage = &$stagesub( $nextstage, LoadConfig( "$conffile.TMP" ) );
@@ -201,7 +201,7 @@ sub Configure
         my $channels = &$listsub( $conf, $opt );
         select_channels( $channels, $conffile, $lang );
     }
-    
+
     # Store temporary configuration file
     rename "$conffile.TMP", $conffile or die "Failed to write to $conffile";
 }
@@ -212,16 +212,16 @@ sub configure_stage
 
     my $nextstage = undef;
 
-    open OUT, ">> $conffile.TMP" 
+    open OUT, ">> $conffile.TMP"
 	or die "Failed to open $conffile.TMP for writing";
 
     my $xml = XML::LibXML->new;
     my $doc = $xml->parse_string($stage);
-    
+
     binmode(STDERR, ":utf8") if ($doc->encoding eq "utf-8");
 
     my $ns = $doc->find( "//xmltvconfiguration/*" );
-  
+
     foreach my $p ($ns->get_nodelist)
     {
 	my $tag = $p->nodeName;
@@ -236,7 +236,7 @@ sub configure_stage
 	my $description = getvalue( $p, 'description', $lang );
 	my $default = $p->findvalue( '@default' );
 	my $constant = $p->findvalue( '@constant' );
-	
+
 	my $value;
 
 	my $q = $default ne '' ? "$title: [$default]" :
@@ -271,8 +271,8 @@ sub configure_stage
 	}
 
 	if( $tag eq "selectone" )
-	{   
-	    my $selected = ask_choice( "$title:", $optiontexts[0], 
+	{
+	    my $selected = ask_choice( "$title:", $optiontexts[0],
                                        @optiontexts );
 	    for( my $i=0; $i<scalar( @optiontexts ); $i++ )
 	    {
@@ -309,15 +309,15 @@ sub select_channels
 {
     my( $channels,  $conffile, $lang ) = @_;
 
-    open OUT, ">> $conffile.TMP" 
+    open OUT, ">> $conffile.TMP"
 	or die "Failed to open $conffile.TMP for writing";
 
     my $xml = XML::LibXML->new;
     my $doc;
     $doc = $xml->parse_string($channels);
-    
+
     my $ns = $doc->find( "//channel" );
-  
+
     my @channelname;
     my @channelid;
 
@@ -355,7 +355,7 @@ sub SelectChannelsStage
     my $doc;
     $doc = $xml->parse_string($channels);
     my $encoding = $doc->encoding;
-    
+
     my $ns = $doc->find( "//channel" );
 
     my $result;
@@ -363,17 +363,17 @@ sub SelectChannelsStage
 					       encoding => $encoding );
     $writer->start( { grabber => $grabber_name } );
     $writer->start_selectmany( {
-	id => 'channel', 
+	id => 'channel',
 	title => [ [ 'Channels', 'en' ] ],
-	description => [ 
+	description => [
 	 [ "Select the channels that you want to receive data for.",
 	   'en' ] ],
      } );
 
     foreach my $p ($ns->get_nodelist)
     {
-	# FIXME: Preserve all languages for the display-name        
-	$writer->write_option( { 
+	# FIXME: Preserve all languages for the display-name
+	$writer->write_option( {
 	    value=>$p->findvalue( '@id' ),
 	    text=> => [ [ getvalue($p, "display-name", 'en' ),
 			  'en'] ],
@@ -381,7 +381,7 @@ sub SelectChannelsStage
     }
     $writer->end_selectmany();
     $writer->end( 'end' );
-    
+
     return $result;
 }
 
@@ -391,7 +391,7 @@ sub getvalue
 
     # Try the correct language first
     my $value = $p->findvalue( $field . "[\@lang='$lang']");
-    
+
     # Use English if there is no value for the correct language.
     $value = $p->findvalue( $field . "[\@lang='en']")
 	unless length( $value ) > 0;
@@ -408,7 +408,7 @@ sub getvalue
 }
 
 =back
-    
+
 =head1 COPYRIGHT
 
 Copyright (C) 2005 Mattias Holmlund.
