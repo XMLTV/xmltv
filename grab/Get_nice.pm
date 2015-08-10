@@ -34,10 +34,11 @@ package XMLTV::Get_nice;
 # 0.005065 : add decode option to get_nice_tree()
 # 0.005065 : expose the LWP response object ($Response)
 # 0.005066 : support unknown tags in HTML::TreeBuilder ($IncludeUnknownTags)
-our $VERSION = 0.005066;
+# 0.005067 : new method post_nice_json()
+our $VERSION = 0.005067;
 
 use base 'Exporter';
-our @EXPORT = qw(get_nice get_nice_tree get_nice_xml get_nice_json error_msg);
+our @EXPORT = qw(get_nice get_nice_tree get_nice_xml get_nice_json post_nice_json error_msg);
 use Encode qw(decode);
 use LWP::UserAgent;
 use XMLTV;
@@ -153,8 +154,8 @@ sub get_nice_aux( $ ) {
     #
     $last_get_time = time();
 
-		# expose the response object for those grabbers which need to process the headers, status code, etc.
-		$Response = $r;
+    # expose the response object for those grabbers which need to process the headers, status code, etc.
+    $Response = $r;
 
     if ($r->is_error) {
         # At the moment download failures seem rare, so the script dies if
@@ -166,10 +167,45 @@ sub get_nice_aux( $ ) {
         $errors{$url} = $r->status_line;
         return undef;
     } else {
-        # De-compress, if necessary, but skip character set conversions
-        return $r->decoded_content(charset => 'none');
+        return $r->content;
     }
 
+}
+
+# Fetch page via a JSON object in the Content and return as a JSON object.  
+# Arguments:
+#    URI to post to
+#    JSON object with the AJAX data to be posted e.g. "{ 'programId':'123456', 'channel':'BBC'}"
+#
+sub post_nice_json( $$ ) {
+    my $url = shift;
+    my $json = shift;
+
+    require JSON::PP;
+
+    if (defined $last_get_time) {
+        # A page has already been retrieved recently.  See if we need
+        # to sleep for a while before getting the next page 
+        #
+        my $next_get_time = $last_get_time + (rand $Delay) + $MinDelay;
+        my $sleep_time = $next_get_time - time();
+        sleep $sleep_time if $sleep_time > 0;
+    }
+
+    my $r = $ua->post($url, 'Content_Type' => 'application/json; charset=utf-8', 'Content' => $json);
+
+    $last_get_time = time();
+
+    # expose the response object for those grabbers which need to process the headers, status code, etc.
+    $Response = $r;
+
+    if ($r->is_error) {
+        die "could not fetch $url, error: " . $r->status_line . ", aborting\n" if $FailOnError;
+        $errors{$url} = $r->status_line;
+        return undef;
+    } else {
+        return JSON::PP->new()->utf8(1)->decode($r->content) or die "cannot parse content of $url\n";
+    }
 }
 
 1;
