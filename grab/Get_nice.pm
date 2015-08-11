@@ -204,7 +204,8 @@ sub post_nice_json( $$ ) {
         $errors{$url} = $r->status_line;
         return undef;
     } else {
-        return JSON::PP->new()->utf8(1)->decode($r->content) or die "cannot parse content of $url\n";
+        my $content = JSON::PP->new()->utf8(1)->decode($r->content) or die "cannot parse content of $url\n";
+        return $content;
     }
 }
 
