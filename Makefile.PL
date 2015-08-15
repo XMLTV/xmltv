@@ -498,8 +498,11 @@ my @opt_components
      { name => 'tv_grab_fr',
        blurb => 'Grabber for France',
        exes => [ 'grab/fr/tv_grab_fr' ],
-       prereqs => { 'HTML::Entities'    => 1.27,
-                    'HTML::TreeBuilder' => 0, },
+       prereqs => { 'DateTime'           => 0,
+                    'DateTime::Duration' => 0,
+                    'DateTime::TimeZone' => 0,
+                    'HTML::Entities'     => 1.27,
+                    'HTML::TreeBuilder'  => 0, },
      },
 
      { name => 'tv_grab_fr_kazer',

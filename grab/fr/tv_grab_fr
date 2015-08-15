@@ -1,4 +1,4 @@
-#!/usr/bin/perl -w
+#!/usr/bin/perl
 
 eval 'exec /usr/bin/perl -w -S $0 ${1+"$@"}'
     if 0; # not running under some shell
@@ -11,8 +11,6 @@ tv_grab_fr - Grab TV listings for France.
 
  To configure:
    tv_grab_fr --configure [--config-file FILE] [--gui OPTION]
- To configure AUTRES CHAINES list:
-   tv_grab_fr --configure-more-channels
  To grab listings:
    tv_grab_fr [--config-file FILE] [--output FILE] [--days N]
     [--offset N] [--quiet] [--debug]
@@ -27,23 +25,19 @@ tv_grab_fr - Grab TV listings for France.
 
 =head1 DESCRIPTION
 
-Output TV listings for several channels available in France (Hertzian,
-Cable/satellite, Canal+ Sat, TPS).  The data comes from
-telepoche.guidetele.com.  The default is to grab as many days as possible
-(currently 9) from the current day onwards.
+Output TV listings for many channels available in France (Orange,
+Free, cable/ADSL/satellite, Canal+ Sat).  The data comes from
+telestar.fr.  The default is to grab 7 days, but there are usually
+14 days of listings available from the current day onwards.
 
-B<--configure> Grab channels information from the website and ask for
-channel type and names to grab.
+Grabbing speed varies, but is typically 1-2 minutes/day/channel.
 
-B<--configure-more-channels> Use this option to create AUTRES CHAINES list.
-This allows grabbing listings for some channels that are not listed  in the
-bouquets on the website. For more information and a list of channels see
-L<http://www.lahiette.com/biboobox/forum/viewtopic.php?t=1842>.
+B<--configure> Choose which bouquets/channels to grab listings data for.
 
-B<--list-channels> List available channels for chosen bouquets.
+B<--list-channels> List all available channels.
 
 B<--config-file FILE> Use FILE as config file instead of the default config
-file. This allows one to have different config files for i.e. different apps.
+file. This allows for different config files for different applications.
 
 B<--gui OPTION> Use this option to enable a graphical interface to be used.
 OPTION may be 'Tk', or left blank for the best available choice.
@@ -52,17 +46,15 @@ Additional allowed values of OPTION are 'Term' for normal terminal output
 
 B<--output FILE> Write to FILE rather than standard output.
 
-B<--days N> Grab N days starting from today, rather than as many as
-possible.
+B<--days N> Grab N days (default 7, maximum 14) starting from today.
 
 B<--offset N> Start grabbing N days from today, rather than starting
-today.  N may be negative. Due to the website organization, N cannot
-be inferior to -1.
+today.
 
 B<--quiet> Suppress the progress messages normally written to standard
 error.
 
-B<--debug> Provide additional debugging message during processing.
+B<--debug> Provide additional debugging messages during processing.
 
 B<--capabilities> Show which capabilities the grabber supports. For more
 information, see L<http://wiki.xmltv.org/index.php/XmltvCapabilities>.
@@ -77,26 +69,29 @@ L<xmltv(5)>
 
 =head1 AUTHOR
 
-The original author was Sylvain Fabre, centraladmin at lahiette dot com
+The current version of the script was rewritten by Nick Morrott,
+knowledgejunkie at gmail dot com, to support the new telestar.fr site.
+
+The original author was Sylvain Fabre, centraladmin at lahiette dot com,
 with patches from:
-  - Francois Gouget, fgouget at free dot fr
-  - Niel Markwick, nielm at bigfoot dot com
-  - Zubrick, zubrick at number6 dot ch
-  - Nick Morrott, knowledgejunkie at gmail dot com
+  - Francois Gouget, fgouget at free dot fr,
+  - Geoff Westcott, honir999 at gmail dot com,
+  - Karl Dietz, dekarl at spaetfruehstuecken dot org,
+  - Niel Markwick, nielm at bigfoot dot com,
+  - Zubrick, zubrick at number6 dot ch,
+  - and many more!
 
 =cut
 
-# TODO / FIXME
-# ============
+# TODO
+# ====
+#
+# - convert to use ParseOptions
 #
 # - perhaps we should internationalize messages and docs?
 #
 # - try to detect the language based on the country so we can make use of the
 #   set the VO, VF and original title markers
-#
-# - due to the layout of the grid program data, a given show can appear more
-#   than once, first without an icon and then with the icon. But in such a
-#   case we miss the icon
 #
 # - investigate how to better handle France 5 and Arte as they share a single
 #   channel for over-the-air broadcasts, but each have their own channel on
@@ -108,7 +103,6 @@ with patches from:
 use XMLTV::Usage <<END
 $0: get French television listings in XMLTV format
 To configure: tv_grab_fr --configure [--config-file FILE]
-To configure AUTRES CHAINES list: tv_grab_fr --configure-more-channels
 To grab listings: tv_grab_fr [--config-file FILE] [--output FILE] [--days N]
  [--offset N] [--quiet] [--debug]
 To list available channels: tv_grab_fr --list-channels
@@ -136,62 +130,54 @@ $XMLTV::Get_nice::FailOnError = 0;
 use XMLTV::Memoize;
 XMLTV::Memoize::check_argv('XMLTV::Get_nice::get_nice_aux');
 
-use Date::Manip;
+use DateTime;
+use DateTime::Duration;
 use Encode qw(decode_utf8 encode_utf8);
 use Getopt::Long;
 use HTML::Entities;
 use HTML::TreeBuilder;
 use IO::File;
-use POSIX qw(strftime);
-
-BEGIN {
-    if (int(Date::Manip::DateManipVersion) >= 6) {
-        Date::Manip::Date_Init("SetDate=now,UTC");
-    } else {
-        Date::Manip::Date_Init("TZ=UTC");
-    }
-}
 
 #***************************************************************************
 # Main declarations
 #***************************************************************************
-my $ROOT_URL                = 'http://telepoche.guidetele.com';
-my $GRID_FOR_CHANNEL        = "$ROOT_URL/programmes-tv/";
-my $GRID_BY_CHANNEL_PER_DAY = "$ROOT_URL/programmes-tv/chaine/";
+my $ROOT_URL                = 'http://www.telestar.fr';
+my $GRID_FOR_CHANNEL        = "$ROOT_URL/programme-tv/";
+my $GRID_BY_CHANNEL_PER_DAY = "$ROOT_URL/programme-tv/grille-chaine/";
 
 my $ENCODING = 'utf-8';
 my $LANG = "fr";
 my $MAX_RETRY = 5;
 
-# Grid id defined by the website according to channel types (needed to build the URL)
-my %GridType = ( "HERTZIENNE"   => "hertziennes",
-                 "TNT"          => "tnt",
-                 "CABLE/SAT"    => "cable_sat",
-                 "ETRANGERES"   => "chaines_etrangeres",
-                 "CANAL SAT"    => "canalsat",
-                 "FILMS"        => "films",
-                 "SPORT"        => "sport",
-                 "MUSIQUE"      => "musique",
-                 "SERIES"       => "feuilleton",
-                 "JEUNESSE"     => "jeunesse",
-                 "DOCU/CULTURE" => "documentaire",
-                 "FREEBOX"      => "freebox",
+my %GridType = ( "Grandes Chaines"        => "grandes-chaines-et-tnt",
+                 "Orange"                 => "orange",
+                 "Free"                   => "free",
+                 "Bouygues"               => "bouygues",
+                 "SFR"                    => "sfr",
+                 "Numéricable"            => "numericable",
+                 "Canal+"                 => "canal",
+                 "Câble, ADSL, Satellite" => "cable-adsl-satellite",
+                 "Canal+ et Canalsat"     => "canal-et-canalsat",
+                 "Belgique"               => "belgique",
+                 "Hors bouquet"           => "hors-bouquet",
                );
 
 #***************************************************************************
 # Global variables allocation according to options
 #***************************************************************************
 
-my ( $opt_config_file, $opt_days, $opt_offset, $opt_output,
-     $opt_gui, $opt_quiet, $opt_list_channels, $opt_configure,
-     $opt_morechannels, $opt_help, $opt_debug, );
+my ( $opt_config_file,  $opt_days,  $opt_offset,        $opt_output,
+     $opt_gui,          $opt_quiet, $opt_list_channels, $opt_configure,
+     $opt_help,         $opt_debug, );
 
 # Default to non-quiet, non-debug mode
 $opt_quiet  = 0;
 $opt_debug  = 0;
 
-# The website is able to provide up to nine days of listings
-my $default_opt_days = 9;
+# Although the website is able to provide up to fourteen days of listings,
+# parsing pages is slow so we set the default grab to 7 days. You can
+# specify up to 14 days via the --days option.
+my $default_opt_days = 7;
 
 # Default to STDOUT
 $opt_output = '-';
@@ -206,7 +192,6 @@ GetOptions( 'days=i'    => \$opt_days,
             'debug'     => \$opt_debug,
             'config-file=s' => \$opt_config_file,
             'list-channels' => \$opt_list_channels,
-            'configure-more-channels' => \$opt_morechannels,
     )
     or usage(0);
 
@@ -214,7 +199,11 @@ GetOptions( 'days=i'    => \$opt_days,
 # Options processing, warnings, checks and default parameters
 #***************************************************************************
 die 'Number of days must not be negative'  if (defined $opt_days && $opt_days < 0);
-die 'Cannot get more than one day before current day' if (defined $opt_offset && $opt_offset < -1);
+die 'Number of days must be less than 15'  if (defined $opt_days && $opt_days > 14);
+die 'Offset must not be negative' if (defined $opt_offset && $opt_offset < 0);
+die 'Offset must be less than 14' if (defined $opt_offset && $opt_offset > 13);
+die 'Offset+days must be less than 15' if (defined $opt_offset && defined $opt_days && ($opt_offset + $opt_days > 14));
+
 die 'Error: You cannot specify --quiet with --debug, exiting' if ($opt_quiet && $opt_debug);
 
 usage(1) if $opt_help;
@@ -233,7 +222,7 @@ if ( (($opt_offset + $opt_days) > $default_opt_days) or ($opt_offset > $default_
     }
     say <<END
 The website does not handle more than $default_opt_days days.
-So the grabber is now configure with --offset $opt_offset --days $opt_days
+So, the grabber is now configured with --offset $opt_offset and --days $opt_days
 END
 ;
 }
@@ -244,9 +233,9 @@ END
 
 # Detect if we are in configure mode
 my $mode = XMLTV::Mode::mode('grab', # default
-                        $opt_configure => 'configure',
-                        $opt_list_channels => 'list-channels',
-                        $opt_morechannels  => 'confmorechannels' );
+                             $opt_configure => 'configure',
+                             $opt_list_channels => 'list-channels'
+                            );
 
 # File that stores which channels to download
 my $config_file = XMLTV::Config_file::filename($opt_config_file, 'tv_grab_fr', $opt_quiet);
@@ -254,21 +243,21 @@ my $config_file = XMLTV::Config_file::filename($opt_config_file, 'tv_grab_fr', $
 #***************************************************************************
 # Subroutines
 #***************************************************************************
-sub process_channel_grid_page( $$$$ );
-sub process_program_table( $$$$ );
-sub process_prog_details_page( $$$ );
-sub get_channels( $ );
-sub get_manual_config_filename();
-sub get_manual_channels();
-sub get_manual_channel_icon( $ );
-sub debug_print( $ );
-sub trim( $ );
-sub tidy_html($ );
-sub parse_name_list( $ );
-sub get_tree( $ );
-sub get_country_code( $ );
-sub get_date_ymd();
-sub get_date_offset_ymd( $ );
+sub get_dates_to_grab;
+sub get_listings_page_start_date;
+sub get_data_for_available_days;
+sub get_data_for_filtered_days;
+sub process_channel_row;
+sub process_program;
+sub get_channels;
+sub debug_print;
+sub trim;
+sub tidy_html;
+sub parse_name_list;
+sub get_tree;
+sub get_country_code;
+sub get_date_today;
+sub get_date_today_with_offset;
 
 #***************************************************************************
 # Configure mode
@@ -277,18 +266,13 @@ if ($mode eq 'configure') {
     XMLTV::Config_file::check_no_overwrite($config_file);
     open(CONF, ">$config_file") or die "Cannot write to $config_file: $!";
 
-    # Dynamic upgrade of GridType if a file OTHERCHANNELS exists
-    my $otherchan_file = get_manual_config_filename();
-    if ( (-e $otherchan_file) && ((-s $otherchan_file) > 0) ) {
-      $GridType{"AUTRES CHAINES"} = "OTHERCHANNELS";
-    }
-
-    # Get a list of available channels, according to the grid type
+    # Choose which bouquets to configure channels for
     my @gts = sort keys %GridType;
     my @gtnames = map { $GridType{$_} } @gts;
     my @gtqs = map { "Get channels type : $_?" } @gts;
     my @gtwant = ask_many_boolean(1, @gtqs);
 
+    # Get channels for each requested bouquet
     my $bar = new XMLTV::ProgressBar('getting channel lists',
                                     scalar grep { $_ } @gtwant)
                     if not $opt_quiet;
@@ -297,7 +281,6 @@ if ($mode eq 'configure') {
         my ($gt, $gtw, $gtname) = ($gts[$i], $gtwant[$i], $gtnames[$i]);
         next if not $gtw;
         my %channels = get_channels( $gtname );
-        #die 'No channels could be found' if not %channels;
         print STDERR 'WARNING: No channels could be found'."\n" if not %channels;
         $channels_for{$gt} = \%channels;
         update $bar if not $opt_quiet;
@@ -322,7 +305,7 @@ if ($mode eq 'configure') {
                 warn("cannot read input, stopping channel questions"), last if not defined $w;
                 # Print a config line, but comment it out if channel not wanted.
                 print CONF '#' if not $w;
-                print CONF "channel $_ $channels{$_}{name};$channels{$_}{icon}\n";
+                print CONF "channel $channels{$_}{name}\n";
             }
         }
     }
@@ -332,90 +315,7 @@ if ($mode eq 'configure') {
 }
 
 #***************************************************************************
-# "Configure more channels" mode
-#***************************************************************************
-sub display_otherchannels_list( \% ) {
-    my %chlist = %{(shift)};
-
-    say ">>>>>> Current list <<<<<<";
-    foreach my $chid (keys %chlist) {
-        say "Channel ID: ". $chid." - Name: " . $chlist{$chid}{name} .
-            " - Icon: ". $chlist{$chid}{icon};
-    }
-    say ">>>>>> List end <<<<<<";
-}
-
-if ($mode eq 'confmorechannels') {
-    my $input_file_notempty = 0;
-    my %morechannels = get_manual_channels();
-    display_otherchannels_list(%morechannels);
-    if ( (scalar keys  %morechannels) > 0 ) {
-        $input_file_notempty= 1;
-    }
-    my $choice = "";
-    my ($chid, $chname, $chicon);
-
-    while ( !($choice eq "exit")) {
-        $choice = ask_choice( "Select command to configure OTHERCHANNELS", "add", ("add", "remove", "view list", "save&exit", "exit") );
-        my $exit = 0;
-        if ($choice eq "add" ) {
-            while ($exit == 0) {
-                $chid = ask('Enter channel ID : ');
-                $chname = ask('Enter channel name : ');
-                if ( !($chid =~ /^[0-9]*$/) ) {
-                    say ("Enter a numeric value for channel id");
-                } else {
-                    if ( $chname eq "" ) {
-                        say ("Enter a string for the name of the channel");
-                    } else {
-                        $exit = 1;
-                    }
-                }
-            }
-        say("Testing channel $chid - $chname ...");
-        my $chicon = get_manual_channel_icon( $chid );
-        $morechannels{$chid} = {'name'=>$chname, 'icon'=>$chicon};
-        }
-        if ($choice eq "remove" ) {
-            display_otherchannels_list(%morechannels);
-            my $chid = ask('Enter the channel id to remove it (see list above): ');
-            if ( defined $morechannels{$chid} ) {
-                $chname = $morechannels{$chid}{name};
-                delete $morechannels{$chid};
-                say ("Channel $chname removed");
-            } else {
-                say("Channel $chid does not exist in the list");
-            }
-        }
-        if ($choice eq "view list" ) {
-            display_otherchannels_list(%morechannels);
-        }
-        if ($choice eq "save&exit") {
-            my $morechannels_file = get_manual_config_filename();
-            # Then write the file
-            if ( (scalar keys  %morechannels) > 0 ) {
-                open(CONFMORE, ">$morechannels_file") or die "Cannot write to $morechannels_file: $!";
-                foreach $chid (keys %morechannels) {
-                    if (!( $morechannels{$chid}{name} eq 'DELETED' )) {
-                        print CONFMORE "channel $chid $morechannels{$chid}{name};$morechannels{$chid}{icon}\n";
-                    }
-                }
-                close CONFMORE or warn "cannot close $morechannels_file: $!";
-                display_otherchannels_list(%morechannels);
-                say ('Channel list saved. Launch now a --configure mode to add them into the legacy config');
-            } else {
-                unlink ($morechannels_file);
-                say ('No channels to be configure, file deleted.');
-            }
-            $choice = "exit";
-        }
-    }
-    say("Finished configuration for OTHERCHANNELS.");
-    exit();
-}
-
-#***************************************************************************
-# Check mode checking and get configuration file
+# Check mode
 #***************************************************************************
 die if $mode ne 'grab' and $mode ne 'list-channels';
 
@@ -446,10 +346,10 @@ $writer->start
 # List channels only case
 #***************************************************************************
 if ($mode eq 'list-channels') {
-    # Get a list of all available channels, for all grid types
+    # Get a list of all available channels, for all bouquets
     #
     # Unlike channel configuration in --configure, we do not ask the user
-    # for any input to select grid types, we list everything
+    # for any input to select bouquets, we list everything
     my @gts = sort keys %GridType;
     my @gtnames = map { $GridType{$_} } @gts;
     my %seen;
@@ -458,10 +358,10 @@ if ($mode eq 'list-channels') {
         my %channels = get_channels( $gtname );
         print STDERR 'WARNING: No channels could be found'."\n" if (scalar(keys(%channels)) == 0);
         foreach my $ch_did (sort(keys %channels)) {
-            my $ch_xid = "C".$ch_did.".telepoche.com";
+            my $ch_xid = $ch_did.".telestar.fr";
             $writer->write_channel({ id => $ch_xid,
-                                        'display-name' => [[encode_utf8( $channels{$ch_did}{name} )]],
-                                        'icon' => [{src=>$channels{$ch_did}{icon}}] })
+                                     'display-name' => [[encode_utf8( $channels{$ch_did}{name} )]],
+                                   })
             unless $seen{$ch_xid}++;
         }
      }
@@ -470,84 +370,138 @@ if ($mode eq 'list-channels') {
 }
 
 #***************************************************************************
-# Now the real grabbing work
+# Only grabbing beyond here...
 #***************************************************************************
 die if $mode ne 'grab';
 
 #***************************************************************************
-# Build the working list of channel name/channel id
+# Read configuration file
 #***************************************************************************
 my @config_lines;
 @config_lines = XMLTV::Config_file::read_lines($config_file);
 
-my (%channels, $chicon, $chid, $chname);
+my (%channels, $chname);
 my $line_num = 1;
 foreach (@config_lines) {
     ++ $line_num;
     next if not defined;
 
-    # Here we store the channel name with the ID in the config file, as
-    # XMLTV id = Website ID
-    if (/^channel:?\s+(\S+)\s+([^\#]+);([^\#]+)/) {
-        $chid = $1;
-        $chname = $2;
-        $chicon = $3;
-        $chname =~ s/\s*$//;
-        $channels{$line_num} = {'chid'=>$chid, 'name'=>$chname, 'icon'=>$chicon};
+    # We store the channel name as the identifier in the config file
+    if (/^channel (\w+)$/) {
+        $chname = $1;
+        $channels{$line_num} = { 'name'=>$chname };
     } else {
         warn "$config_file:$line_num: bad line $_\n";
     }
 }
 
 #***************************************************************************
-# Now process the days by getting the main grids.
+# Process requested days
 #***************************************************************************
-my @to_get;
 warn "No working channels configured, so no listings\n" if not %channels;
 my $script_duration = time();
 
-# The website stores channel information by hour area for a whole week !
-my $ind;
+my @to_get;
+my $listings_page_start_date = get_listings_page_start_date();
+
+# The telestar.fr website provides up to 14 days of listings for each
+# channel. The first 7 days from today are on one page, the second
+# 7 days on another.
 debug_print("\nCreating list of pages to grab based on configured channels...");
-foreach $ind (sort { $a <=> $b } keys %channels) {
-    my $chid = $channels{$ind}{chid};
-    my $xmltvid = "C".$chid.".telepoche.com";
-    my $chname = $channels{$ind}{name};
+foreach my $idx (sort { $a <=> $b } keys %channels) {
+    my $chname = $channels{$idx}{name};
+    my $xmltvid = $chname.".telestar.fr";
     my $url;
-    my $i;
     my $dayoff;
+
     $writer->write_channel({ id => $xmltvid,
                              'display-name' => [[encode_utf8( $chname )]],
-                             'icon' => [{src=>$channels{$ind}{icon}}] });
-    debug_print("\n  <channel>: xmltvid=$xmltvid, name=$chname, icon=$channels{$ind}{icon}");
+                           });
+
+    debug_print("\n  <channel>: xmltvid=$xmltvid, name=$chname");
     debug_print("  Creating list of pages for " . $chname);
-    for ($i = $opt_offset; $i < $opt_offset+$opt_days; $i++ ) {
-        $dayoff = get_date_offset_ymd($i);
-        debug_print( "    offset i=$i, date=$dayoff");
-        $url = $GRID_BY_CHANNEL_PER_DAY . "$chid/telepoche/soir/$dayoff";
-        # create list of urls to process based on configured channels and days/offset
-        push @to_get, [ $url, $chid, $i ];
-        debug_print( "    adding: url=$url, chid=$chid, i=$i" );
+
+    my @urls;
+    if ($opt_offset < 7) {
+        $url = $GRID_BY_CHANNEL_PER_DAY . $chname;
+        push @urls, $url;
+        debug_print( "    adding: url=$url" );
+    }
+    if ($opt_offset + $opt_days >= 7) {
+        $dayoff = get_date_today_with_offset(7)->strftime("%d-%m-%Y");
+        $url = $GRID_BY_CHANNEL_PER_DAY . "$chname/$dayoff";
+        push @urls, $url;
+        debug_print( "    adding: url=$url" );
+    }
+    push @to_get, [\@urls, $chname];
+}
+
+debug_print("\nGenerating list of dates...\n");
+my $dates_to_grab = get_dates_to_grab();
+
+my $bar;
+if (not $opt_quiet and not $opt_debug) {
+    $bar = new XMLTV::ProgressBar('getting listings', scalar @to_get);
+}
+
+debug_print("\nProcessing list of pages to grab...\n");
+CHANNEL:
+foreach (@to_get) {
+    # Each item in the @to_get listref is a listref for each channel
+    # (a list of URLS to get, and the channel name).
+    my ($urls, $chname) = @$_;
+    my @data_for_available_days;
+
+    foreach my $url (@$urls) {
+        push @data_for_available_days, get_data_for_available_days($url, $chname);
+    }
+
+    my $data_for_filtered_days = get_data_for_filtered_days(\@data_for_available_days);
+
+    debug_print("  Have " . scalar @{$data_for_filtered_days} . " days of data\n");
+    debug_print("  Have " . scalar @{$dates_to_grab} . " dates to grab for\n");
+
+    if (scalar @{$data_for_filtered_days} != scalar @{$dates_to_grab}) {
+        if (not $opt_quiet) {
+            print STDERR "ERROR: Not enough data available for requested number of days\n";
+            print STDERR "  Have " . scalar @{$data_for_filtered_days} . " days of data\n";
+            print STDERR "  Need " . scalar @{$dates_to_grab} . " days of data\n";
+            print STDERR "  Skipping channel\n";
+        }
+        next CHANNEL;
+    }
+    # Store individual programmes in a list and write each channel in full.
+    # No stop times are given in the listings (only inaccurate durations), so
+    # we can use the start time of a following programme as the stop time of
+    # the previous programme. (May fail if channel does not have listings
+    # for full 24hrs).
+    my @programmes = ();
+
+    foreach my $i (0 .. (scalar @{$data_for_filtered_days} - 1)) {
+        debug_print("  Getting listings for day " . ($i+1));
+        push @programmes, @{ process_channel_row( $chname, $data_for_filtered_days->[$i], $dates_to_grab->[$i] ) };
+    }
+
+    # Update programme stop times
+    @programmes = @{ update_programme_stop_times(\@programmes) };
+
+    # Write the channel's programme elements to output
+    foreach my $prog (@programmes) {
+        $writer->write_programme($prog);
+    }
+
+    if (not $opt_quiet and not $opt_debug) {
+        update $bar;
     }
 }
 
-my $bar = new XMLTV::ProgressBar('getting listings', scalar @to_get) if not $opt_quiet;
+$writer->end();
 
-# Hash to track processed programmes by programme ID
-my %processed;
-
-debug_print("\nProcessing list of pages to grab...\n");
-foreach (@to_get) {
-    my ($url, $chid, $slot) = @$_;
-    # now process each page of listings data (1 page per channel per day)
-    process_channel_grid_page($writer, $chid, $url, $slot);
-    update $bar if not $opt_quiet;
+if (not $opt_quiet and not $opt_debug) {
+    $bar->finish();
 }
 
-$writer->end();
-$bar->finish() if not $opt_quiet;
-
-# Print the duration
+# Print the script's execution time
 $script_duration = time() - $script_duration;
 print STDERR "Grabber process finished in " . $script_duration . " seconds.\n" if not $opt_quiet;
 
@@ -555,547 +509,406 @@ print STDERR "Grabber process finished in " . $script_duration . " seconds.\n" i
 # Subroutines
 #***************************************************************************
 
-# Process a page of listings for a particular channel on a particular day,
-# based on the given url. The page is designed as a grid of program cells,
-# arranged in 6 rows (tables) of 4hrs each (4h-8h, 8h-12h, ...., 0h-4h).
-# Each of these tables is processed in via process_program_table() when
-# identified to extract the programmes contained therein
-#
-sub process_channel_grid_page( $$$$ ) {
-    my ($writer, $chid, $url, $slot) = @_;
-    debug_print("process_channel_grid_page(): chid=$chid, url=$url, slot=$slot\n");
+sub get_dates_to_grab {
+    my @dates_to_grab = ();
+    # First date to grab listings for
+    my $grab_start_date = get_date_today_with_offset($opt_offset);
+    push @dates_to_grab, $grab_start_date;
+    # Remaining dates to grab listings for
+    for (my $offset = 1; $offset < $opt_days; $offset++) {
+        push @dates_to_grab, $grab_start_date + DateTime::Duration->new( days => $offset );
+    }
 
-    # Get the current page
+    debug_print("Will grab listings for following dates:");
+    if ($opt_debug) {
+        foreach (@dates_to_grab) {
+            # print STDERR "  " . $_->strftime("%a, %d %b %Y %H:%M:%S %z") . "\n";
+            print STDERR "  " . $_->strftime("%a, %d %b %Y") . "\n";
+        }
+    }
+    debug_print("\n");
+
+    return \@dates_to_grab;
+}
+
+# Each week of listings for a channel is provided on a single page.
+#
+# * if we are grabbing with no starting offset (today) or an offset less than
+#   7 days into the future, we'll start with the default page (starts today).
+#
+# * if we are grabbing with a starting offset of at least 7 days, we'll
+#   start with next week's page.
+#
+sub get_listings_page_start_date {
+    my $start_date;
+
+    if ($opt_offset < 7) {
+        $start_date = get_date_today();
+        debug_print("get_listings_page_start_date(): " . $start_date->strftime("%d-%m-%Y"));
+    }
+    else {
+        $start_date = get_date_today_with_offset(7);
+        debug_print("get_listings_page_start_date(): " . $start_date->strftime("%d-%m-%Y"));
+    }
+
+    return $start_date;
+}
+
+sub get_data_for_available_days {
+    my ($url, $chname) = @_;
+
+    debug_print("get_available_days(): url=$url");
+
+    # Get the page's tree
     my $t = get_tree($url);
     if (not defined $t) {
         debug_print("*** Error: Could not get tree for '" . $url . "' ***");
         return;
     }
 
-    # Reset some working variables
-    my ($day, $month, $year) = 0;
-
-    # Determine the date of the current page's listings (it should agree with that
-    # in the page's url
-    if ( my $div_channav = $t->look_down('_tag', 'div', 'id', 'channel_navigation') ) {
-        if ( my $logo_text = $div_channav->look_down('_tag', 'span', 'id', 'logo_text') ) {
-            my $text_date = $logo_text->as_text();
-            $text_date =~ /^Les programmes de la journ.*e\s+du\s+(\d+)\/(\d+)\/(\d+)/;
-            $day = $1; $month = $2; $year = $3;
-            debug_print("  ###############################################################");
-            debug_print("  processing listings for: ".$year."/".$month."/".$day);
-            debug_print("  ###############################################################\n");
-        }
-    }
-
-    my $date = DateCalc($month."/".$day."/".$year, "+0 days");
-    my $dateindex = UnixDate($date, "%Y%m%d");
-    # process all program cells in turn
-    foreach my $tbl_prog ($t->look_down('_tag', 'table', 'class', 'programs')) {
-        # Skip table which do not contain program (class 'program')
-        next if($tbl_prog->look_down('_tag', 'td', 'class', 'program'));
-        debug_print("  processing listings table '" . $tbl_prog->as_text() . "'");
-        process_program_table( $writer, $chid, $tbl_prog, $dateindex);
-    }
-
-    $t->delete(); undef $t;
+    # Return all available day elements ( <div class="channel"...> )
+    my @nodes = $t->look_down('_tag', 'div', 'class', 'channel');
+    debug_print("get_available_days():   Found " . scalar @nodes . " days of data\n");
+    return @nodes;
 }
 
-# Process a table of programme cells from the channel grid page. Each cell
-# contains basic information which is extracted and a link to a dedicated
-# page of more detailed information for the programme which is processed
-# via process_prog_details_page()
+sub get_data_for_filtered_days {
+    my $available_days = shift;
+    my @filtered_days;
+
+    AVAILABLE:
+    foreach my $i (0 .. scalar @$available_days) {
+        next AVAILABLE if ($i < $opt_offset);
+        last AVAILABLE if ($i == $opt_offset + $opt_days);
+        push @filtered_days, $available_days->[$i];
+    }
+
+    debug_print("filter_days(): Will get listings for " . scalar @filtered_days . " days\n");
+    undef $available_days;
+    return \@filtered_days;
+}
+
+sub process_channel_row {
+    my ($chname, $row, $dt) = @_;
+
+    my $dateindex = $dt->strftime("%Y%m%d");
+
+    debug_print("  ###############################################################");
+    debug_print("  process_row: processing listings for: chname=$chname, dateindex=$dateindex");
+    debug_print("  ###############################################################\n");
+
+    my @programmes = ();
+    PROGRAMME:
+    foreach my $programme ($row->look_down('_tag', 'div', 'class', qr/program /) ) {
+        # skip empty program cells
+        if ($programme->attr('class') =~ /no-program/) {
+            debug_print("        Skipping 'no-program' entry\n");
+            next PROGRAMME;
+        }
+        # extract the programme data
+        push @programmes, process_program($chname, $programme, $dateindex);
+        debug_print("\n");
+    }
+
+    return \@programmes;
+}
+
+sub process_program {
+    my ($chname, $programme, $dateindex) = @_;
+
+    my $title_text;
+    my $prog_page;
+    my $title = $programme->look_down('_tag', 'p', 'class', 'title');
+    if ($title) {
+        if ($title->as_text() =~ /\w+/) {
+            $title_text = trim($title->as_text());
+            debug_print("        Found programme title '" . $title_text . "'");
+
+            #FIXME for all prog types
+            my $link = $title->look_down('_tag', 'a', 'class', 'lien-fiche');
+            if ($link and $link->attr('href') =~ /programme-tv/) {
+                $prog_page = $ROOT_URL . $link->attr('href');
+                debug_print("        Programme subpage found '" . $prog_page . "'");
+            }
+        }
+        else {
+            debug_print("        No programme title text found, skipping programme");
+            return undef; # REQUIRED
+        }
+    }
+    else {
+        debug_print("        No programme title found, skipping programme");
+        return undef; # REQUIRED
+    }
+
+    my $start_time;
+    my $duration_mins;
+    my $start = $programme->look_down('_tag', 'p', 'class', 'time');
+    if ($start) {
+        if ($start->as_text() =~ /(\d\d)h(\d\d)/) {
+            my ($hh, $mm) = ($1, $2);
+            $start_time = $dateindex.$hh.$mm."00";
+            debug_print("        Found programme start '" . $hh."h".$mm . "'");
+        }
+        else {
+            debug_print("        Start time not parsed, skipping programme'");
+            return undef; # REQUIRED
+        }
+
+        # Programme durations are given, but rarely agree with the difference
+        # between this programme's start time and the next
+        $duration_mins = $start->look_down('_tag', 'span');
+        if ($duration_mins) {
+            if ($duration_mins->as_text() =~ /\((\d+) min\)/) {
+                $duration_mins = $1;
+                debug_print("        Found programme duration '" . $duration_mins ." mins'");
+            }
+            else {
+                debug_print("        No programme duration found");
+            }
+        }
+    }
+    else {
+        debug_print("        No start time found, skipping programme'");
+        return undef; # REQUIRED
+    }
+
+    debug_print("        Creating programme hash for '" . $title_text . " / " . $start_time);
+    my %prog = (channel => $chname.".telestar.fr",
+                title   => [ [ encode_utf8( trim($title_text) ) ] ], # lang unknown
+                start   => utc_offset($start_time, "+0100"),
+                );
+
+    # Store some temp data for later processing. A leading underscore in
+    # a key name means the data is not written by XMLTV::Writer
+    if ($duration_mins and $duration_mins > 0) {
+        $prog{'_duration_mins'} = $duration_mins;
+    }
+    if ($prog_page) {
+        $prog{'_prog_page'} = $prog_page;
+    }
+
+    my $episodenumber = $programme->look_down('_tag', 'p', 'class', 'title-episode');
+    if ($episodenumber) {
+        if ($episodenumber->as_text() =~ /Saison (\d+) Episode (\d+)/) {
+            my ($season_num, $episode_num) = ($1, $2);
+            # Season/episode number is zero-indexed. (Totals are one-indexed.)
+            # Sometimes, a series or episode number of 0 is seen, so we ignore it
+            if ($season_num == 0) {
+                $season_num = "";
+            }
+            else {
+                $season_num--;
+            }
+            if ($episode_num == 0) {
+                $episode_num = "";
+            }
+            else {
+                $episode_num--;
+            }
+            $episodenumber = $episodenumber->as_text();
+            $prog{'episode-num'} = [ [ $season_num . "." . $episode_num . ".", "xmltv_ns" ] ];
+            debug_print("        Found programme episodenumber '" . $episodenumber . "'");
+        }
+        # Likely the programme's sub-title if not an episode number
+        elsif ($episodenumber->as_text() =~ /\w+/) {
+            $episodenumber = $episodenumber->as_text();
+            $prog{'sub-title'} = [ [ encode_utf8( $episodenumber ) ] ];
+            debug_print("        Found programme sub-title '" . $episodenumber . "'");
+        }
+    }
+    else {
+        debug_print("        No episodenumber found");
+    }
+
+    my $category = $programme->look_down('_tag', 'p', 'class', 'category');
+    if ($category and $category->as_text() =~ /\w+/) {
+        $category = trim($category->as_text());
+        $prog{category} = [ [ encode_utf8( $category ), $LANG ] ];
+        debug_print("        Found programme genre '" . $category . "'");
+    }
+    else {
+        debug_print("        No category found");
+    }
+
+    my $synopsis = $programme->look_down('_tag', 'p', 'class', 'synopsis');
+    if ($synopsis and $synopsis->as_text() =~ /\w+/) {
+        $synopsis = trim($synopsis->as_text());
+        $prog{desc} = [ [ encode_utf8( $synopsis ), $LANG ] ];
+        debug_print("        Found programme synopsis '" . $synopsis . "'");
+    }
+    else {
+        debug_print("        No synopsis found");
+    }
+
+    my $rating = $programme->look_down('_tag', 'span', 'class', 'pastille csa');
+    if ($rating and trim($rating->as_text()) =~ /^(-(?:10|12|16|18))$/) {
+        $rating = $1;;
+        $prog{rating} = [ [ $rating, "CSA" ] ];
+        debug_print("        Found programme rating '" . $rating . "'");
+    }
+    else {
+        debug_print("        No rating found");
+    }
+
+    my $thumbnail = $programme->look_down('_tag', 'img', 'class', 'thumbnail');
+    if ($thumbnail) {
+        my $url = $thumbnail->attr('src');
+        push @{$prog{icon}}, {src => $url};
+        debug_print("        Found programme icon: '" . $url . "'");
+    }
+
+    if ($prog_page) {
+        process_programme_page(\%prog);
+    }
+
+    return \%prog;
+}
+
+# Process a page of detailed programme information for stored url and
+# update the given programme hash with any extra information extracted
+# from the page
 #
-sub process_program_table( $$$$ ) {
-    my ($writer, $chid, $myrow, $dateindex) = @_;
-    debug_print("      process_program_table: chid=$chid, dateindex=$dateindex");
+sub process_programme_page {
+    my $prog = shift;
+    my $prog_page = $prog->{'_prog_page'};
 
-    # Each show is described in a table cell with one of several class values:
-    #
-    # - 'program ' - a regular program that has title displayed
-    #
-    # - 'program previous' - a duplicate program cell that is present because
-    #   the programme starts/stops in two different 4hr blocks in the grid.
-    #   Programmes starting the previous day are flagged this way
-    #
-    # - 'program short ' - a short programme (<20min) that is displayed in
-    #   the grid as a small icon (no title shown)
-    #
-    foreach my $show ($myrow->look_down('_tag', 'td', 'class', qr/program /) ) {
+    debug_print("        process_programme_page(): url=$prog_page");
 
-        # - Each cell usually contains a link to a detailed description (class = details)
-        # - If the cell is wide enough, the link is appplied to the programme title text
-        #   and the start time of the programme is also shown (class = hour)
-        # - If the cell is very narrow (<20min), no text is displayed and
-        #   instead a small icon is displayed
-        # - An onmouseover attribute for the link contains useful program details that are
-        #   passed to a popup function on the page
-        # - Programme icons may also be displayed - these are also linked to the
-        #   detailed description for the programme
-        # - If no information is available for part of a 4hr block, the cell can contain
-        #   a cell with the text 'Pas de programme'
-        # - If there are no programmes at all in the 4hr block, there will be no
-        #   programme cells
-        #
-        my $link = $show->look_down('_tag', 'a', 'class', 'details') ||
-                   $show->look_down('_tag', 'a', 'onmouseover', qr/showmenu/);
-        next if (!$link);
+    # Get the page's tree
+    my $t = get_tree($prog_page);
+    if (not defined $t) {
+        debug_print("        *** Error: Could not get tree for '" . $prog_page . "' ***");
+        return $prog;
+    }
 
-        # Each showing has a unique ID present in the url. Extract this and
-        # use it to avoid reprocessing duplicate cells
-        my ($prog_url, $prog_id);
-        if ( $link->attr('class') eq 'details' ) {
-            $prog_url = $link->attr('href');
-                debug_print("        Programme URL: " . $prog_url);
-            # programme ID are usuallly 8 digits long for valid programmes.
-            # Blocks of time containing no programmes have an ID ending with 'Z'
-            if ( trim($prog_url) =~ /emission\/(\d+Z?)\// ) {
-                $prog_id = $1;
-                debug_print("        Programme ID : " . $1);
+    my $prog_info = $t->look_down('_tag', 'div', 'class', qr/program-informations/);
+    if ($prog_info) {
+        my $episode_name = $prog_info->look_down('_tag', 'h2', 'class', 'underlined red');
+        if ($episode_name) {
+            if ($episode_name->as_text() =~ /Saison \d+ Episode \d+ : (\w.*)$/) {
+                $episode_name = trim($1);
+                $prog->{'sub-title'} = [ [ encode_utf8( $episode_name ), $LANG ] ];
+                debug_print("        Found programme sub-title '" . $episode_name . "'");
+            }
+            elsif ($episode_name->as_text() =~ /\w+/) {
+                $episode_name = trim($episode_name->as_text());
+                $prog->{'sub-title'} = [ [ encode_utf8( $episode_name ), $LANG ] ];
+                debug_print("        Found programme sub-title '" . $episode_name . "'");
             }
         }
-        if ($processed{$prog_id}) {
-            debug_print("        *** Programme already processed, skipping ***\n\n");
-            next;
-        }
-
-        # The trimmed onmouseover attribute will contain something like:
-        # showmenu('23h25-00h20<br />&nbsp;Série/Feuilleton, Thriller','Dexter - Deux en un')
-        # However some contain badly escaped double-quotes which causes this
-        # string to be truncated. That should really only happen in the title.
-        my $line = trim($link->attr('onmouseover'));
-        #debug_print("        RAWDATA: '" . $line . "'");
-        $line =~ /showmenu\(\'(.*)\',\'((?:[^\\\']|\\.)*)(?:\'|$)/;
-        my $tgdata = trim($1); # time/genre data
-        debug_print("        Time/genre info: '" . $tgdata . "'");
-        my $title = trim($2);  # title data
-        $title =~ s%\\\'%\'%g; # unescape the quotes
-        $title =~ s%\\\\%\\%g; # and backslashes
-        debug_print("        Title info (original): '" . $title . "'");
-        # Ignore empty programming cells
-        next if ( ($title =~ /Fin de.* programme.*/) or ($title =~ /Pas de programme/) );
-        my ($hours, $genre) = split (/<br \/>/, $tgdata);
-        next if ( !$hours );
-        # At this point, $title contains title and subtitle (if any), separated by a '-'
-
-        # Process start/stop times given as HHhMM
-        my ($starthour, $endhour)  = split("-", $hours);
-        $starthour =~ s/h//g
-          or die "Cannot detect start hour from website : $starthour \n";
-        $endhour   =~ s/h//g
-          or die "Cannot detect end hour from website : $endhour \n";
-        # Process the start/stop dates
-        my $start = $dateindex.$starthour."00";
-        my $stop  = $dateindex.$endhour."00";
-        debug_print("        Initial start date/time: '" . $start . "'");
-        debug_print("        Initial stop  date/time: '" . $stop  . "'");
-
-        # Initial check to see if start time is later than stop time. This
-        # can indicate that a programme is straddling midnight.
-        if ( Date_Cmp( ParseDateString($start), ParseDateString($stop) ) > 0 ) {
-            $stop = &UnixDate(&DateCalc($stop, "+1 day"), "%Y%m%d%H%M%S");
-            die 'could not add one day to stop time' if not $stop;
-        }
-
-        # Now set the proper timezone (WT/ST) according to current date
-        die if not $start; die if not $stop;
-        # Do not apply utc_offset until we are happy timings are correct
-
-        debug_print("        Creating programme hash for '" . $title . " / " . $start . " " . $stop);
-        my %prog = (channel => "C".$chid.".telepoche.com",
-                    title   => [ [ encode_utf8( trim($title) ) ] ], # lang unknown
-                    start   => $start,
-                    stop    => $stop,
-                   );
-
-        # Process the title sub-title in all cases from the popup title
-        # The text for the <a> tag contains the title without the sub-title
-        # so we can use that to separate the two. However the text for the <a>
-        # tag may have been truncated so it fits the slot on the page. Also
-        # some titles may contain a ' - '. Still the heuristic works very
-        # well. In addition, sometimes, the title is not present as text,
-        # only with icons notably in case of short programs.
-        #
-        my $subtitle;
-        my $text = $link->as_text();
-        if ( $text eq "") {
-            if ( $title =~ m/^(.*) - (.*)$/ ) {
-                $prog{'title'}     = [ [ encode_utf8( trim($1) ) ] ];
-                $prog{'sub-title'} = [ [ encode_utf8( trim($2) ) ] ];
-            }
-        } else {
-            if ($text =~ s/\.\.\.$//) {
-                if ($title =~ s/^\Q$text\E([^-]+)\s+-\s+//) {
-                    $prog{'title'}     = [ [ encode_utf8( trim($text).trim($1) ) ] ];
-                    $prog{'sub-title'} = [ [ encode_utf8( trim($title) ) ] ];
-                }
-            }
-            elsif ($title =~ s/^\Q$text\E\s+-\s+//) {
-                $prog{'title'}     = [ [ encode_utf8( trim($text) ) ] ];
-                $prog{'sub-title'} = [ [ encode_utf8( trim($title) ) ] ];
+        my $date_created = $prog_info->look_down('_tag', 'span', 'itemprop', 'dateCreated');
+        if ($date_created) {
+            if ($date_created->as_text() =~ /^\d{4}$/) {
+                $date_created = trim($date_created->as_text());
+                $prog->{'date'} = $date_created;
+                debug_print("        Found programme year '" . $date_created . "'");
             }
         }
-
-        # Process the genre (and sub-genre if present)
-        if  (defined $genre ) {
+        my $genre = $prog_info->look_down('_tag', 'span', 'itemprop', 'genre');
+        if ($genre) {
             my $subgenre;
-            ($genre, $subgenre) = split(",", tidy_html($genre) );
+            ($genre, $subgenre) = split(/,|\s-\s/, $genre->as_text() );
             if (defined $genre && $genre =~ /\w+/) {
                 $genre = trim($genre);
-                debug_print("        Programme genre:     '" . $genre . "'");
+                debug_print("        Found programme genre '" . $genre . "'");
 
                 if (defined $subgenre && $subgenre =~ /\w+/) {
                     $subgenre = trim($subgenre);
-                    debug_print("        Programme sub-genre: '" . $subgenre . "'");
+                    debug_print("        Found programme sub-genre '" . $subgenre . "'");
 
-                    $prog{category} = [ [ encode_utf8( lc($genre) ), $LANG ],
-                                        [ encode_utf8( lc($subgenre) ), $LANG ] ];
+                    $prog->{category} = [ [ encode_utf8( $genre ), $LANG ],
+                                        [ encode_utf8( $subgenre ), $LANG ] ];
                 }
                 else {
-                    $prog{category} = [ [ encode_utf8( lc($genre) ), $LANG ] ];
+                    $prog->{category} = [ [ encode_utf8( $genre ), $LANG ] ];
                 }
             }
         }
-
-        # Programme thumbnail image if present
-        my $img = $show->look_down('_tag', 'img', 'src', qr%/medias/visuels/v/%);
-        if ($img) {
-            my $url = trim($img->attr('src'));
-            # Get the bigger icon icon
-            $url =~ s%/visuels/v/%/visuels/i/%;
-            push @{$prog{icon}}, {src => $url};
-            debug_print("        Found programme icon: '" . $url . "'");
-        }
-
-        # Get more detailed program information (description, review,
-        # original title, etc) from programme details page. We can also
-        # use this data to check dates/times etc.
-        if ( $link->attr('class') eq 'details' ) {
-            process_prog_details_page( $prog_url, \%prog, $title );
-        }
-
-        # Check that the start time of the programme is during today
-        my $earliest_start = $dateindex.'000000';
-        my $latest_start = &UnixDate(&DateCalc($earliest_start, "+1 day"), "%Y%m%d%H%M%S");
-        if ( (Date_Cmp( $prog{start}, $earliest_start) >= 0) and (Date_Cmp( $prog{start}, $latest_start) < 0) ) {
-            debug_print("        Programme starts during today, will output");
-        }
-        else {
-            debug_print("        Programme does not start during today, skipping\n\n");
-            next;
-        }
-
-        # Add timezone information to start/stop times
-        $prog{start} = utc_offset( $prog{start}, "+0100");
-        $prog{stop}  = utc_offset( $prog{stop} , "+0100");
-
-        # Finally, write the programme
-        $writer->write_programme(\%prog);
-        # Add ID to processed list
-        $processed{$prog_id} = $prog_id;
-        debug_print("        Writing programme '" . ${$prog{title}[0]}[0] . " (" . $prog_id . ")'\n\n");
     }
+    my $synopsis = $t->look_down('_tag', 'p', 'class', qr/synopsis/);
+    if ($synopsis) {
+        $synopsis = trim($synopsis->as_text());
+        $prog->{desc} = [ [ encode_utf8( $synopsis ), $LANG ] ];
+        debug_print("        Found programme synopsis '" . $synopsis . "'");
+    }
+
+    # Casting information on the default programme information page is
+    # typically limited to series.
+    #
+    # A separate "Casting" page is available for many programmes which may
+    # include casting information for the given programme, but typically
+    # includes all casting information for the whole series of programmes so is
+    # not currently used.
+    my $casting = $t->look_down('_tag', 'div', 'class', qr/block-casting/);
+    if ($casting) {
+        my @directors = $casting->look_down('_tag', 'a', 'itemprop', 'producer');
+        foreach my $director (@directors) {
+            $director = trim($director->as_text());
+            push @{$prog->{credits}{director}}, encode_utf8( $director );
+            debug_print("        Found programme director '" . $director . "'");
+        }
+
+        my @actors = $casting->look_down('_tag', 'a', 'itemprop', 'actor');
+        foreach my $actor (@actors) {
+            $actor = trim($actor->as_text());
+            push @{$prog->{credits}{actor}}, encode_utf8( $actor );
+            debug_print("        Found programme actor '" . $actor . "'");
+        }
+
+        my @writers   = $casting->look_down('_tag', 'a', 'itemprop', 'author');
+        foreach my $writer (@writers) {
+            $writer = trim($writer->as_text());
+            push @{$prog->{credits}{writer}}, encode_utf8( $writer );
+            debug_print("        Found programme writer '" . $writer . "'");
+        }
+    }
+
+    return $prog;
 }
 
-# Process a page of detailed programme information for a given url and updates
-# the given programme hash with any information extracted from the page
-#
-sub process_prog_details_page( $$$ ) {
-    my $url   = shift;
-    my $prog  = shift;
-    my $title = shift;
+# For each programme in the given programme listref, set the stop time
+# of a given programme to the start time of the following programme. For
+# the last programme in the list, set the stop time to start time plus
+# its duration
+sub update_programme_stop_times {
+    my $programmes = shift;
 
-    # unused but data is put into these vars for possible future use
-    my $fic_channel;
-    # store parsed start time/date/duration data
-    my ($p_dur_hr, $p_dur_min) = 0;
-    my ($p_hr, $p_min) = 0;
-    my ($p_day, $p_month, $p_year) = 0;
+    # Stop at antepenultimate programme
+    foreach my $i (0 .. (scalar @{$programmes} -2)) {
+        my $prog_current = $programmes->[$i];
+        my $prog_next    = $programmes->[$i+1];
 
-    my $fic_url = $ROOT_URL . $url;
-    debug_print("\n    process_prog_details_page(): " . $fic_url);
-    my $tfic = get_tree($fic_url);
-    if (not defined $tfic) {
-        debug_print("*** Error: Could not get tree for '" . $fic_url . "' ***");
-        return;
+        $prog_current->{stop} = $prog_next->{start};
     }
 
-    # Get the details for the programme
-    if ( my $tdetails = $tfic->look_down('_tag', 'table', 'width', '300', 'class', 'bord') ) {
-        debug_print("      Located main programme details table");
+    # Handle final programmes separately: add duration to start time
+    my $prog_last = $programmes->[-1];
+    my ($y, $m, $d, $hh, $mm, $ss) = $prog_last->{start} =~ /^(\d{4})(\d\d)(\d\d)(\d\d)(\d\d)(\d\d)/;
+    my $prog_last_start = DateTime->new(
+            year      => $y,  month     => $m,  day       => $d,
+            hour      => $hh, minute    => $mm, second    => $ss,
+            time_zone => 'Europe/Paris', );
+    my $prog_last_duration = DateTime::Duration->new( minutes => $prog_last->{'_duration_mins'});
+    my $prog_last_stop = $prog_last_start + $prog_last_duration;
+    $prog_last->{stop} = utc_offset($prog_last_stop->strftime("%Y%m%d%H%M%S"), "+0100");
 
-        # Process cells in first table - 4 cells: start time, channel, date, duration
-        if (my $table_timings = $tdetails->look_down('_tag', 'table', 'class', 'dates') ) {
-            debug_print("        Located programme timings table");
-            #debug_print("          RAW DATA: '" . $table_timings->as_text() . "'");
-            my @td_timings = $table_timings->look_down('_tag', 'td', 'align', 'center');
-            #last if $#td_timings != 4;
-            if (trim($td_timings[0]->as_text()) =~ /(\d\d)h(\d\d)/) { # e.g. 16h35
-                $p_hr = $1;
-                $p_min = $2;
-                debug_print("          Programme start time: '" . $p_hr.$p_min . "'");
-            }
-            $fic_channel   = trim($td_timings[1]->as_text()); # e.g. TF1
-            debug_print("          Programme channel: '" . $fic_channel . "'");
-
-            # Start to build a starttime to compare to the starttime parsed from the
-            # program cell
-            if (trim($td_timings[2]->as_text()) =~ /(\d\d)\/(\d\d)\/(\d{4})/) { # e.g. 15/02/2010
-                $p_day = $1;
-                $p_month = $2;
-                $p_year = $3;
-                debug_print("          Programme start date: '".$p_day."/".$p_month."/".$p_year."'");
-            }
-
-            if (trim($td_timings[3]->as_text()) =~ /^Dur.*e\s*:\s*(?:(\d{1,2})h)?\s*(\d{1,2})min/) {
-                $p_dur_hr = $1 if defined $1;
-                $p_dur_min = $2;
-                debug_print("          Programme duration: '".$p_dur_hr."h".$p_dur_min."min'");
-            }
-        }
-
-        # Now we compare the start/stop timings in $prog with those calculated from
-        # the information given on the details page. We can adjust any timings found
-        # to be different
-        my $curr_start = ${$prog}{start};
-        my $curr_stop  = ${$prog}{stop};
-        my $details_start = $p_year.$p_month.$p_day.$p_hr.$p_min.'00';
-        my $details_stop  = &UnixDate(&DateCalc($details_start, "+$p_dur_hr hours $p_dur_min minutes"), "%Y%m%d%H%M%S");
-
-        if ( (Date_Cmp( $curr_start, $details_start ) == 0) and (Date_Cmp( $curr_stop, $details_stop ) == 0) ) {
-            debug_print("          Programme start/stop times agree on grid and details pages, no adjustment required");
-        }
-        else {
-            ${$prog}{start} = $details_start;
-            ${$prog}{stop}  = $details_stop;
-            debug_print("          Programme start times differ on grid and details pages, adjustment required");
-            debug_print("            Channel grid: start = " . $curr_start . ", stop = " . $curr_stop);
-            debug_print("            Details page: start = " . $details_start . ", stop = " . $details_stop);
-            debug_print("              Will use start/stop times from details page");
-        }
-
-        debug_print("");
-
-        # Process cells in second table - 5 cells: date, ?, ?, rating, ?
-        foreach my $td ($tdetails->look_down('_tag', 'td', 'align', 'center', 'class', 'blc12') ) {
-
-            # Programme rating
-            if (my $img = $td->look_down('_tag', 'img')) {
-
-                debug_print("        Located a likely ratings image");
-                my $text = $img->attr('alt');
-                debug_print("          Programme rating description: '" . $text . "'");
-                my $rating;
-
-                if ($text =~ /interdit - 10 ans/i) {
-                    $rating = "-10";
-                } elsif ($text =~ /interdit - 12 ans/i) {
-                    $rating = "-12";
-                } elsif ($text =~ /interdit - 16 ans/i) {
-                    $rating = "-16";
-                } elsif ($text =~ /interdit - 18 ans/i) {
-                    $rating = "-18";
-                } else {
-                    debug_print("          Unknown programme rating: '" . $text . "'");
-                }
-                if ($rating) {
-                    my $icon = trim($ROOT_URL . $img->attr('src'));
-                    push @{$prog->{rating}}, [ $rating, "CSA", [ {src => $icon} ] ];
-                    debug_print("          Programme rating: '" . $rating . "' (icon = " . $icon . ")");
-                }
-            }
-            # Production year
-            if ($td->as_text() =~ /^(\d{4})$/i) {
-                $prog->{date} = $1;
-                debug_print("          Programme year: '" . $1 . "'");
-            }
-        }
-        debug_print("");
-
-        # Process content in third table - programme icon, director, writer
-        if ( my $table_cat = $tdetails->look_down('_tag', 'table', 'width', '298', 'cellpadding', '4') ) {
-            debug_print("        Located crew/programme icon table");
-            #debug_print("          RAW DATA: '" . $table_cat->as_text() . "'");
-
-            # Programme icon is handled in process_program_table()
-
-            # Original title/country/video/audio information
-            if (my $td_avinfo = $table_cat->look_down('_tag', 'td', 'class', 'bleuf11r')) {
-                my $content = $td_avinfo->as_HTML();
-                my ($original_title, $original_country);
-                foreach my $field ( split ("<br />", $content) ) {
-                    $field = trim( tidy_html($field) );
-                    if ( $field =~ /^couleur.*/i ) {
-                        $prog->{'video'}{colour} = 1;
-                        debug_print("          Programme is in colour");
-                    } elsif ( $field =~ /^noir.*/i ) {
-                        $prog->{'video'}{colour} = 0;
-                        debug_print("          Programme is in black and white");
-                    } elsif ( $field =~ /^16\/9/ ) {
-                        $prog->{'video'}{aspect} = "16:9";
-                        debug_print("          Programme is in widescreen");
-                    } elsif ( $field =~ /^(st.r.o|Dolby)\s+/i) {
-                        my $stereo = $1;
-                        if ($stereo =~ /^st.r.o$/i) {
-                            $prog->{'audio'}{stereo} = "stereo";
-                            debug_print("          Programme is in stereo");
-                        } elsif ($stereo eq "Dolby") {
-                            $prog->{'audio'}{stereo} = "dolby";
-                            debug_print("          Programme is in Dolby stereo");
-                        }
-                    }
-                    elsif ( $field =~ /^Titre original\s*:\s*<b>(.*)<\/b>/i) {
-                        $original_title = $1;
-                    }
-                    elsif ( $field =~ /^Nationalit.*\s*:\s*<b>(.*)<\/b>/i) {
-                        $original_country = $1;
-                    }
-                }
-                # handle country of origin and original title
-                if (defined $original_country) {
-                    my ($c_lang, $c_code) = get_country_code($original_country);
-                    if (defined $c_code) {
-                        debug_print("          Programme originated in '" . $original_country
-                                    . "' (country code '" . $c_code . "')");
-                        push @{$prog->{country}}, [ encode_utf8( $original_country ), $LANG ];
-                        push @{$prog->{country}}, [ encode_utf8( uc($c_code) ) ];
-                    }
-                    else {
-                        debug_print("          Programme originated in '" . $original_country
-                                    . "' (unknown country code)");
-                    }
-                    # only output original title if we know the language it is given in
-                    if (defined $original_title and defined $c_lang) {
-                        push @{$prog->{title}}, [ encode_utf8( $original_title ), $c_lang ];
-                        debug_print("          Programme has original title '" . $original_title . "'");
-                    }
-                }
-            }
-
-            # Director/writer/presenter/music etc
-            foreach my $crew ($tdetails->look_down('_tag', 'span', 'class', 'bleuf11r')) {
-                my $sibling = $crew->left();
-                next if (!defined $sibling);
-
-                # find matching <span> element
-                if (!ref $sibling) {
-                    # $sibling is a string, what we want is the previous <span> element
-                    $sibling = ($crew->parent()->content_list())[$crew->pindex()-2];
-                    next if (!defined $sibling);
-                }
-                next if ($sibling->attr('_tag') ne "span");
-
-                my $job = trim($sibling->as_text());
-                my $name = trim($crew->as_text());
-                # now check jobs against supported credit types
-                if ($job =~ /R.*alisateur/i) {
-                    push @{$prog->{credits}{director}}, encode_utf8( $name );
-                    debug_print("          Found director: '" . $name . "'");
-                } elsif ($job =~ /Pr.*sentation/i) {
-                    push @{$prog->{credits}{presenter}}, encode_utf8( $name );
-                    debug_print("          Found presenter: '" . $name . "'");
-                } elsif ($job =~ /Sc.*nari.*ste/i) {
-                    push @{$prog->{credits}{writer}}, encode_utf8( $name );
-                    debug_print("          Found writer: '" . $name . "'");
-                }
-            }
-        }
-    }
-
-    # Process the cast list
-    if ( my $casting = $tfic->look_down('_tag', 'table', 'width', '609', 'cellpadding', '4') ) {
-        debug_print("      Located cast details table");
-        foreach my $actor ($casting->look_down('_tag', 'td', 'valign', 'top', 'class', 'bleuf11' )) {
-            next if ($actor->as_text() eq "Acteur");
-            next if ($actor->as_text() =~ /^\s*$/);
-            my $role = $actor->right();
-            my ($name, $part);
-            $name = trim($actor->as_text());
-            if (defined $role and ($role->attr('class') eq "bleuf11r")) {
-                $part = trim($role->as_text()) if trim($role->as_text()) !~ /\s*/;
-            }
-            # No support for role in actor element
-            if (defined $part) {
-                #push @{$prog->{credits}{actor}}, [ encode_utf8($name), { role => encode_utf8($part)} ];
-                debug_print("        Found actor: '" . $name . "' ('" .  $part . "')");
-            }
-            else {
-                #push @{$prog->{credits}{actor}}, encode_utf8($name);
-                debug_print("        Found actor: '" . $name . "'");
-            }
-            push @{$prog->{credits}{actor}}, encode_utf8($name);
-        }
-    }
-
-    # Get summary, description, director, etc
-    my ($histoire, $resume, $avis);
-    if (my $desc_table = $tfic->look_down('_tag', 'table', 'class', 'bord', 'cellpadding', '4')) {
-        debug_print("      Located description details table");
-        if (my $desc_td = $desc_table->look_down('_tag', 'td', 'class', 'bleuf11r')) {
-            my @descs = split( "<br />", $desc_td->as_HTML() );
-            for (my $tmp = 0; $tmp < $#descs; $tmp++) {
-                my $desc = trim( tidy_html($descs[$tmp]) );
-                if ($desc =~ /Histoire :/i) {
-                    $histoire = trim( tidy_html($descs[$tmp+1]) );
-                    debug_print("        Programme histoire: '" . $histoire . "'");
-                }
-                elsif ($desc =~ /R.*sum.* :/i) {
-                    $resume = trim( tidy_html($descs[$tmp+1]) );
-                    debug_print("        Programme resume: '" . $resume . "'");
-                }
-                elsif ($desc =~ /Avis :/i) {
-                    $avis = trim( tidy_html($descs[$tmp+1]) );
-                    debug_print("        Programme review: '" . $avis . "'");
-                }
-            }
-        }
-    }
-
-    # If histoire is the same as, or part of the resume, ignore histoire text
-    if (defined $histoire and defined $resume) {
-        if ($histoire eq $resume) {
-            undef $histoire;
-            debug_print("        Programme summary and description match, dropping summary");
-        }
-        elsif ($resume =~ /\Q$histoire\E/i) {
-            undef $histoire;
-            debug_print("        Programme summary is included in description, dropping summary");
-        }
-    }
-
-    # $resume is the main description, $histoire is a short summary
-    foreach ($resume, $histoire) {
-        push @{$prog->{desc}}, [ encode_utf8( $_ ), $LANG ] if defined and length;
-    }
-    # Add $avis to existing description, otherwise add as a new desc
-    if (defined $avis and length($avis) ) {
-        if ($prog->{desc}) {
-            $prog->{desc}->[0]->[0] .= encode_utf8( " Critique : " . $avis );
-        } else {
-            push @{$prog->{desc}}, [ encode_utf8( $avis ), $LANG ];
-        }
-    }
-
-    $tfic->delete(); undef $tfic;
+    # Return updates listref of programmes
+    return $programmes;
 }
 
-# Return a hash of available channels for a given bouquet. Channels configured
-# in --configure-more-channels mode are retrieved via get_manual_channels()
+# Return a hash of available channels for a given bouquet.
 #
-sub get_channels( $ ) {
+sub get_channels {
     my $bouquet = shift;
     my %bouquet_channels;
 
     return undef if not defined $bouquet;
 
-    # Other channels mode, return the content of the file
-    if ( $bouquet eq 'OTHERCHANNELS' ) {
-        return get_manual_channels();
-    }
-
     # Get the current page for the given bouquet
-    my $today = get_date_ymd();
-    my $url = $GRID_FOR_CHANNEL.'grille/'.$bouquet.'/soiree/'.$today;
+    # http://www.telestar.fr/programme-tv/grille/09-08-2015/grandes-chaines-et-tnt
+    my $today = get_date_ddmmyyyy();
+    my $url = $GRID_FOR_CHANNEL.'grille/'.$today.'/'.$bouquet;
     my $t = get_tree($url);
     debug_print("get_channels(): url = '" . $url . "'");
     if (!defined $t) {
@@ -1103,17 +916,17 @@ sub get_channels( $ ) {
         return %bouquet_channels;
     }
 
-    foreach my $cellTree ( $t->look_down( "_tag", "td", "class", "channel" ) ) {
+    foreach my $cellTree ( $t->look_down( "_tag", "div", "class", "channel" ) ) {
         my $tag = $cellTree->look_down( "_tag", "a" );
         if (defined $tag) {
             my $progurl = $tag->attr('href');
-            if ( $progurl =~ /^\/programmes-tv\/chaine\/(\d+)/ ) {
-                $chid = $1;
-                my $imgCell = $cellTree->look_down( "_tag", "img" );
-                my $chicon = trim( $ROOT_URL.$imgCell->attr('src') );
-                my $chname = trim( $imgCell->attr('alt') );
-                debug_print("  Found channel: id = '" . $chid . "', name = '" . $chname . "'");
-                $bouquet_channels{$chid} = {'name' =>  $chname, 'icon' => $chicon };
+            if ( $progurl =~ /^\/programme-tv\/grille-chaine\/(\w+)/ ) {
+                # There are now no parsable channel names and icons
+                # are given as a single site-wide imagemap instead of individual URLs:
+                # http://css1.telestar.fr/extension/telestar/design/telestar/images/chaines/chaines.jpg
+                my $chname = $1;
+                debug_print("  Found channel: name = '" . $chname . "'");
+                $bouquet_channels{$chname} = {'name' =>  $chname };
             }
         }
     }
@@ -1121,76 +934,9 @@ sub get_channels( $ ) {
     return %bouquet_channels;
 }
 
-# Return a hash of the channels configured manually
-#
-sub get_manual_channels() {
-    my $morechannels_file = get_manual_config_filename();
-    my @morechannels_lines;
-    if (-e $morechannels_file && ((-s $morechannels_file)>0) ) {
-        @morechannels_lines = XMLTV::Config_file::read_lines($morechannels_file);
-    }
-    my %morechannels;
-    my ($chid, $chname, $chicon);
-    my $line_num = 0;
-
-    foreach (@morechannels_lines) {
-        next if not defined;
-
-        # store the channel name and icon, keyed against the website ID
-        # for the channel
-        if (/^channel:?\s+(\S+)\s+([^\#]+);([^\#]+)/) {
-            $chid = $1;
-            $chname = $2;
-            $chicon = $3;
-            $chname =~ s/\s*$//;
-            $morechannels{$chid} = {'name'=>$chname, 'icon'=>$chicon};
-        }
-        $line_num++;
-    }
-    return %morechannels;
-}
-
-# Return the full path of the configuration file used to store
-# channels configured manually (--configure-more-channels)
-#
-sub get_manual_config_filename() {
-    my $home = $ENV{HOME};
-    $home = '.' if not defined $home;
-    my $conf_dir = "$home/.xmltv";
-    (-d $conf_dir) or mkdir($conf_dir, 0777) or die "cannot mkdir $conf_dir: $!";
-    return "$conf_dir/OTHERCHANNELS";
-}
-
-# Return a channel icon url for a given channel id
-# This sub is called from --configure-more-channels mode in
-# order to add an icon url to the config file
-#
-sub get_manual_channel_icon( $ ) {
-    my $chid = shift;
-    my $today = get_date_ymd();
-    my $url = $GRID_BY_CHANNEL_PER_DAY.$chid.'/telepoche/soiree/'.$today;
-    print $chid;
-    # Get the current page
-    my $t = get_tree($url);
-
-    debug_print("get_manual_channel_icon(): url = $url\n");
-    # Set by default an EMPTY logo
-    my $chicon = "EMPTY";
-
-    foreach my $cellTree ( $t->look_down( "_tag", "img") ) {
-        my $chiconsrc = $cellTree->attr('src');
-        if ( $chiconsrc =~ /\/medias\/chaines\/(.*)/ ) {
-            $chicon = "$ROOT_URL/medias/chaines/".$1;
-            debug_print("  Found icon, url = $chicon");
-        }
-    }
-    $t->delete(); undef $t;
-    return $chicon;
-}
-
 # Prints a debug string when the --debug option is used
 #
-sub debug_print( $ ) {
+sub debug_print {
     if ($opt_debug) {
         my ($msg) = shift;
         print STDERR $msg . "\n";
@@ -1199,7 +945,7 @@ sub debug_print( $ ) {
 
 # Remove leading/trailing whitespace
 #
-sub trim( $ ) {
+sub trim {
     for (my $s = shift) {
         s/^\s*//;
         s/\s*$//;
@@ -1211,7 +957,7 @@ sub trim( $ ) {
 # Replaces specific HTML entities with text replacements, and then
 # decodes any remaining entities in the string
 #
-sub tidy_html( $ ) {
+sub tidy_html {
     for (my $s = shift) {
         # handle specific entities
         s/&nbsp;/ /g;
@@ -1237,23 +983,11 @@ sub tidy_html( $ ) {
     }
 }
 
-# The given string is processed to produce a comma-separated list of
-# names, which is then returned
-#
-sub parse_name_list( $ ) {
-    for (my $s = shift) {
-        $s = trim($s);
-        $s = s/\s+(?:avec|et)\s+/, /i;
-
-        return split /(?:\s*,)+\s*/, $s;
-    }
-}
-
-# Returns a TreeBuilder instance for a given url. The url is retrieved
+# Returns a TreeBuilder instance for a given URL. The URL is retrieved
 # via get_nice(), decoded into a Perl string, processed to remove HTML
 # entities and then parsed into a HTML::TreeBuilder object
 #
-sub get_tree( $ ) {
+sub get_tree {
     my $url = shift;
     my $content;
     my $nbretry = 0;
@@ -1271,38 +1005,15 @@ sub get_tree( $ ) {
     return $t;
 }
 
-# Return a list containing:
+# Return a DateTime object representing 'now'
 #
-#   1) the two character language code for a country (given in French)
-#      per ISO 639-1 (http://en.wikipedia.org/wiki/ISO_639-1)
-#   2) the two character country code for a country (given in French)
-#      per ISO 3166-1 alpha-2 (http://en.wikipedia.org/wiki/ISO_3166-1)
-#
-sub get_country_code( $ ) {
-    my $fr_country = shift;
-    return undef if !defined $fr_country;
-    for ($fr_country) {
-        if    (/France/i)     {return ('fr', 'FR')}
-        elsif (/Angleterre/i) {return ('en', 'GB')}
-        elsif (/Etats-Unis/i) {return ('en', 'US')}
-        elsif (/Canada/i)     {return ('en', 'CA')}
-        elsif (/Allemagne/i)  {return ('de', 'DE')}
-
-        # return undef if input unhandled
-        else { return undef }
-    }
+sub get_date_today {
+    return DateTime->now( time_zone  => 'Europe/Paris' );
 }
 
-# Return today's date as a string in format "YYYY-MM-DD"
+# Return a DateTime object represent 'now' + $offset days
 #
-sub get_date_ymd() {
-    return POSIX::strftime( "%Y-%m-%d", localtime() );
-}
-
-# Return a date string in format "YYYY-MM-DD", calculated as the given
-# number of days from today's date
-#
-sub get_date_offset_ymd( $ ) {
-    my $offset = shift;
-    return POSIX::strftime( "%Y-%m-%d", gmtime(time() + 3600 * 24 * $offset) );
+sub get_date_today_with_offset {
+    my $offset = DateTime::Duration->new( days => shift );
+    return get_date_today() + $offset;
 }
