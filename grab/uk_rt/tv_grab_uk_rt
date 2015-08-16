@@ -1258,7 +1258,7 @@ sub write_listings_data {
             if ($prog{'_premiere'}) {
                 if (defined $channel_offset{$xmltv_id}) {
                     $prog{'_repeat'} = 1;
-                    t("  Ignoring premiere flag on timeshifted channel");
+                    t("    Ignoring premiere flag on timeshifted channel");
                 }
                 else {
                     $prog{premiere} = [ '' ];
@@ -2879,6 +2879,9 @@ sub generate_start_stop_times {
     # through the night, we also need to test against the next day's
     # broadcast times.
     #
+    # If the channel's timeshift is a multiple of 24hrs (e.g. Channel 5 +24)
+    # we adjust the channel's start/stop times accordingly.
+    #
     if (defined $broadcast_hours{ $prog->{channel} }) {
         $broadcast_hours{ $prog->{channel} } =~ m/(\d\d)(\d\d)-(\d\d)(\d\d)/;
         my ($chan_start_hr, $chan_start_mn, $chan_stop_hr, $chan_stop_mn) = ($1, $2, $3, $4);
@@ -2892,7 +2895,6 @@ sub generate_start_stop_times {
             second     => 0,
             time_zone  => 'Europe/London',
         );
-        my $chan_start  = "" . $chan_start_dt->ymd('') . $chan_start_dt->hms('') . ' ' . DateTime::TimeZone->offset_as_string($chan_start_dt->offset);
 
         my $chan_stop_dt = DateTime->new(
             year       => $yyyy,
@@ -2904,29 +2906,43 @@ sub generate_start_stop_times {
             time_zone  => 'Europe/London',
         );
 
+        # Shift channel start/stop times forward by whole days if necessary.
+        if (defined $channel_offset{ $prog->{channel} } and $ts_dt->in_units( 'hours' ) % 24 == 0) {
+            $chan_start_dt = $chan_start_dt + $ts_dt;
+            $chan_stop_dt  = $chan_stop_dt  + $ts_dt;
+            t("    Applying channel timeshift of " . $ts_dt->in_units( 'hours' ) . " hours");
+        }
+
         # Correct the stop time if it is earlier than the start time
-        my $chan_stop_next_day = 0;
+        my $chan_stops_next_day = 0;
         if ($chan_start_dt >= $chan_stop_dt) {
             $chan_stop_dt = $chan_stop_dt + $day_dur;
-            $chan_stop_next_day = 1;
+            $chan_stops_next_day = 1;
         }
+
+        my $chan_start  = "" . $chan_start_dt->ymd('') . $chan_start_dt->hms('') . ' ' . DateTime::TimeZone->offset_as_string($chan_start_dt->offset);
         my $chan_stop  = "" . $chan_stop_dt->ymd('') . $chan_stop_dt->hms('') . ' ' . DateTime::TimeZone->offset_as_string($chan_stop_dt->offset);
 
-        t("    " . $chan_start . " - Start time of channel (current day)");
-        t("    " . $chan_stop  . " - Stop time of channel (current day)");
+        t("    " . $chan_start . " - Start time of channel (normal)");
+        t("    " . $chan_stop  . " - Stop time of channel (normal)");
 
-        # Include the current programme if its timeslot lies inside the
+        # Include the current programme if its start time lies inside the
         # channel's broadcast window
-        if ($start_dt >= $chan_start_dt && $stop_dt <= $chan_stop_dt) {
+        if ($start_dt >= $chan_start_dt && $start_dt < $chan_stop_dt) {
             t("    '" . $prog->{'_title'} . "' shown whilst channel is on-air, adding");
         }
         # If the channel starts and stops broadcasting on the same
-        # calendar day and the programme's timeslot is outside the
+        # calendar day and the programme's start time is outside the
         # broadcast window, skip it
-        elsif (( $start_dt < $chan_start_dt || $stop_dt > $chan_stop_dt)
-                && $chan_stop_next_day == 0 ) {
-            t("    '" . $prog->{'_title'} . "' shown whilst channel is off-air, skipping\n");
-            return undef;
+        elsif ($chan_stops_next_day == 0 ) {
+            if ($start_dt < $chan_start_dt) {
+                t("    '" . $prog->{'_title'} . "' starts before channel has started, skipping\n");
+                return undef;
+            }
+            elsif ($start_dt >= $chan_stop_dt) {
+                t("    '" . $prog->{'_title'} . "' starts after channel has stopped, skipping\n");
+                return undef;
+            }
         }
         else {
             # If the channel broadcasts through the night, and the channel
@@ -2954,7 +2970,7 @@ sub generate_start_stop_times {
 
             # Test again to see if the programme falls between the adjusted
             # channel broadcast times
-            if ($start_dt >= $chan_start_dt && $stop_dt <= $chan_stop_dt) {
+            if ($start_dt >= $chan_start_dt && $start_dt < $chan_stop_dt) {
                 t("    '" . $prog->{'_title'} . "' shown whilst channel is on-air, adding");
             } else {
                 t("    '" . $prog->{'_title'} . "' shown whilst channel is off-air, skipping\n");
