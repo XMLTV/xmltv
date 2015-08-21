@@ -31,8 +31,6 @@ use XML::LibXML; # used for lineups parsing/modification
 #
 # - audio tag for audio described channels
 #
-# - include actor role data where available
-
 ###############################################
 ################## VARIABLES ##################
 ###############################################
@@ -259,6 +257,13 @@ my %possible_series_nums;
 my %possible_episode_nums;
 my %possible_part_nums;
 
+# Hash to map cast roles seen in the source data to valid XMLTV credits roles
+my %credits_role_map;
+my @valid_roles = ('director', 'actor', 'writer', 'adapter', 'producer', 'composer', 'editor', 'presenter', 'commentator', 'guest');
+
+# Track roles seen in the source data
+my %seen_roles;
+
 # Hash to store titles containing text that should likely be removed
 my %title_text_to_remove;
 
@@ -318,6 +323,7 @@ if ($opt->{debug}) {
     print_short_films();
     print_possible_prog_numbering();
     print_misencoded_utf8_data();
+    print_unhandled_credits_roles();
 }
 
 # Give a useful exit status if data for some channels was not downloaded
@@ -1196,8 +1202,10 @@ sub write_listings_data {
             extract_numbering_from_desc(\%prog);
             # Create episode numbering
             my $ep_num = generate_episode_numbering(\%prog);
-            # Create cast list
-            my $cast_ref = generate_cast_list(\%prog);
+
+            # Create credits structure
+            generate_cast_list(\%prog);
+
             # Store genre debug info for later analysis
             store_genre_debug_info(\%prog);
             # Create start/stop timings
@@ -1224,12 +1232,6 @@ sub write_listings_data {
             }
             if (defined $prog{'_director'} && $prog{'_director'} !~ m/^\s*$/) {
                 $prog{credits}{director} = [ encode($xml_encoding, $prog{'_director'}) ];
-            }
-            if (defined $cast_ref) {
-                foreach my $cast (@{$cast_ref}) {
-                    $cast = encode($xml_encoding, $cast);
-                }
-                $prog{credits}{actor} = $cast_ref;
             }
             if (defined $prog{'_year'}) {
                 $prog{date} = $prog{'_year'};
@@ -1641,6 +1643,18 @@ sub load_prog_titles_to_process {
                 my( $title, $text_to_remove ) = @fields;
                 push @{$subtitle_remove_text{$title}}, $text_to_remove;
                 t("[13] Will remove text '" . $text_to_remove . "' from subtitle for title '" . $title . "'");
+                $have_title_data = 1;
+                next PROG_TITLE_ENTRY;
+            }
+            elsif ($code eq '14') {
+                my @fields = split( /~/, $process_text, -1);
+                if (scalar @fields != 2) {
+                    t("[13] Invalid number of fields (need 2) in processing text: '" . $process_text . "'");
+                    next PROG_TITLE_ENTRY;
+                }
+                my( $source_role, $xmltv_role ) = @fields;
+                $credits_role_map{lc $source_role} = lc $xmltv_role;
+                t("[14] Will remap credits role from '" . $source_role . "' to '" . $xmltv_role . "'");
                 $have_title_data = 1;
                 next PROG_TITLE_ENTRY;
             }
@@ -2701,7 +2715,8 @@ sub generate_episode_numbering {
 
 # Create cast list based on various cast formats seen in source data
 sub generate_cast_list {
-    my $prog = shift;
+    my $p = shift;
+    my $cast = $p->{'_cast'};
 
     # The Radio Times data includes cast information in 2 formats:
     #
@@ -2711,54 +2726,113 @@ sub generate_cast_list {
     #
     # If 'Director' appears in the character entry, this is to be used
     # as a regular cast member, not the programme's director
-    if (defined $prog->{'_cast'}) {
-        my @cast;
-        $prog->{'_cast'} =~ s/\s+/ /g;   # remove extra spaces
-        $prog->{'_cast'} =~ s/\|\|/\|/g; # remove empty pipe-separated fields
-        $prog->{'_cast'} =~ s/,,/,/g;    # remove empty comma-separated fields
+    if (defined $cast) {
+
+        my $credits;
+        $cast =~ s/\s+/ /g;   # remove extra spaces
+        $cast =~ s/\|\|/\|/g; # remove empty pipe-separated fields
+        $cast =~ s/,,/,/g;    # remove empty comma-separated fields
 
         # First we check for 'character*actor' entries
-        if ($prog->{'_cast'} =~ tr/*//) {
+        if ($cast =~ tr/*//) {
+            my @castlist;
             # Multiple 'character*actor'entries
-            if ($prog->{'_cast'} =~ tr/|//) {
-                @cast = split /\|/, $prog->{'_cast'};
+            if ($cast =~ tr/|//) {
+                @castlist = split /\|/, $cast;
             }
             # Single 'character*actor' entry
             else {
-                push @cast, $prog->{'_cast'};
+                push @castlist, $cast;
             }
 
+            # role debugging for non-actor role mapping
+            my $seen_valid_roles = 0;
+            my $seen_actor_roles = 0;
+
+            my @crew = ();
+            my @actors = ();
+
             # Now process the list of cast entries
-            foreach my $cast (@cast) {
+            ENTRY:
+            foreach my $entry (@castlist) {
+
+                # Check for bad cast entries
+                next ENTRY if ($entry !~ m/^[^*]+[*]/);
+
+                # Populate cast list against known production roles if possible,
+                # otherwise as character names for actors. We use a LUT to map
+                # roles seen in the source listings to valid XMLTV roles.
+                #
+                # Typically we'll see either only actor credits (e.g. for
+                # entertainment programmes) or crew credits (for non-fiction
+                # programming). We look to see which type of credits we've
+                # seen therefore before deciding whether to i) ignore unknown
+                # roles, or ii) assign them as acting roles
+                #
+                my ($given_role, $name) = split /\*/, $entry;
+
                 # Replace any actor given as Himself/Herself with the
                 # character name given
-                if ($cast =~ m/^(.*)[*](Himself|Herself)$/) {
-                    $cast = "$1*$1";
+                if ($given_role =~ m/^(Himself|Herself|Themselves)$/i) {
+                    $given_role = $name;
                 }
-                # Remove the 'character*' portion of the entry
-                if ($cast !~ s/^.*[*]//) {
-                    t("  Bad cast entry for '" . $prog->{'_title'} . "': " . $cast);
+
+                $given_role = get_valid_xmltv_role($given_role);
+
+                if (grep {$given_role =~ /^$_$/i} @valid_roles) {
+                    t("    Found valid crew role: " . $given_role);
+                    push @crew, [ $given_role, $name ];
+                    # push @{$p->{credits}{$given_role}}, [$name];
+                    $seen_valid_roles++;
+                }
+                elsif ($seen_valid_roles >= 1 && $seen_actor_roles == 0) {
+                    # It's not a role that we currently handle, but we've
+                    # seen other crew roles, so let's remember it
+                    # t("    Found possible crew role: " . $given_role);
+                    $seen_roles{$given_role}++;
+                }
+                else {
+                    t("    Found possible actor role: " . $given_role . " - " . $name);
+                    push @actors, [ $given_role, $name ];
+                    # push @{$p->{credits}{'actor'}}, [$name, $given_role];
+                    $seen_actor_roles++;
+                }
+            }
+
+            # Prefer actors if we've seen 2 or fewer crew roles
+            if ($seen_actor_roles >= 1 && $seen_valid_roles <=2) {
+                foreach my $actor ((@actors, @crew)) {
+                    push @{$p->{credits}{'actor'}}, [encode($xml_encoding, $actor->[1]), encode($xml_encoding, $actor->[0])];
+                }
+            }
+            # Otherwise, prefer crew roles
+            else {
+                foreach my $actor (@crew) {
+                    push @{$p->{credits}{$actor->[0]}}, encode($xml_encoding, $actor->[1]);
                 }
             }
         }
         # Next we check for CSV-style actor entries
-        elsif ($prog->{'_cast'} =~ tr/,//) {
-            @cast = split /,/, $prog->{'_cast'};
+        elsif ($cast =~ tr/,//) {
+            foreach my $actor (split /,/, $cast) {
+                push @{$p->{credits}{actor}}, [ encode($xml_encoding, $actor) ];
+            }
         }
         # Finally assume a single name that contains neither '*' nor ','
         else {
-            push @cast, $prog->{'_cast'};
+            $p->{credits}{actor} = [ encode($xml_encoding, $cast) ];
         }
-
-        # Trim whitespace from beginning/end of actor names
-        foreach my $cast (@cast) {
-            $cast =~ s/^\s+//;
-            $cast =~ s/\s+$//;
-        }
-
-        return \@cast if scalar @cast > 0;
     }
-    return undef;
+}
+
+# Lookup a given credits role to see if it is a valid (or mapped-to-valid)
+# role. Return the valid XMLTV role if we find one.
+sub get_valid_xmltv_role {
+    my $role = shift;
+    if (exists $credits_role_map{lc $role}) {
+        return $credits_role_map{lc $role};
+    }
+    return $role;
 }
 
 # Store details of uncategorised programmes, programmes having different
@@ -5419,6 +5493,16 @@ sub print_empty_listings {
             say("  $chan ($empty_listings{$chan})");
         }
         say("End of list of channels providing no listings");
+    }
+}
+
+sub print_unhandled_credits_roles {
+    if (%seen_roles && scalar keys %seen_roles > 0) {
+        say("\nStart of list of unhandled credits roles");
+        foreach my $role (sort keys %seen_roles) {
+            say("  $role");
+        }
+        say("End of list of unhandled credits roles");
     }
 }
 
