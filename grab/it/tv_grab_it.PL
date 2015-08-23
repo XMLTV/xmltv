@@ -64,8 +64,6 @@ Currently configured backends are (in default order):
 
 =item B<boingtv>  - grabs data from www.boingtv.it
 
-=item B<mtvit>    - grabs data from www.mtv.it
-
 =item B<la7>    - grabs data from www.la7.it
 
 
@@ -133,9 +131,9 @@ good overall site if you donE<39>t need the whole sky package.
 
 =over 
 
-=item tv_grab_it --backend mtvit --configure
+=item tv_grab_it --backend skylife --configure
 
-configures tv_grab_it using only the backend mtvit
+configures tv_grab_it using only the backend skylife
 
 =item tv_grab_it --backend skylife,wfactory --days 1
 
@@ -206,8 +204,6 @@ Le fonti configurate al momento sono: (in ordine di utilizzo):
 
 =item B<skylife>  - prende i dati da www.skylife.it
 
-=item B<mtvit>    - prende i dati da www.mtv.it
-
 =item B<boingtv>  - prende i dati da www.boingtv.it
 
 =item B<sitcom1>  - prende i dati da www.sitcom1.it
@@ -272,9 +268,9 @@ non hai bisogno di tutto il pacchetto sky.
 
 =over 
 
-=item tv_grab_it --backend mtvit --configure
+=item tv_grab_it --backend skylife --configure
 
-configura tv_grab_it usando solo la sorgente mtvit
+configura tv_grab_it usando solo la sorgente skylife
 
 =item tv_grab_it --backend skylife,wfactory --days 1
 
