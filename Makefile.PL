@@ -68,7 +68,7 @@ GetOptions('strict-deps'  => \$opt_strictdeps,  # be strict about dependencies
           );
 
 our $VERSION;
-$VERSION = '0.5.66';
+$VERSION = '0.5.67';
 
 # Fragment of Makefile text to give the directory where files should
 # be installed.  The extra '.' in the middle of the path is to avoid
