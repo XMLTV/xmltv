@@ -223,8 +223,27 @@ sub dump {
 	 (($left, $special, $right) = ($description =~ $match_description))) {
     my $desc_subtitle;
 
-    # Check for "Kausi <season>. Jakso <episode>/<# of episodes>. <sub-title>...."
+    # Check for "Kausi <season>, osa <episode>. <maybe sub-title>...."
     if (my($desc_season, $desc_episode, $remainder) =
+	($description =~ m/^Kausi\s+(\d+),\s+osa\s+(\d+)\.\s*(.*)$/)) {
+	$season  = $desc_season;
+	$episode = $desc_episode;
+
+	# Repeat the above match on remaining description
+	($left, $special, $right) = ($remainder =~ $match_description);
+
+	# Take a guess if we have a episode title in description or not
+	my $words;
+	$words++ while $left =~ /\S+/g;
+	if ($words > 5) {
+	    # More than 5 words probably means no episode title
+	    undef $left;
+	    undef $special;
+	    $right = $remainder;
+	}
+
+    # Check for "Kausi <season>. Jakso <episode>/<# of episodes>. <sub-title>...."
+    } elsif (my($desc_season, $desc_episode, $remainder) =
 	($description =~ m,^Kausi\s+(\d+)\.\s+Jakso\s+(\d+)(?:/\d+)?\.\s*(.*)$,)) {
 	$season  = $desc_season;
 	$episode = $desc_episode;
@@ -240,6 +259,7 @@ sub dump {
 
 	# Repeat the above match on remaining description
 	($left, $special, $right) = ($remainder =~ $match_description);
+
     # Check for "<sub-title>. Kausi <season>, <episode>/<# of episodes>...."
     } elsif (($desc_subtitle, $desc_season, $desc_episode, $remainder) =
 	     ($description =~ m!^(.+)\s+Kausi\s+(\d+),\s+(\d+)(?:/\d+)?\.\s*(.*)$!)) {

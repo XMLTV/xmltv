@@ -145,7 +145,7 @@ sub grab {
 		my $children = $row->content_array_ref;
 		if ($children) {
 		  my $td = $children->[$index];
-		  push(@divs, $td->look_down("class" => "full-row"))
+		  push(@divs, $td->look_down("class" => qr/full-row/))
 		    if defined($td);
 		}
 	      }
