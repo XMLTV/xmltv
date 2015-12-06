@@ -218,7 +218,7 @@ sub dump {
   #   sub-title:   Pingviinin paluu?!?
   #   description: Amerikkalainen animaatiosarja....
   #
-  elsif ((defined $description)               &&
+  elsif ((defined($description))              &&
 	 (exists $series_description{$title}) &&
 	 (($left, $special, $right) = ($description =~ $match_description))) {
     my $desc_subtitle;
@@ -243,7 +243,7 @@ sub dump {
 	}
 
     # Check for "Kausi <season>. Jakso <episode>/<# of episodes>. <sub-title>...."
-    } elsif (my($desc_season, $desc_episode, $remainder) =
+    } elsif (($desc_season, $desc_episode, $remainder) =
 	($description =~ m,^Kausi\s+(\d+)\.\s+Jakso\s+(\d+)(?:/\d+)?\.\s*(.*)$,)) {
 	$season  = $desc_season;
 	$episode = $desc_episode;
@@ -271,18 +271,20 @@ sub dump {
 	$right = $remainder;
 	undef $special;
     }
-    unless (defined $special) {
-      # We only remove period from episode title, preserve others
-      $left =~ s/\.$//;
-    } elsif (($left    !~ /\.$/) &&
-	     ($special =~ /^\.\s/)) {
-      # Ignore extraneous period after sentence
-    } else {
-      # Preserve others, e.g. ellipsis
-      $special =~ s/\s+$//;
-      $left    .= $special;
+    if (defined($left)) {
+	unless (defined($special)) {
+	    # We only remove period from episode title, preserve others
+	    $left =~ s/\.$//;
+	} elsif (($left    !~ /\.$/) &&
+		 ($special =~ /^\.\s/)) {
+	    # Ignore extraneous period after sentence
+	} else {
+	    # Preserve others, e.g. ellipsis
+	    $special =~ s/\s+$//;
+	    $left    .= $special;
+	}
+	debug(3, "XMLTV series title '$title' episode '$left'");
     }
-    debug(3, "XMLTV series title '$title' episode '$left'");
     ($subtitle, $description) = ($left, $right);
   }
 
