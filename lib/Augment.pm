@@ -138,7 +138,7 @@ use XMLTV::Date 0.005066 qw( time_xmltv_to_epoch );
 	
 use Encode;
 
-our $VERSION = 0.001001;
+our $VERSION = 0.005068;
 
 use base 'Exporter';
 our @EXPORT = qw(setEncoding inputChannel augmentProgramme printInfo end);
@@ -2132,6 +2132,12 @@ Replace <category> with supplied text.
   in : "Antiques Roadshow / " category "Reality"
   out: "Antiques Roadshow / " category "Entertainment" + "Arts" + "Shopping"
 
+You can specify a wildcard with the title by using %% which represents any number 
+of characters.
+So for example "News%%" will match "News", "News and Weather", "Newsnight", etc.
+But be careful; "%%News%%" will also match "John Craven's Newsround", "Eurosport News",
+"Election Newsroom Live", "Have I Got News For You", "Scuzz Meets Jason Newsted", etc.
+
 =cut
 
 # Rule 6
@@ -2159,11 +2165,15 @@ sub process_replacement_genres () {
         my $idx = lc(substr $prog->{'_title'}, 0, 2);
 		
         LOOP:
-        foreach (@{ $self->{'rules'}->{$ruletype}->{$idx} }) {
+        #  append any rules which start with a wildcard
+        #  (todo: this doesn't work for "x%%...")
+        foreach ( @{ $self->{'rules'}->{$ruletype}->{$idx} } , @{ $self->{'rules'}->{$ruletype}->{'%%'} } ) {
 			my ( $line, $key, $value ) = ( $_->{'line'}, $_->{'key'}, $_->{'value'} );
 			_d(4,"\t $line, $key, $value");
 			
-            if ($prog->{'_title'} eq $key) {		
+			my $_key = $self->replace_wild($key);
+			
+      if ($prog->{'_title'} =~ m/$_key/i ) {
 				#_d(4,dd(4,$prog->{'_genres'}));
 				
 				my $old = '';
@@ -2188,7 +2198,12 @@ sub process_replacement_genres () {
 				
 				l(sprintf("\t Replaced genre(s) '%s' with '%s' (#%s.%s)",
 						  $old, $new, $ruletype, $line));
+				# if using a wildcard, we could mod many progs with this one rule so let's report all of them
+				if ($key =~ m/%%/) {
+					$self->add_to_audit ($me, $key.'~'.$prog->{'_title'}, $prog);
+				} else {
 				$self->add_to_audit ($me, $key, $prog);
+				}
 				
 				$prog->{'_subtitles_processed'} = 1;
 				last LOOP;
@@ -3499,6 +3514,17 @@ sub load_rule () {
 	my $data = { 'line' => $linenum, 'key' => $k, 'value' => $v };
 	push @{ $self->{'rules'}->{$ruletype}->{$idx} }, $data;
 	
+}
+
+
+# Replace our wildcards ("%%") in the rule's key
+# 
+sub replace_wild () {
+	my ($self, $key) = @_;
+	if ($key =~ m/%%/) {
+		$key =~ s/%%/\.\*\?/g
+	}
+	return "^$key\$";
 }
 
 
