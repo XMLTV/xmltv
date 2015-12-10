@@ -1191,6 +1191,7 @@ sub process_user_rules () {
 				 '_episode' 		=> (defined $prog->{'sub-title'} ? $prog->{'sub-title'}[0][0] : undef),
 				 '_desc' 			=> (defined $prog->{'desc'} ? $prog->{'desc'}[0][0] : undef),
 				 '_genres'			=> (defined $prog->{'category'} ? $prog->{'category'} : undef),
+				 '_channel'			=> (defined $prog->{'channel'} ? $prog->{'channel'} : undef),
 				 '_series_num' 		=> $episode_num->{'season'},
 				 '_series_total' 	=> $episode_num->{'season_total'},
 				 '_episode_num' 	=> $episode_num->{'episode'},
@@ -1262,6 +1263,9 @@ sub process_user_rules () {
 	
 	# Replace specified categories with another
 	$self->process_translate_genres($_prog);		    # (type=14)
+	
+	# Add specified categories to all progs on a channel
+	$self->process_add_genres_to_channel($_prog);       # (type=15)
 	
 	
 	_d(4,'_Prog, after title fixups:',dd(4,$_prog));
@@ -2331,7 +2335,7 @@ sub process_translate_genres () {
 	if ( defined $prog->{'_title'} && defined $prog->{'_genres'} ) {
 		#_d(4,dd(4,$prog->{'_genres'}));	
 				
-		# To esnure the replacements are NOT iterative, we'll store the new values separate for now
+		# To ensure the replacements are NOT iterative, we'll store the new values separate for now
 		$prog->{'_newgenres'} = undef;
 		my $storenewgenres = 0;
 			
@@ -2377,6 +2381,96 @@ sub process_translate_genres () {
 		
 	}
 }
+
+
+=item B<process_add_genres_to_channel>
+
+Rule #15
+
+Add a category to all programmes on a specified channel.
+
+  If channel matches this prog, the add the supplied category(-ies) to the programme
+  (note any other categories are left alone)
+
+  rule: 15|travelchannel.co.uk~Travel
+  in : "World's Greatest Motorcycle Rides" category "Motoring"
+  out: "World's Greatest Motorcycle Rides" category "Motoring" + "Travel"
+  
+  rule: 15|cnbc.com~News~Business
+  in : "Investing in India" category ""
+  out: "Investing in India" category "News" + "Business"
+
+You should be very careful with this one as it will add the category you specify 
+to EVERY programme broadcast on that channel. This may not be what you always
+want (e.g. Teleshopping isn't really "music" even if it is on MTV!)
+
+=cut
+
+# Rule 15
+#
+# Add a genre to all programmes on a specified channel.. The addition may be a single or multiple genres.
+#
+# Data type 15
+#     The content contains a channel value followed by 
+#     category(-ies) separated by a tilde (~).
+#     Use case: can add a category if data from your supplier is always missing; e.g. add "News" to a news channel, or "Music" to a music vid channel.
+#
+sub process_add_genres_to_channel () {
+	my ($self, $prog) = @_;
+	my $me = self();
+	if ( ! $self->{'options_all'} && ! $self->{'options'}{$me} ) { return 0; }
+	_d(3,self());
+	
+	my $ruletype = 15;
+	if (!defined $self->{'rules'}->{$ruletype}) { return 0; }
+	
+	if ( defined $prog->{'_title'} && defined $prog->{'_channel'} ) {
+		#_d(4,dd(4,$prog->{'_channel'}));	
+		
+        my $idx = lc(substr $prog->{'_channel'}, 0, 2);
+
+		LOOP:
+		foreach (@{ $self->{'rules'}->{$ruletype}->{$idx} }) {
+			my ( $line, $key, $value ) = ( $_->{'line'}, $_->{'key'}, $_->{'value'} );
+			_d(4,"\t $line, $key, $value");
+			
+			if ($prog->{'_channel'} eq $key) {
+				#_d(4,dd(4,$prog->{'_genres'}));
+				
+				my %h_old = ();
+				my $old = '';
+				if (defined $prog->{'_genres'}) {
+					foreach my $genre (@{ $prog->{'_genres'} }) {
+						$old .= $genre->[0] . ',';
+						$h_old{$genre->[0]} = 1;
+					}
+					chop $old;
+				}
+				my $new = $value; $new =~ s/~/, /g;
+				
+				# allow multiple genres separated by tilde
+				my @values = split /~/, $value;
+				
+				my $i = defined $prog->{'_genres'} ? scalar( @{ $prog->{'_genres'} } ) : 0;
+				my $msgdone = 0;
+				foreach (@values) {	
+				    if ( ! exists( $h_old{$_} ) ) {
+						$prog->{'_genres'}[$i++] = [ $_, $self->{'language_code'} ];
+						l(sprintf("\t Added genre(s) '%s' to '%s' (#%s.%s)",
+								$new, $old, $ruletype, $line))  if !$msgdone; $msgdone = 1;
+						#(we could mod many progs with this one rule so let's report all of them)
+						#$self->add_to_audit ($me, $key, $prog);
+						$self->add_to_audit ($me, $key.'~'.$prog->{'_title'}, $prog);
+					}
+				}
+				
+				last LOOP;
+            }
+		}
+		
+	}
+}
+
 
 
 # Store a variety of title debugging information for later analysis
@@ -3159,6 +3253,7 @@ sub printInfo () {
 			[ 'process_replacement_genres' , ': Replace <category> with supplied value(s) (#6)' ],
 			[ 'process_replacement_film_genres' , ': Replace \'Film\'/\'Films\' <category> with supplied value(s) (#12)' ],
 			[ 'process_translate_genres', ': Replace <category> with supplied value(s) (#14)' ],
+			[ 'process_add_genres_to_channel', ': Add category to all programmes on <channel> (#15)' ],
 			);
 		
 		foreach (@audits) {
