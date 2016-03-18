@@ -2722,7 +2722,8 @@ sub generate_cast_list {
     # The Radio Times data includes cast information in 2 formats:
     #
     # a) pairings of 'character*actor' with subsequent pairings
-    #    separated by '|' - '*' does not appear in any text
+    #    separated by '|' - the single '*' delimiter char should only appear
+    #    in text once but runs of '*' may additionally be seen
     # b) a comma separated list of actors with no character details
     #
     # If 'Director' appears in the character entry, this is to be used
@@ -2749,16 +2750,34 @@ sub generate_cast_list {
             # role debugging for non-actor role mapping
             my $seen_valid_roles = 0;
             my $seen_actor_roles = 0;
+            my $seen_actor_missing_roles = 0;
 
-            my @crew = ();
+            my @given_crew = (); # as given in the listings
+            my @valid_crew = (); # after mapping to valid XMLTV roles
             my @actors = ();
 
             # Now process the list of cast entries
             ENTRY:
             foreach my $entry (@castlist) {
 
-                # Check for bad cast entries
-                next ENTRY if ($entry !~ m/^[^*]+[*]/);
+                $entry =~ s/^\s+//;
+                $entry =~ s/\s+$//;
+
+                # Check for missing '*' separator in this entry
+                if ($entry !~ m/[*]/) {
+                    t("    Missing separator in credits (entry: $entry), skipping");
+                    next ENTRY;
+                }
+                # Don't allow a missing crew/actor name (e.g. "Director*")
+                if ($entry !~ m/[*][^*]+$/) {
+                    t("    Found empty credits name (entry: $entry), skipping");
+                    next ENTRY;
+                }
+                # Allow a missing crew role or character name (e.g. "*Patton Oswalt")
+                if ($entry !~ m/^[^*]+[*]/) {
+                    t("    Missing credits role (entry: $entry), treating as actor entry");
+                    $entry = "MISSING_ROLE" . $entry;
+                }
 
                 # Populate cast list against known production roles if possible,
                 # otherwise as character names for actors. We use a LUT to map
@@ -2770,7 +2789,7 @@ sub generate_cast_list {
                 # seen therefore before deciding whether to i) ignore unknown
                 # roles, or ii) assign them as acting roles
                 #
-                my ($given_role, $name) = split /\*/, $entry;
+                my ($given_role, $name) = $entry =~ m/^(\S.*[^*])\*([^*].*)$/;
 
                 # Replace any actor given as Himself/Herself with the
                 # character name given
@@ -2778,44 +2797,53 @@ sub generate_cast_list {
                     $given_role = $name;
                 }
 
-                $given_role = get_valid_xmltv_role($given_role);
+                my $valid_role = get_valid_xmltv_role($given_role);
 
-                if (grep {$given_role =~ /^$_$/i} @valid_roles) {
-                    t("    Found valid crew role: " . $given_role);
-                    push @crew, [ $given_role, $name ];
-                    # push @{$p->{credits}{$given_role}}, [$name];
+                if (grep {$valid_role =~ /^$_$/i} @valid_roles) {
+                    t("    Found valid crew role: " . $valid_role);
+                    push @given_crew, [ $given_role, $name ];
+                    push @valid_crew, [ $valid_role, $name ];
                     $seen_valid_roles++;
                 }
-                elsif ($seen_valid_roles >= 1 && $seen_actor_roles == 0) {
+                elsif ($given_role eq "MISSING_ROLE") {
+                    t("    Found possible actor entry without role: " . $name);
+                    push @actors, [ $given_role, $name ];
+                    $seen_actor_missing_roles++;
+                }
+                elsif ($seen_valid_roles >= 1 && $seen_actor_roles == 0 && $seen_actor_missing_roles == 0) {
                     # It's not a role that we currently handle, but we've
                     # seen other crew roles, so let's remember it
-                    # t("    Found possible crew role: " . $given_role);
-                    $seen_roles{$given_role}++;
+                    # t("    Found possible crew role: " . $valid_role);
+                    $seen_roles{$valid_role}++ if $given_role ne "MISSING_ROLE";
                 }
                 else {
-                    t("    Found possible actor role: " . $given_role . " - " . $name);
+                    t("    Found possible actor entry: " . $given_role . " - " . $name);
                     push @actors, [ $given_role, $name ];
-                    # push @{$p->{credits}{'actor'}}, [$name, $given_role];
                     $seen_actor_roles++;
                 }
             }
 
             # Prefer actors if we've seen 2 or fewer crew roles
-            if ($seen_actor_roles >= 1 && $seen_valid_roles <=2) {
-                foreach my $actor ((@actors, @crew)) {
-                    push @{$p->{credits}{'actor'}}, [encode($xml_encoding, $actor->[1]), encode($xml_encoding, $actor->[0])];
+            if (($seen_actor_roles + $seen_actor_missing_roles >= 1) && $seen_valid_roles <=2) {
+                foreach my $actor ((@actors, @given_crew)) {
+                    push @{$p->{credits}{'actor'}}, [encode($xml_encoding, $actor->[1]), ($actor->[0] eq "MISSING_ROLE" ? undef : encode($xml_encoding, $actor->[0]))];
                 }
             }
             # Otherwise, prefer crew roles
             else {
-                foreach my $actor (@crew) {
+                foreach my $actor (@valid_crew) {
                     push @{$p->{credits}{$actor->[0]}}, encode($xml_encoding, $actor->[1]);
                 }
             }
         }
         # Next we check for CSV-style actor entries
         elsif ($cast =~ tr/,//) {
+            ENTRY:
             foreach my $actor (split /,/, $cast) {
+                if ($actor !~ m/\S/) {
+                    t("    Found empty actor entry, skipping");
+                    next ENTRY;
+                }
                 push @{$p->{credits}{actor}}, [ encode($xml_encoding, $actor) ];
             }
         }
