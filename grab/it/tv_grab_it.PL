@@ -159,9 +159,7 @@ L<xmltv>.
 
 =head1 AUTHOR
 
-Davide Chiarini, davide.chiarini\@gmail.com
-
-you can find some more help at http://www.htpcpoint.it/forum/
+This grabber is currently unmantained.
 
 =cut
 
@@ -296,9 +294,7 @@ L<xmltv>.
 
 =head1 AUTORE
 
-Davide Chiarini, davide.chiarini\@gmail.com
-
-puoi anche trovare varie informazioni nel forum http://www.htpcpoint.it/forum/
+Questo grabber non è più sviluppato.
 
 =cut
 
