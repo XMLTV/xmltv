@@ -198,9 +198,6 @@ HTTP::Cache::Transparent::init( {
     }
 );
 
-# A reusable 1 day duration object
-my $day_dur = DateTime::Duration->new( days => 1 );
-
 # Variables for programme title manipulation
 my $have_title_data = 0;
 my %non_title_info;           # key = title, value = title
@@ -982,12 +979,15 @@ sub write_listings_data {
         $rt_listings_root = $conf->{'rt_listings_root'}[0];
     }
 
+    # A reusable 1 day duration object
+    my $day_dur = DateTime::Duration->new( days => 1 );
+
     # Process all of the channels we want listings for
     WANTED_CH:
-    foreach my $chan_href (@{$wanted_chs}) {
-        my $xmltv_id = $chan_href->{'id'};
-        my $rt_id    = $chan_href->{'rt_id'};
-        my $rt_name  = $chan_href->{'display-name'}[0][0];
+    foreach my $ch (@{$wanted_chs}) {
+        my $xmltv_id = $ch->{'id'};
+        my $rt_id    = $ch->{'rt_id'};
+        my $rt_name  = $ch->{'display-name'}[0][0];
         if (! defined $rt_id) {
             t("No Radio Times ID for channel '$rt_name', skipping");
             next WANTED_CH;
@@ -1017,14 +1017,13 @@ sub write_listings_data {
         }
         t("");
 
-        my $ts_dt;
-        if (defined $channel_offset{$xmltv_id}) {
-            t("  Detected a channel offset of '$channel_offset{$xmltv_id}' for '$rt_name'");
-
-            # Setup a reusable Duration object for this channel's timeshift
-            $channel_offset{$xmltv_id} =~ m/[+](\d+)hours?/;
-            $ts_dt = DateTime::Duration->new( hours => $1 );
-        }
+        # Set some channel defaults
+        $ch->{'stops_next_day'} = 0;
+        $ch->{'starts_at_0100'} = 0;
+        # Determine timeshift for channel
+        my $ts_dur_dt = get_channel_timeshift_dt($ch);
+        # Determine broadcast length if part-time channel
+        my $chan_dur_dt = get_channel_duration_dt($ch, $day_dur);
 
         # detect/correct UTF-8 errors in source data
         $page = process_utf8_fixups($page, $rt_name, $rt_listings_uri);
@@ -1213,7 +1212,7 @@ sub write_listings_data {
             # Store genre debug info for later analysis
             store_genre_debug_info(\%prog);
             # Create start/stop timings
-            if (! generate_start_stop_times(\%prog, $ts_dt)) {
+            if (! generate_start_stop_times(\%prog, $ts_dur_dt, $chan_dur_dt, $day_dur, $ch)) {
                 $prog_warnings++;
                 t("\n  ----\n");
                 next PROGRAMME;
@@ -2167,11 +2166,26 @@ sub validate_key_fields {
         t("  Missing duration in entry, skipping");
         return undef;
     }
-    if ($prog->{'_date'} !~ m{^\d\d/\d\d/\d{4}$}) {
+    #FIXME
+    # if ($prog->{'_date'} !~ m{^\d\d/\d\d/\d{4}$}) {
+    #     t("  Bad date '" . $prog->{'_date'} . "' detected for '" . $prog->{'_title'} . "', skipping");
+    #     return undef;
+    # }
+    if ($prog->{'_date'} =~ m{^(\d\d)/(\d\d)/(\d{4})$}) {
+        ($prog->{'_dd'}, $prog->{'_mm'}, $prog->{'_yyyy'}) = ($1, $2, $3);
+    }
+    else {
         t("  Bad date '" . $prog->{'_date'} . "' detected for '" . $prog->{'_title'} . "', skipping");
         return undef;
     }
-    if ($prog->{'_start'} !~ m/\d\d:\d\d/) {
+    # if ($prog->{'_start'} !~ m/\d\d:\d\d/) {
+    #     t("  Bad start time '" . $prog->{'_start'} . "' detected for '" . $prog->{'_title'} . "', skipping");
+    #     return undef;
+    # }
+    if ($prog->{'_start'} =~ m/(\d\d):(\d\d)/) {
+        ($prog->{'_hr'}, $prog->{'_mn'}) = ($1, $2);
+    }
+    else {
         t("  Bad start time '" . $prog->{'_start'} . "' detected for '" . $prog->{'_title'} . "', skipping");
         return undef;
     }
@@ -2929,300 +2943,488 @@ sub store_genre_debug_info {
 # the morning of the last Sunday in March and ending at one o'clock,
 # Greenwich mean time, in the morning of the last Sunday in October."
 sub generate_start_stop_times {
-    my $prog = shift;
-    my $ts_dt = shift;
-
-    my ($dd, $mm, $yyyy)      = ($prog->{'_date'}  =~ m{(\d\d)/(\d\d)/(\d{4})});
-    my ($start_hr, $start_mn) = ($prog->{'_start'} =~ m/(\d\d):(\d\d)/);
-    t("    Start time given as '" . $yyyy . "/" . $mm . "/" . $dd . " "
-            . $start_hr . ":" . $start_mn . "', duration " . $prog->{'_duration_mins'} . " mins");
+    my $p = shift;
+    my $ts_dur_dt = shift;
+    my $chan_dur_dt = shift;
+    my $day_dur = shift;
+    my $ch = shift;
 
     # Use explicit GMT/BST information if found in title
+    my $tz = get_timezone( $p );
+    # Determine programme duration
+    my $dur_dt = get_prog_duration_dt( $p );
+    # Determine start time with correct UTC offset
+    my $start_dt = get_prog_start_dt( $p, $tz );
+    # Determine stop time by adding duration of programme to start time
+    my $stop_dt = get_prog_stop_dt( $p, $start_dt, $dur_dt );
+    # --debug output
+    t("    " . $p->{start} . " - Start time");
+    t("    " . $p->{stop}  . " - Stop time");
+    # Add any required timeshift
+    ($start_dt, $stop_dt) = apply_prog_timeshift($p, $start_dt, $stop_dt, $ts_dur_dt);
+    # Check if programme airs during channel broadcast hours
+    return check_prog_shown_in_broadcast_hours($p, $start_dt, $stop_dt, $ts_dur_dt, $day_dur, $ch);
+}
+
+sub get_timezone {
+    my $p = shift;
     my $tz = 'Europe/London';
-    if (defined $prog->{'_explicit_tz'}) {
-        t("    Explicit timezone '" . $prog->{'_explicit_tz'} . "' detected in title");
-        if ($prog->{'_explicit_tz'} eq 'GMT') {
+
+    if (defined $p->{'_explicit_tz'}) {
+        t("    Explicit timezone '" . $p->{'_explicit_tz'} . "' detected in title");
+        if ($p->{'_explicit_tz'} eq 'GMT') {
             t("    Forcing timezone to GMT/+0000");
             $tz = '+0000';
         }
-        elsif ($prog->{'_explicit_tz'} eq 'BST') {
+        elsif ($p->{'_explicit_tz'} eq 'BST') {
             t("    Forcing timezone to BST/+0100");
             $tz = '+0100';
         }
     }
+    return $tz;
+}
 
-    # Determine start time with correct UTC offset
+sub get_prog_start_dt {
+    my ($p, $tz) = @_;
+
     my $start_dt;
     eval {
         $start_dt = DateTime->new(
-            year       => $yyyy,
-            month      => $mm,
-            day        => $dd,
-            hour       => $start_hr,
-            minute     => $start_mn,
-            second     => 0,
-            time_zone  => $tz,
+            year      => $p->{'_yyyy'},
+            month     => $p->{'_mm'},
+            day       => $p->{'_dd'},
+            hour      => $p->{'_hr'},
+            minute    => $p->{'_mn'},
+            second    => 0,
+            time_zone => $tz,
         );
     };
     if ($@) {
         t("  A valid programme start time object could not be created for '"
-                .  $prog->{'_title'} . "' ($yyyy$mm$dd $start_hr$start_mn), skipping programme");
+            .  $p->{'_title'} . "' ($p->{'_yyyy'}$p->{'_mm'}$p->{'_dd'} $p->{'_hr'}$p->{'_mn'}), skipping programme");
         return undef;
     }
 
-    eval { $prog->{start} = "" . $start_dt->ymd('') . $start_dt->hms('') . ' ' . DateTime::TimeZone->offset_as_string($start_dt->offset); };
+    eval { $p->{start} = "" . $start_dt->ymd('') . $start_dt->hms('') . ' ' . DateTime::TimeZone->offset_as_string($start_dt->offset); };
     if ($@) {
         t("  A valid programme start time string could not be created for '"
-            .  $prog->{'_title'} . "' ($yyyy$mm$dd $start_hr$start_mn), skipping programme");
+            .  $p->{'_title'} . "' ($p->{'_yyyy'}$p->{'_mm'}$p->{'_dd'} $p->{'_hr'}$p->{'_mn'}), skipping programme");
         return undef;
     }
-    t("    " . $prog->{start} . " - Start time");
+    t("    Start time given as '" . $p->{'_yyyy'} . "/" . $p->{'_mm'} . "/" . $p->{'_dd'} . " "
+        . $p->{'_hr'} . ":" . $p->{'_mn'} . "', duration " . $p->{'_duration_mins'} . " mins");
 
-    # Determine stop time with correct UTC offset by adding duration of
-    # programme to start time
-    my $dur_dt = DateTime::Duration->new( minutes => $prog->{'_duration_mins'} );
+    return $start_dt;
+}
+
+sub get_prog_duration_dt {
+    my $p = shift;
+    return DateTime::Duration->new( minutes => $p->{'_duration_mins'} );
+}
+
+sub get_prog_stop_dt {
+    my $p = shift;
+    my $start_dt = shift;
+    my $dur_dt = shift;
 
     my $stop_dt;
     eval { $stop_dt = $start_dt + $dur_dt; };
     if ($@) {
         t("  A valid programme stop time object could not be created for '"
-            .  $prog->{'_title'} . "' ($yyyy$mm$dd $start_hr$start_mn), skipping programme");
+            .  $p->{'_title'} . "' ($p->{'_yyyy'}$p->{'_mm'}$p->{'_dd'} $p->{'_hr'}$p->{'_mn'}), skipping programme");
         return undef;
     }
 
     # Ensure correct timezone for stop time where TZ was explicitly flagged
-    eval { $stop_dt = $stop_dt->set_time_zone('Europe/London') if (defined $prog->{'_explicit_tz'}); };
+    eval { $stop_dt = $stop_dt->set_time_zone('Europe/London') if (defined $p->{'_explicit_tz'}); };
     if ($@) {
         t("  An explicit timezone could not be created for '"
-            .  $prog->{'_title'} . "' ($yyyy$mm$dd $start_hr$start_mn), skipping programme");
+            .  $p->{'_title'} . "' ($p->{'_yyyy'}$p->{'_mm'}$p->{'_dd'} $p->{'_hr'}$p->{'_mn'}), skipping programme");
         return undef;
     }
 
-    eval { $prog->{stop}  = "" . $stop_dt->ymd('') . $stop_dt->hms('') . ' ' . DateTime::TimeZone->offset_as_string($stop_dt->offset); };
+    eval { $p->{stop}  = "" . $stop_dt->ymd('') . $stop_dt->hms('') . ' ' . DateTime::TimeZone->offset_as_string($stop_dt->offset); };
     if ($@) {
         t("  A valid programme stop time string could not be created for '"
-            .  $prog->{'_title'} . "' ($yyyy$mm$dd $start_hr$start_mn), skipping programme");
+            .  $p->{'_title'} . "' ($p->{'_yyyy'}$p->{'_mm'}$p->{'_dd'} $p->{'_hr'}$p->{'_mn'}), skipping programme");
+        return undef;
+    }
+    return $stop_dt;
+}
+
+sub apply_prog_timeshift {
+    my $p = shift;
+    my $start_dt = shift;
+    my $stop_dt  = shift;
+    my $ts_dur_dt = shift;
+
+    if ($ts_dur_dt) {
+        eval { $start_dt = $start_dt + $ts_dur_dt; };
+        if ($@) {
+            t("  A valid timeshifted programme start time object could not be created for '"
+                .  $p->{'_title'} . "' ($p->{'_yyyy'}$p->{'_mm'}$p->{'_dd'} $p->{'_hr'}$p->{'_mn'}), skipping programme");
+            return undef;
+        }
+
+        eval { $stop_dt  = $stop_dt + $ts_dur_dt; };
+        if ($@) {
+            t("  A valid timeshifted programme stop time object could not be created for '"
+                .  $p->{'_title'} . "' ($p->{'_yyyy'}$p->{'_mm'}$p->{'_dd'} $p->{'_hr'}$p->{'_mn'}), skipping programme");
+            return undef;
+        }
+
+        eval { $p->{start} = "" . $start_dt->ymd('') . $start_dt->hms('') . ' ' . DateTime::TimeZone->offset_as_string($start_dt->offset); };
+        if ($@) {
+            t("  A valid timeshifted programme start time string could not be created for '"
+                .  $p->{'_title'} . "' ($p->{'_yyyy'}$p->{'_mm'}$p->{'_dd'} $p->{'_hr'}$p->{'_mn'}), skipping programme");
+            return undef;
+        }
+
+        eval { $p->{stop}  = "" . $stop_dt->ymd('')  . $stop_dt->hms('')  . ' ' . DateTime::TimeZone->offset_as_string($stop_dt->offset); };
+        if ($@) {
+            t("  A valid timeshifted programme stop time string could not be created for '"
+                .  $p->{'_title'} . "' ($p->{'_yyyy'}$p->{'_mm'}$p->{'_dd'} $p->{'_hr'}$p->{'_mn'}), skipping programme");
+            return undef;
+        }
+
+        # --debug output
+        t("    " . $p->{start} . " - Start time after applying '" . $channel_offset{ $p->{channel} } . "' timeshift");
+        t("    " . $p->{stop}  . " - Stop time after applying '"  . $channel_offset{ $p->{channel} } . "' timeshift");
+
+        return ($start_dt, $stop_dt);
+    }
+    return ($start_dt, $stop_dt);
+}
+
+sub get_chan_start_stop_dt {
+    my $p = shift;
+    my $ch = shift;
+    my $day_dur = shift;
+
+    my $chan_dur_dt = get_channel_duration_dt($ch, $day_dur);
+
+    my ($chan_start_dt, $chan_stop_dt);
+    # Use the channel start time _unless_ it is between 0100-0200
+    unless ($ch->{'starts_at_0100'}) {
+        eval {
+            $chan_start_dt = DateTime->new(
+                year       => $p->{'_yyyy'},
+                month      => $p->{'_mm'},
+                day        => $p->{'_dd'},
+                hour       => $ch->{'_start_hr'},
+                minute     => $ch->{'_start_mn'},
+                second     => 0,
+                time_zone  => 'Europe/London',
+            );
+        };
+        if ($@) {
+            t("  A valid channel start time object (not 01:00) could not be created for '"
+                .  $p->{'_rt_name'} . "', skipping programme");
+            return undef;
+        }
+
+        eval { $chan_stop_dt = $chan_start_dt + $chan_dur_dt; };
+        if ($@) {
+            t("  A valid channel stop time object (not 01:00) could not be created for '"
+                .  $p->{'_rt_name'} . "', skipping programme");
+            return undef;
+        }
+    }
+    else {
+        eval {
+            $chan_stop_dt = DateTime->new(
+                year       => $p->{'_yyyy'},
+                month      => $p->{'_mm'},
+                day        => $p->{'_dd'},
+                hour       => $ch->{'_stop_hr'},
+                minute     => $ch->{'_stop_mn'},
+                second     => 0,
+                time_zone  => 'Europe/London',
+            );
+        };
+        if ($@) {
+            t("  A valid channel stop time object (01:00) could not be created for '"
+                .  $p->{'_rt_name'} . "', skipping programme");
+            return undef;
+        }
+
+        eval { $chan_start_dt = $chan_stop_dt - $chan_dur_dt; };
+        if ($@) {
+            t("  A valid channel start time object (01:00) could not be created for '"
+                .  $p->{'_rt_name'} . "', skipping programme");
+            return undef;
+        }
+    }
+    return ($chan_start_dt, $chan_stop_dt);
+}
+
+sub get_timeshifted_chan_start_stop_dt {
+    my $p = shift;
+    my $ts_dur_dt = shift;
+    my $chan_start_dt = shift;
+    my $chan_stop_dt = shift;
+
+    # Shift channel start/stop times forward by whole days if necessary.
+    if (defined $channel_offset{ $p->{channel} } and $ts_dur_dt->in_units( 'hours' ) % 24 == 0) {
+        eval { $chan_start_dt = $chan_start_dt + $ts_dur_dt; };
+        if ($@) {
+            t("  A valid day-shifted channel start time object could not be created for '"
+                .  $p->{'_rt_name'} . "', skipping programme");
+            return undef;
+        }
+
+        eval { $chan_stop_dt  = $chan_stop_dt  + $ts_dur_dt; };
+        if ($@) {
+            t("  A valid day-shifted channel stop time object could not be created for '"
+                .  $p->{'_rt_name'} . "', skipping programme");
+            return undef;
+        }
+
+        t("    Applying channel timeshift of " . $ts_dur_dt->in_units( 'hours' ) . " hours");
+    }
+
+    my $chan_start;
+    eval { $chan_start  = "" . $chan_start_dt->ymd('') . $chan_start_dt->hms('') . ' ' . DateTime::TimeZone->offset_as_string($chan_start_dt->offset); };
+    if ($@) {
+        t("  A valid channel start time string could not be created for '"
+            .  $p->{'_rt_name'} . "', skipping programme");
         return undef;
     }
 
-    t("    " . $prog->{start} . " - Start time");
-    t("    " . $prog->{stop}  . " - Stop time");
-
-    # Now we have determined the correct start/stop times for the programme
-    # add any required timeshift defined in channel_ids and preserve the
-    # correct timezone information
-    #
-    #FIXME factor out checking of datetime object manipulation - undef+next if return is defined
-    if (defined $channel_offset{ $prog->{channel} }) {
-        eval { $start_dt = $start_dt + $ts_dt; };
-        if ($@) {
-            t("  A valid timeshifted programme start time object could not be created for '"
-                .  $prog->{'_title'} . "' ($yyyy$mm$dd $start_hr$start_mn), skipping programme");
-            return undef;
-        }
-
-        eval { $stop_dt  = $stop_dt + $ts_dt; };
-        if ($@) {
-            t("  A valid timeshifted programme stop time object could not be created for '"
-                .  $prog->{'_title'} . "' ($yyyy$mm$dd $start_hr$start_mn), skipping programme");
-            return undef;
-        }
-
-        eval { $prog->{start} = "" . $start_dt->ymd('') . $start_dt->hms('') . ' ' . DateTime::TimeZone->offset_as_string($start_dt->offset); };
-        if ($@) {
-            t("  A valid timeshifted programme start time string could not be created for '"
-                .  $prog->{'_title'} . "' ($yyyy$mm$dd $start_hr$start_mn), skipping programme");
-            return undef;
-        }
-
-        eval { $prog->{stop}  = "" . $stop_dt->ymd('')  . $stop_dt->hms('')  . ' ' . DateTime::TimeZone->offset_as_string($stop_dt->offset); };
-        if ($@) {
-            t("  A valid timeshifted programme stop time string could not be created for '"
-                .  $prog->{'_title'} . "' ($yyyy$mm$dd $start_hr$start_mn), skipping programme");
-            return undef;
-        }
-
-        t("    " . $prog->{start} . " - Start time after applying '" . $channel_offset{ $prog->{channel} } . "' timeshift");
-        t("    " . $prog->{stop}  . " - Stop time after applying '"  . $channel_offset{ $prog->{channel} } . "' timeshift");
+    my $chan_stop;
+    eval { $chan_stop  = "" . $chan_stop_dt->ymd('') . $chan_stop_dt->hms('') . ' ' . DateTime::TimeZone->offset_as_string($chan_stop_dt->offset); };
+    if ($@) {
+        t("  A valid channel stop time string could not be created for '"
+            .  $p->{'_rt_name'} . "', skipping programme");
+        return undef;
     }
 
-    # Now check to see whether the channel broadcasting the programme is a
-    # part-time channel, and if so, see whether this programme's timeslot
-    # times fall within the broadcast window. If a channel broadcasts
-    # through the night, we also need to test against the next day's
-    # broadcast times.
+    # --debug output
+    t("    " . $chan_start . " - Start time of channel (normal)");
+    t("    " . $chan_stop  . " - Stop time of channel (normal)");
+
+    return ($chan_start_dt, $chan_stop_dt);
+}
+
+sub get_chan_start_stop_yest_dt {
+    my $p = shift;
+    my $ch = shift;
+    my $chan_start_dt = shift;
+    my $chan_stop_dt = shift;
+    my $day_dur = shift;
+
+    my $chan_dur_dt = get_channel_duration_dt($ch, $day_dur);
+
+    unless ($ch->{'starts_at_0100'}) {
+        eval { $chan_start_dt = $chan_start_dt - $day_dur; };
+        if ($@) {
+            t("  A valid channel start time object (prev day, not 01:00) could not be created for '"
+                .  $p->{'_rt_name'} . "', skipping programme");
+            return undef;
+        }
+        eval { $chan_stop_dt  = $chan_start_dt + $chan_dur_dt; };
+        if ($@) {
+            t("  A valid channel stop time object (prev day, not 01:00) could not be created for '"
+                .  $p->{'_rt_name'} . "', skipping programme");
+            return undef;
+        }
+    }
+    else {
+        eval { $chan_stop_dt  = $chan_stop_dt - $day_dur; };
+        if ($@) {
+            t("  A valid channel stop time object (prev day, 01:00) could not be created for '"
+                .  $p->{'_rt_name'} . "', skipping programme");
+            return undef;
+        }
+        eval { $chan_start_dt = $chan_stop_dt - $chan_dur_dt; };
+        if ($@) {
+            t("  A valid channel start time object (prev day, 01:00) could not be created for '"
+                .  $p->{'_rt_name'} . "', skipping programme");
+            return undef;
+        }
+    }
+
+    my $chan_start;
+    eval { $chan_start = "" . $chan_start_dt->ymd('') . $chan_start_dt->hms('') . ' ' . DateTime::TimeZone->offset_as_string($chan_start_dt->offset); };
+    if ($@) {
+        t("  A valid channel start time string (prev day) could not be created for '"
+            .  $p->{'_rt_name'} . "', skipping programme");
+        return undef;
+    }
+
+    my $chan_stop;
+    eval { $chan_stop  = "" . $chan_stop_dt->ymd('')  . $chan_stop_dt->hms('')  . ' ' . DateTime::TimeZone->offset_as_string($chan_stop_dt->offset); };
+    if ($@) {
+        t("  A valid channel stop time string (prev day) could not be created for '"
+            .  $p->{'_rt_name'} . "', skipping programme");
+        return undef;
+    }
+
+    t("    " . $chan_start . " - Start time of channel (previous day)");
+    t("    " . $chan_stop  . " - Stop time of channel (previous day)");
+
+    return ($chan_start_dt, $chan_stop_dt);
+}
+
+# Now check to see whether the channel broadcasting the programme is a
+# part-time channel, and if so, see whether this programme's timeslot
+# times fall within the broadcast window. If a channel broadcasts
+# through the night, we also need to test against the next day's
+# broadcast times.
+#
+# If the channel's timeshift is a multiple of 24hrs (e.g. Channel 5 +24)
+# we adjust the channel's start/stop times accordingly.
+#
+sub check_prog_shown_in_broadcast_hours {
+    my $p = shift;
+    return [ $p->{start}, $p->{stop} ]
+            unless defined $broadcast_hours{ $p->{channel} };
+
+    my $start_dt = shift;
+    my $stop_dt  = shift;
+    my $ts_dur_dt = shift;
+    my $day_dur = shift;
+    my $ch = shift;
+
+    my ($chan_start_dt, $chan_stop_dt) = get_chan_start_stop_dt($p, $ch, $day_dur);
+    ($chan_start_dt, $chan_stop_dt) = get_timeshifted_chan_start_stop_dt($p, $ts_dur_dt, $chan_start_dt, $chan_stop_dt);
+
+    # #FIXME
+    # Include the current programme if its start time lies inside the
+    # channel's broadcast window
     #
-    # If the channel's timeshift is a multiple of 24hrs (e.g. Channel 5 +24)
-    # we adjust the channel's start/stop times accordingly.
-    #
-    if (defined $broadcast_hours{ $prog->{channel} }) {
-        $broadcast_hours{ $prog->{channel} } =~ m/(\d\d)(\d\d)-(\d\d)(\d\d)/;
-        my ($chan_start_hr, $chan_start_mn, $chan_stop_hr, $chan_stop_mn) = ($1, $2, $3, $4);
-
-        my $chan_start_dt;
-        eval {
-            $chan_start_dt = DateTime->new(
-                year       => $yyyy,
-                month      => $mm,
-                day        => $dd,
-                hour       => $chan_start_hr,
-                minute     => $chan_start_mn,
-                second     => 0,
-                time_zone  => 'Europe/London',
-            );
-        };
-        if ($@) {
-            t("  A valid channel start time object could not be created for '"
-                .  $prog->{'_rt_name'} . "', skipping programme");
-            return undef;
+    # If the channel starts and stops broadcasting on the same
+    # calendar day and the programme's start time is outside the
+    # broadcast window, skip it
+    if (! $ch->{'stops_next_day'}) {
+        if ($start_dt >= $chan_start_dt && $start_dt < $chan_stop_dt && $stop_dt <= $chan_stop_dt) {
+            t("    '" . $p->{'_title'} . "' shown whilst channel is on-air, adding");
+            return [ $p->{start}, $p->{stop} ];
         }
-
-        my $chan_stop_dt;
-        eval {
-            $chan_stop_dt = DateTime->new(
-                year       => $yyyy,
-                month      => $mm,
-                day        => $dd,
-                hour       => $chan_stop_hr,
-                minute     => $chan_stop_mn,
-                second     => 0,
-                time_zone  => 'Europe/London',
-            );
-        };
-        if ($@) {
-            t("  A valid channel stop time object could not be created for '"
-                .  $prog->{'_rt_name'} . "', skipping programme");
-            return undef;
-        }
-
-        # Shift channel start/stop times forward by whole days if necessary.
-        if (defined $channel_offset{ $prog->{channel} } and $ts_dt->in_units( 'hours' ) % 24 == 0) {
-            eval { $chan_start_dt = $chan_start_dt + $ts_dt; };
-            if ($@) {
-                t("  A valid day-shifted channel start time object could not be created for '"
-                    .  $prog->{'_rt_name'} . "', skipping programme");
-                return undef;
-            }
-
-            eval { $chan_stop_dt  = $chan_stop_dt  + $ts_dt; };
-            if ($@) {
-                t("  A valid day-shifted channel stop time object could not be created for '"
-                    .  $prog->{'_rt_name'} . "', skipping programme");
-                return undef;
-            }
-
-            t("    Applying channel timeshift of " . $ts_dt->in_units( 'hours' ) . " hours");
-        }
-
-        # Correct the stop time if it is earlier than the start time
-        my $chan_stops_next_day = 0;
-        if ($chan_start_dt >= $chan_stop_dt) {
-            eval { $chan_stop_dt = $chan_stop_dt + $day_dur; };
-            if ($@) {
-                t("  A valid corrected channel stop time object could not be created for '"
-                    .  $prog->{'_rt_name'} . "', skipping programme");
-                return undef;
-            }
-            $chan_stops_next_day = 1;
-        }
-
-        my $chan_start;
-        eval { $chan_start  = "" . $chan_start_dt->ymd('') . $chan_start_dt->hms('') . ' ' . DateTime::TimeZone->offset_as_string($chan_start_dt->offset); };
-        if ($@) {
-            t("  A valid channel start time string could not be created for '"
-                .  $prog->{'_rt_name'} . "', skipping programme");
-            return undef;
-        }
-
-        my $chan_stop;
-        eval { $chan_stop  = "" . $chan_stop_dt->ymd('') . $chan_stop_dt->hms('') . ' ' . DateTime::TimeZone->offset_as_string($chan_stop_dt->offset); };
-        if ($@) {
-            t("  A valid channel stop time string could not be created for '"
-                .  $prog->{'_rt_name'} . "', skipping programme");
-            return undef;
-        }
-
-        t("    " . $chan_start . " - Start time of channel (normal)");
-        t("    " . $chan_stop  . " - Stop time of channel (normal)");
-
-        # Include the current programme if its start time lies inside the
-        # channel's broadcast window
-        if ($start_dt >= $chan_start_dt && $start_dt < $chan_stop_dt) {
-            t("    '" . $prog->{'_title'} . "' shown whilst channel is on-air, adding");
-        }
-
-        # If the channel starts and stops broadcasting on the same
-        # calendar day and the programme's start time is outside the
-        # broadcast window, skip it
-        elsif ($chan_stops_next_day == 0 ) {
+        else {
             if ($start_dt < $chan_start_dt) {
-                t("    '" . $prog->{'_title'} . "' starts before channel has started, skipping\n");
+                t("    '" . $p->{'_title'} . "' starts before channel has started, skipping\n");
                 return undef;
             }
             elsif ($start_dt >= $chan_stop_dt) {
-                t("    '" . $prog->{'_title'} . "' starts after channel has stopped, skipping\n");
+                t("    '" . $p->{'_title'} . "' starts after channel has stopped, skipping\n");
                 return undef;
             }
-        }
-        else {
-            # If the channel broadcasts through the night, and the channel
-            # start time is later than the stop time (i.e. 2300-0600), it is
-            # possible for a program shown at or after midnight to result in
-            # the generation of incorrect channel start/stop times (shifted
-            # +1day forward). We therefore generate another pair of channel
-            # start/stop times for the previous day to match against.
-            #
-            # Example: consider a 30min programme broadcast on 20120101 at 00:30
-            # and we're comparing it to a channel that broadcasts between
-            # 2300 and 0600. We generate start/stop times of 201201012300 and
-            # 201201020600 for the channel, but the programme starts/stops
-            # at 201201010030 and 201201010100. These times occur whilst the
-            # channel is on-air the _previous_ day.
-            #
-            eval { $chan_start_dt = $chan_start_dt - $day_dur; };
-            if ($@) {
-                t("  A valid channel start time object (prev day) could not be created for '"
-                    .  $prog->{'_rt_name'} . "', skipping programme");
-                return undef;
-            }
-
-            eval { $chan_stop_dt  = $chan_stop_dt - $day_dur; };
-            if ($@) {
-                t("  A valid channel stop time object (prev day) could not be created for '"
-                    .  $prog->{'_rt_name'} . "', skipping programme");
-                return undef;
-            }
-
-            my $chan_start;
-            eval { $chan_start = "" . $chan_start_dt->ymd('') . $chan_start_dt->hms('') . ' ' . DateTime::TimeZone->offset_as_string($chan_start_dt->offset); };
-            if ($@) {
-                t("  A valid channel start time string (prev day) could not be created for '"
-                    .  $prog->{'_rt_name'} . "', skipping programme");
-                return undef;
-            }
-
-            my $chan_stop;
-            eval { $chan_stop  = "" . $chan_stop_dt->ymd('')  . $chan_stop_dt->hms('')  . ' ' . DateTime::TimeZone->offset_as_string($chan_stop_dt->offset); };
-            if ($@) {
-                t("  A valid channel stop time string (prev day) could not be created for '"
-                    .  $prog->{'_rt_name'} . "', skipping programme");
-                return undef;
-            }
-
-            t("    " . $chan_start . " - Start time of channel (previous day)");
-            t("    " . $chan_stop  . " - Stop time of channel (previous day)");
-
-            # Test again to see if the programme falls between the adjusted
-            # channel broadcast times
-            if ($start_dt >= $chan_start_dt && $start_dt < $chan_stop_dt) {
-                t("    '" . $prog->{'_title'} . "' shown whilst channel is on-air, adding");
-            } else {
-                t("    '" . $prog->{'_title'} . "' shown whilst channel is off-air, skipping\n");
-                return undef;
+            else {
+                die "Something odd happended checking broadcast hours";
             }
         }
     }
-    return [ $prog->{start}, $prog->{stop} ];
+    else {
+        # If the channel broadcasts through the night, and the channel
+        # start time is later than the stop time (i.e. 2300-0600), it is
+        # possible for a program shown at or after midnight to result in
+        # the generation of incorrect channel start/stop times (shifted
+        # +1day forward). We therefore generate another pair of channel
+        # start/stop times for the previous day to match against.
+        #
+        # Example: consider a 30min programme broadcast on 20120101 at 00:30
+        # and we're comparing it to a channel that broadcasts between
+        # 2300 and 0600. We generate start/stop times of 201201012300 and
+        # 201201020600 for the channel, but the programme starts/stops
+        # at 201201010030 and 201201010100. These times occur whilst the
+        # channel is on-air the _previous_ day.
+        #
+        #First compare against the channel broadcasting today->tomorrow
+        if ($start_dt >= $chan_start_dt && $start_dt < $chan_stop_dt && $stop_dt <= $chan_stop_dt) {
+            t("    '" . $p->{'_title'} . "' shown whilst channel is on-air, adding");
+            return [ $p->{start}, $p->{stop} ];
+        }
+
+        # Now compare against channel broadcasting yesterday->today
+        ($chan_start_dt, $chan_stop_dt) = get_chan_start_stop_yest_dt($p, $ch, $chan_start_dt, $chan_stop_dt, $day_dur);
+        if ($start_dt >= $chan_start_dt && $start_dt < $chan_stop_dt && $stop_dt <= $chan_stop_dt) {
+            t("    '" . $p->{'_title'} . "' shown whilst channel is on-air, adding");
+            return [ $p->{start}, $p->{stop} ];
+        } else {
+            t("    '" . $p->{'_title'} . "' shown whilst channel is off-air, skipping\n");
+            return undef;
+        }
+    }
+}
+
+sub get_channel_timeshift_dt {
+    my $ch = shift;
+    return undef unless (defined $channel_offset{ $ch->{'id'} });
+
+    t("  Detected a channel offset of '$channel_offset{$ch->{'id'}}' for '$ch->{'display-name'}[0][0]'");
+
+    # Setup a reusable Duration object for this channel's timeshift
+    $channel_offset{$ch->{'id'}} =~ m/[+](\d+)hours?/;
+    return DateTime::Duration->new( hours => $1 );
+}
+
+sub get_channel_duration_dt {
+    my $ch = shift;
+    my $day_dur = shift;
+
+    return undef unless (defined $broadcast_hours{ $ch->{'id'} });
+
+    $broadcast_hours{ $ch->{'id'} } =~ m/(\d\d)(\d\d)-(\d\d)(\d\d)/;
+    ($ch->{'_start_hr'}, $ch->{'_start_mn'}, $ch->{'_stop_hr'}, $ch->{'_stop_mn'}) = ($1, $2, $3, $4);
+
+    # Handle channel starting between 01:00-01:59. 01:00-01:59 local time
+    # does not exist on day of GMT->BST transition (00:59 -> 02:00)
+    if ($ch->{'_start_hr'} == 1) {
+        $ch->{'starts_at_0100'} = 1;
+        t("  Channel '" . $ch->{'display-name'}[0][0] . "' starts broadcasting between 01:00 and 02:00");
+    }
+
+    # Create "dummy" start/stop times which are unaffected by GMT/BST transition
+    # in order to determine broadcast duration.
+    my $chan_start_dt;
+    eval {
+        $chan_start_dt = DateTime->new(
+            year       => 2015,
+            month      => 12,
+            day        => 25,
+            hour       => $ch->{'_start_hr'},
+            minute     => $ch->{'_start_mn'},
+            second     => 0,
+            time_zone  => 'Europe/London',
+        );
+    };
+    if ($@) {
+        t("  A dummy channel start time object could not be created for '"
+            .  $ch->{'display-name'}[0][0] . "', skipping channel");
+        next WANTED_CH;
+    }
+
+    my $chan_stop_dt;
+    eval {
+        $chan_stop_dt = DateTime->new(
+            year       => 2015,
+            month      => 12,
+            day        => 25,
+            hour       => $ch->{'_stop_hr'},
+            minute     => $ch->{'_stop_mn'},
+            second     => 0,
+            time_zone  => 'Europe/London',
+        );
+    };
+    if ($@) {
+        t("  A dummy channel stop time object could not be created for '"
+            .  $ch->{'display-name'}[0][0] . "', skipping channel");
+        next WANTED_CH;
+    }
+
+    # Correct the stop time if it is earlier than the start time
+    if ($chan_start_dt >= $chan_stop_dt) {
+        eval { $chan_stop_dt = $chan_stop_dt + $day_dur; };
+        if ($@) {
+            t("  A dummy corrected channel stop time object could not be created for '"
+                .  $ch->{'display-name'}[0][0] . "', skipping channel");
+            next WANTED_CH;
+        }
+        $ch->{'stops_next_day'} = 1;
+    }
+
+    return DateTime::Duration->new( $chan_stop_dt - $chan_start_dt );
 }
 
 # Remove non-title text found in programme title. This text is placed at the
@@ -5556,7 +5758,7 @@ sub print_reality_progs {
         say("\nStart of list of Reality programmes");
         foreach my $title (sort keys %reality_progs) {
             next if exists $reality_progs_maybe_docs{$title};
- 
+
             say("  $title");
             say("    desc: " . $reality_progs{$title}->{'desc'});
             say("    chan: " . join(", ", sort keys %{$reality_progs{$title}->{'channel'}}));
