@@ -38,8 +38,9 @@ sub grab {
   return unless ($id eq "foxtv.fi");
 
   # Fetch & parse HTML (do not ignore HTML5 <section>)
+  # Anything beyond 14 days results in 404 error -> ignore errors
   my $root = fetchTree("http://www.foxtv.fi/ohjelmaopas/fox/$today",
-		       undef, 0, 1);
+		       undef, 1, 1);
   if ($root) {
 
     #
