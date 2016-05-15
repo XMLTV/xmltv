@@ -1,0 +1,1326 @@
+#!/usr/bin/perl -w
+
+my $grabber_cvs_id = '$Id$';
+
+=head1 NAME
+
+tv_grab_sd_json - Grab TV listings from Schedules Direct SD-JSON service.
+
+=head1 SYNOPSIS
+
+tv_grab_sd_json --help
+
+tv_grab_sd_json --info
+
+tv_grab_sd_json --version
+
+tv_grab_sd_json --capabilities
+
+tv_grab_sd_json --description
+
+
+tv_grab_sd_json [--config-file FILE]
+                [--days N] [--offset N]
+                [--output FILE] [--quiet] [--debug]
+
+tv_grab_sd_json --configure [--config-file FILE]
+
+=head1 DESCRIPTION
+
+This is an XMLTV grabber for the Schedules Direct
+(http://www.schedulesdirect.org) JSON API.
+
+=head1 CONFIGURATION
+
+Run tv_grab_sd_json with the --configure option to create a config file.
+
+MythTV does not use the default XMLTV config file path. If using MythTV you
+should also specify the config file such as:
+
+    tv_grab_sd_json --configure --config-file ~/.mythtv/source_name.xmltv
+
+Doing the XMLTV config from within the MythTV GUI seems very flaky so you
+are probably better off configuring from the command line.
+
+=head1 AUTHOR
+
+Kevin Groeneveld (kgroeneveld at gmail dot com)
+
+=cut
+
+use strict;
+use XMLTV;
+use XMLTV::Options qw(ParseOptions);
+use XMLTV::Configure::Writer;
+use XMLTV::Ask;
+#use File::HomeDir qw(my_home);
+use Storable;
+use LWP::UserAgent;
+use JSON;
+use Digest::SHA qw(sha1_hex);
+use DateTime::Format::ISO8601;
+use List::MoreUtils qw(uniq);
+use Scalar::Util qw(looks_like_number);
+use Try::Tiny;
+use Data::Dumper;
+
+my $grabber_name;
+my $grabber_version;
+
+if($grabber_cvs_id =~ m!\$Id: ([^,]+),v (\S+) ([0-9/: -]+) !) {
+	$grabber_name = $1;
+	$grabber_version = "$2 $3";
+}
+else {
+	$grabber_name = 'tv_grab_sd_json';
+    $grabber_version = '0.1';
+}
+
+# The XMLTV::Writer docs only indicate you need to set 'encoding'. However,
+# this value does not get passed to the underlying XML::Writer object. Unless
+# 'ENCODING' is also specified XML::Writer does not actually encode the data!
+my %w_args = (
+	'encoding' => 'utf-8',
+	'ENCODING' => 'utf-8',
+);
+
+my %tv_attributes = (
+	'source-info-name'    => 'Schedules Direct',
+	'source-info-url'     => 'http://www.schedulesdirect.org',
+	'generator-info-name' => "$grabber_name $grabber_version",
+);
+
+my @channel_id_formats = (
+	[ 'default', 'I%s.json.schedulesdirect.org', 'Default Format' ],
+	[ 'zap2it',  'I%s.labs.zap2it.com',          'tv_grab_na_dd Format' ],
+	[ 'mythtv',  '%s',                           'MythTV Internal DD Grabber Format' ],
+);
+my $channel_id_format;
+
+my $cache_schema = 1;
+
+my $sd_json_baseurl = 'https://json.schedulesdirect.org';
+my $sd_json_api = '/20141201/';
+my $sd_json_token;
+my $sd_json_status;
+my $sd_json_request_max = 5000;
+
+my $ua = LWP::UserAgent->new(agent => "$grabber_name $grabber_version");
+$ua->default_header('accept-encoding' => scalar HTTP::Message::decodable());
+
+my $debug;
+my $quiet;
+
+# In general we rely on ParseOptions to parse the command line options. However
+# ParseOptions does not pass the options to stage_sub so we check for some
+# options on our own.
+for my $opt (@ARGV) {
+	$debug = 1 if($opt =~ /--debug/i);
+	$quiet = 1 if($opt =~ /--quiet/i);
+}
+
+$quiet = 0 if $debug;
+$ua->show_progress(1) unless $quiet;
+
+my ($opt, $conf) = ParseOptions({
+	grabber_name => $grabber_name,
+	version => $grabber_cvs_id,
+	description => 'Schedules Direct JSON API',
+	capabilities => [qw/baseline manualconfig preferredmethod/],
+	stage_sub => \&config_stage,
+	listchannels_sub => \&list_channels,
+	preferredmethod => 'allatonce',
+	defaults => { days => -1 },
+});
+
+# set channel_id_format based on config file
+if($conf->{'channel-id-format'}->[0]) {
+	for my $format (@channel_id_formats) {
+		if($format->[0] eq $conf->{'channel-id-format'}->[0]) {
+			$channel_id_format = $format->[1];
+			last;
+		}
+	}
+}
+if(!$channel_id_format) {
+	print STDERR "Valid channel ID format not specified in config, using default.\n" unless $quiet;
+	$channel_id_format = $channel_id_formats[0]->[1];
+}
+
+# default days to largish value
+if($opt->{'days'} < 0) {
+	$opt->{'days'} = 100;
+}
+
+# calculate start and stop time from offset and days options
+my $dt_start = DateTime->now();
+my $today = $dt_start->strftime('%Y-%m-%d');
+$dt_start->add(days => $opt->{'offset'});
+my $dt_stop = $dt_start->clone();
+$dt_stop->add(days => $opt->{'days'});
+
+# Add a little margin. Without this it would be more likely for some programs
+# to not be included at all when the grabber is only run in multiple segments
+# and the start time of the grabber is close to a program boundary.
+$dt_start->add(minutes => -15);
+$dt_stop->add(minutes => 15);
+
+my $cache_file = $conf->{'cache'}->[0];
+
+sub retry {
+	my ($action) = @_;
+	my $retry = 3;
+	my $result;
+
+	for(;;) {
+		try {
+			$result = $action->();
+		}
+		catch {
+			if(--$retry) {
+				print STDERR $_, "Retry in 10 seconds...\n" unless $quiet;
+				sleep 10;
+			}
+			else {
+				die $_, "Retry count exceeded.";
+			}
+		};
+		return $result if $result;
+	}
+}
+
+sub sd_json_request {
+	my ($method, $path, $content) = @_;
+
+	my $url;
+	if($path =~ /^\//) {
+		$url = $sd_json_baseurl . $path;
+	}
+	else {
+		$url = $sd_json_baseurl . $sd_json_api . $path;
+	}
+
+	my @params;
+	push(@params, content_type => 'application/json');
+	push(@params, token => $sd_json_token) unless $path eq 'token';
+	push(@params, content => encode_json($content)) if defined $content;
+
+	my $response = $ua->$method($url, @params);
+	if($response->is_success()) {
+		return decode_json($response->decoded_content());
+	}
+	else {
+		my $msg = $response->decoded_content();
+
+		if($response->header('content-type') =~ m{application/json}i) {
+			my $error = decode_json($msg);
+
+			# for lineups request don't consider 4102/NO_LINEUPS an error
+			if($path eq 'lineups' && $error->{'code'} == 4102) {
+				return undef;
+			}
+
+			$msg = "Server (ID=$error->{'serverID'} Time=$error->{'datetime'}) returned an error:\n"
+				."$error->{'message'} ($error->{'code'}/$error->{'response'})";
+		}
+
+		print STDERR Dumper($response) if $debug;
+		die $msg, "\n";
+	}
+}
+
+sub sd_json_get_token {
+	my ($username, $password) = @_;
+
+	retry sub {
+		my $response = sd_json_request('post', 'token', { username => $username, password => $password });
+		if(ref $response ne 'HASH' || !exists $response->{'token'}) {
+			die "Invalid token response.\n";
+		}
+		return $response->{'token'};
+	};
+}
+
+sub sd_json_get_status {
+	retry sub {
+		my $status = sd_json_request('get', 'status');
+		if(ref $status ne 'HASH' ||
+			ref $status->{'systemStatus'} ne 'ARRAY' || ref $status->{'systemStatus'}->[0] ne 'HASH' ||
+			ref $status->{'account'} ne 'HASH' ||
+			ref $status->{'lineups'} ne 'ARRAY') {
+			die "Invalid status response.\n"
+		}
+		return $status;
+	}
+}
+
+sub sd_json_get_lineups {
+	return sd_json_request('get', 'lineups');
+}
+
+sub sd_json_get_headends {
+	my ($country, $postalcode) = @_;
+	return sd_json_request('get', "headends?country=$country&postalcode=$postalcode");
+}
+
+sub sd_json_add_lineup {
+	my ($lineup) = @_;
+	return sd_json_request('put', $lineup);
+}
+
+sub sd_json_delete_lineup {
+	my ($lineup) = @_;
+	return sd_json_request('delete', $lineup);
+}
+
+sub sd_json_get_lineup {
+	my ($lineup) = @_;
+	retry sub {
+		my $lineup = sd_json_request('get', $lineup);
+		if(ref $lineup ne 'HASH') {
+			die "Invalid lineup response.\n"
+		}
+		return $lineup;
+	}
+}
+
+sub sd_json_get_schedules_md5 {
+	my ($channels) = @_;
+	my @stations;
+	for my $channel (@{$channels}) {
+		push(@stations, { stationID => $channel });
+	}
+	return sd_json_request('post', 'schedules/md5', \@stations);
+}
+
+sub sd_json_get_schedules {
+	my ($schedules) = @_;
+	return sd_json_request('post', 'schedules', $schedules);
+}
+
+sub sd_json_get_programs {
+	my ($programs) = @_;
+	return sd_json_request('post', 'programs', $programs);
+}
+
+sub sd_json_init {
+	my ($conf) = @_;
+
+	if(!defined $sd_json_status) {
+		$sd_json_token = sd_json_get_token($conf->{'username'}->[0], sha1_hex($conf->{'password'}->[0]));
+		$sd_json_status = sd_json_get_status();
+
+		my $status = $sd_json_status->{'systemStatus'}->[0]->{'status'};
+		if($status !~ /online/i) {
+			die "Schedules Direct system status: $status\n";
+		}
+	}
+}
+
+sub get_lineup_description {
+	my ($lineup) = @_;
+
+	my $location = $lineup->{'location'}  // 'unknown';
+	my $type     = $lineup->{'transport'} // 'unknown';
+	my $name     = $lineup->{'name'}      // 'unknown';
+	my ($id)     = $lineup->{'uri'} =~ m{.*/(.*)};
+
+	if($type eq 'QAM') {
+		return "$type | $id";
+	}
+	else {
+		return "$location | $type | $name | $id";
+	}
+}
+
+sub config_stage {
+	my ($stage, $conf) = @_;
+
+	if($stage ne 'start' && $stage ne 'login') {
+		sd_json_init($conf);
+	}
+
+	my $result;
+	my $w = new XMLTV::Configure::Writer(OUTPUT => \$result, %w_args);
+	$w->start(\%tv_attributes);
+
+	if($stage eq 'start') {
+		$w->write_string({
+			id => 'cache',
+			description => [ [ 'Cache file for lineups, schedules and programs.', 'en' ] ],
+			title => [ [ 'Cache file', 'en' ] ],
+#			default => my_home() . "/.xmltv/$grabber_name.cache",
+			default => XMLTV::Config_file::filename(undef, '$grabber_name.cache' , $quiet),
+		});
+
+		$w->start_selectone({
+			id => 'channel-id-format',
+			description => [ [ 'If you are migrating from a different grabber selecting an alternate channel ID format can make the migration easier.', 'en' ] ],
+			title => [ [ 'Select channel ID format', 'en' ] ],
+		});
+		for my $format (@channel_id_formats) {
+			$w->write_option({
+				value => $format->[0],
+				text  => [ [ $format->[2].' (eg: '.sprintf($format->[1], 12345).')', 'en' ] ],
+			});
+		}
+		$w->end_selectone();
+
+		$w->end('login');
+	}
+	elsif($stage eq 'login') {
+		$w->write_string({
+			id => 'username',
+			description => [ [ 'Schedules Direct username.', 'en' ] ],
+			title => [ [ 'Username', 'en' ] ],
+		});
+		$w->write_secretstring({
+			id => 'password',
+			description => [ [ 'Schedules Direct password.', 'en' ] ],
+			title => [ [ 'Password', 'en' ] ],
+		});
+
+		$w->end('account-lineups');
+	}
+	elsif($stage eq 'account-lineups') {
+		# This stage doesn't work with configapi and I am not sure if there is
+		# currently any good way to make it work...
+		my $edit;
+		do {
+			my $max = $sd_json_status->{'account'}->{'maxLineups'};
+			my $lineups = sd_json_get_lineups();
+			$lineups = $lineups->{'lineups'};
+			my $count = 0;
+
+			say("This step configures the lineups enabled for your Schedules "
+				."Direct account. It impacts all other configurations and "
+				."programs using the JSON API with your account. A maximum of "
+				."$max lineups can by added to your account. In a later step "
+				."you will choose which lineups or channels to actually use "
+				."for this configuration.\n"
+				."Current lineups enabled for your Schedules Direct account:"
+			);
+
+			for my $lineup (@{$lineups}) {
+				$count++;
+				my $desc = get_lineup_description($lineup);
+				say("$count. $desc");
+			}
+			if(!$count) {
+				say('(none)');
+			}
+
+			my @options;
+			push(@options, 'continue') if $count;
+			push(@options, 'add' ) if($count < $max);
+			push(@options, 'delete') if $count;
+			$edit = ask_choice('Edit account lineups', $options[0], @options);
+
+			try
+			{
+				if($edit eq 'add') {
+					my $country = ask('Lineup or Country (ISO-3166-1 alpha 3 such as USA or CAN):');
+					if(length($country) > 3) {
+						sd_json_add_lineup("lineups/$country");
+					}
+					else {
+						my $postalcode = ask(($country eq 'USA') ? 'Zip Code:' : 'Postal Code:');
+						my $headends = sd_json_get_headends($country, $postalcode);
+						my $count = 0;
+						my @uri;
+
+						for my $headend (@{$headends}) {
+							for my $lineup (@{$headend->{'lineups'}}) {
+								$count++;
+								push(@uri, $lineup->{'uri'});
+								my ($id) = $lineup->{'uri'} =~ m{.*/(.*)};
+								say("$count. $headend->{'location'} | $headend->{'transport'} | $lineup->{'name'} | $id");
+							}
+						}
+
+						my $add = ask_choice('Add lineup (0 = none)', 0, (0 .. $count));
+						if($add) {
+							sd_json_add_lineup($uri[$add - 1]);
+						}
+					}
+				}
+				elsif($edit eq 'delete') {
+					my $delete = ask_choice('Delete lineup (0 = none)', 0, (0 .. $count));
+					if($delete) {
+						sd_json_delete_lineup($lineups->[$delete - 1]->{'uri'});
+					}
+				}
+			}
+			catch {
+				say($_);
+			};
+		}
+		while($edit ne 'continue');
+
+		$w->end('select-mode');
+	}
+	elsif($stage eq 'select-mode') {
+		$w->start_selectone({
+			id => 'mode',
+			description => [ [ 'Choose whether you want to include complete lineups or individual channels for this configuration.', 'en' ] ],
+			title => [ [ 'Select mode', 'en' ] ],
+		});
+		$w->write_option({
+			value => 'lineup',
+			text  => [ [ 'lineups', 'en' ] ],
+		});
+		$w->write_option({
+			value => 'channels',
+			text  => [ [ 'channels', 'en' ] ],
+		});
+		$w->end_selectone();
+
+		$w->end('select-lineups');
+	}
+	elsif($stage eq 'select-lineups') {
+		my $lineups = sd_json_get_lineups();
+		$lineups = $lineups->{'lineups'};
+
+		my $desc;
+		if($conf->{'mode'}->[0] eq 'lineup') {
+			$desc = 'Choose lineups to use for this configuration.';
+		}
+		else {
+			$desc = 'Choose lineups from which you want to select channels for this configuration.';
+		}
+
+		$w->start_selectmany({
+			id => $conf->{'mode'}->[0],
+			description => [ [ $desc, 'en' ] ],
+			title => [ [ 'Select linups', 'en' ] ],
+		});
+		for my $lineup (@{$lineups}) {
+			my ($id) = $lineup->{'uri'} =~ m{.*/(.*)};
+			$w->write_option({
+				value => $id,
+				text  => [ [ $id, 'en' ] ],
+			});
+		}
+		$w->end_selectmany();
+
+		$w->end('select-channels');
+	}
+	else {
+		die "Unknown stage $stage";
+	}
+
+	return $result;
+}
+
+my $cache;
+my $cache_lineups;
+my $cache_schedules;
+my $cache_programs;
+my %channel_index;
+my %channel_map;
+
+sub cache_load {
+	sub get_hash {
+		my $hash = $cache->{$_[0]};
+		return (ref $hash eq 'HASH') ? $hash : {};
+	}
+
+	# make sure the cache file is readable and writable
+	if(open(my $fh, '+>>', $cache_file)) {
+		close($fh);
+	}
+	else {
+		die "Cannot open $cache_file for read/write.\n";
+	}
+
+	# attempt to retreive cached data
+	try {
+		$cache = retrieve($cache_file);
+		if(ref $cache ne 'HASH') {
+			die "Invalid cache file.\n";
+		}
+
+		if($cache->{'schema'} == $cache_schema) {
+			$cache_lineups = get_hash('lineups');
+			$cache_schedules = get_hash('schedules');
+			$cache_programs = get_hash('programs');
+		}
+		else {
+			die "Ignoring cache file with old schema.\n";
+		}
+	}
+	catch {
+		print STDERR unless $quiet;
+		$cache_lineups = {};
+		$cache_schedules = {};
+		$cache_programs = {};
+	};
+
+	$cache = { schema => $cache_schema, lineups => $cache_lineups, schedules => $cache_schedules, programs => $cache_programs };
+}
+
+sub cache_update_lineups {
+	print STDERR "Updating lineups...\n" unless $quiet;
+
+	my $now = DateTime->now()->epoch();
+	my %lineups_enabled;
+	my @lineups_update;
+
+	# check for out of date lineups
+	for my $lineup (@{$sd_json_status->{'lineups'}}) {
+		if(ref $lineup ne 'HASH') {
+			print STDERR "Invalid lineup in account status.\n" unless $quiet;
+			next;
+		}
+
+		my $id = $lineup->{'lineup'};
+		if(!$id || ref $id) {
+			print STDERR "Invalid lineup in account status.\n" unless $quiet;
+			next;
+		}
+
+		$lineups_enabled{$id} = 1;
+
+		my $metadata = $cache_lineups->{$id}->{'metadata'};
+		if(ref $metadata ne 'HASH') {
+			print STDERR "lineup $id: new\n" if $debug;
+			push(@lineups_update, $lineup);
+		}
+		elsif($metadata->{'modified'} ne $lineup->{'modified'}) {
+			print STDERR "lineup $id: old\n" if $debug;
+			push(@lineups_update, $lineup);
+		}
+		else {
+			print STDERR "lineup $id: current\n" if $debug;
+			$cache_lineups->{$id}->{'accessed'} = $now;
+		}
+	}
+
+	# check that configured lineups are actually enabled for the account
+	my $lineup_error;
+	for my $lineup (@{$conf->{'lineup'}}, @{$conf->{'channels'}}) {
+		if(!$lineups_enabled{$lineup}) {
+			$lineup_error = 1;
+			print STDERR "Lineup $lineup in the current configuration is not enabled on your account.\n";
+		}
+	}
+
+	if($lineup_error) {
+		die "Please reconfigure the grabber or your account settings.\n"
+	}
+
+	# update lineups
+	for my $lineup (@lineups_update) {
+		my $id = $lineup->{'lineup'};
+		my $uri = $lineup->{'uri'};
+
+		if(!$uri || ref $uri) {
+			print STDERR "Invalid lineup URI in account status.\n" unless $quiet;
+			next;
+		}
+
+		my $update = sd_json_get_lineup($uri);
+		$cache_lineups->{$id} = $update;
+		$cache_lineups->{$id}->{'accessed'} = $now;
+	}
+}
+
+sub cache_update_schedules {
+	my ($channels) = @_;
+
+	print STDERR "Updating schedules...\n" unless $quiet;
+
+	my $now = DateTime->now()->epoch();
+	my $schedules_md5 = sd_json_get_schedules_md5($channels);
+	my @channels_update;
+
+	while(my ($channel, $schedule) = each %{$schedules_md5}) {
+		if(ref $schedule ne 'HASH') {
+			print STDERR "Invalid schedule for channel $channel\n" unless $quiet;
+			next;
+		}
+
+		my @dates;
+		while(my ($date, $latest) = each %{$schedule}) {
+			my $metadata = $cache_schedules->{$channel}->{$date}->{'metadata'};
+			if(!defined $metadata) {
+				print STDERR "channel $channel $date: new\n" if $debug;
+				push(@dates, $date);
+			}
+			elsif($metadata->{'md5'} ne $latest->{'md5'}) {
+				print STDERR "channel $channel $date: old\n" if $debug;
+				push(@dates, $date);
+			}
+			else {
+				print STDERR "channel $channel $date: current\n" if $debug;
+			}
+		}
+		if(@dates) {
+			push(@channels_update, { stationID => $channel, date => \@dates });
+		}
+	}
+
+	# update schedules
+	while(my @block = splice(@channels_update, 0, $sd_json_request_max)) {
+		my $schedules = sd_json_get_schedules(\@block);
+		for my $schedule (@{$schedules}) {
+			my $channel = $schedule->{'stationID'};
+			my $date = $schedule->{'metadata'}->{'startDate'};
+			$cache_schedules->{$channel}->{$date} = $schedule;
+		}
+	}
+
+	print STDERR "Updating programs...\n" unless $quiet;
+
+	my %programs_update_hash;
+
+	# create list of programs to update
+	for my $channel (@{$channels}) {
+		for my $schedule (values %{$cache_schedules->{$channel}}) {
+			for my $program (@{$schedule->{'programs'}}) {
+				my $dt = DateTime::Format::ISO8601->parse_datetime($program->{'airDateTime'});
+				my $dur = DateTime::Duration->new(seconds => $program->{'duration'});
+
+				if(($dt + $dur) >= $dt_start && $dt <= $dt_stop) {
+					my $id = $program->{'programID'};
+					my $cached = $cache_programs->{$id};
+
+					if(!defined $cached) {
+						print STDERR "program $id: new\n" if $debug;
+						$programs_update_hash{$id} = 1;
+					}
+					elsif($cached->{'md5'} ne $program->{'md5'}) {
+						print STDERR "program $id: old\n" if $debug;
+						$programs_update_hash{$id} = 1;
+					}
+					else {
+						print STDERR "program $id: current\n" if $debug;
+						$cache_programs->{$id}->{'accessed'} = $now;
+					}
+				}
+			}
+		}
+	}
+
+	# update programs
+	my @programs_update = keys %programs_update_hash;
+	while(my @block = splice(@programs_update, 0, $sd_json_request_max)) {
+		my $programs = sd_json_get_programs(\@block);
+
+		for my $id (@block) {
+			$cache_programs->{$id} = shift @{$programs};
+			$cache_programs->{$id}->{'accessed'} = $now;
+		}
+	}
+}
+
+sub cache_drop_old {
+	my $limit = DateTime->now()->subtract(days => 10)->epoch();
+
+	print STDERR "Removing old cache entires...\n" unless $quiet;
+
+	while(my ($key, $hash) = each %{$cache}) {
+		if($key eq 'lineups' || $key eq 'programs') {
+			# remove old lineups and programs
+			while(my ($key, $value) = each %{$hash}) {
+				if(ref $value ne 'HASH' || !exists $value->{'accessed'} || $value->{'accessed'} < $limit) {
+					print STDERR "$key: drop\n" if $debug;
+					delete $hash->{$key};
+				}
+			}
+		}
+		elsif($key eq 'schedules') {
+			# remove old schedules
+			while(my ($channel, $schedules) = each %{$hash}) {
+				if(ref $schedules ne 'HASH') {
+					print STDERR "$channel: drop\n" if $debug;
+					delete $cache_schedules->{$channel};
+					next;
+				}
+
+				while(my ($date, $schedule) = each %{$schedules}) {
+					if($date lt $today) {
+						print STDERR "$channel $date: drop\n" if $debug;
+						delete $schedules->{$date};
+					}
+				}
+
+				if(scalar keys %{$schedules} == 0) {
+					print STDERR "$channel: drop\n" if $debug;
+					delete $cache_schedules->{$channel};
+				}
+			}
+		}
+		elsif($key ne 'schema') {
+			# remove unknown keys
+			delete $cache->{$key};
+		}
+	}
+}
+
+sub cache_save {
+	store($cache, $cache_file);
+}
+
+sub cache_index {
+	print STDERR "Indexing data...\n" unless $quiet;
+
+	# create index
+	for my $id (@{$conf->{'lineup'}}, @{$conf->{'channels'}}) {
+		my $lineup = $cache_lineups->{$id};
+		if(ref $lineup ne 'HASH' || ref $lineup->{'stations'} ne 'ARRAY') {
+			print STDERR "Invalid stations array for lineup $id\n" unless $quiet;
+			next;
+		}
+
+		for my $channel (@{$lineup->{'stations'}}) {
+			if(ref $channel ne 'HASH') {
+				print STDERR "Invalid channel in lineup $id\n" unless $quiet;
+				next;
+			}
+			$channel_index{$channel->{'stationID'}} = $channel;
+		}
+
+		my $qam = $lineup->{'qamMappings'};
+		my $map;
+
+		if($qam) {
+			$map = $lineup->{'map'}->{$qam->[0]};
+		}
+		else {
+			$map = $lineup->{'map'};
+		}
+
+		for my $channel (@{$map}) {
+			$channel_map{$channel->{'stationID'}} = $channel;
+		}
+	}
+}
+
+sub get_channel_list {
+	my ($conf) = @_;
+
+	if($conf->{'mode'}->[0] eq 'lineup') {
+		my %hash;
+		for my $lineup (@{$conf->{'lineup'}}) {
+			if(ref $cache_lineups->{$lineup}->{'stations'} ne 'ARRAY') {
+				print STDERR "Invalid stations array for lineup $lineup\n" unless $quiet;
+				next;
+			}
+
+			for my $channel (@{$cache_lineups->{$lineup}->{'stations'}}) {
+				if(ref $channel ne 'HASH' || !$channel->{'stationID'}) {
+					print STDERR "Invalid channel in lineup $lineup\n" unless $quiet;
+					next;
+				}
+				$hash{$channel->{'stationID'}} = 1;
+			}
+		}
+
+		my @list = keys %hash;
+		return \@list;
+	}
+	else {
+		my @list = uniq(@{$conf->{'channel'}});
+		return \@list;
+	}
+}
+
+sub get_channel_number {
+	my ($map) = @_;
+
+	if($map->{'virtualChannel'}) {
+		return $map->{'virtualChannel'};
+	}
+	elsif($map->{'atscMajor'}) {
+		return "$map->{'atscMajor'}_$map->{'atscMinor'}";
+	}
+	elsif($map->{'channel'}) {
+		return $map->{'channel'};
+	}
+	elsif($map->{'frequencyHz'}) {
+		return $map->{'frequencyHz'};
+	}
+
+	return undef;
+}
+
+sub write_channel {
+	my ($w, $channel, $map) = @_;
+
+	my %ch;
+
+	# mythtv seems to assume that the first three display-name elements are
+	# name, callsign and channel number. We follow that scheme here.
+	$ch{'id'} = sprintf($channel_id_format, $channel->{'stationID'});
+	$ch{'display-name'} = [
+		[ $channel->{'name'}       || 'unknown name'     ],
+		[ $channel->{'callsign'}   || 'unknown callsign' ],
+		[ get_channel_number($map) || 'unknown number'   ]
+	];
+
+	my $logo = $channel->{'logo'};
+	$ch{'icon'} = [{ 'src' => $logo->{'URL'} }] if $logo;
+
+	$w->write_channel(\%ch);
+}
+
+# this is used by the last stage of --configure
+sub list_channels {
+	my ($conf, $opt) = @_;
+
+	# use raw channel id in configuration files
+	$channel_id_format = '%s';
+
+	my $result;
+	my $w = new XMLTV::Writer(OUTPUT => \$result, %w_args);
+	$w->start(\%tv_attributes);
+
+	for my $id (@{$conf->{'channels'}}) {
+		my $lineup = sd_json_get_lineup("lineups/$id");
+		for my $channel (@{$lineup->{'stations'}}) {
+			write_channel($w, $channel);
+		}
+	}
+
+	$w->end();
+	return $result;
+}
+
+sub get_program_title {
+	my ($details) = @_;
+	my $title = $details->{'titles'}->[0]->{'title120'};
+
+	if($title) {
+		return [ [ $title ] ];
+	}
+	else {
+		return [ [ 'unknown' ] ];
+	}
+}
+
+sub get_program_subtitle {
+	my ($details) = @_;
+	my $subtitle = $details->{'episodeTitle150'};
+
+	if($subtitle) {
+		return [ [ $subtitle ] ];
+	}
+	else {
+		return undef;
+	}
+}
+
+sub get_program_description {
+	my ($details) = @_;
+	my $descriptions = $details->{'descriptions'};
+
+	if(exists $descriptions->{'description1000'}) {
+		return [ [ $descriptions->{'description1000'}->[0]->{'description'} ] ];
+	}
+	elsif(exists $descriptions->{'description100'}) {
+		return [ [ $descriptions->{'description100'}->[0]->{'description'} ] ];
+	}
+	else {
+		return undef;
+	}
+}
+
+sub get_program_credits {
+	my ($details) = @_;
+	my %credits;
+
+	for my $credit (@{$details->{'cast'}}, @{$details->{'crew'}}) {
+		my $role = $credit->{'role'};
+		my $name = $credit->{'name'};
+		my $key;
+
+		if($role =~ /director/i) {
+			$key = 'director';
+		}
+		elsif($role =~ /(actor|voice)/i) {
+			$key = 'actor';
+		}
+		elsif($role =~ /writer/i) {
+			$key = 'writer';
+		}
+		elsif($role =~ /producer/i) {
+			$key = 'producer';
+		}
+		elsif($role =~ /(host|anchor)/i) {
+			$key = 'presenter';
+		}
+		elsif($role =~ /(guest|contestant)/i) {
+			$key = 'guest';
+		}
+		else {
+#			print STDERR "$role\n";
+		}
+
+		if($key) {
+			if(exists $credits{$key}) {
+				push(@{$credits{$key}}, $name);
+			}
+			else {
+				$credits{$key} = [ $name ];
+			}
+		}
+	}
+
+	if(scalar keys %credits) {
+		return \%credits;
+	}
+	else {
+		return undef;
+	}
+}
+
+sub get_program_date {
+	my ($details) = @_;
+
+	my $year = $details->{'movie'}->{'year'};
+	if($year) {
+		return $year;
+	}
+
+	return undef;
+}
+
+sub get_program_category {
+	my ($details) = @_;
+	my %seen;
+	my @result;
+
+	sub add {
+		my ($result, $category, $seen) = @_;
+		if($category && !exists $seen->{$category}) {
+			$seen->{$category} = 1;
+			push(@{$result}, [ $category ]);
+		}
+	}
+
+	for my $genre (@{$details->{'genres'}}) {
+		add(\@result, $genre, \%seen);
+	}
+	add(\@result, $details->{'showType'}, \%seen);
+
+	# mythtv specifically looks for movie|series|sports|tvshow
+	my $entity_type = $details->{'entityType'};
+	if($entity_type =~ /movie/i) {
+		add(\@result, 'movie', \%seen);
+	}
+	elsif($entity_type =~ /episode/i) {
+		add(\@result, 'series', \%seen);
+	}
+	elsif($entity_type =~ /sports/i) {
+		add(\@result, 'sports', \%seen);
+	}
+	else {
+		add(\@result, 'tvshow', \%seen);
+	}
+
+	if(scalar @result) {
+		return \@result;
+	}
+	else {
+		return undef;
+	}
+}
+
+sub get_program_length {
+	my ($details) = @_;
+	my $duration = $details->{'movie'}->{'duration'};
+
+	if($duration) {
+		return $duration;
+	}
+	else {
+		return undef;
+	}
+}
+
+sub get_program_url {
+	my ($details) = @_;
+
+	my $url = $details->{'officialURL'};
+	if($url) {
+		return [ $url ];
+	}
+
+	return undef;
+}
+
+sub get_program_episode {
+	my ($program, $details) = @_;
+	my $season ='';
+	my $episode = '';
+	my $part = '';
+	my $data = 0;
+	my @result;
+
+	my $metadata = $details->{'metadata'}->[0]->{'Gracenote'};
+	if($metadata)
+	{
+		my $temp = $metadata->{'season'};
+		if(looks_like_number($temp)) {
+			$season = sprintf('%d', $temp - 1);
+			$data = 1;
+		}
+
+		$temp = $metadata->{'episode'};
+		if(looks_like_number($temp)) {
+			$episode = sprintf('%d', $temp - 1);
+			$data = 1;
+		}
+	}
+
+	my $multipart = $program->{'multipart'};
+	if($multipart) {
+		my $temp = $multipart->{'partNumber'};
+		if(looks_like_number($temp)) {
+			$part = sprintf('%d', $temp - 1);
+			$temp = $multipart->{'totalParts'};
+			if(looks_like_number($temp)) {
+				$part .= sprintf('/%d', $temp - 1);
+			}
+			$data = 1;
+		}
+	}
+
+	if($data) {
+		push(@result, [ "$season.$episode.$part", 'xmltv_ns' ]);
+	}
+
+	push(@result, [ $program->{'programID'}, 'dd_progid' ]);
+
+	if(scalar @result) {
+		return \@result;
+	}
+	else {
+		return undef;
+	}
+}
+
+sub get_program_video {
+	my ($program) = @_;
+	my %video;
+
+	for my $item (@{$program->{'videoProperties'}}) {
+		if($item =~ /hdtv/i) {
+			$video{'quality'} = 'HDTV';
+		}
+	}
+
+	if(scalar keys %video) {
+		return \%video;
+	}
+	else {
+		return undef;
+	}
+}
+
+sub get_program_audio {
+	my ($program) = @_;
+	my %audio;
+
+	for my $item (@{$program->{'audioProperties'}}) {
+		if($item =~ /mono/i) {
+			$audio{'stereo'} = 'mono';
+		}
+		elsif($item =~ /stereo/i) {
+			$audio{'stereo'} = 'stereo';
+		}
+		elsif($item =~ /DD/i) {
+			$audio{'stereo'} = 'dolby digital';
+		}
+	}
+
+	if(scalar keys %audio) {
+		return \%audio;
+	}
+
+	return undef;
+}
+
+# The xmltv docs state this field is "When and where the programme was last shown".
+# However mythtv expects the original air date to be in this field.
+sub get_program_previously_shown {
+	my ($details) = @_;
+	my %previously_shown;
+
+	my $date = $details->{'originalAirDate'};
+	if($date) {
+		my $dt = DateTime::Format::ISO8601->parse_datetime($date);
+
+		# mythtv needs full date and time even though xmltv only requires date.
+		# No timezone is specified in the source data so lets assume the local
+		# timezone otherwise UTC will be assumed which can cause mythtv to
+		# store the wrong date.
+		$dt->set_time_zone('local');
+		$previously_shown{'start'} = $dt->strftime('%Y%m%d%H%M%S %z');
+	}
+
+	if(scalar keys %previously_shown) {
+		return \%previously_shown;
+	}
+
+	return undef;
+}
+
+sub get_program_premiere {
+	my ($program) = @_;
+	my $premiere = $program->{'isPremiereOrFinale'};
+
+	if(defined $premiere && $premiere =~ /premiere/i) {
+		return [ $premiere ];
+	}
+
+	return undef;
+}
+
+sub get_program_new {
+	my ($program) = @_;
+	my $new = $program->{'new'};
+
+	if(defined $new) {
+		return 1;
+	}
+
+	return undef;
+}
+
+sub get_program_subtitles {
+	my ($program) = @_;
+
+	if(grep('^cc$', @{$program->{'audioProperties'}})) {
+		return [ { 'type' => 'teletext' } ];
+	}
+
+	return undef;
+}
+
+sub get_program_rating {
+	my ($program, $details) = @_;
+
+	# first check 'contentRating' then 'ratings'
+	my $ratings = $details->{'contentRating'};
+	if(!defined $ratings || ref $ratings ne 'ARRAY') {
+		$ratings = $program->{'ratings'};
+		if(!defined $ratings || ref $ratings ne 'ARRAY') {
+			return undef;
+		}
+	}
+
+	my @result;
+	for my $rating (@{$ratings}) {
+		my $code = $rating->{'code'};
+		my $body = $rating->{'body'};
+		if($code) {
+			push(@result, [ $code, $body ]);
+		}
+	}
+
+	if(scalar @result) {
+		return \@result;
+	}
+
+	return undef;
+}
+
+sub get_program_star_rating {
+	my ($details) = @_;
+	my $rating = $details->{'movie'}->{'qualityRating'}->[0];
+
+	if($rating) {
+		return [ [ "$rating->{'rating'}/$rating->{'maxRating'}", $rating->{'ratingsBody'} ] ];
+	}
+	else {
+		return undef;
+	}
+}
+
+sub write_programme {
+	my ($w, $channel, $program, $details) = @_;
+
+	my $dt = DateTime::Format::ISO8601->parse_datetime($program->{'airDateTime'});
+	my $dur = DateTime::Duration->new(seconds => $program->{'duration'});
+
+	if(($dt + $dur) >= $dt_start && $dt <= $dt_stop) {
+		my $start = $dt->strftime('%Y%m%d%H%M%S %z');
+		$dt->add_duration($dur);
+		my $stop = $dt->strftime('%Y%m%d%H%M%S %z');
+
+		$w->write_programme({
+			'channel'          => sprintf($channel_id_format, $channel),
+			'start'            => $start,
+			'stop'             => $stop,
+			'title'            => get_program_title($details),
+			'sub-title'        => get_program_subtitle($details),
+			'desc'             => get_program_description($details),
+			'credits'          => get_program_credits($details),
+			'date'             => get_program_date($details),
+			'category'         => get_program_category($details),
+#			'keyword'          => undef,
+#			'language'         => undef,
+#			'orig-language'    => undef,
+			'length'           => get_program_length($details),
+#			'icon'             => undef,
+			'url'              => get_program_url($details),
+#			'country'          => undef,
+			'episode-num'      => get_program_episode($program, $details),
+			'video'            => get_program_video($program),
+			'audio'            => get_program_audio($program),
+			'previously-shown' => get_program_previously_shown($details),
+			'premiere'         => get_program_premiere($program),
+#			'last-chance'      => undef,
+			'new'              => get_program_new($program),
+			'subtitles'        => get_program_subtitles($program),
+			'rating'           => get_program_rating($program, $details),
+			'star-rating'      => get_program_star_rating($details),
+#			'review'           => undef,
+		});
+	}
+}
+
+sub grab_listings {
+	my ($conf) = @_;
+	my $channels;
+
+	print STDERR "Initializing...\n" unless $quiet;
+	cache_load();
+	sd_json_init($conf);
+	cache_update_lineups();
+	$channels = get_channel_list($conf);
+
+	if(!@{$channels}) {
+		die "No lineups or channels configured.\n";
+	}
+
+	cache_update_schedules($channels);
+	cache_drop_old();
+	cache_save();
+	cache_index();
+
+	print STDERR "Writing output...\n" unless $quiet;
+	my $w = new XMLTV::Writer(%w_args);
+	$w->start(\%tv_attributes);
+
+	# write channels
+	for my $channel (@{$channels}) {
+		write_channel($w, $channel_index{$channel}, $channel_map{$channel});
+	}
+
+	# write programs
+	for my $channel (@{$channels}) {
+		for my $schedule (values %{$cache_schedules->{$channel}}) {
+			for my $program (@{$schedule->{'programs'}}) {
+				write_programme($w, $channel, $program, $cache_programs->{$program->{'programID'}});
+			}
+		}
+	}
+
+	$w->end();
+	print STDERR "Done\n" unless $quiet;
+}
+
+grab_listings($conf);

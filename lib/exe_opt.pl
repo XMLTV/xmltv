@@ -29,6 +29,7 @@ print '-nologo
 -bind=libiconv-2_.dll[file=C:\strawberry\c\bin\libiconv-2_.dll,extract]
 -bind=liblzma-5_.dll[file=C:\strawberry\c\bin\liblzma-5_.dll,extract]
 -bind=zlib1_.dll[file=C:\strawberry\c\bin\zlib1_.dll,extract]
+-bind DateTime/Format/Builder/Parser/Regex.pm[file=c:\Strawberry\Perl\site\lib\DateTime\Format\Builder\Parser\Regex.pm,extract] 
 -trim=Class::MethodMaker::Scalar
 -trim=Class::MethodMaker::Engine
 -trim=JSON::PP58

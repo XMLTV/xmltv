@@ -895,6 +895,19 @@ my @opt_components
                     'Data::Dumper'    => 0, },
      },
 
+	 { name => 'tv_grab_sd_json',
+       blurb => '$$ Grabber for schedulesDirect.org SD-JSON service (many countries)',
+       exes => [ 'grab/sd_json/tv_grab_sd_json' ],
+       prereqs => { 'DateTime::Format::ISO8601' => 0,
+					'Digest::SHA' => 0,
+					'JSON' => 0,
+					 'List::MoreUtils' => 0,
+					 'LWP::UserAgent' => 0,
+					 'Storable' => 0,
+					 'Try::Tiny' => 0,},
+     },
+
+
 # honir 2015-03-05 hasn't worked since 2014-11-19 - source site permanently broken
 #     { name => 'tv_grab_za',
 #       blurb => 'Grabber for South Africa',
