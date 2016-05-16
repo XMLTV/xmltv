@@ -45,8 +45,8 @@ sub convertProgrammeList($$$$) {
   my $programmes = $self->{programmes};
   my $id         = $self->{id};
 
-  # No data found -> return empty list
-  return unless @{ $programmes };
+  # No data found -> return empty list to indicate failure
+  return([]) unless @{ $programmes };
 
   # Check for day crossing between first and second entry
   my @dates = ($today, $tomorrow);
