@@ -1,7 +1,7 @@
 #
 # $Id$
 #
-# 
+#
 #
 
 =pod
@@ -87,17 +87,17 @@ Possible parameters:
                   "log"        => "augment.log",
                   );
         die "failed to create XMLTV::Augment object" if !$augment;
-        
+
         for each channel... {
           # store the channel details
           $augment->inputChannel( $ch );
         }
-	
+
         for each programme... {
           # augmentProgramme will now do any requested processing of the input xml
           $prog = $augment->augmentProgramme( $prog );
         }
-        
+
         # log the stats
         $augment->printInfo();
 
@@ -122,7 +122,7 @@ will not do that for you.
 #
 # Routine to validate 'rules' file and report errors / inconsistencies
 #
-# Modify rule #3 processing - currently we have to check every type 3 fixup for every programme! 
+# Modify rule #3 processing - currently we have to check every type 3 fixup for every programme!
 #
 # ? Add a rule to prioritise the categories. Use case: some grabbers generate multiple categories for a programme,
 # but some downstream apps (e.g. MythTV) can only handle 1 category. This means the "best" category may not be
@@ -133,9 +133,9 @@ will not do that for you.
 
 
 package XMLTV::Augment;
-	
+
 use XMLTV::Date 0.005066 qw( time_xmltv_to_epoch );
-	
+
 use Encode;
 
 our $VERSION = 0.005068;
@@ -184,39 +184,39 @@ sub new
 	# check we have required arguments
     #for ('rule', 'config') {
 	#	die "invalid usage - no $_" if !defined($self->{$_});
-    #}	
-	
+    #}
+
 	# Encoding of the rules file
 	$self->{'encoding'} = 'UTF-8' if !defined($self->{'encoding'});
-	
+
 	# Does user want stats printed in the log file?
     $self->{'stats'} = 1          if !defined($self->{'stats'});
-	
+
 	bless($self, $class);
 
 	# Turn on debug. Note: debug is a 'level between 1-10.
     $debug = ( $self->{'debug'} || 0 );
-	
+
 	open_log( $self->{'log'} || '' );
-	
+
 	# Load the requested options from the config file
 	$self->{'options_all'} = 1;
 	$self->{'options'} = {};
-	$self->load_config($self->{'config'}) if defined($self->{'config'}) && $self->{'config'} ne '';	
+	$self->load_config($self->{'config'}) if defined($self->{'config'}) && $self->{'config'} ne '';
 	$self->{'options_all'} = 0 if defined $self->{'options'}->{'enable_all_options'} && $self->{'options'}->{'enable_all_options'} == 0;
 
 	$self->{'language_code'} = $self->{'options'}{'language_code'};  # e.g. 'en' or undef
-	
+
 	l("\n".'Data shown in brackets after each processing entry refers to the rule type'."\n".' and line number in the rules file, e.g. "(#3.103)" means rule type 3 on line 103 was applied.'."\n");
-	
+
 	# Hash to store the loaded rules
-	$self->{'rules'} = {};	
+	$self->{'rules'} = {};
 	# Read in the 'rules' file. Barf on error.
 	if ( $self->load_rules( $self->{'rule'} ) > 0 ){ return undef; }
-	
+
 	# Hash to store the augmentation results
 	$self->{'audit'} = {};
-		
+
     return $self;
 }
 
@@ -224,15 +224,15 @@ sub new
 # Do any final processing before we exit.
 #
 sub end () {
-	close_log();	
+	close_log();
 }
 
 
 # Set the assumed encoding of the rules file.
-# 
+#
 sub setEncoding () {
 	my ($self, $encoding) = @_;
-	
+
 	$self->{'encoding'} = ($encoding ne '') ? $encoding : 'UTF-8';
 }
 
@@ -247,10 +247,10 @@ sub inputChannel () {
 	_d(4,self());
 
 	my $value = 'input_channels';
-	
+
 	my $key = $channel->{'id'};
 	my $ch_name = ( defined $channel->{'display-name'} ? $channel->{'display-name'}[0][0] : '' );
-	
+
 	$self->{'audit'}{$value}{$key}{'display_name'} = $ch_name;
 }
 
@@ -260,72 +260,72 @@ sub inputChannel () {
 #
 sub augmentProgramme () {
 	my ($self, $prog) = @_;
-	
+
 	_d(3,'Prog in:',dd(3,$prog));
-	
+
 	l("Processing title~~~episode : {" . $prog->{'title'}[0][0] . '~~~'
 	       . (defined $prog->{'sub-title'} ? $prog->{'sub-title'}[0][0] : '') . "}" );
 
 	# Remove "New $title" if seen in episode field (rule A1)
     $self->remove_duplicated_new_title_in_ep($prog);
-	
+
 	# Remove a duplicated programme title/ep if seen in episode field (rule A2)
 	$self->remove_duplicated_title_and_ep_in_ep($prog);
-	
+
 	# Remove a duplicated programme title if seen in episode field (rule A3)
 	$self->remove_duplicated_title_in_ep($prog);
-		
+
 	# Check description for possible premiere/repeat hints (rule A4)
 	$self->update_premiere_repeat_flags_from_desc($prog);
-	
+
 	# Look for series/episode/part numbering in programme title/subtitle/description (rule A5)
 	$self->check_potential_numbering_in_text($prog);
-	
+
 	# Title and episode processing. (user rules)
 	# We process titles if the user has
 	# not explicitly disabled title processing during configuration
 	# and we have supplement data to process programmes against.
 	$self->process_user_rules($prog);
-	
-	
+
+
 	# Tidy <title> text after title processing
 	$self->tidy_title_text($prog);
-	
+
 	# Tidy <sub-title> (episode) text after title processing
 	$self->tidy_episode_text($prog);
-	
+
 	# Tidy $desc text after title processing
 	$self->tidy_desc_text($prog);
-            
+
 	l("\t Post-processing title/episode: {" . $prog->{'title'}[0][0] . '~~~'
 	       . (defined $prog->{'sub-title'} ? $prog->{'sub-title'}[0][0] : '') . "}" );
-		
-            
+
+
 	# Store title debug info for later analysis
 	#  (printed out in the log for manual inspection -
 	#    allows you to check for new rule requirements)
 	$self->store_title_debug_info($prog);
-			
+
 	# Store genre debug info for later analysis
 	$self->store_genre_debug_info($prog);
 
 
 	_d(3,'Prog out:',dd(3,$prog));
 	return $prog;
-}			
-	
+}
+
 
 
 # Tidy <title>
 sub tidy_title_text () {
 	my ($self, $prog) = @_;
-	
+
     if (defined $prog->{'title'}) {
 		for (my $i=0; $i < scalar @{$prog->{'title'}}; $i++) {
-			
+
 			# replace repeated spaces
 			$prog->{'title'}[$i][0] =~ s/\s+/ /g;
-			
+
 			# remove trailing character if any of .,:;-| and not ellipsis
 			$prog->{'title'}[$i][0] =~ s/[|\.,:;-]$//  if $prog->{'title'}[$i][0] !~ m/\.{3}$/;
 		}
@@ -340,15 +340,15 @@ sub tidy_episode_text () {
 
 	if (defined $prog->{'sub-title'}) {
 		for (my $i=0; $i < scalar @{$prog->{'sub-title'}}; $i++) {
-			
+
 			# replace repeated spaces
 			$prog->{'sub-title'}[$i][0] =~ s/\s+/ /g;
-			
-			# remove trailing character if any of .,:;-|
-			$prog->{'sub-title'}[$i][0] =~ s/[|\.,:;-]$//g;
-		}			
+
+			# remove trailing character if any of .,:;-| and not ellipsis
+			$prog->{'sub-title'}[$i][0] =~ s/[|\.,:;-]$//g  if $prog->{'sub-title'}[$i][0] !~ m/\.{3}$/;
+		}
 	}
-	
+
 	# delete sub-title if now empty
 	# TODO: needs modifying to properly handle multiple sub-titles
 	if (defined $prog->{'sub-title'}) {
@@ -365,13 +365,13 @@ sub tidy_episode_text () {
 # Tidy <desc> description text
 sub tidy_desc_text () {
 	my ($self, $prog) = @_;
-	
+
     if (defined $prog->{'desc'}) {
 		for (my $i=0; $i < scalar @{$prog->{'desc'}}; $i++) {
-			
+
 			# replace repeated spaces
 			$prog->{'desc'}[$i][0] =~ s/\s+/ /g;
-			
+
 			# remove trailing character if any of ,:;-|
 			$prog->{'desc'}[$i][0] =~ s/[|,:;-]$//g;
 		}
@@ -404,7 +404,7 @@ sub remove_duplicated_new_title_in_ep () {
 	my $me = self();
 	if ( ! $self->{'options_all'} && ! $self->{'options'}{$me} ) { return 0; }
 	_d(3,self());
-	
+
 	my $ruletype = 'A1';
 
     if (defined $prog->{'sub-title'}) {
@@ -448,7 +448,7 @@ sub remove_duplicated_title_and_ep_in_ep () {
 	my $me = self();
 	if ( ! $self->{'options_all'} && ! $self->{'options'}{$me} ) { return 0; }
 	_d(3,self());
-	
+
 	my $ruletype = 'A2';
 
     if (defined $prog->{'sub-title'}) {
@@ -484,7 +484,7 @@ Remove duplicated programme title from <sub-title>
 
   in : "Antiques Roadshow / Antiques Roadshow (Doncaster)"
   out: "Antiques Roadshow / Doncaster"
-  
+
   in : "Antiques Roadshow / Antiques Roadshow"
   out: "Antiques Roadshow / "
 
@@ -498,14 +498,14 @@ Remove duplicated programme title from <sub-title>
 # i) at the start followed  by the 'real' episode in parentheses (rare),
 # ii) at the start separated from the episode by a colon/hyphen,
 # iii) at the end separated from the episode by a colon/hyphen,
-# iv) no episode at all (e.g. "Teleshopping" / "Teleshopping") 
+# iv) no episode at all (e.g. "Teleshopping" / "Teleshopping")
 #
 sub remove_duplicated_title_in_ep () {
 	my ($self, $prog) = @_;
 	my $me = self();
 	if ( ! $self->{'options_all'} && ! $self->{'options'}{$me} ) { return 0; }
 	_d(3,self());
-	
+
 	my $ruletype = 'A3';
 
     if (defined $prog->{'sub-title'}) {
@@ -552,17 +552,17 @@ sub update_premiere_repeat_flags_from_desc () {
 	_d(3,self());
 
 	my $ruletype = 'A4';
-	
+
 	my $tmp_title = $prog->{'title'}[0][0];
 	my $tmp_episode = (defined $prog->{'sub-title'} ? $prog->{'sub-title'}[0][0] : '');
 
 	#(always remove the "Premiere." text even if <premiere> is already set)
 	#if (!defined $prog->{'premiere'}) {
-	
+
 		if (defined $prog->{'desc'}) {
-			
+
 			my $key = $prog->{'title'}[0][0];
-			
+
 			# Check if desc start with "Premiere.". Remove if found and set flag
 			if ($prog->{'desc'}[0][0] =~ s/^Premiere\.\s*//i ) {
 				l("\t Setting premiere flag based on description (Premiere. )");
@@ -570,7 +570,7 @@ sub update_premiere_repeat_flags_from_desc () {
 				delete $prog->{'previously-shown'};
 				$self->add_to_audit ($me, $key, { '_title'=>$tmp_title, '_episode'=>$tmp_episode })
 			}
-	
+
 			# Check if desc starts with "New series..."
 			elsif ($prog->{'desc'}[0][0] =~ m/^New series/i ) {
 				l("\t Setting premiere flag based on description (New series...)");
@@ -578,17 +578,17 @@ sub update_premiere_repeat_flags_from_desc () {
 				delete $prog->{'previously-shown'};
 				$self->add_to_audit ($me, $key, { '_title'=>$tmp_title, '_episode'=>$tmp_episode })
 			}
-			
+
 		}
-		
+
 	#}
-	
+
 	if (!defined $prog->{'previously-shown'}) {
-	
+
 		if (defined $prog->{'desc'}) {
-			
+
 			my $key = $prog->{'title'}[0][0];
-			
+
 			# Flag showings described as repeats
 			if ($prog->{'desc'}[0][0] =~ m/^(Another chance|Rerun|Repeat)/i ) {
 				l("\t Setting repeat flag based on description (Another chance...)");
@@ -596,9 +596,9 @@ sub update_premiere_repeat_flags_from_desc () {
 				delete $prog->{'premiere'};
 				$self->add_to_audit ($me, $key, { '_title'=>$tmp_title, '_episode'=>$tmp_episode })
 			}
-			
+
 		}
-		
+
 	}
 }
 
@@ -627,7 +627,7 @@ sub check_potential_numbering_in_text () {
 	# extract the existing episode-num
 	my $xmltv_ns = '';
 	my $episode_num = $self->extract_ns_epnum($prog, \$xmltv_ns);
-	
+
 	# make a work copy of $prog
 	my $_prog = {'_title'  			=> (defined $prog->{'title'} ? $prog->{'title'}[0][0] : undef),
 				 '_episode' 		=> (defined $prog->{'sub-title'} ? $prog->{'sub-title'}[0][0] : undef),
@@ -639,14 +639,14 @@ sub check_potential_numbering_in_text () {
 				 '_part_num' 		=> $episode_num->{'part'},
 				 '_part_total' 		=> $episode_num->{'part_total'},
 				 };
-	
+
 	_d(4,'_Prog, before numbering:',dd(4,$_prog));
 	my $t_title = $_prog->{'_title'}.' / '.($_prog->{'_episode'} || 'undef');
-		
+
     $self->extract_numbering_from_episode($_prog);
     $self->extract_numbering_from_title($_prog);
     $self->extract_numbering_from_desc($_prog);
-	
+
 	$self->make_episode_from_part_numbers($_prog);
 
 	_d(4,'_Prog, after numbering:',dd(4,$_prog));
@@ -655,12 +655,12 @@ sub check_potential_numbering_in_text () {
 		_d(0,"Prog title is now empty! Was \{$t_title\}  Now {",$_prog->{'_title'},' / ',($_prog->{'_episode'} || 'undef').'}');
 		$_prog->{'_title'} = '(no title)';
 	}
-	
+
 	# update the title and sub-title and description in the programme
 	$prog->{'title'}[0][0] 			= $_prog->{'_title'}   if defined $_prog->{'_title'};
 	$prog->{'sub-title'}[0][0] 		= $_prog->{'_episode'} if defined $_prog->{'_episode'};
 	$prog->{'desc'}[0][0] 			= $_prog->{'_desc'}    if defined $_prog->{'_desc'};
-	
+
 	# update the episode-num
 	$episode_num->{'season'} 		= $_prog->{'_series_num'};
 	$episode_num->{'season_total'} 	= $_prog->{'_series_total'};
@@ -668,7 +668,7 @@ sub check_potential_numbering_in_text () {
 	$episode_num->{'episode_total'} = $_prog->{'_episode_total'};
 	$episode_num->{'part'} 			= $_prog->{'_part_num'};
 	$episode_num->{'part_total'} 	= $_prog->{'_part_total'};
-	
+
 	# remake the episode-num
 	my $xmltv_ns_new = $self->make_ns_epnum($prog, $episode_num);
 
@@ -676,8 +676,8 @@ sub check_potential_numbering_in_text () {
 		$key = $_prog->{'_title'};
 		$self->add_to_audit ($me, $key, $_prog);
 	}
-				
-	_d(5,'Prog, after potential numbering:',dd(5,$prog)); 
+
+	_d(5,'Prog, after potential numbering:',dd(5,$prog));
 }
 
 
@@ -765,24 +765,24 @@ sub extract_numbering_from_desc () {
 # 2 params: 1) working program hash  2) type: 'title', 'episode' or 'desc'
 sub extract_numbering () {
 	my ($self, $prog, $field) = @_;
-	
+
 	my %elems = ( 'title' => '_title', 'episode' => '_episode', 'desc' => '_desc', 'description' => '_desc' );
 	my $elem = $elems{$field};
-	
+
 	my ($s, $stot, $e, $etot, $p, $ptot);
 	my $int;
 	# TODO: set $lang_words according to 'language_code' option
 	#        also the 'series', 'season' and 'episode' text in the regexs
 	my $lang_words = qr/one|two|three|four|five|six|seven|eight|nine/;
-    
+
 	#
 	_d(4,"\t extract_numbering: $field : in  : ","<$prog->{$elem}>");
-	   
+
 	# Theoretically it's possible to do this in one regex but it gets too unwieldy when we start catering
 	# for "series" at the front as well as the back, and it's not easy to maintain
 	# so we'll parse out the values in 4 passes
 	#
-	
+
 	# Extract and strip the "series"
 		(# check for "Series x/x" format covering following formats:
         #
@@ -796,7 +796,7 @@ sub extract_numbering () {
 		# "Wheeler Dealers, - (Series 1.)"
 		# "Wheeler Dealers (Series 1, Episode 4)"
 		# "Wheeler Dealers Series 1, Episode 4."
-		# "Series 6, Episode 4/7. Part one. ..." 
+		# "Series 6, Episode 4/7. Part one. ..."
 		# "Series 8. ..."
 		# "Series 8/10. ..."
 		#
@@ -811,7 +811,7 @@ sub extract_numbering () {
 		#	Wheeler Dealers, - (Series 1.)
 		#	Wheeler Dealers (Series 1, Episode 4)
 		#	Wheeler Dealers Series 1, Episode 4.
-		#	Series 6, Episode 4/7. Part one. Abc 
+		#	Series 6, Episode 4/7. Part one. Abc
 		#	Series 8. Abc
 		#	Series 8/10. Abc
 		#	Wheeler Dealers - (Series 1)
@@ -828,7 +828,7 @@ sub extract_numbering () {
 		$s = $int  if defined $int and $int > 0;
 		$stot = $2 if defined $2;
 	}
-		
+
 	# Extract and strip the "episode" if number at start of data
 	# Note: beware of false positives with e.g. "10, Rillington Place" or "1984"
 	    (# check for "x/y" format covering following formats:
@@ -877,7 +877,7 @@ sub extract_numbering () {
 		#	    {Premier League Years~~~1999/00}
 		);
 	if ( $prog->{$elem} =~
-		
+
 			# note we insist on the "/" unless the title is just "number." or "number,"
 			# this is to avoid false matching on "1984" but even here we will falsely match "1984."
 			#
@@ -889,7 +889,7 @@ sub extract_numbering () {
 		$e = $int  if defined $int and $int > 0;
 		$etot = $2 if defined $2;
 	}
-	
+
 	# Extract and strip the "episode" if number at end of data
 	    (# check for "x/y" format covering following formats:
         #
@@ -931,8 +931,8 @@ sub extract_numbering () {
 		$e = $int  if defined $int and $int > 0;
 		$etot = $2 if defined $2;
 	}
-	
-	
+
+
 	# Extract and strip the "episode"
 		(# check for "Episode x/x" format covering following formats:
         #
@@ -946,7 +946,7 @@ sub extract_numbering () {
 		# "Wheeler Dealers, - (Episode 1.)"
 		# "Wheeler Dealers (Series 1, Episode 4)"
 		# "Wheeler Dealers Series 1, Episode 4."
-		# "Series 6, Episode 4/7. Part one. ..." 
+		# "Series 6, Episode 4/7. Part one. ..."
 		# "Series 8. ..."
 		# "Series 8/10. ..."
 		#
@@ -981,8 +981,8 @@ sub extract_numbering () {
 		$e = $int  if defined $int and $int > 0;
 		$etot = $2 if defined $2;
 	}
-		
-		
+
+
 	# Extract and strip the "part"
         ( # check for part numbering covering following formats:
         #
@@ -1076,22 +1076,22 @@ sub extract_numbering () {
 		$p = $int  if defined $int and $int > 0;
 		$int = word_to_digit($2) if defined $2;
 		$ptot = $int if defined $2 && defined $int and $int > 0;
-	}	
+	}
 
 
 	# tidy any leading/trailing spaces we've left behind
 	trim($prog->{$elem});
-	
-	#	
+
+	#
 	_d(4,"\t extract_numbering: $field : out : ","<$prog->{$elem}>");
-		
-		
-		
+
+
+
 	my @vals = ( [ 'series',  '_series_num',  $s ], [ 'series total',  '_series_total',  $stot ],
 				 [ 'episode', '_episode_num', $e ], [ 'episode total', '_episode_total', $etot ],
 				 [ 'part',    '_part_num',    $p ], [ 'part total',    '_part_total',    $ptot ]
 			   );
-				
+
 	foreach (@vals) {
 		my ($text, $key, $val) = @$_;
 		if (defined $val && $val ne '' && $val > 0) {
@@ -1104,8 +1104,8 @@ sub extract_numbering () {
 			}
 		}
 	}
-	
-	
+
+
 	# Check that source episode number is not greater than number of episodes
 	# Rather than discard the episode number, we discard the total instead which
 	# is more likely to be incorrect based on observation.
@@ -1116,7 +1116,7 @@ sub extract_numbering () {
 			$prog->{'_episode_total'} = 0;
 		}
 	}
-		
+
 }
 
 
@@ -1128,7 +1128,7 @@ If no <sub-title> then make one from "part" numbers.
 
   in : "Panorama / "  desc = "Part 1/2..."
   out: "Panorama / Part 1 of 2"
-  
+
 =cut
 
 # Rule A6
@@ -1143,18 +1143,18 @@ sub make_episode_from_part_numbers () {
 
     if (!defined $prog->{'_episode'}
              || $prog->{'_episode'} =~ m/^\s*$/ ) {
-		
+
 		if (defined $prog->{'_part_num'} ) {
-			
+
 			_d(4,"\t creating 'episode' from part number(s)");
-			
+
 			# no episode title so make one
 			$prog->{'_episode'} = "Part $prog->{'_part_num'}" . ($prog->{'_part_total'} ? ' of '.$prog->{'_part_total'} : '');
-			
+
 			l(sprintf("\t Created episode from part number(s): %s", $prog->{'_episode'}));
 			$self->add_to_audit ($me, $prog->{'_title'}, $prog);
 		}
-		
+
 	}
 }
 
@@ -1183,7 +1183,7 @@ sub process_user_rules () {
 	# extract the existing episode-num
 	my $xmltv_ns = '';
 	my $episode_num = $self->extract_ns_epnum($prog, \$xmltv_ns);
-	
+
 	# make a work copy of $prog
 	#  (this is mainly for ease of use with the _uk_rt code on which this class is based)
 	#
@@ -1199,15 +1199,15 @@ sub process_user_rules () {
 				 '_part_num' 		=> $episode_num->{'part'},
 				 '_part_total' 		=> $episode_num->{'part_total'},
 				 };
-	
+
 	_d(4,'_Prog, before title fixups:',dd(4,$_prog));
-	
-	
+
+
 	# TODO : the user rules are not processed in numerical order - there's no clues
 	#        in uk_rt grabber (on whch this class is based) as to why the following
 	#        order was chosen or even if it matters (since most of the rules are
 	#        not cumulative)
-	
+
     # Remove non-title text found in programme title (type = 1)
     $self->process_non_title_info($_prog);
 
@@ -1216,66 +1216,66 @@ sub process_user_rules () {
 	# (NOTE: this means the rules are not cumulative)
     $_prog->{'_titles_processed'} = 0;
     $_prog->{'_subtitles_processed'} = 0;
-    
-	
+
+
 	# Next, process titles to make them consistent
-		
+
     # One-off demoted title replacements (type = 11)
     $self->process_demoted_titles($_prog)  if (! $_prog->{'_titles_processed'});
-	
+
     # One-off title and episode replacements (type = 10)
     $self->process_replacement_titles_desc($_prog)  if (! $_prog->{'_titles_processed'});
-    
+
     # One-off title and episode replacements (type = 8)
     $self->process_replacement_titles_episodes($_prog)  if (! $_prog->{'_titles_processed'});
-	
+
     # Look for $title:$episode in source title (type = 2)
     $self->process_mixed_title_subtitle($_prog)  if (! $_prog->{'_titles_processed'});
-    
+
     # Look for $episode:$title in source title (type = 3)
     $self->process_mixed_subtitle_title($_prog)  if (! $_prog->{'_titles_processed'});
 
     # Look for reversed title and subtitle information (type = 4)
     $self->process_reversed_title_subtitle($_prog)  if (! $_prog->{'_titles_processed'});
-    
+
     # Look for inconsistent programme titles (type = 5)
     #
     # This fixup is applied to all titles (processed or not) to handle
     # titles split out in fixups of types 2-4 above
     $self->process_replacement_titles($_prog);
-    
-	
+
+
     # Next, process subtitles to make them consistent
 
     # Remove text from programme subtitles (type = 13)
     $self->process_subtitle_remove_text($_prog)  if (! $_prog->{'_subtitles_processed'});
-	
+
 	# Look for inconsistent programme subtitles (type = 7)
     $self->process_replacement_episodes($_prog)  if (! $_prog->{'_subtitles_processed'});
-	
+
     # Replace subtitle based on description (type = 9)
     $self->process_replacement_ep_from_desc($_prog)  if (! $_prog->{'_subtitles_processed'});
-    
-	
-    # Insert/update a programme's category based on 'corrected' title 
+
+
+    # Insert/update a programme's category based on 'corrected' title
     $self->process_replacement_genres($_prog);          # (type=6)
     $self->process_replacement_film_genres($_prog);     # (type=12)
-	
+
 	# Replace specified categories with another
 	$self->process_translate_genres($_prog);		    # (type=14)
-	
+
 	# Add specified categories to all progs on a channel
 	$self->process_add_genres_to_channel($_prog);       # (type=15)
-	
-	
+
+
 	_d(4,'_Prog, after title fixups:',dd(4,$_prog));
-	
+
 	# update the title and sub-title and description in the programme
 	$prog->{'title'}[0][0] 			= $_prog->{'_title'}   if defined $_prog->{'_title'};
 	$prog->{'sub-title'}[0][0] 		= $_prog->{'_episode'} if defined $_prog->{'_episode'};
 	$prog->{'desc'}[0][0] 			= $_prog->{'_desc'}    if defined $_prog->{'_desc'};
 	$prog->{'category'}				= $_prog->{'_genres'}  if defined $_prog->{'_genres'};
-	
+
 	# update the episode-num
 	$episode_num->{'season'} 		= $_prog->{'_series_num'};
 	$episode_num->{'season_total'} 	= $_prog->{'_series_total'};
@@ -1283,10 +1283,10 @@ sub process_user_rules () {
 	$episode_num->{'episode_total'} = $_prog->{'_episode_total'};
 	$episode_num->{'part'} 			= $_prog->{'_part_num'};
 	$episode_num->{'part_total'} 	= $_prog->{'_part_total'};
-	
+
 	# remake the episode-num
 	$xmltv_ns = $self->make_ns_epnum($prog, $episode_num);
-	
+
 	_d(5,'Prog, after title fixups:',dd(5,$prog));
 }
 
@@ -1310,7 +1310,7 @@ Remove specified non-title text from <title>.
 #
 # Remove non-title text found in programme title.
 #
-# Listings may contain channel teasers (e.g. "Python Night", "Arnie Season") in the programme title 
+# Listings may contain channel teasers (e.g. "Python Night", "Arnie Season") in the programme title
 #
 # Data type 1
 #     The text in the second field is non-title text that is to be removed from
@@ -1325,16 +1325,16 @@ sub process_non_title_info () {
 
 	my $ruletype = 1;
 	if (!defined $self->{'rules'}->{$ruletype}) { return 0; }
-	
+
     if ( defined $prog->{'_title'} && $prog->{'_title'} =~ m/:/ ) {
-		
+
         my $idx = lc(substr $prog->{'_title'}, 0, 2);
-		
+
         LOOP:
         foreach (@{ $self->{'rules'}->{$ruletype}->{$idx} }) {
 			my ( $line, $key, $value ) = ( $_->{'line'}, $_->{'key'}, $_->{'value'} );
 			_d(4,"\t $line, $key, $value");
-			
+
             if ( $prog->{'_title'} =~ s/^\Q$key\E\s*[\:;-]\s*//i ) {
                 l(sprintf("\t Removed '%s' from title. New title '%s' (#%s.%s)",
 						  $key, $prog->{'_title'}, $ruletype, $line));
@@ -1342,7 +1342,7 @@ sub process_non_title_info () {
                 last LOOP;
             }
         }
-		
+
 	}
 }
 
@@ -1384,33 +1384,33 @@ sub process_demoted_titles () {
 
 	my $ruletype = 11;
 	if (!defined $self->{'rules'}->{$ruletype}) { return 0; }
-	
+
 	if ( defined $prog->{'_title'} && defined $prog->{'_episode'} ) {
-		
+
         my $idx = lc(substr $prog->{'_title'}, 0, 2);
-		
+
         LOOP:
         foreach (@{ $self->{'rules'}->{$ruletype}->{$idx} }) {
 			my ( $line, $key, $value ) = ( $_->{'line'}, $_->{'key'}, $_->{'value'} );
 			_d(4,"\t $line, $key, $value");
-			
+
             if ($prog->{'_title'} eq $key) {
-				
+
 				if ( $prog->{'_episode'} =~ s/^\Q$value\E\s*[\.,:;-]\s*//i ) {
-					
+
 					$prog->{'_title'} = $value;
-				
+
 					l(sprintf("\t Promoted title '%s' from subtitle for brand '%s'. New subtitle '%s' (#%s.%s)",
 							  $value, $key, $prog->{'_episode'}, $ruletype, $line));
 					$self->add_to_audit ($me, $key, $prog);
-					
+
 					$prog->{'_titles_processed'} = 1;
 					$prog->{'_subtitles_processed'} = 1;
 					last LOOP;
 				}
             }
         }
-		
+
 	}
 }
 
@@ -1427,7 +1427,7 @@ Replace specified <title> / <sub-title> with title/episode pair supplied using <
   rule: 10|Which Doctor~~Gunsmoke~Which Doctor~Festus and Doc go fishing, but are captured by a family that is feuding with the Haggens.
   in : "Which Doctor / " desc> = "  Festus and Doc go fishing, but are captured by a family that is feuding with the Haggens. ..."
   out: "Gunsmoke / Which Doctor"
-  
+
 =cut
 
 # Rule 10
@@ -1455,24 +1455,24 @@ sub process_replacement_titles_desc () {
 
 	my $ruletype = 10;
 	if (!defined $self->{'rules'}->{$ruletype}) { return 0; }
-	
+
 	if ( defined $prog->{'_title'} ) {
-		
+
         my $idx = lc(substr $prog->{'_title'}, 0, 2);
-		
+
         LOOP:
         foreach (@{ $self->{'rules'}->{$ruletype}->{$idx} }) {
 			my ( $line, $key, $value ) = ( $_->{'line'}, $_->{'key'}, $_->{'value'} );
 			_d(4,"\t $line, $key, $value");
-			
+
             if ($prog->{'_title'} eq $key) {
-				
+
 				# $value comprises 'old episode', 'new title', 'new episode' and 'old description' separated by tilde
 				my ($old_episode, $new_title, $new_episode, $old_desc) = split /~/, $value;
-				
+
 				# ensure we have an episode (to simplify the following code)
 				$prog->{'_episode'} = ''  if !defined $prog->{'_episode'};
-				
+
 				# if the sub-title contains episode numbering then preserve it in the new episode title
 				#  extract any episode numbering (x/y) (c.f. extract_numbering() )
 				my ($epnum, $epnum_text) = ('', '');
@@ -1481,7 +1481,7 @@ sub process_replacement_titles_desc () {
 					$prog->{'_episode'} =~ s/\Q$epnum\E//;
 					$epnum_text = ' (preserved existing numbering)';
 				}
-				
+
 				# check the other parts of the match triplet
 				#
 				# the original uk_rt grabber used an exact match
@@ -1489,22 +1489,22 @@ sub process_replacement_titles_desc () {
 				#  - a 'fuzzy' (e.g. word count) match would be even better!
 				#
 				if ( $prog->{'_episode'} eq $old_episode && defined $prog->{'_desc'} && $prog->{'_desc'} =~ m/^\Q$old_desc\E/i ) {
-					
+
 					# update the title & episode
 					my $old_title = $prog->{'_title'};
 					$prog->{'_title'} = $new_title;
 					$prog->{'_episode'} = $epnum . ' ' . $new_episode;
-					
+
                     l(sprintf("\t Replaced old title/ep '%s / %s' with '%s / %s' using desc%s (#%s.%s)",
 							  $old_title, $old_episode, $prog->{'_title'}, $prog->{'_episode'}, $epnum_text, $ruletype, $line));
 					$self->add_to_audit ($me, $key, $prog);
-					
+
 					$prog->{'_titles_processed'} = 1;
                     last LOOP;
                 }
             }
         }
-		
+
 	}
 }
 
@@ -1520,14 +1520,14 @@ Replace specified <title> / <sub-title> with title/episode pair supplied.
   rule: 8|Top Gear USA Special~Detroit~Top Gear~USA Special
   in : "Top Gear USA Special / Detroit"
   out: "Top Gear / USA Special"
-  
+
   rule: 8|Top Gear USA Special~~Top Gear~USA Special
   in : "Top Gear USA Special / "
   out: "Top Gear / USA Special"
     or
   in : "Top Gear USA Special / 1/6."
   out: "Top Gear / 1/6. USA Special"
-  
+
 =cut
 
 # Rule 8
@@ -1552,24 +1552,24 @@ sub process_replacement_titles_episodes () {
 
 	my $ruletype = 8;
 	if (!defined $self->{'rules'}->{$ruletype}) { return 0; }
-	
+
 	if ( defined $prog->{'_title'} ) {
-		
+
         my $idx = lc(substr $prog->{'_title'}, 0, 2);
-		
+
         LOOP:
         foreach (@{ $self->{'rules'}->{$ruletype}->{$idx} }) {
 			my ( $line, $key, $value ) = ( $_->{'line'}, $_->{'key'}, $_->{'value'} );
 			_d(4,"\t $line, $key, $value");
-			
+
             if ($prog->{'_title'} eq $key) {
-				
+
 				# $value comprises 'old episode', 'new title' and 'new episode' separated by tilde
 				my ($old_episode, $new_title, $new_episode) = split /~/, $value;
-				
+
 				# ensure we have an episode (to simplify the following code)
 				$prog->{'_episode'} = ''  if !defined $prog->{'_episode'};
-				
+
 				# if the sub-title contains episode numbering then preserve it in the new episode title
 				#  extract any episode numbering (x/y) (c.f. extract_numbering() )
 				my ($epnum, $epnum_text) = ('', '');
@@ -1578,25 +1578,25 @@ sub process_replacement_titles_episodes () {
 					$prog->{'_episode'} =~ s/\Q$epnum\E//;
 					$epnum_text = ' (preserved existing numbering)';
 				}
-				
+
 				# check the other part of the match pair
 				if ( $prog->{'_episode'} eq $old_episode ) {
-					
+
 					# update the title & episode
 					my $old_title = $prog->{'_title'};
 					$prog->{'_title'} = $new_title;
 					$prog->{'_episode'} = $epnum . ' ' . $new_episode;
-					
+
                     l(sprintf("\t Replaced old title/ep '%s / %s' with '%s / %s'%s (#%s.%s)",
 							  $old_title, $old_episode, $prog->{'_title'}, $prog->{'_episode'}, $epnum_text, $ruletype, $line));
 					$self->add_to_audit ($me, $key, $prog);
-					
+
 					$prog->{'_titles_processed'} = 1;
                     last LOOP;
                 }
             }
         }
-		
+
 	}
 }
 
@@ -1637,22 +1637,22 @@ sub process_mixed_title_subtitle () {
 
 	my $ruletype = 2;
 	if (!defined $self->{'rules'}->{$ruletype}) { return 0; }
-	
+
     if ( defined $prog->{'_title'} && $prog->{'_title'} =~ m/:|-/ ) {
-		
+
         my $idx = lc(substr $prog->{'_title'}, 0, 2);
-		
+
         LOOP:
         foreach (@{ $self->{'rules'}->{$ruletype}->{$idx} }) {
 			my ( $line, $key, $value ) = ( $_->{'line'}, $_->{'key'}, $_->{'value'} );
 			_d(4,"\t $line, $key, $value");
-			
+
             if ($prog->{'_title'} =~ m/^(\Q$key\E)\s*[:;-]\s*(.*)$/i) {
-			
+
                 # store the captured text
                 my $new_title = $1;
                 my $new_episode = $2;
-				
+
 				# if no sub-title...
                 if (! defined $prog->{'_episode'}) {
                     l(sprintf("\t Moved '%s' to sub-title, new title is '%s' (#%s.%s)",
@@ -1660,14 +1660,14 @@ sub process_mixed_title_subtitle () {
                     $prog->{'_title'} = $new_title;
                     $prog->{'_episode'} = $new_episode;
                 }
-				
+
 				# sub-title already equals the captured text
                 elsif ($prog->{'_episode'} eq $new_episode) {
                     l(sprintf("\t Sub-title '%s' seen in title already exists, new title is '%s' (#%s.%s)",
 							  $new_episode, $new_title, $ruletype, $line));
                     $prog->{'_title'} = $new_title;
                 }
-				
+
 				# already have a sub-title (and which contains episode numbering),
 				#  merge the captured text after any episode numbering (x/y) (c.f. extract_numbering() )
                 elsif ($prog->{'_episode'} =~ m/^([\(\[]*\d+(?:[\s\/]*\d+)?[\.,]?[\)\]]*[\s\.,:;-]*(?:(?:series|season)[\d\s\.,:;-]*)?)(.*)$/) {
@@ -1676,7 +1676,7 @@ sub process_mixed_title_subtitle () {
                     $prog->{'_title'} = $new_title;
                     $prog->{'_episode'} = $1 . $new_episode . ': ' . $2;
                 }
-				
+
 				# already have a sub-title, so prepend the captured text
                 else {
                     l(sprintf("\t Joined sub-title '%s' seen in title with existing episode info '%s' (#%s.%s)",
@@ -1684,9 +1684,9 @@ sub process_mixed_title_subtitle () {
                     $prog->{'_title'} = $new_title;
                     $prog->{'_episode'} = $new_episode . ": " . $prog->{'_episode'};
                 }
-				
+
 				$self->add_to_audit ($me, $key, $prog);
-				
+
                 $prog->{'_titles_processed'} = 1;
                 last LOOP;
             }
@@ -1731,25 +1731,25 @@ sub process_mixed_subtitle_title () {
 
 	my $ruletype = 3;
 	if (!defined $self->{'rules'}->{$ruletype}) { return 0; }
-	
+
     if ( defined $prog->{'_title'} && $prog->{'_title'} =~ m/:|-/ ) {
-		
+
 		# can't use the index for this one since we don't know what the incoming title begins with
 		#  (i.e. the rule doesn't specify it)
-		
+
         LOOP:
         foreach my $k (keys %{ $self->{'rules'}->{$ruletype} }) {
         foreach (@{ $self->{'rules'}->{$ruletype}->{$k} }) {
-				
+
 			my ( $line, $key, $value ) = ( $_->{'line'}, $_->{'key'}, $_->{'value'} );
 			_d(4,"\t $line, $key, $value");
 
             if ($prog->{'_title'} =~ m/^(.*?)\s*[:;-]\s*(\Q$key\E)$/i) {
-				
+
                 # store the captured text
                 my $new_title = $2;
                 my $new_episode = $1;
-				
+
 				# if no sub-title...
                 if (! defined $prog->{'_episode'}) {
                     l(sprintf("\t Moved '%s' to sub-title, new title is '%s' (#%s.%s)",
@@ -1757,14 +1757,14 @@ sub process_mixed_subtitle_title () {
                     $prog->{'_title'} = $new_title;
                     $prog->{'_episode'} = $new_episode;
                 }
-				
+
 				# sub-title already equals the captured text
                 elsif ($prog->{'_episode'} eq $new_episode) {
                     l(sprintf("\t Sub-title '%s' seen in title already exists, new title is '%s' (#%s.%s)",
 							  $new_episode, $new_title, $ruletype, $line));
                     $prog->{'_title'} = $new_title;
                 }
-				
+
 				# already have a sub-title (and which contains episode numbering),
 				#  merge the captured text after any episode numbering (x/y) (c.f. extract_numbering() )
                 elsif ($prog->{'_episode'} =~ m/^([\(\[]*\d+(?:[\s\/]*\d+)?[\.,]?[\)\]]*[\s\.,:;-]*(?:(?:series|season)[\d\s\.,:;-]*)?)(.*)$/) {
@@ -1773,7 +1773,7 @@ sub process_mixed_subtitle_title () {
                     $prog->{'_title'} = $new_title;
                     $prog->{'_episode'} = $1 . $new_episode . ': ' . $2;
                 }
-				
+
 				# already have a sub-title, so prepend the captured text
                 else {
                     l(sprintf("\t Joined sub-title '%s' seen in title with existing episode info '%s' (#%s.%s)",
@@ -1781,9 +1781,9 @@ sub process_mixed_subtitle_title () {
                     $prog->{'_title'} = $new_title;
                     $prog->{'_episode'} = $new_episode . ": " . $prog->{'_episode'};
                 }
-				
+
 				$self->add_to_audit ($me, $key, $prog);
-				
+
                 $prog->{'_titles_processed'} = 1;
                 last LOOP;
             }
@@ -1828,30 +1828,30 @@ sub process_reversed_title_subtitle () {
 
 	my $ruletype = 4;
 	if (!defined $self->{'rules'}->{$ruletype}) { return 0; }
-	
+
 	if ( defined $prog->{'_episode'} ) {
-		
+
         my $idx = lc(substr $prog->{'_episode'}, 0, 2);
-		
+
         LOOP:
         foreach (@{ $self->{'rules'}->{$ruletype}->{$idx} }) {
 			my ( $line, $key, $value ) = ( $_->{'line'}, $_->{'key'}, $_->{'value'} );
 			_d(4,"\t $line, $key, $value");
-			
+
             if ($prog->{'_episode'} eq $key) {
-				
+
 				$prog->{'_episode'} = $prog->{'_title'};
 				$prog->{'_title'} = $key;
-			
+
 				l(sprintf("\t Reversed title-subtitle for '%s / %s'. New title is '%s' (#%s.%s)",
 						  $prog->{'_episode'}, $prog->{'_title'}, $prog->{'_title'}, $ruletype, $line));
 				$self->add_to_audit ($me, $key, $prog);
-				
+
 				$prog->{'_titles_processed'} = 1;
 				last LOOP;
             }
         }
-		
+
 	}
 }
 
@@ -1895,29 +1895,29 @@ sub process_replacement_titles () {
 
 	my $ruletype = 5;
 	if (!defined $self->{'rules'}->{$ruletype}) { return 0; }
-	
+
 	if ( defined $prog->{'_title'} ) {
-		
+
         my $idx = lc(substr $prog->{'_title'}, 0, 2);
-		
+
         LOOP:
         foreach (@{ $self->{'rules'}->{$ruletype}->{$idx} }) {
 			my ( $line, $key, $value ) = ( $_->{'line'}, $_->{'key'}, $_->{'value'} );
 			_d(4,"\t $line, $key, $value");
-			
+
             if ($prog->{'_title'} eq $key) {
-				
+
 				$prog->{'_title'} = $value;
-			
+
 				l(sprintf("\t Replaced title '%s' with '%s' (#%s.%s)",
 						  $key, $prog->{'_title'}, $ruletype, $line));
 				$self->add_to_audit ($me, $key, $prog);
-				
+
 				$prog->{'_titles_processed'} = 1;
 				last LOOP;
             }
         }
-		
+
 	}
 }
 
@@ -1956,31 +1956,31 @@ sub process_subtitle_remove_text () {
 
 	my $ruletype = 13;
 	if (!defined $self->{'rules'}->{$ruletype}) { return 0; }
-	
+
 	if ( defined $prog->{'_title'} && defined $prog->{'_episode'} ) {
-		
+
         my $idx = lc(substr $prog->{'_title'}, 0, 2);
-		
+
         LOOP:
         foreach (@{ $self->{'rules'}->{$ruletype}->{$idx} }) {
 			my ( $line, $key, $value ) = ( $_->{'line'}, $_->{'key'}, $_->{'value'} );
 			_d(4,"\t $line, $key, $value");
-			
+
             if ($prog->{'_title'} eq $key) {
-				
+
                 if ( $prog->{'_episode'} =~ s/^\Q$value\E[\s\.,:;-]*//i
 				 ||  $prog->{'_episode'} =~ s/[\s\.,:;-]*\Q$value\E[\s\.]*$//i ) {
-					
+
                     l(sprintf("\t Removed text '%s' from subtitle. New subtitle is '%s' (#%s.%s)",
 							  $value, $prog->{'_episode'}, $ruletype, $line));
 					$self->add_to_audit ($me, $key, $prog);
-					
+
                     $prog->{'_subtitles_processed'} = 1;
                     last LOOP;
                 }
             }
         }
-		
+
 	}
 }
 
@@ -2015,34 +2015,34 @@ sub process_replacement_episodes () {
 
 	my $ruletype = 7;
 	if (!defined $self->{'rules'}->{$ruletype}) { return 0; }
-	
+
 	if ( defined $prog->{'_title'} && defined $prog->{'_episode'} ) {
-		
+
         my $idx = lc(substr $prog->{'_title'}, 0, 2);
-		
+
         LOOP:
         foreach (@{ $self->{'rules'}->{$ruletype}->{$idx} }) {
 			my ( $line, $key, $value ) = ( $_->{'line'}, $_->{'key'}, $_->{'value'} );
 			_d(4,"\t $line, $key, $value");
-			
+
             if ($prog->{'_title'} eq $key) {
-				
+
 				# $value comprises 'old episode' & 'new episode' separated by tilde
 				my ($old_episode, $new_episode) = split /~/, $value;
-				
+
                 if ( $prog->{'_episode'} eq $old_episode ) {
-					
+
 					$prog->{'_episode'} = $new_episode;
                     l(sprintf("\t Replaced episode '%s' with '%s' (#%s.%s)",
 							  $old_episode, $prog->{'_episode'}, $ruletype, $line));
 					$self->add_to_audit ($me, $key, $prog);
-					
+
                     $prog->{'_subtitles_processed'} = 1;
                     last LOOP;
                 }
             }
         }
-		
+
 	}
 }
 
@@ -2081,40 +2081,40 @@ sub process_replacement_ep_from_desc () {
 
 	my $ruletype = 9;
 	if (!defined $self->{'rules'}->{$ruletype}) { return 0; }
-	
+
 	if ( defined $prog->{'_title'} && defined $prog->{'_desc'} ) {
-		
+
         my $idx = lc(substr $prog->{'_title'}, 0, 2);
-		
+
         LOOP:
         foreach (@{ $self->{'rules'}->{$ruletype}->{$idx} }) {
 			my ( $line, $key, $value ) = ( $_->{'line'}, $_->{'key'}, $_->{'value'} );
 			_d(4,"\t $line, $key, $value");
-			
+
             if ($prog->{'_title'} eq $key) {
-				
+
 				# $value comprises 'new episode' & 'description' separated by tilde
 				my ($new_episode, $old_desc) = split /~/, $value;
-				
+
 				# the original uk_rt grabber used an exact match
 				#  - a 'startswith' match would be better
 				#  - a 'fuzzy' (e.g. word count) match would be even better!
 				#
                 ##if ( $prog->{'_desc'} eq $old_desc ) {
 				if ( $prog->{'_desc'} =~ m/^\Q$old_desc\E/ ) {
-					
+
 					my $old = $prog->{'_episode'} || '';
 					$prog->{'_episode'} = $new_episode;
                     l(sprintf("\t Replaced episode '%s' with '%s' (#%s.%s)",
 							  $old, $prog->{'_episode'}, $ruletype, $line));
 					$self->add_to_audit ($me, $key, $prog);
-					
+
                     $prog->{'_subtitles_processed'} = 1;
                     last LOOP;
                 }
             }
         }
-		
+
 	}
 }
 
@@ -2132,7 +2132,7 @@ Replace <category> with supplied text.
   in : "Antiques Roadshow / " category "Reality"
   out: "Antiques Roadshow / " category "Entertainment" + "Arts" + "Shopping"
 
-You can specify a wildcard with the title by using %% which represents any number 
+You can specify a wildcard with the title by using %% which represents any number
 of characters.
 So for example "News%%" will match "News", "News and Weather", "Newsnight", etc.
 But be careful; "%%News%%" will also match "John Craven's Newsround", "Eurosport News",
@@ -2159,23 +2159,23 @@ sub process_replacement_genres () {
 
 	my $ruletype = 6;
 	if (!defined $self->{'rules'}->{$ruletype}) { return 0; }
-	
+
 	if ( defined $prog->{'_title'} ) {
-		
+
         my $idx = lc(substr $prog->{'_title'}, 0, 2);
-		
+
         LOOP:
         #  append any rules which start with a wildcard
         #  (todo: this doesn't work for "x%%...")
         foreach ( @{ $self->{'rules'}->{$ruletype}->{$idx} } , @{ $self->{'rules'}->{$ruletype}->{'%%'} } ) {
 			my ( $line, $key, $value ) = ( $_->{'line'}, $_->{'key'}, $_->{'value'} );
 			_d(4,"\t $line, $key, $value");
-			
+
 			my $_key = $self->replace_wild($key);
-			
+
       if ($prog->{'_title'} =~ m/$_key/i ) {
 				#_d(4,dd(4,$prog->{'_genres'}));
-				
+
 				my $old = '';
 				if (defined $prog->{'_genres'}) {
 					foreach my $genre (@{ $prog->{'_genres'} }) {
@@ -2184,18 +2184,18 @@ sub process_replacement_genres () {
 					chop $old;
 				}
 				my $new = $value; $new =~ s/~/, /g;
-					
+
 				$prog->{'_genres'} = undef;
-				
+
 				# the original uk_rt grabber only allowed one genre, but let's enhance that
 				# and allow multiple genres separated by tilde
 				my @values = split /~/, $value;
-				
+
 				my $i=0;
-				foreach (@values) {	
+				foreach (@values) {
 					$prog->{'_genres'}[$i++] = [ $_, $self->{'language_code'} ];
 				}
-				
+
 				l(sprintf("\t Replaced genre(s) '%s' with '%s' (#%s.%s)",
 						  $old, $new, $ruletype, $line));
 				# if using a wildcard, we could mod many progs with this one rule so let's report all of them
@@ -2204,13 +2204,13 @@ sub process_replacement_genres () {
 				} else {
 				$self->add_to_audit ($me, $key, $prog);
 				}
-				
+
 				$prog->{'_subtitles_processed'} = 1;
 				last LOOP;
-				
+
             }
         }
-		
+
 	}
 }
 
@@ -2246,65 +2246,65 @@ sub process_replacement_film_genres () {
 	my $me = self();
 	if ( ! $self->{'options_all'} && ! $self->{'options'}{$me} ) { return 0; }
 	_d(3,self());
-	
+
 	my $ruletype = 12;
 	if (!defined $self->{'rules'}->{$ruletype}) { return 0; }
-	
+
 	if ( defined $prog->{'_title'} && defined $prog->{'_genres'} ) {
-		
+
         my $idx = lc(substr $prog->{'_title'}, 0, 2);
-		
+
         LOOP:
         foreach (@{ $self->{'rules'}->{$ruletype}->{$idx} }) {
 			my ( $line, $key, $value ) = ( $_->{'line'}, $_->{'key'}, $_->{'value'} );
 			_d(4,"\t $line, $key, $value");
-			
+
             if ($prog->{'_title'} eq $key) {
 				#_d(4,dd(4,$prog->{'_genres'}));
-				
+
 				my $isfilm = 0;
-				
+
 				my $old = '';
 				if (defined $prog->{'_genres'}) {
 					foreach my $genre (@{ $prog->{'_genres'} }) {
 						$old .= $genre->[0] . ',';
-						
+
 						# is it a film?
 						if ( $genre->[0] =~ m/films?/i ) {
 							$isfilm = 1;
 						}
-							
+
 					}
 					chop $old;
 				}
-				
+
 				if (!$isfilm) {
 					last LOOP;
 				}
-				
+
 				my $new = $value; $new =~ s/~/, /g;
-					
+
 				$prog->{'_genres'} = undef;
-				
+
 				# the original uk_rt grabber only allowed one genre, but let's enhance that
 				# and allow multiple genres separated by tilde
 				my @values = split /~/, $value;
-				
+
 				my $i=0;
-				foreach (@values) {				
+				foreach (@values) {
 					$prog->{'_genres'}[$i++] = [ $_, $self->{'language_code'} ];
 				}
-				
+
 				l(sprintf("\t Replaced genre(s) '%s' with '%s' (#%s.%s)",
 						  $old, $new, $ruletype, $line));
 				$self->add_to_audit ($me, $key, $prog);
-				
+
 				$prog->{'_subtitles_processed'} = 1;
 				last LOOP;
-				
+
             }
         }
-		
+
 	}
 }
 
@@ -2321,7 +2321,7 @@ Replace <category> with supplied value(s).
   rule: 14|Soccer~Football
   in : "Leeds v Arsenal" category "Soccer"
   out: "Leeds v Arsenal" category "Soccer"
-  
+
   rule: 14|Adventure/War~Action Adventure~War
   in : "Leeds v Arsenal" category "Adventure/War"
   out: "Leeds v Arsenal" category "Action Adventure" + "War"
@@ -2343,57 +2343,57 @@ sub process_translate_genres () {
 	my $me = self();
 	if ( ! $self->{'options_all'} && ! $self->{'options'}{$me} ) { return 0; }
 	_d(3,self());
-	
+
 	my $ruletype = 14;
 	if (!defined $self->{'rules'}->{$ruletype}) { return 0; }
-	
+
 	if ( defined $prog->{'_title'} && defined $prog->{'_genres'} ) {
-		#_d(4,dd(4,$prog->{'_genres'}));	
-				
+		#_d(4,dd(4,$prog->{'_genres'}));
+
 		# To ensure the replacements are NOT iterative, we'll store the new values separate for now
 		$prog->{'_newgenres'} = undef;
 		my $storenewgenres = 0;
-			
+
 		foreach my $genre (@{ $prog->{'_genres'} }) {
 			my $haschanged = 0;
 			my $old = $genre->[0];
-			
+
 			my $idx = lc(substr $genre->[0], 0, 2);
-	
+
 			LOOP:
 			foreach (@{ $self->{'rules'}->{$ruletype}->{$idx} }) {
 				my ( $line, $key, $value ) = ( $_->{'line'}, $_->{'key'}, $_->{'value'} );
 				_d(4,"\t $line, $key, $value");
-				
+
 				if ($genre->[0] eq $key) {
-			
+
 					my $new = $value; $new =~ s/~/, /g;
-			
+
 					my @values = split /~/, $value;
-					foreach (@values) {				
+					foreach (@values) {
 						push @{$prog->{'_newgenres'}}, [ $_, $self->{'language_code'} ];
 					}
-					
+
 					l(sprintf("\t Replaced genre(s) '%s' with '%s' (#%s.%s)",
 							  $old, $new, $ruletype, $line));
 					$self->add_to_audit ($me, $key, $prog);
-			
+
 					$haschanged = 1; $storenewgenres = 1;
 					last LOOP;
 				}
 			}
-			
+
 			if (!$haschanged) {
 				push @{$prog->{'_newgenres'}}, $genre;
 			}
-				
+
 		}
-		
+
 		if ($storenewgenres) {
 			# store the new categories
 			$prog->{'_genres'} = $prog->{'_newgenres'};
 		}
-		
+
 	}
 }
 
@@ -2410,12 +2410,12 @@ Add a category to all programmes on a specified channel.
   rule: 15|travelchannel.co.uk~Travel
   in : "World's Greatest Motorcycle Rides" category "Motoring"
   out: "World's Greatest Motorcycle Rides" category "Motoring" + "Travel"
-  
+
   rule: 15|cnbc.com~News~Business
   in : "Investing in India" category ""
   out: "Investing in India" category "News" + "Business"
 
-You should be very careful with this one as it will add the category you specify 
+You should be very careful with this one as it will add the category you specify
 to EVERY programme broadcast on that channel. This may not be what you always
 want (e.g. Teleshopping isn't really "music" even if it is on MTV!)
 
@@ -2426,7 +2426,7 @@ want (e.g. Teleshopping isn't really "music" even if it is on MTV!)
 # Add a genre to all programmes on a specified channel.. The addition may be a single or multiple genres.
 #
 # Data type 15
-#     The content contains a channel value followed by 
+#     The content contains a channel value followed by
 #     category(-ies) separated by a tilde (~).
 #     Use case: can add a category if data from your supplier is always missing; e.g. add "News" to a news channel, or "Music" to a music vid channel.
 #
@@ -2435,23 +2435,23 @@ sub process_add_genres_to_channel () {
 	my $me = self();
 	if ( ! $self->{'options_all'} && ! $self->{'options'}{$me} ) { return 0; }
 	_d(3,self());
-	
+
 	my $ruletype = 15;
 	if (!defined $self->{'rules'}->{$ruletype}) { return 0; }
-	
+
 	if ( defined $prog->{'_title'} && defined $prog->{'_channel'} ) {
-		#_d(4,dd(4,$prog->{'_channel'}));	
-		
+		#_d(4,dd(4,$prog->{'_channel'}));
+
         my $idx = lc(substr $prog->{'_channel'}, 0, 2);
 
 		LOOP:
 		foreach (@{ $self->{'rules'}->{$ruletype}->{$idx} }) {
 			my ( $line, $key, $value ) = ( $_->{'line'}, $_->{'key'}, $_->{'value'} );
 			_d(4,"\t $line, $key, $value");
-			
+
 			if ($prog->{'_channel'} eq $key) {
 				#_d(4,dd(4,$prog->{'_genres'}));
-				
+
 				my %h_old = ();
 				my $old = '';
 				if (defined $prog->{'_genres'}) {
@@ -2462,13 +2462,13 @@ sub process_add_genres_to_channel () {
 					chop $old;
 				}
 				my $new = $value; $new =~ s/~/, /g;
-				
+
 				# allow multiple genres separated by tilde
 				my @values = split /~/, $value;
-				
+
 				my $i = defined $prog->{'_genres'} ? scalar( @{ $prog->{'_genres'} } ) : 0;
 				my $msgdone = 0;
-				foreach (@values) {	
+				foreach (@values) {
 				    if ( ! exists( $h_old{$_} ) ) {
 						$prog->{'_genres'}[$i++] = [ $_, $self->{'language_code'} ];
 						l(sprintf("\t Added genre(s) '%s' to '%s' (#%s.%s)",
@@ -2478,11 +2478,11 @@ sub process_add_genres_to_channel () {
 						$self->add_to_audit ($me, $key.'~'.$prog->{'_title'}, $prog);
 					}
 				}
-				
+
 				last LOOP;
             }
 		}
-		
+
 	}
 }
 
@@ -2499,16 +2499,16 @@ sub store_title_debug_info () {
 	_d(3,self());
 
     if ($self->{'stats'}) {
-		
+
 		my $tmp_prog = {};
-		
+
 		$tmp_prog->{'_title'}   = defined $prog->{'title'} ? $prog->{'title'}[0][0] : '';
 		$tmp_prog->{'_episode'} = defined $prog->{'sub-title'} ? $prog->{'sub-title'}[0][0] : '';
 		$tmp_prog->{'_genres'}  = defined $prog->{'category'} ? $prog->{'category'} : '';
 		$tmp_prog->{'_channel'} = defined $prog->{'channel'} ? $prog->{'channel'} : '';
-		
+
 		_d(4,dd(4,$tmp_prog));
-		
+
 		$self->check_numbering_in_text ($tmp_prog);
 		$self->check_title_in_subtitle ($tmp_prog);
 		$self->check_titles_with_colons ($tmp_prog);
@@ -2516,19 +2516,19 @@ sub store_title_debug_info () {
 		$self->check_subtitles_with_hyphens ($tmp_prog);
 		$self->check_uc_titles_post ($tmp_prog);
 		$self->check_new_titles ($tmp_prog);
-		
+
 		$self->check_titles_with_years ($tmp_prog);
 		$self->check_titles_with_bbfc_ratings ($tmp_prog);
 		$self->check_titles_with_mpaa_ratings ($tmp_prog);
-		
+
 		$self->check_flagged_title_eps ($tmp_prog);
 		$self->check_dotdotdot_titles ($tmp_prog);
-	
+
 		$self->make_frequency_distribution ($tmp_prog);
 		$self->count_progs_by_channel ($tmp_prog);
-	
+
 	}
-	
+
 }
 
 
@@ -2542,7 +2542,7 @@ sub make_frequency_distribution () {
 	my $me = self();
 	if ( ! $self->{'stats'} ) { return 0; }
 	_d(4,self());
-	
+
 	# remove some punctuation, etc from title
 	my $title_nopunc = lc $prog->{'_title'};
 	$title_nopunc =~ s/^the\s+//;
@@ -2552,40 +2552,40 @@ sub make_frequency_distribution () {
 	$title_nopunc =~ s/' //g;
 	$title_nopunc =~ s/'s/s/g;
 	$title_nopunc =~ s/\W//g;
-	
+
 	my $value = 'case_insens_titles';
 	my $key = $title_nopunc;
-	
+
 	# count number of each variant by genre and channel name
 	if ( (!defined $prog->{'_genres'}) || (ref $prog->{'_genres'} ne 'ARRAY') ) {
 		$prog->{'_genres'} = [ [ '(no genre)' ] ];
 	}
-		
+
 	foreach (@{ $prog->{'_genres'} }) {
 		my $genre = $_->[0];
 		$self->{'audit'}{$value}{$key}{ $prog->{'_title'} }{$genre}{ $prog->{'_channel'} }++;
 	}
-	
+
 	$self->{'audit'}{$value}{$key}{ $prog->{'_title'} }{'count'}++;
 }
 
-		
+
 # Count the programmes seen for each channel
 sub count_progs_by_channel () {
 	my ($self, $prog) = @_;
 	my $me = self();
 	if ( ! $self->{'stats'} ) { return 0; }
 	_d(4,self());
-	
+
 	my $value = 'input_channels';
-	
+
 	my $key = $prog->{'_channel'};
-	
+
 	# frequency count of progs for each channel
 	$self->{'audit'}{$value}{$key}{'count'}++;
 }
-		
-		
+
+
 # Process the titles previously stored by make_frequency_distribution()
 # Look for possible title variants: i.e. where 2 incoming progs have
 # different title but may be the same
@@ -2596,14 +2596,14 @@ sub check_title_variants {
 	my $me = self();
 	if ( ! $self->{'stats'} ) { return 0; }
 	_d(4,self());
-	
+
 	my $value = 'case_insens_titles';
-	
+
     if (!defined $self->{'audit'}{$value}) { return 0; }
 
 	# temp hash to avoid too many mods to following code
 	my $case_insens_titles = $self->{'audit'}{$value};
-	
+
 	# iterate over each 'unique' title (i.e. the title without punctuation etc)
 	foreach my $title_nopunc (sort keys %{$case_insens_titles}) {
 
@@ -2637,24 +2637,24 @@ sub check_title_variants {
 			my @title_freqs = sort {$b <=> $a} keys %variants;
             my $highest_freq = $title_freqs[0];
 			if (scalar @{$variants{$highest_freq}} == 1) {
-				
+
 				# extract title with highest frequency and remove key from $case_insens_titles{$unique_title}
 				my $best_title = shift @{$variants{$highest_freq}};
 				delete $case_insens_titles->{$title_nopunc}{$best_title};
-				
+
 				# now iterate over remaining variations of title and generate fixups
 				foreach (keys %{$case_insens_titles->{$title_nopunc}}) {
 					my $fixup = "5|" . $_ . "~" . $best_title;
 					push @{ $self->{'audit'}{'possible_title_variants_fixups'} }, $fixup;
 				}
-				
+
 			}
 		}
 	}
-	
+
 }
 
-		
+
 # Check to see if prog contains possible series,episode or part numbering
 #   (c.f. rule A5 check_potential_numbering_in_text() )
 #
@@ -2665,9 +2665,9 @@ sub check_numbering_in_text () {
 	_d(4,self());
 
 	# audit the quality of extraction rule A5
-	
+
 	my $key = $prog->{'_title'};
-		
+
     # check if $title still contains "season" text
     if ($prog->{'_title'} =~ m/(season|series|episode)/i ) {
         l("\t Check title text for possible series/episode text:  " . $prog->{'_title'});
@@ -2694,7 +2694,7 @@ sub check_numbering_in_text () {
     }
 }
 
-	
+
 # Check for title text still present in episode details
 #
 sub check_title_in_subtitle {
@@ -2702,38 +2702,38 @@ sub check_title_in_subtitle {
 	my $me = self();
 	if ( ! $self->{'stats'} ) { return 0; }
 	_d(4,self());
-	
+
 	my $key = $prog->{'_title'};
-	
+
 	if (defined $prog->{'_episode'}) {
-		
+
 		if ($prog->{'_episode'} =~ m/^\Q$prog->{'_title'}\E/) {
 			l("\t Possible title in subtitle:  " . $prog->{'_episode'});
 			$self->add_to_audit ('title_in_subtitle_notfixed', $key, $prog);
         }
-		
+
 	}
-	
+
 }
-	
+
 
 # Check to see if title contains a colon
 # - this may indicate a 'title:sub-title' which should be extracted
-#           
+#
 sub check_titles_with_colons {
 	my ($self, $prog) = @_;
 	my $me = self();
 	if ( ! $self->{'stats'} ) { return 0; }
 	_d(4,self());
-	
+
 	my $key = $prog->{'_title'};
-	
+
 	# match a colon or semi-colon
 	if ($prog->{'_title'} =~ m/^(.*?)\s*[:;]\s*(.*)$/ ) {
 		my ($pre, $post) = ($1, $2);
         l("\t Title contains colon:  " . $prog->{'_title'});
 		$self->add_to_audit ('colon_in_title', $key, $prog);
-		
+
 		# the uk_rt code only generated a fixup hint when there was >1 prog with the same
 		#  value before or after the colon. Doeesn't say why: presumably to reduce false positives.
 		#  I'm not sure this works as expected though, e.g. it doesn't account for repeats of the same prog
@@ -2747,8 +2747,8 @@ sub check_titles_with_colons {
 			}
 		}
 		else { $self->{'audit'}{'colon_in_title_pre'}{$pre} = 1; }
-		
-		
+
+
 		if ( defined $self->{'audit'}{'colon_in_title_post'}{$post} ) {
 			$self->{'audit'}{'colon_in_title_post'}{$post}++;
 			# only print each fixup once!
@@ -2758,9 +2758,9 @@ sub check_titles_with_colons {
 			}
 		}
 		else { $self->{'audit'}{'colon_in_title_post'}{$post} = 1; }
-		
+
     }
-	
+
 }
 
 
@@ -2772,9 +2772,9 @@ sub check_titles_with_hyphens {
 	my $me = self();
 	if ( ! $self->{'stats'} ) { return 0; }
 	_d(4,self());
-	
+
 	my $key = $prog->{'_title'};
-	
+
 	# match a hyphen not preceded by a colon
 	if ($prog->{'_title'} =~ m/^(.*?)(?:\s?[^:]-\s|\s[^:]-\s?)(.*)$/ ) {
 		my $fixup = "5|" . $prog->{'_title'} . '~' . "$1: $2";
@@ -2782,8 +2782,8 @@ sub check_titles_with_hyphens {
 		$self->add_to_audit ('possible_hyphenated_title', $key, $prog);
 		push @{ $self->{'audit'}{'possible_hyphenated_title_fixups'} }, $fixup;
     }
-	
-}	
+
+}
 
 
 # Check for episode details that contain a colon or hyphen -
@@ -2795,21 +2795,21 @@ sub check_subtitles_with_hyphens {
 	my $me = self();
 	if ( ! $self->{'stats'} ) { return 0; }
 	_d(4,self());
-	
+
 	my $key = $prog->{'_title'};
-	
+
 	if (defined $prog->{'_episode'}) {
-		
+
 		# match a colon, or a hyphen if not a hyphenated word
 		if ($prog->{'_episode'} =~ m/(:|\s-\s|-\s|\s-)/ ) {		# (note '\s-\s' is superfluous!)
 			l("\t Possible hyphenated subtitle:  " . $prog->{'_episode'});
 			$self->add_to_audit ('colon_in_subtitle', $key, $prog);
 		}
-		
+
 	}
-	
-}	
-	
+
+}
+
 
 # Check if title is all upper case
 #
@@ -2818,16 +2818,16 @@ sub check_uc_titles_post {
 	my $me = self();
 	if ( ! $self->{'stats'} ) { return 0; }
 	_d(4,self());
-	
+
 	my $key = $prog->{'_title'};
-	
+
 	# title is all uppercase?
 	if ($prog->{'_title'} eq uc($prog->{'_title'}) && $prog->{'_title'} !~ m/^\d+$/) {
 		$self->add_to_audit ('uppercase_title', $key, $prog);
     }
-	
+
 }
-		
+
 
 # Look for various text in the prog title
 #
@@ -2836,44 +2836,44 @@ sub check_new_titles {
 	my $me = self();
 	if ( ! $self->{'stats'} ) { return 0; }
 	_d(4,self());
-	
+
 	my $key = $prog->{'_title'};
-	
+
 	# match a title containing various text
-	
+
 	if ( $prog->{'_title'} =~ m/Special\b/i ) {
         l("\t Title contains 'Special':  " . $prog->{'_title'});
 		$self->add_to_audit ('titles_word_special', $key, $prog);
     }
-	
+
 	if ( $prog->{'_title'} =~ m/^(All New|New)\b/i
 	 ||  $prog->{'_title'} =~ m/(Premiere|Final|Finale|Anniversary)\b/i ) {
 		my $match = $1;
         l("\t Title contains 'New/Premiere/Finale/etc.':  " . $prog->{'_title'});
 		$self->add_to_audit ('titles_word_various1', $match.':::'.$key, $prog);
     }
-	
+
 	if ( $prog->{'_title'} =~ m/\b(Day|Night|Week)\b/i ) {
 		my $match = $1;
         l("\t Title contains 'Day/Night/Week':  " . $prog->{'_title'});
 		$self->add_to_audit ('titles_word_various2', $match.':::'.$key, $prog);
     }
-	
+
 	if ( $prog->{'_title'} =~ m/\b(Christmas|New\s+Year['s]?)\b/i ) {
 		my $match = $1;
         l("\t Title contains 'Christmas/New Year':  " . $prog->{'_title'});
 		$self->add_to_audit ('titles_word_various3', $match.':::'.$key, $prog);
     }
-	
+
 	if ( $prog->{'_title'} =~ m/\b(Best of|Highlights|Results|Top)\b/i ) {
 		my $match = $1;
         l("\t Title contains 'Results/Best of/Highlights/Top':  " . $prog->{'_title'});
 		$self->add_to_audit ('titles_word_various4', $match.':::'.$key, $prog);
     }
-	
+
 }
 
-		
+
 # Look for titles which include a possible year (e.g. for films)
 #
 sub check_titles_with_years {
@@ -2881,16 +2881,16 @@ sub check_titles_with_years {
 	my $me = self();
 	if ( ! $self->{'stats'} ) { return 0; }
 	_d(4,self());
-	
+
 	my $key = $prog->{'_title'};
-	
+
 	# match a title containing what could be a year
 	#
 	if ( $prog->{'_title'} =~ m/\b(19|20)\d{2}\b/ ) {
         l("\t Title contains year:  " . $prog->{'_title'});
 		$self->add_to_audit ('titles_with_years', $key, $prog);
     }
-	
+
 }
 
 
@@ -2901,16 +2901,16 @@ sub check_titles_with_bbfc_ratings {
 	my $me = self();
 	if ( ! $self->{'stats'} ) { return 0; }
 	_d(4,self());
-	
+
 	my $key = $prog->{'_title'};
-	
+
 	# match a title containing a BBFC rating
 	#
 	if ( $prog->{'_title'} =~ m/\((E|U|PG|12|12A|15|18|R18)\)/ ) {
         l("\t Title contains possible BBFC rating:  " . $prog->{'_title'});
 		$self->add_to_audit ('titles_with_bbfc', $key, $prog);
     }
-	
+
 }
 
 
@@ -2921,16 +2921,16 @@ sub check_titles_with_mpaa_ratings {
 	my $me = self();
 	if ( ! $self->{'stats'} ) { return 0; }
 	_d(4,self());
-	
+
 	my $key = $prog->{'_title'};
-	
+
 	# match a title containing a MPAA rating
 	#
 	if ( $prog->{'_title'} =~ m/\((G|PG|PG-?13|R|NC-?17)\)/ ) {
         l("\t Title contains possible MPAA rating:  " . $prog->{'_title'});
 		$self->add_to_audit ('titles_with_mpaa', $key, $prog);
     }
-	
+
 }
 
 
@@ -2943,17 +2943,17 @@ sub check_flagged_title_eps {
 	my $me = self();
 	if ( ! $self->{'stats'} ) { return 0; }
 	_d(4,self());
-	
+
 	my $key = $prog->{'_title'};
 
 	my $ruletype = 8;
-		
+
 	my $idx = lc(substr $prog->{'_title'}, 0, 2);
-	
+
 	LOOP:
 	foreach (@{ $self->{'rules'}->{$ruletype}->{$idx} }) {
 		my ( $_line, $_key, $_value ) = ( $_->{'line'}, $_->{'key'}, $_->{'value'} );
-			
+
 		if (lc $_key eq lc $prog->{'_title'}) {
 			l("\t Title matches a rule $ruletype fixup:  " . $prog->{'_title'});
 			$self->add_to_audit ('flagged_title_eps', $key, $prog);
@@ -2962,11 +2962,11 @@ sub check_flagged_title_eps {
 	}
 }
 
-		
+
 # Here's another one which is somewhat obscure.
 # If title contains ellipsis and we already have a fixup (code 8 or 10)
 # containing ellipsis for this title in the *corrected* title then
-# maybe we need another one for the 'new' prog?  
+# maybe we need another one for the 'new' prog?
 # e.g.
 #   8|All I Want For Christmas Is Katy Perry!~~All I Want For Christmas Is...~Katy Perry!
 #   8|All I Want For Christmas Is Mariah Carey!~~All I Want For Christmas Is...~Mariah Carey!
@@ -2977,22 +2977,22 @@ sub check_dotdotdot_titles {
 	my $me = self();
 	if ( ! $self->{'stats'} ) { return 0; }
 	_d(4,self());
-	
+
 	my $key = $prog->{'_title'};
-	
+
 	# create a hash of rule types 8 and 10 which contain ellipsis in the 'new title'
 	if (!defined $self->{'rules'}->{'ellipsis'} ) {
 		foreach my $ruletype (qw/8 10/) {
 			foreach my $k (keys %{ $self->{'rules'}->{$ruletype} }) {
 				foreach (@{ $self->{'rules'}->{$ruletype}->{$k} }) {
 					my ( $_line, $_key, $_value ) = ( $_->{'line'}, $_->{'key'}, $_->{'value'} );
-					
+
 					# $value comprises
 					#  type 8 : 'old episode', 'new title', 'new episode'
 					#  type 10 : 'old episode', 'new title', 'new episode' and 'old description'
 					# separated by tilde
 					my ($old_episode, $new_title, $new_episode, $old_desc) = split /~/, $_value;
-						
+
 					# store titles that are being corrected with an existing "some title..." fixup
 					# store the title without a leading "The" or "A" or the trailing "..."
 					if ($new_title =~ m/^(?:The\s+|A\s+)?(.*)\.\.\.$/) {
@@ -3003,8 +3003,8 @@ sub check_dotdotdot_titles {
 		}
 		#_d(4,'Ellipsis hash',dd(4,$self->{'rules'}->{'ellipsis'}));
 	}
-		
-		
+
+
 	# if title does not contain ellipsis see if we already have a fixup for this title
 	# which *does* contain an ellipsis
 	if ( $prog->{'_title'} !~ m/\.{3}$/ ) {
@@ -3019,7 +3019,7 @@ sub check_dotdotdot_titles {
 			}
 		}
 	}
-			
+
 }
 
 
@@ -3032,12 +3032,12 @@ sub store_genre_debug_info () {
 	_d(3,self());
 
     if ($self->{'stats'}) {
-		
+
         my $tmp_title = $prog->{'title'}[0][0];
         my $tmp_episode = (defined $prog->{'sub-title'} ? $prog->{'sub-title'}[0][0] : '');
         my $key = $tmp_title . "|" . $tmp_episode;
-	
-	
+
+
 		# store genres for this prog as well as all genres seen across all programmes
 		if (defined $prog->{'category'}) {
 			my $all_cats;
@@ -3052,8 +3052,8 @@ sub store_genre_debug_info () {
 				$self->{'audit'}{'allcats_per_prog'}{$tmp_title}{$all_cats}++;
 			}
 		}
-		
-		
+
+
 		# explode the genres
 		my $genres = '';
 		if (defined $prog->{'category'}) {
@@ -3062,7 +3062,7 @@ sub store_genre_debug_info () {
 			}
 			chop $genres;
 		}
-		
+
 		# Check for "Film" < 75 minutes long
 		if ( $genres =~ m/Films?/i ) {
 			if (defined $prog->{'stop'}) {
@@ -3075,7 +3075,7 @@ sub store_genre_debug_info () {
 				}
 			}
         }
-		
+
 		# Check for progs without any genre
 		elsif ( $genres eq '' ) {
 			if ($prog->{'title'} !~ m/^(To Be Announced|TBA|Close)\.?$/i ) {
@@ -3085,10 +3085,10 @@ sub store_genre_debug_info () {
         }
 
     }
-	
+
 }
-	
-	
+
+
 # Process the genres previously stored by store_genre_debug_info()
 # to print all categories seen across all programmes
 #
@@ -3097,9 +3097,9 @@ sub check_categories {
 	my $me = self();
 	if ( ! $self->{'stats'} ) { return 0; }
 	_d(4,self());
-	
+
 	my $value = 'all_genres';
-	
+
     if (!defined $self->{'audit'}{$value}) { return 0; }
 
 	# sort the genre counts descending and format as a list ready for printing
@@ -3107,7 +3107,7 @@ sub check_categories {
 	foreach my $key (@keys) {
 		push @{$self->{'audit'}{'all_genres_sorted'}}, $key.' 'x(25-length $key).$self->{'audit'}{$value}->{$key}." times";
 	}
-	
+
 }
 
 
@@ -3123,22 +3123,22 @@ sub check_cats_per_prog {
 	my $me = self();
 	if ( ! $self->{'stats'} ) { return 0; }
 	_d(4,self());
-	
+
 	my $value = 'allcats_per_prog';
-	
+
     if (!defined $self->{'audit'}{$value}) { return 0; }
 
 	# temp hash to avoid too many mods to following code
 	my $cats_per_prog = $self->{'audit'}{$value};
-	
+
 	# iterate over each title
 	foreach my $title (sort keys %{$cats_per_prog}) {
 
 		if (scalar keys %{$cats_per_prog->{$title}} > 1) {
             my ($best_cat, $best_cat_cnt);
-			
+
             my $line = "$title is categorised as: ";
-				
+
 			foreach my $cat ( sort { $cats_per_prog->{$title}{$b} <=> $cats_per_prog->{$title}{$a} || $a cmp $b }
 							( keys %{$cats_per_prog->{$title}} ) )
 			{
@@ -3152,12 +3152,12 @@ sub check_cats_per_prog {
 					push @{ $self->{'audit'}{'categories_per_prog_fixups'} }, $fixup;
 				}
 			}
-				
+
 			$self->add_to_audit ('categories_per_prog', $title, { '_title' => $line });
 		}
-		
+
 	}
-	
+
 }
 
 
@@ -3172,19 +3172,19 @@ sub print_empty_listings {
 	_d(4,self());
 
 	my $value = 'input_channels';
-	
+
     if (!defined $self->{'audit'}{$value}) { return 0; }
-	
+
     foreach my $key (keys %{ $self->{'audit'}->{$value} }) {
-		
+
 		if ( !defined $self->{'audit'}->{$value}->{$key}->{'count'} ) {
 			$self->add_to_audit ('empty_listings', $key, { '_title' => $key });
 		}
-		
+
 		if ( !defined $self->{'audit'}->{$value}->{$key}->{'display_name'} ) {
 			$self->add_to_audit ('listings_no_channel', $key, { '_title' => $key });
 		}
-		
+
 	}
 }
 
@@ -3203,16 +3203,16 @@ sub process_title_debug_info () {
 	_d(3,self());
 
     if ($self->{'stats'}) {
-		
+
 		$self->check_title_variants ();
 		$self->check_categories ();
 		$self->check_cats_per_prog ();
 		$self->print_empty_listings ();
-		
+
 	}
 }
 
-	
+
 # Add to our stats analysis hash data
 sub add_to_audit () {
 	my ($self, $value, $key, $prog) = @_;
@@ -3220,7 +3220,7 @@ sub add_to_audit () {
 	_d(0,'Missing $value in add_to_audit')   if !defined $value || $value eq '';
 	_d(0,'Missing $key in add_to_audit'. " ($value)")   if !defined $key || $key eq '';
 	_d(0,'Missing $prog->{_title} in add_to_audit')   if !defined $prog->{'_title'} || $prog->{'_title'} eq '';
-	
+
 	$self->{'audit'}{$value}{$key} = { 'title'    => $prog->{'_title'},
 									   'episode'  => $prog->{'_episode'},
 									   'msg'      => $prog->{'_msg'},
@@ -3241,11 +3241,11 @@ sub printInfo () {
 
 
     if ($self->{'stats'}) {
-		
+
 		my ($k,$v);
-		
+
 		l("\n".'++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++');
-		
+
 		# Actions taken
 		@audits = (
 			[ 'remove_duplicated_new_title_in_ep' , 'list of programmes where \'New \$title\' was removed from sub-title field (#A1)' ],
@@ -3270,14 +3270,14 @@ sub printInfo () {
 			[ 'process_translate_genres', ': Replace <category> with supplied value(s) (#14)' ],
 			[ 'process_add_genres_to_channel', ': Add category to all programmes on <channel> (#15)' ],
 			);
-		
+
 		foreach (@audits) {
 			($k,$v) = @{$_};
 			$self->print_audit( $k, $v );
 		}
-			
+
 		##l('++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++');
-		
+
 		# Progs for possible modification
 		@audits = (
 			[ 'title_in_subtitle_notfixed' , 'list of programmes where title is still present in sub-title field' ],
@@ -3294,35 +3294,35 @@ sub printInfo () {
 			[ 'titles_word_various2', 'list of titles containing \'Day/Night/Week\'' ],
 			[ 'titles_word_various3', 'list of titles containing \'Christmas/New Year\'' ],
 			[ 'titles_word_various4', 'list of titles containing \'Results/Best of/Highlights/Top\'' ],
-			
+
 			[ 'titles_with_years', 'list of titles including possible years' ],
 			[ 'titles_with_bbfc', 'list of film titles including possible BBFC ratings' ],
 			[ 'titles_with_mpaa', 'list of film titles including possible MPAA ratings' ],
-			
+
 			[ 'flagged_title_eps', 'list of titles that may need fixing individually' ],
 			[ 'dotdotdot_titles', 'list of potential \'...\' titles that may need fixing individually' ],
-			
+
 			[ 'possible_title_variants', 'possible title variations' ],
-			
+
 			[ 'categories_per_prog', 'list of programmes with multiple categories' ],
 			[ 'uncategorised_progs' , 'list of programmes with no category' ],
 			[ 'short_films' , 'films < 75 minutes long' ],
-			
+
 			[ 'empty_listings', 'list of channels providing no listings' ],
 			[ 'listings_no_channel', 'list of channels with no channel details' ],
-			
+
 			[ 'all_genres_sorted', 'all categories' ],
-			
+
 			#[  ],
 			);
-		
+
 		foreach (@audits) {
 			($k,$v) = @{$_};
 			$self->print_audit( $k, $v );
 		}
-		
+
 	}
-	
+
 	l("\n".'++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++'."\n\n");
 }
 
@@ -3335,23 +3335,23 @@ sub print_audit () {
 								(ref $self->{'audit'}{$k} eq 'HASH' && scalar keys %{$self->{'audit'}{$k}} > 0)
 							 || (ref $self->{'audit'}{$k} eq 'ARRAY' && scalar $self->{'audit'}{$k} > 0) )) {
         l("\nStart of $t");
-		
+
 		if (ref $self->{'audit'}{$k} eq 'ARRAY') {
-			
+
 			foreach my $v (@{$self->{'audit'}{$k}}) {
 				l("\t $v");
 			}
-			
+
 		} else {
-			
+
 			foreach my $v (sort keys %{$self->{'audit'}{$k}} ) {
 				l("\t $self->{'audit'}{$k}{$v}->{'title'}" . (defined($self->{'audit'}{$k}{$v}->{'episode'}) ? " / $self->{'audit'}{$k}{$v}->{'episode'}" : '') .
 				  (defined $self->{'audit'}{$k}{$v}->{'msg'} ? '  -- '.$self->{'audit'}{$k}{$v}->{'msg'} : '')
 				  );
 			}
-			
+
 		}
-		
+
 		# see if there's a fixup hash for this audit
 		my $k2 = $k . '_fixups';
 		if ($self->{'audit'}{$k2} && scalar @{ $self->{'audit'}{$k2} } > 0) {
@@ -3361,7 +3361,7 @@ sub print_audit () {
 			}
 			l("");
 		}
-		
+
         l("End   of $t");
     }
 }
@@ -3373,7 +3373,7 @@ sub print_audit () {
 # Load the configuration file
 sub load_config () {
 	my ($self, $fn) = @_;
-	
+
 	if ( -e $fn ) {
 		my $fhok = open my $fh, '<', $fn or v("Cannot open config file $fn");
 		if ($fhok) {
@@ -3382,7 +3382,7 @@ sub load_config () {
 				$c++;
 				chomp $line;  chop($line) if ($line =~ m/\r$/);  trim($line);
 				next if $line =~ /^#/ || $line eq '';
-				
+
 				my ($key, $value, $trash) = $line =~ /^(.*?)\s*=\s*(.*?)([\s\t]*#.*)?$/;
 				$self->{'options'}{$key} = $value;
 			}
@@ -3393,7 +3393,7 @@ sub load_config () {
 		v("File not found $fn");
 		return 1;
 	}
-	
+
 	_d(8,'Loaded options:',dd(8,$self->{'options'}));
 }
 
@@ -3404,7 +3404,7 @@ sub load_rules () {
 
 	# if filename is undefined then look to see if user wants us to fetch a grabber's Supplement file
 	if ((!defined $fn) && $self->{'options'}{'use_supplement'}) {
-		
+
 		# Retrieve prog_titles_to_process via XMLTV::Supplement
 		require XMLTV::Supplement;  XMLTV::Supplement->import(GetSupplement);
 		my $rules_file = GetSupplement($self->{'options'}{'supplement_grabber_name'}, $self->{'options'}{'supplement_grabber_file'});
@@ -3423,13 +3423,13 @@ sub load_rules () {
 				l("Using Supplement: $1 \n");
 			}
 			next if $line =~ /^#/ || $line eq '';
-			
+
 			$self->load_rule($c, $line);
 		}
 	}
-	
+
 	elsif ( defined $fn ) {
-		
+
 		if ( -e $fn ) {
 			my $fhok = open my $fh, '<', $fn or v("Cannot open rules file $fn");
 			if ($fhok) {
@@ -3438,7 +3438,7 @@ sub load_rules () {
 					$c++;
 					chomp $line;  chop($line) if ($line =~ m/\r$/);  trim($line);
 					next if $line =~ /^#/ || $line eq '';
-					
+
 					$self->load_rule($c, $line);
 				}
 				close $fh;
@@ -3448,32 +3448,32 @@ sub load_rules () {
 			v("File not found $fn");
 			return 1;
 		}
-		
+
 	} else {
 		v("No rules file");
 		return 1;
 	}
-	
+
 	_d(9,'Loaded rules:',dd(9,$self->{'rules'}));
 	return 0;
 }
-			
-			
-# Load an augmentation rule into a hash of rules		
+
+
+# Load an augmentation rule into a hash of rules
 sub load_rule () {
 	my ($self, $linenum, $rule) = @_;
 
 	# Decode the rule data using the specified encoding (defaults to UTF-8)
 	$rule = decode($self->{'encoding'}, $rule);
-	
+
 	# Each rule consists of rule 'type' followed by the rule itself, separated by | char
 	my @f = split /\|/, $rule;
 	if (scalar @f != 2) {
 		v("Wrong number of fields on line $linenum \n");
 		return 1;
-	}	
+	}
 	my ($ruletype, $ruletext) = @f;
-	
+
 	# Do some basic validation
 	if (!defined $ruletype || $ruletype eq '' || $ruletype !~ m/\d+/) {
 		v("Invalid rule type on line $linenum \n");
@@ -3485,7 +3485,7 @@ sub load_rule () {
 		return 1;
 	}
 
-	
+
 	# Text to try and match against the programme title is stored in a hash of arrays
 	# to shortcut the list of possible matches to those beginning with the same
 	# first two characters as the title. It would seem to be quicker to use a regex
@@ -3499,26 +3499,26 @@ sub load_rule () {
 	@f = split /~/, $ruletext;
 	my ($k, $v) = ($ruletext . '~') =~ /^(.*?)~(.*)$/;
 	chop $v;
-	
-	
+
+
 	# (don't do any further validation on the rules; to do so would mean parsing each and every rule in the file even when
 	#  only a few (if any) of them will be met for any given augmentation rule - i.e. very slow and generally pointless -
 	#  we'll validate them later at time-of-use)
 	# TODO: make a separate validation function to do this
 
-	
+
 	# Text-based rules are stored segregated by the first 2 chars of the key (to make subsequent list searching faster)
 	my $idx = lc(substr ($k, 0, 2));
 
 	# Store the rule
 	my $data = { 'line' => $linenum, 'key' => $k, 'value' => $v };
 	push @{ $self->{'rules'}->{$ruletype}->{$idx} }, $data;
-	
+
 }
 
 
 # Replace our wildcards ("%%") in the rule's key
-# 
+#
 sub replace_wild () {
 	my ($self, $key) = @_;
 	if ($key =~ m/%%/) {
@@ -3535,25 +3535,25 @@ sub replace_wild () {
 #
 sub make_ns_epnum () {
 	my ($self, $prog, $_prog) = @_;
-	
+
 	my $s 		= $_prog->{'season'}		if defined $_prog->{'season'} && $_prog->{'season'} ne '';
 	my $s_tot 	= $_prog->{'season_total'}	if defined $_prog->{'season_total'} && $_prog->{'season_total'} ne '';
 	my $e 		= $_prog->{'episode'}		if defined $_prog->{'episode'} && $_prog->{'episode'} ne '' && $_prog->{'episode'} ne 0;
 	my $e_tot 	= $_prog->{'episode_total'}	if defined $_prog->{'episode_total'} && $_prog->{'episode_total'} ne '';
 	my $p 		= $_prog->{'part'}			if defined $_prog->{'part'} && $_prog->{'part'} ne '';
 	my $p_tot 	= $_prog->{'part_total'}	if defined $_prog->{'part_total'} && $_prog->{'part_total'} ne '';
-	
+
 	# sanity check
 	undef($s) 		if defined $s     && $s     eq '0';
 	undef($e) 		if defined $e     && $e     eq '0';
 	undef($p) 		if defined $p     && $p     eq '0';
 	undef($p_tot) 	if defined $p_tot && $p_tot eq '0';
-	
+
 	# re-base the series/episode/part numbers
 	$s-- if (defined $s && $s ne '');
 	$e-- if (defined $e && $e ne '');
 	$p-- if (defined $p && $p ne '');
-	
+
 	# make the xmltv_ns compliant episode-num
 	my $episode_ns = '';
 	$episode_ns .= $s if (defined $s && $s ne '');
@@ -3564,15 +3564,15 @@ sub make_ns_epnum () {
 	$episode_ns .= '.';
 	$episode_ns .= $p if (defined $p && $p ne '');
 	$episode_ns .= '/'.$p_tot if (defined $p_tot && $p_tot ne '');
-	
+
 	_d(3,'Make <episode-num>:',$episode_ns);
-	
+
 	if ($episode_ns eq '..') {
 		# no series/ep/part details input.
 		# TODO: should we consider deleting any existing xmltv_ns <episode-num> element?
 		return '';
 	}
-		
+
 	# find the 'xmltv_ns' details in the prog
 	my $xmltv_ns_old;
 	if (defined $prog->{'episode-num'}) {
@@ -3585,12 +3585,12 @@ sub make_ns_epnum () {
 			}
 		}
 	}
-			
+
 	# no 'xmltv_ns' attribute found; create a suitable element
     if (!defined $xmltv_ns_old) {
 		push @{$prog->{'episode-num'}}, [ $episode_ns, 'xmltv_ns' ];
 	}
-		
+
 	return $episode_ns;
 }
 
@@ -3603,9 +3603,9 @@ sub make_ns_epnum () {
 #
 sub extract_ns_epnum () {
 	my ($self, $prog, $xmltv_ns) = @_;
-	
+
 	if (defined $prog->{'episode-num'}) {
-		
+
 		# find the 'xmltv_ns' details
 		##my $xmltv_ns;
 		foreach (@{$prog->{'episode-num'}}) {
@@ -3632,9 +3632,9 @@ sub extract_ns_epnum () {
 				return \%episode_num;
 			}
 		}
-		
+
 	}
-	
+
 	_d(5,'No <episode-num> found');
 	return undef;
 }
@@ -3649,10 +3649,10 @@ sub extract_ns_epnum () {
 # or return the word if it appears to consist of only digits
 sub word_to_digit ($;$) {
     my $word = shift;
-	
+
     return undef if ! defined $word;
     return $word if $word =~ m/^\d+$/;
-	
+
 	my $lang = shift;
 	$lang = 'EN' if !defined $lang;
 
@@ -3665,7 +3665,7 @@ sub word_to_digit ($;$) {
 				   i => 1, ii => 2, iii => 3, iv => 4, v => 5, vi => 6, vii => 7, viii => 8, ix => 9
 			     );
 	}
-	
+
     for (lc $word) {
 		return $nums{$_} if exists $nums{$_};
 	}
@@ -3676,7 +3676,7 @@ sub word_to_digit ($;$) {
 # Remove leading & trailing spaces
 sub trim {
 	# Remove leading & trailing spaces
-	$_[0] =~ s/^\s+|\s+$//g;       
+	$_[0] =~ s/^\s+|\s+$//g;
 }
 
 ###############################################
@@ -3691,7 +3691,7 @@ sub open_log (;$) {
 	open(my $fh, $mode, $fn)
 			or die "cannot open $fn: $!";
 	$logh = $fh;
-	
+
 	print $logh "\n" . ($debug ? '-'x80 ."\n\n\n" : '');
 }
 
