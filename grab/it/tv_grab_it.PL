@@ -137,7 +137,7 @@ configures tv_grab_it using only the backend skylife
 
 =item tv_grab_it --backend skylife,wfactory --days 1
 
-grabs one day of data overiding the default order (could also be --backend skylife --backend wfactory)
+grabs one day of data overriding the default order (could also be --backend skylife --backend wfactory)
 
 =item tv_grab_it --cache --slow --days 3
 
