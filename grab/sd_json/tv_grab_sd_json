@@ -95,7 +95,11 @@ my @channel_id_formats = (
 	[ 'zap2it',  'I%s.labs.zap2it.com',          'tv_grab_na_dd Format' ],
 	[ 'mythtv',  '%s',                           'MythTV Internal DD Grabber Format' ],
 );
-my $channel_id_format;
+
+my @previously_shown_formats = (
+	[ 'date',     '%Y%m%d',          'Date Only' ],
+	[ 'datetime', '%Y%m%d%H%M%S %z', 'Date And Time' ],
+);
 
 my $cache_schema = 1;
 
@@ -133,19 +137,29 @@ my ($opt, $conf) = ParseOptions({
 	defaults => { days => -1 },
 });
 
-# set channel_id_format based on config file
-if($conf->{'channel-id-format'}->[0]) {
-	for my $format (@channel_id_formats) {
-		if($format->[0] eq $conf->{'channel-id-format'}->[0]) {
-			$channel_id_format = $format->[1];
-			last;
+sub get_conf_format {
+	my ($config, $options, $text) = @_;
+	my $result;
+
+	if($conf->{$config}->[0]) {
+		for my $format (@{$options}) {
+			if($format->[0] eq $conf->{$config}->[0]) {
+				$result = $format->[1];
+				last;
+			}
 		}
 	}
+
+	if(!$result) {
+		print STDERR "Valid $text not specified in config, using default.\n" unless $quiet;
+		$result = $options->[0]->[1];
+	}
+
+	return $result;
 }
-if(!$channel_id_format) {
-	print STDERR "Valid channel ID format not specified in config, using default.\n" unless $quiet;
-	$channel_id_format = $channel_id_formats[0]->[1];
-}
+
+my $channel_id_format = get_conf_format('channel-id-format', \@channel_id_formats, 'channel ID format');
+my $previously_shown_format = get_conf_format('previously-shown-format', \@previously_shown_formats, 'previously shown format');
 
 # default days to largish value
 if($opt->{'days'} < 0) {
@@ -382,6 +396,19 @@ sub config_stage {
 			$w->write_option({
 				value => $format->[0],
 				text  => [ [ $format->[2].' (eg: '.sprintf($format->[1], 12345).')', 'en' ] ],
+			});
+		}
+		$w->end_selectone();
+
+		$w->start_selectone({
+			id => 'previously-shown-format',
+			description => [ [ 'As the JSON data only includes the previously shown date normally the XML output should only have the date. However some programs such as older versions of MythTV also need a time.', 'en' ] ],
+			title => [ [ 'Select previously shown format', 'en' ] ],
+		});
+		for my $format (@previously_shown_formats) {
+			$w->write_option({
+				value => $format->[0],
+				text  => [ [ $format->[2], 'en' ] ],
 			});
 		}
 		$w->end_selectone();
@@ -1191,12 +1218,14 @@ sub get_program_previously_shown {
 	if($date) {
 		my $dt = DateTime::Format::ISO8601->parse_datetime($date);
 
-		# mythtv needs full date and time even though xmltv only requires date.
-		# No timezone is specified in the source data so lets assume the local
-		# timezone otherwise UTC will be assumed which can cause mythtv to
-		# store the wrong date.
+		# Older versions of mythtv needs full date and time even though xmltv
+		# only requires date. No timezone is specified in the source data so
+		# lets assume the local timezone otherwise UTC will be assumed which
+		# can cause mythtv to store the wrong date. Whether we actually
+		# include the time in the output depends on the selected format in
+		# the config file.
 		$dt->set_time_zone('local');
-		$previously_shown{'start'} = $dt->strftime('%Y%m%d');
+		$previously_shown{'start'} = $dt->strftime($previously_shown_format);
 	}
 
 	if(scalar keys %previously_shown) {
