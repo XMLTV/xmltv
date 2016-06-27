@@ -2173,7 +2173,7 @@ sub process_replacement_genres () {
 
 			my $_key = $self->replace_wild($key);
 
-      if ($prog->{'_title'} =~ m/$_key/i ) {
+      if ($prog->{'_title'} =~ m/\Q$_key\E/i ) {
 				#_d(4,dd(4,$prog->{'_genres'}));
 
 				my $old = '';
