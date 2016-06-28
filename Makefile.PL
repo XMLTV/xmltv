@@ -903,6 +903,7 @@ my @opt_components
 					'Digest::SHA' => 0,
 					'JSON' => 0,
 					 'List::MoreUtils' => 0,
+					 'LWP::Protocol::https' => 0,
 					 'LWP::UserAgent' => 0,
 					 'Storable' => 0,
 					 'Try::Tiny' => 0,},
