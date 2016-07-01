@@ -278,14 +278,14 @@ sub augmentProgramme () {
 	# Check description for possible premiere/repeat hints (rule A4)
 	$self->update_premiere_repeat_flags_from_desc($prog);
 
-	# Look for series/episode/part numbering in programme title/subtitle/description (rule A5)
-	$self->check_potential_numbering_in_text($prog);
-
 	# Title and episode processing. (user rules)
 	# We process titles if the user has
 	# not explicitly disabled title processing during configuration
 	# and we have supplement data to process programmes against.
 	$self->process_user_rules($prog);
+
+	# Look for series/episode/part numbering in programme title/subtitle/description (rule A5)
+	$self->check_potential_numbering_in_text($prog);
 
 
 	# Tidy <title> text after title processing
