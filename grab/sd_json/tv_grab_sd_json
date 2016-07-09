@@ -58,7 +58,7 @@ use Storable;
 use LWP::UserAgent;
 use JSON;
 use Digest::SHA qw(sha1_hex);
-use DateTime::Format::DateParse;
+use DateTime;
 use List::MoreUtils qw(uniq);
 use Scalar::Util qw(looks_like_number);
 use Try::Tiny;
@@ -166,15 +166,22 @@ if($opt->{'days'} < 0) {
 	$opt->{'days'} = 100;
 }
 
-# calculate start and stop time from offset and days options
-my $dt_start = DateTime->today(time_zone => 'local');
-$dt_start->add(days => $opt->{'offset'});
-my $dt_stop = $dt_start->clone();
-$dt_stop->add(days => $opt->{'days'});
+sub get_start_stop_time {
+	# calculate start and stop time from offset and days options
+	my $dt_start = DateTime->today(time_zone => 'local');
+	$dt_start->add(days => $opt->{'offset'});
+	my $dt_stop = $dt_start->clone();
+	$dt_stop->add(days => $opt->{'days'});
 
-# source data has times in UTC
-$dt_start->set_time_zone('UTC');
-$dt_stop->set_time_zone('UTC');
+	# source data has times in UTC
+	$dt_start->set_time_zone('UTC');
+	$dt_stop->set_time_zone('UTC');
+
+	# convert DateTime to seconds from epoch which will allow for a LOT faster
+	# comparisons than comparing DateTime objects
+	return ($dt_start->epoch(), $dt_stop->epoch());
+}
+my ($time_start, $time_stop) = get_start_stop_time();
 
 my $cache_file = $conf->{'cache'}->[0];
 
@@ -186,6 +193,39 @@ sub get_default_cache_file {
 	my $home = $ENV{HOME} || $winhome || getcwd();
 
 	return "$home/.xmltv/$grabber_name.cache";
+}
+
+my $dt_zone_utc = DateTime::TimeZone->new(name => 'UTC');
+my $dt_zone_local = DateTime::TimeZone->new(name => 'local');
+
+sub parse_airdate {
+	my @date = ($_[0] =~ /(\d+)-(\d+)-(\d+)T(\d+):(\d+):(\d+)Z/);
+	local $Params::Validate::NO_VALIDATION = 1;
+	return DateTime->new(
+		year       => $date[0],
+		month      => $date[1],
+		day        => $date[2],
+		hour       => $date[3],
+		minute     => $date[4],
+		second     => $date[5],
+		time_zone  => $dt_zone_utc,
+	);
+}
+
+# SD-JSON only specifies a date for originalAirDate. Older versions of
+# mythtv need full date and time even though xmltv only requires date.
+# We assume local time as mythtv expects and set the time to noon to
+# minimize the chance of an error causing the day to be off by one.
+sub parse_original_airdate {
+	my @date = ($_[0] =~ /(\d+)-(\d+)-(\d+)/);
+	local $Params::Validate::NO_VALIDATION = 1;
+	return DateTime->new(
+		year       => $date[0],
+		month      => $date[1],
+		day        => $date[2],
+		hour       => 12,
+		time_zone  => $dt_zone_local,
+	);
 }
 
 sub retry {
@@ -786,10 +826,11 @@ sub cache_update_schedules {
 	for my $channel (@{$channels}) {
 		for my $schedule (values %{$cache_schedules->{$channel}}) {
 			for my $program (@{$schedule->{'programs'}}) {
-				my $dt = DateTime::Format::DateParse->parse_datetime($program->{'airDateTime'});
-				my $dur = DateTime::Duration->new(seconds => $program->{'duration'});
+				my $dt = parse_airdate($program->{'airDateTime'});
+				my $airtime = $dt->epoch();
+				my $dur = int($program->{'duration'});
 
-				if(($dt + $dur) > $dt_start && $dt < $dt_stop) {
+				if(($airtime + $dur) > $time_start && $airtime < $time_stop) {
 					my $id = $program->{'programID'};
 					my $cached = $cache_programs->{$id};
 
@@ -1288,14 +1329,7 @@ sub get_program_previously_shown {
 
 	my $date = $details->{'originalAirDate'};
 	if($date) {
-		# SD-JSON only specifies a date for originalAirDate. Older versions of
-		# mythtv need full date and time even though xmltv only requires date.
-		# DateParse will assume local time as mythtv expects. We set the time
-		# to noon to minimize the chance of an error causing the day to be off
-		# by one. Whether we actually include the time in the output depends
-		# on the selected format in the config file.
-		my $dt = DateTime::Format::DateParse->parse_datetime($date);
-		$dt->add(hours => 12);
+		my $dt = parse_original_airdate($date);
 		$previously_shown{'start'} = $dt->strftime($previously_shown_format);
 	}
 
@@ -1381,12 +1415,13 @@ sub get_program_star_rating {
 sub write_programme {
 	my ($w, $channel, $program, $details) = @_;
 
-	my $dt = DateTime::Format::DateParse->parse_datetime($program->{'airDateTime'});
-	my $dur = DateTime::Duration->new(seconds => $program->{'duration'});
+	my $dt = parse_airdate($program->{'airDateTime'});
+	my $airtime = $dt->epoch();
+	my $dur = int($program->{'duration'});
 
-	if(($dt + $dur) > $dt_start && $dt < $dt_stop) {
+	if(($airtime + $dur) > $time_start && $airtime < $time_stop) {
 		my $start = $dt->strftime('%Y%m%d%H%M%S %z');
-		$dt->add_duration($dur);
+		$dt->add(seconds => $dur);
 		my $stop = $dt->strftime('%Y%m%d%H%M%S %z');
 
 		$w->write_programme({

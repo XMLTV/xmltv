@@ -899,7 +899,7 @@ my @opt_components
      { name => 'tv_grab_sd_json',
        blurb => '$$ Grabber for schedulesDirect.org SD-JSON service (many countries)',
        exes => [ 'grab/sd_json/tv_grab_sd_json' ],
-       prereqs => { 'DateTime::Format::DateParse' => 0,
+       prereqs => { 'DateTime' => 0,
                     'Digest::SHA' => 0,
                     'JSON' => 0,
                     'List::MoreUtils' => 0,
