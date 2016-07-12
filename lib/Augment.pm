@@ -2204,9 +2204,10 @@ sub process_replacement_genres () {
 			my ( $line, $key, $value ) = ( $_->{'line'}, $_->{'key'}, $_->{'value'} );
 			_d(4,"\t $line, $key, $value");
 
-			my $_key = $self->replace_wild($key);
+			my $qr_key = $self->replace_wild($key);
+            _d(5,"\t $line, $qr_key, $value");
 
-      if ($prog->{'_title'} =~ m/\Q$_key\E/i ) {
+      if ($prog->{'_title'} =~ $qr_key ) {
 				#_d(4,dd(4,$prog->{'_genres'}));
 
 				my $old = '';
@@ -3555,9 +3556,14 @@ sub load_rule () {
 sub replace_wild () {
 	my ($self, $key) = @_;
 	if ($key =~ m/%%/) {
-		$key =~ s/%%/\.\*\?/g
+        $key = quotemeta($key);
+        $key =~ s/\\%\\%/%%/g;
+		$key =~ s/%%/\.\*\?/g;
+        return qr/^$key$/;
 	}
-	return "^$key\$";
+    else {
+        return qr/^\Q$key\E$/;
+    }
 }
 
 
