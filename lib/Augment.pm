@@ -1425,7 +1425,7 @@ sub process_demoted_titles () {
 
             if ($prog->{'_title'} eq $key) {
 
-				if ( $prog->{'_episode'} =~ s/^\Q$value\E\s*[\.,:;-]\s*//i ) {
+				if ( $prog->{'_episode'} =~ s/^\Q$value\E(?:\s*[.,:;-]\s*)?//i ) {
 
 					$prog->{'_title'} = $value;
 
