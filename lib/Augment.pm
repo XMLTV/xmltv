@@ -301,6 +301,9 @@ sub augmentProgramme () {
 	# Tidy $desc text after title processing
 	$self->tidy_desc_text($prog);
 
+    # Add missing language codes to <title>, <sub-title> and <desc> elements
+    $self->add_missing_language_codes($prog);
+
 	l("\t Post-processing title/episode: {" . $prog->{'title'}[0][0] . '~~~'
 	       . (defined $prog->{'sub-title'} ? $prog->{'sub-title'}[0][0] : '') . "}" );
 
@@ -379,6 +382,28 @@ sub tidy_desc_text () {
 			# remove trailing character if any of ,:;-|
 			$prog->{'desc'}[$i][0] =~ s/[|,:;-]$//g;
 		}
+    }
+}
+
+
+# Add missing language codes to <title>, <sub-title> and <desc> elements
+sub add_missing_language_codes () {
+    _d(3,self());
+    my ($self, $prog) = @_;
+
+    my @elems = ('title', 'sub-title', 'desc');
+    foreach my $elem (@elems) {
+        if (defined $prog->{$elem}) {
+            dd(3,$prog->{$elem});
+            for (my $i=0; $i < scalar @{$prog->{$elem}}; $i++) {
+
+                # add language code if missing (leave existing codes alone)
+                # my $v = $prog->{$elem}[$i][0];
+                # $prog->{$elem}[$i] = [ $v, $self->{'language_code'} ];
+                push @{$prog->{$elem}[$i]}, $self->{'language_code'}
+                        if (scalar @{$prog->{$elem}[$i]} == 1);
+            }
+        }
     }
 }
 
