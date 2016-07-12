@@ -2299,18 +2299,16 @@ sub process_replacement_film_genres () {
 				my $isfilm = 0;
 
 				my $old = '';
-				if (defined $prog->{'_genres'}) {
-					foreach my $genre (@{ $prog->{'_genres'} }) {
-						$old .= $genre->[0] . ',';
+                foreach my $genre (@{ $prog->{'_genres'} }) {
+                    $old .= $genre->[0] . ',';
 
-						# is it a film?
-						if ( $genre->[0] =~ m/films?/i ) {
-							$isfilm = 1;
-						}
+                    # is it a film?
+                    if ( $genre->[0] =~ m/films?/i ) {
+                        $isfilm = 1;
+                    }
 
-					}
-					chop $old;
-				}
+                }
+                chop $old;
 
 				if (!$isfilm) {
 					last LOOP;
