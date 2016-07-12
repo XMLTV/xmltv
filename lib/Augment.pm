@@ -521,7 +521,7 @@ sub remove_duplicated_title_in_ep () {
         if ($tmp_episode =~ m/^\Q$tmp_title\E\s*[\.,:;-]\s*(.+)?$/i
 			|| $tmp_episode =~ m/^\Q$tmp_title\E\s+\((.+)\)$/i
 			|| $tmp_episode =~ m/^\Q$tmp_title\E\s*$/i ) {
-            $prog->{'sub-title'}[0][0] = $1;
+            $prog->{'sub-title'}[0][0] = defined $1 ? $1 : '';
             l(sprintf("\t Removing title text from beginning of episode field (#%s)", $ruletype));
 			$self->add_to_audit ($me, $key, { '_title'=>$tmp_title, '_episode'=>$tmp_episode })
         }
