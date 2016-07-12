@@ -1355,7 +1355,7 @@ sub process_non_title_info () {
 	my $ruletype = 1;
 	if (!defined $self->{'rules'}->{$ruletype}) { return 0; }
 
-    if ( defined $prog->{'_title'} && $prog->{'_title'} =~ m/:/ ) {
+    if ( defined $prog->{'_title'} && $prog->{'_title'} =~ m/[:;-]/ ) {
 
         my $idx = lc(substr $prog->{'_title'}, 0, 2);
 
@@ -1364,7 +1364,7 @@ sub process_non_title_info () {
 			my ( $line, $key, $value ) = ( $_->{'line'}, $_->{'key'}, $_->{'value'} );
 			_d(4,"\t $line, $key, $value");
 
-            if ( $prog->{'_title'} =~ s/^\Q$key\E\s*[\:;-]\s*//i ) {
+            if ( $prog->{'_title'} =~ s/^\Q$key\E\s*[:;-]\s*//i ) {
                 l(sprintf("\t Removed '%s' from title. New title '%s' (#%s.%s)",
 						  $key, $prog->{'_title'}, $ruletype, $line));
 				$self->add_to_audit ($me, $key, $prog);
