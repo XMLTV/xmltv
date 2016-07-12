@@ -793,319 +793,378 @@ sub extract_numbering_from_desc () {
 # used by: extract_numbering_from_title(), extract_numbering_from_episode(), extract_numbering_from_desc()
 # 2 params: 1) working program hash  2) type: 'title', 'episode' or 'desc'
 sub extract_numbering () {
-	my ($self, $prog, $field) = @_;
+    my ($self, $prog, $field) = @_;
 
-	my %elems = ( 'title' => '_title', 'episode' => '_episode', 'desc' => '_desc', 'description' => '_desc' );
-	my $elem = $elems{$field};
+    my %elems = ( 'title' => '_title', 'episode' => '_episode', 'desc' => '_desc', 'description' => '_desc' );
+    my $elem = $elems{$field};
 
-	my ($s, $stot, $e, $etot, $p, $ptot);
-	my $int;
-	# TODO: set $lang_words according to 'language_code' option
-	#        also the 'series', 'season' and 'episode' text in the regexs
-	my $lang_words = qr/one|two|three|four|five|six|seven|eight|nine/;
+    my ($s, $stot, $e, $etot, $p, $ptot);
+    my $int;
+    # TODO: set $lang_words according to 'language_code' option
+    #        also the 'series', 'season' and 'episode' text in the regexs
+    my $lang_words = qr/one|two|three|four|five|six|seven|eight|nine/i;
 
-	#
-	_d(4,"\t extract_numbering: $field : in  : ","<$prog->{$elem}>");
+    #
+    _d(4,"\t extract_numbering: $field : in  : ","<$prog->{$elem}>");
 
-	# Theoretically it's possible to do this in one regex but it gets too unwieldy when we start catering
-	# for "series" at the front as well as the back, and it's not easy to maintain
-	# so we'll parse out the values in 4 passes
-	#
+    # Theoretically it's possible to do this in one regex but it gets too unwieldy when we start catering
+    # for "series" at the front as well as the back, and it's not easy to maintain
+    # so we'll parse out the values in separate passes
 
-	# Extract and strip the "series"
-		(# check for "Series x/x" format covering following formats:
-        #
-		# "Series 1"
-		# "Series one :"
-		# "Series 2/4"
-		# "Series 12. ..."
-		# "Series 1."
-		# "Series 4/7. Part one. ..."
-		# "Wheeler Dealers - (Series 1)"
-		# "Wheeler Dealers, - (Series 1.)"
-		# "Wheeler Dealers (Series 1, Episode 4)"
-		# "Wheeler Dealers Series 1, Episode 4."
-		# "Series 6, Episode 4/7. Part one. ..."
-		# "Series 8. ..."
-		# "Series 8/10. ..."
-		#
-		# Test cases:
-		#	Series 1
-		#	Series one :
-		#	Series 2/4
-		#	Series 12. Abc
-		#	Series 1.
-		#	Series 4/7. Part one. Abc
-		#	Wheeler Dealers - (Series 1)
-		#	Wheeler Dealers, - (Series 1.)
-		#	Wheeler Dealers (Series 1, Episode 4)
-		#	Wheeler Dealers Series 1, Episode 4.
-		#	Series 6, Episode 4/7. Part one. Abc
-		#	Series 8. Abc
-		#	Series 8/10. Abc
-		#	Wheeler Dealers - (Series 1)
-		#	Wheeler Dealers (Season 1)
-		#	Wheeler Dealers Series 1
-		#	Wheeler Dealers Series 1, 3
-        );
-	if ( $prog->{$elem} =~
-			s/(?:[\s\.,:;-]*\(?)(?:series|season)\s*(\d+|${lang_words})(?:[\s\/]*(\d+))?[\.,]?\)?[\s\.,:;-]*/ /i
-		)
-	{
-		_d(4,"\t matched 'series' regex");
-		$int = word_to_digit($1);
-		$s = $int  if defined $int and $int > 0;
-		$stot = $2 if defined $2;
-	}
+    # First, remove any part numbering from the *end* of the element
 
-	# Extract and strip the "episode" if number at start of data
-	# Note: beware of false positives with e.g. "10, Rillington Place" or "1984"
-	    (# check for "x/y" format covering following formats:
-        #
-        # "1/6 - ..."
-        # "1/6, ..."
-        # "1/6 ..."
-        # "1/6. ..."
-        # "1/6;"
-        # "(1/6)"
-        # "[1/6]"
-		#
-		# Test cases:
-		#  (the ones tagged "<-- cannot match" cannot be matched to avoid false positives c.f. "10, Rillington Place")
-		#	1/6 - Abc
-		#	1/6, series 1 - Abc
-		#	1, series 1 - Abc       <-- cannot match
-		#	1/6, series one - Abc
-		#	1/6. Abc
-		#	1/6; series one
-		#	1, series one - Abc     <-- cannot match
-		#	4/25 Wirral v Alicante, Spain
-		#	1/6 - Abc
-		#	1/6, Abc
-		#	1, Abc                  <-- cannot match
-		#	1/6. Abc
-		#	1/6;
-		#	(1/6)
-		#	[1/6]
-		#	1.
-		#	1,
-		#	2/25 Female Problems
-		#	should not match --v
-		#	3rd Rock
-		#	3 rd Rock
-		#	10, Rillington Place
-		#	10 Rillington Place
-		#	1984
-		#	1984.                   <-- false positive
-		#	Episode 1
-		#	Episode one
-		#	Episode 2/4
-		#
-		# I'm not convinced we should be matching things like "1." - can we be sure this is an ep number?
-		#	e.g. should not match --v
-		#	    {Premier League Years~~~1999/00}
-		);
-	if ( $prog->{$elem} =~
+    # Should match --v
+    #   Dead Man's Eleven
+    #   Dead Man's Eleven: 1
+    #   Dead Man's Eleven (Part 1)
+    #   Dead Man's Eleven - (Part 1)
+    #   Dead Man's Eleven - (Part 1/2)
+    #   Dead Man's Eleven (Pt 1)
+    #   Dead Man's Eleven - (Pt. 1)
+    #   Dead Man's Eleven - (Pt. 1/2)
+    #   Dead Man's Eleven - Part 1
+    #   Dead Man's Eleven: Part 1
+    #   Dead Man's Eleven; Pt 1
+    #   Dead Man's Eleven, Pt. 1
+    #   Dead Man's Eleven Part 1
+    #   Dead Man's Eleven Pt 1
+    #   Dead Man's Eleven Pt 1/2
+    #   Dead Man's Eleven Pt. 1
+    #   Dead Man's Eleven - Part One
+    #   Dead Man's Eleven: Part One
+    #   Dead Man's Eleven; Pt One
+    #   Dead Man's Eleven, Pt. One
+    #   Dead Man's Eleven Part One
+    #   Dead Man's Eleven Pt One
+    #   Dead Man's Eleven Pt. One
+    #   Dead Man's Eleven (Part One)
+    #   Dead Man's Eleven - (Part One)
+    #   Dead Man's Eleven (Pt One)
+    #   Dead Man's Eleven - (Pt. One)
+    #   Part One
+    #   Pt Two
+    #   Pt. Three
+    #   Part One of Two
+    #   Pt Two / Three
+    #   Pt. Three of Four
+    #   Part 1
+    #   Part 1/3
+    #   Pt 2
+    #   Pt 2/3
+    #   Pt. 3
+    #
+    # Should not match --v
+    #   Burnley v Preston North End: 2006/07
 
-			# note we insist on the "/" unless the title is just "number." or "number,"
-			# this is to avoid false matching on "1984" but even here we will falsely match "1984."
-			#
-			s/^[\(\[]*(?!(?:19|20)\d\d)(\d+)\s*(?:\/|[\.,]$)(\d*)[\.,]?[\)\]]*\s?(?:[\s\.,:;-]+\s*|\s*$)//i
-		)
-	{
-		_d(4,"\t matched 'leading episode' regex");
-		$int = word_to_digit($1);
-		$e = $int  if defined $int and $int > 0;
-		$etot = $2 if defined $2;
-	}
+    if ( $prog->{$elem} =~
+            s{
+                (?:
+                        [\s.,:;-]*
+                        \(?
+                    (?:
+                        part|pt\.?
+                    )
+                        \s*
+                        (?! (?:19|20)\d\d ) (\d+ | ${lang_words})   # $1
+                        \s*
+                    (?:
+                      (?:
+                        /|of
+                      )
+                        \s*
+                        (\d+ | ${lang_words})                       # $2
+                    )?
+                        \)?
+                            |
+                        :
+                        \s*
+                        (\d+)                                       # $3
+                )
 
-	# Extract and strip the "episode" if number at end of data
-	    (# check for "x/y" format covering following formats:
-        #
-        # "1/6"
-        # "1/6."
-        # "(1/6)"
-        # "[1/6]"
-        # "s1e6"
-        # "(s1e6)"
-		#
-		# Test cases:
-		#	1/6
-		#	1/6.
-		#	(1/6)
-		#	[1/6]
-		#	s1e6
-		#	(s1e6)
-		#	1 / 6
-		#	( 1/6 )
-		#	In the Mix. 2 / 6
-		#	In the Mix. ( 2/6 ).
-		#	should not match --v
-		#	£20,000.
-		#	20,000
-		#	the 24.
-		#	go 24.
-		#	24
-		#	1984
-		# 2015/16
-		# 2015/2016 could theoretically be ok but statistically unlikely
-		#   (although 2015/3000 could be ok but the likes of Eastenders don't have a 'total' so again this is unlikely)
-		);
-	if ( $prog->{$elem} =~
-			s/(?:^|[\s\(\[]+)s?(?!(?:19|20)\d\d)(\d+)\s*[\/e]+\s*(\d+)[\s\.,]?[\)\]]*[\s\.]*$//i
-		)
-	{
-		_d(4,"\t matched 'trailing episode' regex");
-		$int = word_to_digit($1);
-		$e = $int  if defined $int and $int > 0;
-		$etot = $2 if defined $2;
-	}
+                        [\s.,:;-]*
+                        $
+            }
+            { }ix
+        )
+    {
+        _d(4,"\t matched 'part' regex");
+        $int = word_to_digit($3 || $1);				# $3 is in use case "Dead Man's Eleven: 1"
+        $p = $int  if defined $int and $int > 0;
+        $int = word_to_digit($2) if defined $2;
+        $ptot = $int if defined $2 && defined $int and $int > 0;
+    }
 
+    # Next, extract and strip "series x/y"
+    #
+    # Should match --v
+    #   Series 1
+    #   Series one :
+    #   Series 2/4
+    #   Series 12. Abc
+    #   Series 1.
+    #   Wheeler Dealers - (Series 1)
+    #   Wheeler Dealers, - (Series 1.)
+    #   Wheeler Dealers (Series 1, Episode 4)
+    #   Wheeler Dealers Series 1, Episode 4.
+    #   Series 8. Abc
+    #   Series 8/10. Abc
+    #   Wheeler Dealers - (Series 1)
+    #   Wheeler Dealers (Season 1)
+    #   Wheeler Dealers Series 1
+    #   Wheeler Dealers Series 1, 3
+    #
+    # Does not match --v
+    #   Series 4/7. Part one. Abc
+    #   Series 6, Episode 4/7. Part one. Abc
 
-	# Extract and strip the "episode"
-		(# check for "Episode x/x" format covering following formats:
-        #
-		# "Episode 1"
-		# "Episode one :"
-		# "Episode 2/4"
-		# "Episode 12. ..."
-		# "Episode 1."
-		# "Episode 4/7. Part one. ..."
-		# "Wheeler Dealers - (Episode 1)"
-		# "Wheeler Dealers, - (Episode 1.)"
-		# "Wheeler Dealers (Series 1, Episode 4)"
-		# "Wheeler Dealers Series 1, Episode 4."
-		# "Series 6, Episode 4/7. Part one. ..."
-		# "Series 8. ..."
-		# "Series 8/10. ..."
-		#
-		# Test cases:
-		#	Episode one :
-		#	Episode 2/4
-		#	Episode 12. Abc
-		#	Episode 1.
-		#	Episode 4/7. Part one. Abc
-		#	Wheeler Dealers - (Episode 1)
-		#	Wheeler Dealers, - (Episode 1.)
-		#	Wheeler Dealers (Series 1, Episode 4)
-		#	Wheeler Dealers Series 1, Episode 4.
-		#	Series 6, Episode 4/7. Part one. Abc
-		#	should not match --v
-		#	Series 8. Abc
-		#	Series 8/10. Abc
-		#	1/6 - Abc
-		#	1/6, series 1 - Abc
-		#	1, series 1 - Abc
-		#	1/6, series one - Abc
-		#	1/6. Abc
-		#	1/6; series one
-		#	1, series one - Abc
-        );
-	if ( $prog->{$elem} =~
-			s/(?:[\s\.,:;-]*\(?)(?:episode)\s*(\d+|${lang_words})(?:[\s\/]*(\d+))?[\.,]?\)?[\s\.,:;-]*/ /i
-		)
-	{
-		_d(4,"\t matched 'episode' regex");
-		$int = word_to_digit($1);
-		$e = $int  if defined $int and $int > 0;
-		$etot = $2 if defined $2;
-	}
+    if ( $prog->{$elem} =~
+            s{
+                (?:
+                    [\s.,:;-]*
+                    \(?
+                )
+                (?:
+                    series|season
+                )
+                    \s*
+                    ( \d+ | ${lang_words} )     # $1
+                (?:
+                    [\s/]*
+                    ( \d+ )                     # $2
+                )?
+                    [.,]?
+                    \)?
+                    [\s\.,:;-]*
+            }
+            { }ix
+        )
+    {
+        _d(4,"\t matched 'series' regex");
+        $int = word_to_digit($1);
+        $s = $int  if defined $int and $int > 0;
+        $stot = $2 if defined $2;
+    }
 
+    # Extract and strip the "episode"
+    #
+    # i) check for "Episode x/x" format covering following formats:
+    #
+    # Should match --v
+    #   Episode one :
+    #   Episode 2/4
+    #   Episode 12. Abc
+    #   Episode 1.
+    #   Wheeler Dealers - (Episode 1)
+    #   Wheeler Dealers, - (Episode 1.)
+    #   Wheeler Dealers (Series 1, Episode 4)
+    #   Wheeler Dealers Series 1, Episode 4.
+    #
+    # Should not match --v
+    #   Series 8. Abc
+    #   Series 8/10. Abc
+    #   1/6 - Abc
+    #   1/6, series 1 - Abc
+    #   1, series 1 - Abc
+    #   1/6, series one - Abc
+    #   1/6. Abc
+    #   1/6; series one
+    #   1, series one - Abc
+    #
+    # Does not match --v
+    #   Episode 4/7. Part one. Abc
+    #   Series 6, Episode 4/7. Part one. Abc
 
-	# Extract and strip the "part"
-        ( # check for part numbering covering following formats:
-        #
-        # "Dead Man's Eleven (Part 1)"
-        # "Dead Man's Eleven - (Part 1)"
-        # "Dead Man's Eleven - (Part 1/2)"
-        # "Dead Man's Eleven (Pt 1)"
-        # "Dead Man's Eleven - (Pt. 1)"
-        # "Dead Man's Eleven - (Pt. 1/2)"
-        # "Dead Man's Eleven - Part 1"
-        # "Dead Man's Eleven: Part 1"
-        # "Dead Man's Eleven; Pt 1"
-        # "Dead Man's Eleven, Pt. 1"
-        # "Dead Man's Eleven Part 1"
-        # "Dead Man's Eleven Pt 1"
-        # "Dead Man's Eleven Pt 1/2"
-        # "Dead Man's Eleven Pt. 1"
-        # "Part 1"
-        # "Part 1/3"
-        # "Pt 2"
-        # "Pt 2/3"
-        # "Pt. 3"
-        # "Part One"
-        # "Pt Two"
-        # "Pt. Three"
-		# "Part One of Two"
-		# "Pt Two / Three"
-		# "Pt. Three of Four"
-        # "Dead Man's Eleven - Part One"
-        # "Dead Man's Eleven: Part One"
-        # "Dead Man's Eleven; Pt One"
-        # "Dead Man's Eleven, Pt. One"
-        # "Dead Man's Eleven Part One"
-        # "Dead Man's Eleven Pt One"
-        # "Dead Man's Eleven Pt. One"
-        # "Dead Man's Eleven (Part One)"
-        # "Dead Man's Eleven - (Part One)"
-        # "Dead Man's Eleven (Pt One)"
-        # "Dead Man's Eleven - (Pt. One)"
-        # "Dead Man's Eleven: 1"
-		#
-		# Test cases:
-		#	Dead Man's Eleven
-		#	Dead Man's Eleven: 1
-		#	Dead Man's Eleven (Part 1)
-		#	Dead Man's Eleven - (Part 1)
-		#	Dead Man's Eleven - (Part 1/2)
-		#	Dead Man's Eleven (Pt 1)
-		#	Dead Man's Eleven - (Pt. 1)
-		#	Dead Man's Eleven - (Pt. 1/2)
-		#	Dead Man's Eleven - Part 1
-		#	Dead Man's Eleven: Part 1
-		#	Dead Man's Eleven; Pt 1
-		#	Dead Man's Eleven, Pt. 1
-		#	Dead Man's Eleven Part 1
-		#	Dead Man's Eleven Pt 1
-		#	Dead Man's Eleven Pt 1/2
-		#	Dead Man's Eleven Pt. 1
-		#	Dead Man's Eleven - Part One
-		#	Dead Man's Eleven: Part One
-		#	Dead Man's Eleven; Pt One
-		#	Dead Man's Eleven, Pt. One
-		#	Dead Man's Eleven Part One
-		#	Dead Man's Eleven Pt One
-		#	Dead Man's Eleven Pt. One
-		#	Dead Man's Eleven (Part One)
-		#	Dead Man's Eleven - (Part One)
-		#	Dead Man's Eleven (Pt One)
-		#	Dead Man's Eleven - (Pt. One)
-		#	Part One
-		#	Pt Two
-		#	Pt. Three
-		#	Part One of Two
-		#	Pt Two / Three
-		#	Pt. Three of Four
-		#	Part 1
-		#	Part 1/3
-		#	Pt 2
-		#	Pt 2/3
-		#	Pt. 3
-		#
-		#	should not match --v
-		#	Burnley v Preston North End: 2006/07
-		);
-	if ( $prog->{$elem} =~
-			s/(?:[\s\.,:;-]*\(?(?:part|pt\.?)\s*(?!(?:19|20))(\d+|${lang_words})\s*(?:(?:\/|of)\s*(\d+|${lang_words}))?\)?|:\s*(\d+))[\s\.,:;-]*$/ /i
-		)
-	{
-		_d(4,"\t matched 'part' regex");
-		$int = word_to_digit($3 || $1);				# $3 is in use case "Dead Man's Eleven: 1"
-		$p = $int  if defined $int and $int > 0;
-		$int = word_to_digit($2) if defined $2;
-		$ptot = $int if defined $2 && defined $int and $int > 0;
-	}
+    if ( $prog->{$elem} =~
+            s{
+                (?:
+                    [\s.,:;-]*
+                    \(?
+                )
+                (?:
+                    episode
+                )
+                    \s*
+                    (\d+ | ${lang_words})       # $1
+                (?:
+                    [\s/]*
+                    (\d+)                       # $2
+                )?
+                    [.,]?
+                    \)?
+                    [\s.,:;-]*
+            }
+            { }ix
+        )
+    {
+        _d(4,"\t matched 'episode' regex");
+        $int = word_to_digit($1);
+        $e = $int  if defined $int and $int > 0;
+        $etot = $2 if defined $2;
+    }
+
+    # Extract and strip the episode "x/y" if number at start of data
+    #
+    # Note: beware of false positives with e.g. "10, Rillington Place" or "1984".
+    # Those entries below tagged "<-- cannot match" are not matched to avoid
+    # false positives c.f. "10, Rillington Place")
+    #
+    # I'm not convinced we should be matching things like "1." - can we be sure
+    # this is an ep number?
+    #
+    # Should match --v
+    #   1/6 - Abc
+    #   1/6, series 1 - Abc
+    #   1/6, series one - Abc
+    #   1/6. Abc
+    #   1/6; series one
+    #   4/25 Wirral v Alicante, Spain
+    #   1/6 - Abc
+    #   1/6, Abc
+    #   1/6. Abc
+    #   1/6;
+    #   (1/6)
+    #   [1/6]
+    #   1.
+    #   1,
+    #   2/25 Female Problems
+    #
+    # Should not match --v
+    #   1, series 1 - Abc       <-- cannot match
+    #   1, series one - Abc     <-- cannot match
+    #   1, Abc                  <-- cannot match
+    #   3rd Rock
+    #   3 rd Rock
+    #   10, Rillington Place
+    #   10 Rillington Place
+    #   1984
+    #   1984.                   <-- false positive
+    #   Episode 1
+    #   Episode one
+    #   Episode 2/4
+    #   {Premier League Years~~~1999/00}
+
+    elsif ( $prog->{$elem} =~
+
+            # note we insist on the "/" unless the title is just "number." or "number,"
+            # this is to avoid false matching on "1984" but even here we will falsely match "1984."
+            #
+            s{
+                    ^
+                    [([]*
+                    (?! (?:19|20)\d\d ) (\d+)   # $1
+                    \s*
+                (?:
+                    /
+                    \s*
+                        |
+                    [.,]
+                    $
+                )
+                    (\d*)                       # $2
+                    [.,]?
+                    [)\]]*
+                    \s?
+                (?:
+                    [\s.,:;-]+
+                    \s*
+                        |
+                    \s*
+                    $
+                )
+            }
+            {}ix
+        )
+    {
+        _d(4,"\t matched 'leading episode' regex");
+        $int = word_to_digit($1);
+        $e = $int  if defined $int and $int > 0;
+        $etot = $2 if defined $2;
+    }
+
+    # Extract and strip the episode "x/y" if number at end of data
+    #
+    # Should match --v
+    #   1/6
+    #   1/6.
+    #   (1/6)
+    #   [1/6]
+    #   1 / 6
+    #   ( 1/6 )
+    #   In the Mix. 2 / 6
+    #   In the Mix. ( 2/6 ).
+    #
+    # Should not match --v
+    #   £20,000.
+    #   20,000
+    #   the 24.
+    #   go 24.
+    #   24
+    #   1984
+    #   2015/16
+    #   2015/2016 (could theoretically be ok but statistically unlikely)
+    #   2015/3000 (could be ok but the likes of Eastenders don't have a 'total' so again this is unlikely)
+
+    elsif ( $prog->{$elem} =~
+            s{
+                (?:
+                    ^
+                        |
+                    [\s(\[]+
+                )
+                    (?! (?:19|20)\d\d ) (\d+)       # $1
+                    \s*
+                    \/
+                    \s*
+                    (\d+)                           # $2
+                    [\s.,]?
+                    [)\]]*
+                    [\s.]*
+                    $
+            }
+            {}ix
+        )
+    {
+        _d(4,"\t matched 'trailing episode' regex");
+        $int = word_to_digit($1);
+        $e = $int  if defined $int and $int > 0;
+        $etot = $2 if defined $2;
+    }
+
+    # Extract and strip the series/episode "sXeY" at end of data
+    #
+    # Should match --v
+    #   e6
+    #   [E6]
+    #   s1e6
+    #   (s1e6)
+    #   In the Mix. S1E6
+    #   In the Mix. ( S1E6 ).
+
+    elsif ( $prog->{$elem} =~
+            s{
+                (?:
+                    ^
+                        |
+                    [\s([]+
+                )
+                    s?
+                    (\d+)?      # $1
+                    \s*
+                    e
+                    \s*
+                    (\d+)       # $2
+                    [\s.,]?
+                    [)\]]*
+                    [\s.]*
+                    $
+            }
+            {}ix
+        )
+    {
+        _d(4,"\t matched 'trailing series/episode' regex");
+        $s = $1 if defined $1 and $1 > 0;
+        $e = $2 if defined $2 and $2 > 0;
+    }
 
 
 	# tidy any leading/trailing spaces we've left behind
