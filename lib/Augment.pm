@@ -370,6 +370,7 @@ sub tidy_episode_text () {
 
 
 # Tidy <desc> description text
+# Remove <desc> if empty/whitespace
 sub tidy_desc_text () {
 	my ($self, $prog) = @_;
 
@@ -382,6 +383,17 @@ sub tidy_desc_text () {
 			# remove trailing character if any of ,:;-|
 			$prog->{'desc'}[$i][0] =~ s/[|,:;-]$//g;
 		}
+    }
+
+    # delete desc if now empty
+    # TODO: needs modifying to properly handle multiple descriptions
+    if (defined $prog->{'desc'}) {
+        if ( $prog->{'desc'}[0][0] =~ m/^\s*$/ ) {
+            splice(@{$prog->{'desc'}},0,1);
+            if (scalar @{$prog->{'desc'}} == 0) {
+                delete $prog->{'desc'};
+            }
+        }
     }
 }
 
@@ -859,7 +871,7 @@ sub extract_numbering () {
     if ( $prog->{$elem} =~
             s{
                 (?:
-                        [\s.,:;-]*
+                        [\s,:;-]*
                         \(?
                     (?:
                         part|pt\.?
