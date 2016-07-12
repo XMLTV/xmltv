@@ -1744,7 +1744,9 @@ Extract sub-title from <title>.
 # Rule 3
 #
 # Some programme titles contain both the episode and title data,
-# separated by a colon ($episode:$title) or a hyphen ($episode - $title).
+# separated by a colon ($episode:$title), semicolon ($episode; $title) or a
+# hyphen ($episode - $title).
+#
 # Here we reassign the episode to the $episode element, leaving only the
 # programme's title in the $title element
 #
@@ -1763,7 +1765,7 @@ sub process_mixed_subtitle_title () {
 	my $ruletype = 3;
 	if (!defined $self->{'rules'}->{$ruletype}) { return 0; }
 
-    if ( defined $prog->{'_title'} && $prog->{'_title'} =~ m/:|-/ ) {
+    if ( defined $prog->{'_title'} && $prog->{'_title'} =~ m/[:;-]/ ) {
 
 		# can't use the index for this one since we don't know what the incoming title begins with
 		#  (i.e. the rule doesn't specify it)
