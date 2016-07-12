@@ -1126,7 +1126,7 @@ sub extract_numbering () {
 
 =item B<make_episode_from_part_numbers>
 
-Rule #A6
+Rule #A5.4
 
 If no <sub-title> then make one from "part" numbers.
 
@@ -1135,7 +1135,7 @@ If no <sub-title> then make one from "part" numbers.
 
 =cut
 
-# Rule A6
+# Rule A5.4
 #
 # if no episode title then make one from part numbers
 #
@@ -3257,7 +3257,7 @@ sub printInfo () {
 			[ 'remove_duplicated_title_in_ep' , 'list of programmes where title was removed from sub-title field (#A3)' ],
 			[ 'update_premiere_repeat_flags_from_desc' , 'list of programmes where <premiere> or <previously-shown> was set from description content (#A4)' ],
 			[ 'check_potential_numbering_in_text' , 'list of programmes where <episode-num was changed (#A5)' ],
-			[ 'make_episode_from_part_numbers' , 'list of programmes where <sub-title> was created from \'part\' numbers (#A6)' ],
+			[ 'make_episode_from_part_numbers' , 'list of programmes where <sub-title> was created from \'part\' numbers (#A5.4)' ],
 			[ 'process_non_title_info' , ': Remove specified non-title text from <title> (#1)' ],
 			[ 'process_demoted_titles' , ': Promote demoted title from <sub-title> to <title> (#11)' ],
 			[ 'process_replacement_titles_desc' , ': Replace specified <title> / <sub-title> with title/episode pair supplied using <desc> (#10)' ],
