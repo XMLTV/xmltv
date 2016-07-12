@@ -2354,7 +2354,7 @@ Replace <category> with supplied value(s).
 
   rule: 14|Soccer~Football
   in : "Leeds v Arsenal" category "Soccer"
-  out: "Leeds v Arsenal" category "Soccer"
+  out: "Leeds v Arsenal" category "Football"
 
   rule: 14|Adventure/War~Action Adventure~War
   in : "Leeds v Arsenal" category "Adventure/War"
