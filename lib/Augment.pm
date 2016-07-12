@@ -2001,8 +2001,10 @@ sub process_subtitle_remove_text () {
 
             if ($prog->{'_title'} eq $key) {
 
-                if ( $prog->{'_episode'} =~ s/^\Q$value\E[\s\.,:;-]*//i
-				 ||  $prog->{'_episode'} =~ s/[\s\.,:;-]*\Q$value\E[\s\.]*$//i ) {
+                if ( $prog->{'_episode'} =~ s/^\Q$value\E\s*[.,:;-]?\s*//i
+				 ||  $prog->{'_episode'} =~ s/\s*[.,:;-]?\s*\Q$value\E$//i ) {
+
+                    $prog->{'_episode'} = ucfirst($prog->{'_episode'});
 
                     l(sprintf("\t Removed text '%s' from subtitle. New subtitle is '%s' (#%s.%s)",
 							  $value, $prog->{'_episode'}, $ruletype, $line));
