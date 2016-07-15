@@ -82,6 +82,7 @@ else {
 my %w_args = (
 	'encoding' => 'utf-8',
 	'ENCODING' => 'utf-8',
+	'UNSAFE'   => 1,
 );
 
 my %tv_attributes = (
@@ -195,34 +196,51 @@ sub get_default_cache_file {
 	return "$home/.xmltv/$grabber_name.cache";
 }
 
-my $dt_zone_utc = DateTime::TimeZone->new(name => 'UTC');
-my $dt_zone_local = DateTime::TimeZone->new(name => 'local');
+# days to add to day of month to get days since Jan 1st
+my @days_norm = ( -1, 30, 58, 89, 119, 150, 180, 211, 242, 272, 303, 333 );
+my @days_leap = ( -1, 30, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334 );
 
-sub parse_airdate {
-	my @date = ($_[0] =~ /(\d+)-(\d+)-(\d+)T(\d+):(\d+):(\d+)Z/);
-	local $Params::Validate::NO_VALIDATION = 1;
-	return DateTime->new(
-		year       => $date[0],
-		month      => $date[1],
-		day        => $date[2],
-		hour       => $date[3],
-		minute     => $date[4],
-		second     => $date[5],
-		time_zone  => $dt_zone_utc,
-	);
+sub is_leap_year {
+	return (!($_[0] % 4) && (($_[0] % 100) || !($_[0] % 400)));
 }
+
+sub parse_airtime {
+	use integer;
+	my ($year, $month, $day, $hour, $min, $sec) = ($_[0] =~ /(\d+)-(\d+)-(\d+)T(\d+):(\d+):(\d+)Z/);
+
+	# determine number of days since Jan 1st of requested year
+	$month -= 1;
+	$day += is_leap_year($year) ? $days_leap[$month] : $days_norm[$month];
+
+	# add number of days (minus leap days) for years since 1970
+	$day += ($year - 1970) * 365;
+
+	# add leap days from previous years since year 0 (we already included leap
+	# day for this year), subtract number of leap days between 0 and 1970 (477)
+	$year -= 1;
+	$day += $year / 4 - $year / 100 + $year / 400 - 477;
+
+	return ($day * 86400 + $hour * 3600 + $min * 60 + $sec);
+}
+
+sub format_airtime {
+	my ($sec, $min, $hour, $day, $month, $year) = gmtime($_[0]);
+	return sprintf('%04d%02d%02d%02d%02d%02d +0000', $year + 1900, $month + 1, $day, $hour, $min, $sec);
+}
+
+my $dt_zone_local = DateTime::TimeZone->new(name => 'local');
 
 # SD-JSON only specifies a date for originalAirDate. Older versions of
 # mythtv need full date and time even though xmltv only requires date.
 # We assume local time as mythtv expects and set the time to noon to
 # minimize the chance of an error causing the day to be off by one.
 sub parse_original_airdate {
-	my @date = ($_[0] =~ /(\d+)-(\d+)-(\d+)/);
+	my ($year, $month, $day) = ($_[0] =~ /(\d+)-(\d+)-(\d+)/);
 	local $Params::Validate::NO_VALIDATION = 1;
 	return DateTime->new(
-		year       => $date[0],
-		month      => $date[1],
-		day        => $date[2],
+		year       => $year,
+		month      => $month,
+		day        => $day,
 		hour       => 12,
 		time_zone  => $dt_zone_local,
 	);
@@ -826,8 +844,7 @@ sub cache_update_schedules {
 	for my $channel (@{$channels}) {
 		for my $schedule (values %{$cache_schedules->{$channel}}) {
 			for my $program (@{$schedule->{'programs'}}) {
-				my $dt = parse_airdate($program->{'airDateTime'});
-				my $airtime = $dt->epoch();
+				my $airtime = parse_airtime($program->{'airDateTime'});
 				my $dur = int($program->{'duration'});
 
 				if(($airtime + $dur) > $time_start && $airtime < $time_stop) {
@@ -1415,14 +1432,12 @@ sub get_program_star_rating {
 sub write_programme {
 	my ($w, $channel, $program, $details) = @_;
 
-	my $dt = parse_airdate($program->{'airDateTime'});
-	my $airtime = $dt->epoch();
+	my $airtime = parse_airtime($program->{'airDateTime'});
 	my $dur = int($program->{'duration'});
 
 	if(($airtime + $dur) > $time_start && $airtime < $time_stop) {
-		my $start = $dt->strftime('%Y%m%d%H%M%S %z');
-		$dt->add(seconds => $dur);
-		my $stop = $dt->strftime('%Y%m%d%H%M%S %z');
+		my $start = format_airtime($airtime);
+		my $stop = format_airtime($airtime + $dur);
 
 		$w->write_programme({
 			'channel'          => sprintf($channel_id_format, $channel),
