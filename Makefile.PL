@@ -909,6 +909,28 @@ my @opt_components
                     'Try::Tiny' => 0, },
      },
 
+      { name => 'tv_grab_zz_sdjson_sqlite',
+       blurb => '$$ Grabber for schedulesDirect.org SD-JSON service (many countries)',
+       exes => [ 'grab/zz_sdjson_sqlite/tv_grab_zz_sdjson_sqlite' ],
+       prereqs => { 
+					'Encode' => 0,
+					'JSON' 	=> 0,
+					'Digest::SHA1'	=> 0,
+					'File::Basename'=> 0,
+					'File::Which' 	=> 0,
+					'File::HomeDir' => 0,
+					'File::Path'	=> 0,
+					'DateTime' 		=> 0,
+					'DateTime::TimeZone' => 0,
+					'DateTime::Format::ISO8601' => 0,
+					'DateTime::Format::SQLite'  => 0,
+					'List::MoreUtils' => 0,
+					'DBI' => 0,
+					'DBD::SQLite'  => 0,
+					'Scalar::Util' => 0,
+					'Data::Dumper' => 0,}
+     },
+
 
 # honir 2015-03-05 hasn't worked since 2014-11-19 - source site permanently broken
 #     { name => 'tv_grab_za',
