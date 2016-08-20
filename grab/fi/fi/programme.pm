@@ -260,9 +260,9 @@ sub dump {
 	# Repeat the above match on remaining description
 	($left, $special, $right) = ($remainder =~ $match_description);
 
-    # Check for "<sub-title>. Kausi <season>, <episode>/<# of episodes>...."
+    # Check for "<sub-title>. Kausi <season>, (jakso )?<episode>/<# of episodes>...."
     } elsif (($desc_subtitle, $desc_season, $desc_episode, $remainder) =
-	     ($description =~ m!^(.+)\s+Kausi\s+(\d+),\s+(\d+)(?:/\d+)?\.\s*(.*)$!)) {
+	     ($description =~ m!^(.+)\s+Kausi\s+(\d+),\s+(?:jakso\s+)?(\d+)(?:/\d+)?\.\s*(.*)$!)) {
 	$left    = $desc_subtitle;
 	$season  = $desc_season;
 	$episode = $desc_episode;
