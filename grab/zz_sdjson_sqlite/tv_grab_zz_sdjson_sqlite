@@ -21,7 +21,7 @@
 #
 #
 # For extended help information run
-#     tv_grab_zz_sdjson_sqlite  --info
+#     tv_grab_zz_sdjson_sqlite --info
 #
 #
 # NOTE - Automated XMLTV testing will report failure since Schedules Direct
@@ -44,6 +44,21 @@
 #
 # Version history:
 #
+# 2016/08/25 - 1.22 - no warning messages for malformed SD data if quiet
+# 2016/08/25 - 1.21 - additional error checking of SD data
+# 2016/08/24 - 1.20 - correct sql error reporting
+# 2016/08/03 - 1.19 - reflect multinational capability (and fix docs)
+# 2016/08/03 - 1.18 - rename grabber based on xmltv agreed convention
+# 2016/07/30 - 1.17 - don't report radio stations as tvshow category
+# 2016/07/30 - 1.16 - eliminate XML:Writer validation for performance
+# 2016/07/17 - 1.15 - use Digest::SHA rather than Digest::SHA1
+# 2016/06/07 - 1.14 - support multipart episodes
+# 2016/06/07 - 1.13 - improved season/episode value checks
+# 2016/05/28 - 1.12 - add support for episodeImage
+# 2016/05/26 - 1.11 - use program duration as length
+# 2016/05/26 - 1.10 - hack for tv_find_grabbers source parsing of desc
+# 2016/05/25 - 1.9 - Support total seasons, and more robust validation
+# 2016/05/24 - 1.8 - retry limit updates and get-lineup improvements
 # 2016/05/21 - 1.7 - protect against bad json returned by server
 # 2016/05/21 - 1.6 - correct (mis)use of global variable in package
 # 2016/05/20 - 1.5 - minor output formatting improvements for xmltv_ns
@@ -76,7 +91,7 @@ use XMLTV::Ask;
 use XML::Writer;
 use Encode qw/decode encode/;
 use JSON;
-use Digest::SHA1 qw(sha1 sha1_hex sha1_base64);
+use Digest::SHA qw(sha1 sha1_hex sha1_base64);
 use File::Basename;
 use File::Which;
 use File::HomeDir;
@@ -87,6 +102,7 @@ use DateTime::Format::ISO8601;
 use DateTime::Format::SQLite;
 use POSIX qw(strftime);
 use List::MoreUtils qw(natatime);
+use List::Util qw/min max/;
 use DBI;
 use DBI qw(:sql_types);
 use DBD::SQLite;
@@ -97,8 +113,7 @@ my $RFC2838_COMPLIANT          = 1;             # RFC2838 compliant station ids,
                                                 # validate even though the docs say "SHOULD" not "MUST"
 
 my $SCRIPT_VERSION             = '$Id$';
-my $SCRIPT_DESC                = 'North America Schedules Direct XMLTV grabber';
-my $SCRIPT_URL                 = 'https://github.com/garybuhrmaster/tv_grab_na_sd';
+my $SCRIPT_URL                 = 'https://github.com/garybuhrmaster/tv_grab_zz_sdjson_sqlite';
 my $SCRIPT_NAME                = basename("$0");
 my $SCRIPT_NAME_DIR            = dirname("$0");
 
@@ -146,7 +161,7 @@ my $conf;
       load_old_config_sub => \&loadOldConfig,
       preferredmethod => 'allatonce',
       version => "$SCRIPT_VERSION",
-      description => "$SCRIPT_DESC",
+      description => 'Multinational (Schedules Direct JSON web services with SQLite DB)',
       extra_options => [qw/manage-lineups force-download download-only no-download passwordhash=s/],
       defaults => { days => 30 },
     } 
@@ -488,7 +503,7 @@ else
 # not have current information based on hash values and
 # feed to our DB
 #
-for (my $retry = 0; $retry < 4; $retry++)
+for (my $retry = 0; $retry < 7; $retry++)
   {
 
     my $downloadQueued = 0;
@@ -553,28 +568,28 @@ for (my $retry = 0; $retry < 4; $retry++)
 
     print (STDERR "   downloading " . scalar(@{$stationsSchedulesList}) . " new, updated, or missing daily schedules" . (($retry == 0) ? "" : " (retry $retry)") . "\n") if (!$quiet);
 
-    sleep(10 * $retry);
+    sleep(min(30, (10 * $retry)));
 
     $sql1 = "delete from schedules where station = ? and day = ?";
     $sql2 = "replace into schedules (station, day, starttime, duration, program, program_hash, details) values (?, ?, ?, ?, ?, ?, ?)";
     $sql3 = "replace into schedules_hash (station, day, hash) values (?, ?, ?)";
 
     $sth1 = $DBH->prepare_cached($sql1);
-    if (!defined($sth))
+    if (!defined($sth1))
       {
         print (STDERR "Unexpected error when preparing statement ($sql1): " . $DBH->errstr . "\n");
         exit(1);
       }
     $sth2 = $DBH->prepare_cached($sql2);
-    if (!defined($sth))
+    if (!defined($sth2))
       {
         print (STDERR "Unexpected error when preparing statement ($sql2): " . $DBH->errstr . "\n");
         exit(1);
       }
     $sth3 = $DBH->prepare_cached($sql3);
-    if (!defined($sth))
+    if (!defined($sth3))
       {
-        print (STDERR "Unexpected error when preparing statement ($sql2): " . $DBH->errstr . "\n");
+        print (STDERR "Unexpected error when preparing statement ($sql3): " . $DBH->errstr . "\n");
         exit(1);
       }
 
@@ -651,16 +666,22 @@ for (my $retry = 0; $retry < 4; $retry++)
             $sth1->execute();
             if ($sth1->err)
               {
-                print (STDERR "Unexpected error when executing statement ($sql): " . $sth1->errstr . "\n");
+                print (STDERR "Unexpected error when executing statement ($sql1): " . $sth1->errstr . "\n");
                  exit(1);
               }
             foreach my $program(@{$programs})
               {
                 my $pID = $program->{'programID'};
-                my $starttime = DateTime::Format::ISO8601->parse_datetime($program->{'airDateTime'});
+                my $airDateTime = $program->{'airDateTime'};
                 my $duration = $program->{'duration'};
                 my $phash = $program->{'md5'};
                 my $details = $JSON->utf8->encode($program);
+                if ((!defined($duration)) || (!defined($phash)) || (!defined($pID)) || (!defined($airDateTime)))
+                  {
+                    print (STDERR "Unexpected parsing error in program (data malformed) in schedule for $sID on " . $meta->{'startDate'} . ", skipping\n") if (!$quiet);
+                    next;
+                  }
+                my $starttime = DateTime::Format::ISO8601->parse_datetime($airDateTime);
                 $sth2->bind_param( 1, $sID, SQL_VARCHAR );
                 $sth2->bind_param( 2, DateTime::Format::SQLite->format_date($dayDateTime), SQL_DATE );
                 $sth2->bind_param( 3, DateTime::Format::SQLite->format_datetime($starttime), SQL_DATETIME );
@@ -671,7 +692,7 @@ for (my $retry = 0; $retry < 4; $retry++)
                 $sth2->execute();
                 if ($sth2->err)
                   {
-                    print (STDERR "Unexpected error when executing statement ($sql): " . $sth2->errstr . "\n");
+                    print (STDERR "Unexpected error when executing statement ($sql2): " . $sth2->errstr . "\n");
                     exit(1);
                   }
               }
@@ -681,7 +702,7 @@ for (my $retry = 0; $retry < 4; $retry++)
             $sth3->execute();
             if ($sth3->err)
               {
-                print (STDERR "Unexpected error when executing statement ($sql): " . $sth3->errstr . "\n");
+                print (STDERR "Unexpected error when executing statement ($sql3): " . $sth3->errstr . "\n");
                  exit(1);
               }
           }
@@ -699,7 +720,7 @@ for (my $retry = 0; $retry < 4; $retry++)
 # and feed to our DB
 #
 
-for (my $retry = 0; $retry < 4; $retry++)
+for (my $retry = 0; $retry < 7; $retry++)
   {
 
     my $downloadQueued = 0;
@@ -762,7 +783,7 @@ for (my $retry = 0; $retry < 4; $retry++)
 
     print (STDERR "   downloading " . scalar(@{$programsList}) . " new, updated, or missing programs" . (($retry == 0) ? "" : " (retry $retry)") . "\n") if (!$quiet);
 
-    sleep(10 * $retry);
+    sleep(min(30, (10 * $retry)));
 
     $sql1 = "replace into programs (program, hash, details) values (?, ?, ?)";
 
@@ -831,7 +852,7 @@ for (my $retry = 0; $retry < 4; $retry++)
             $sth1->execute();
             if ($sth1->err)
               {
-                print (STDERR "Unexpected error when executing statement ($sql): " . $sth1->errstr . "\n");
+                print (STDERR "Unexpected error when executing statement ($sql1): " . $sth1->errstr . "\n");
                 exit(1);
               }
           }
@@ -990,7 +1011,8 @@ my $crewMap =
  
 my $w = XML::Writer->new( 'ENCODING' => 'UTF-8',
                           'DATA_MODE' => 1,
-                          'DATA_INDENT' => 1 );
+                          'DATA_INDENT' => 1,
+                          'UNSAFE' => (!$debug) );
 
 $w->xmlDecl('UTF-8');
 $w->comment($SD_COMMENT);
@@ -1015,7 +1037,7 @@ $w->startTag('tv',
   # desirable, but when you get back 40-50% of the cpu
   # it is a necessary compromise
   #
-  $sql = "select schedules.station, schedules.starttime, schedules.duration, schedules.program, schedules.details, programs.details, strftime('%Y%m%d%H%M%S', schedules.starttime), strftime('%Y%m%d%H%M%S', datetime(schedules.starttime, '+' || schedules.duration || ' seconds')) from schedules as schedules left join programs as programs on programs.program = schedules.program where schedules.station in (select distinct stations.station from stations as stations where stations.station in ( select distinct channels.station from channels as channels where channels.lineup = ? and channels.selected = 1)) AND schedules.day >= ? and schedules.day < ? order by schedules.station, schedules.starttime";
+  $sql = "select schedules.station, schedules.starttime, schedules.duration, schedules.program, schedules.details, programs.details, strftime('%Y%m%d%H%M%S', schedules.starttime), strftime('%Y%m%d%H%M%S', datetime(schedules.starttime, '+' || schedules.duration || ' seconds')), stations.details from schedules as schedules left join programs as programs on programs.program = schedules.program left join stations as stations on stations.station = schedules.station where schedules.station in (select distinct stations.station from stations as stations where stations.station in ( select distinct channels.station from channels as channels where channels.lineup = ? and channels.selected = 1)) AND schedules.day >= ? and schedules.day < ? order by schedules.station, schedules.starttime";
 
   $sth = $DBH->prepare_cached($sql);
   if (!defined($sth))
@@ -1050,6 +1072,7 @@ $w->startTag('tv',
   $sth->bind_col(6, undef, SQL_VARCHAR );
   $sth->bind_col(7, undef, SQL_VARCHAR );
   $sth->bind_col(8, undef, SQL_VARCHAR );
+  $sth->bind_col(9, undef, SQL_VARCHAR );
 
   my $programsWritten = 0;
 
@@ -1066,6 +1089,11 @@ $w->startTag('tv',
       if (defined($r->[5]))
         {
           $programDetails = $JSON->decode($r->[5]);
+        }
+      my $stationDetails;
+      if (defined($r->[8]))
+        {
+          $stationDetails = $JSON->decode($r->[8]);
         }
 
       $w->startTag('programme', 'channel' => generateRFC2838($sID),
@@ -1200,7 +1228,13 @@ $w->startTag('tv',
           {
             # For MythTV, we need to specify the first category
             # in the xmltv file as one of movie, series, sports,
-            # or tvshow.  We can derive that from the entityType
+            # or tvshow.  We can derive that from the entityType.
+            # If the station is a radio station, do not add tvshow
+            my $radioStation = 0;
+            if (defined($stationDetails->{'isRadioStation'}))
+              {
+                $radioStation = $stationDetails->{'isRadioStation'};
+              }
             if (defined($programDetails->{'entityType'}))
               {
                 my $entityType = $programDetails->{'entityType'};
@@ -1216,14 +1250,20 @@ $w->startTag('tv',
                   {
                     $w->dataElement('category', 'series');
                   }
-                else   # Should be Show, but if anything else, show
+                else   # Should be Show
                   {
-                    $w->dataElement('category', 'tvshow');
+                    if (!$radioStation)
+                      {
+                        $w->dataElement('category', 'tvshow');
+                      }
                   }
               }
             else   # entityType is supposed to be manditory, but....
-              { 
-                $w->dataElement('category', 'tvshow');
+              {
+                if (!$radioStation)
+                  {
+                    $w->dataElement('category', 'tvshow');
+                  }
               }
           }
 
@@ -1267,9 +1307,26 @@ $w->startTag('tv',
               }
           }
 
-        if (defined($programDetails->{'movie'}->{'duration'}))
+        if (defined($programDetails->{'duration'}))
           {
-            $w->dataElement('length', $programDetails->{'movie'}->{'duration'}, 'units' => 'seconds');
+            $w->dataElement('length', $programDetails->{'duration'}, 'units' => 'seconds');
+          }
+
+        if (defined($programDetails->{'episodeImage'}) &&
+            defined($programDetails->{'episodeImage'}->{'uri'}))
+          {
+            my $url = $SD->uriResolve($programDetails->{'episodeImage'}->{'uri'}, '/image');
+            if (defined($programDetails->{'episodeImage'}->{'width'}) &&
+                defined($programDetails->{'episodeImage'}->{'height'}))
+              {
+                $w->emptyTag('icon', 'src' => $url,
+                                  'width' => $programDetails->{'episodeImage'}->{'width'},
+                                  'height' => $programDetails->{'episodeImage'}->{'height'});
+              }
+            else
+              {
+                $w->emptyTag('icon', 'src' => $url);
+              }
           }
 
         if (defined($programDetails->{'officialURL'}))
@@ -1284,6 +1341,9 @@ $w->startTag('tv',
              $w->dataElement('episode-num', $prodid, 'system' => 'dd_progid' );
           }
 
+        my $season = '';
+        my $episode = '';
+        my $part = '';
         if (defined($programDetails->{'metadata'}))
           {
             foreach my $meta(@{$programDetails->{'metadata'}})
@@ -1291,16 +1351,38 @@ $w->startTag('tv',
                 # We only support Gracenote season/episode metadata
                 if (defined($meta->{'Gracenote'}))
                   {
-                    my $season = $meta->{'Gracenote'}->{'season'};
-                    my $episode = $meta->{'Gracenote'}->{'episode'} || '';
-                    my $total = $meta->{'Gracenote'}->{'totalEpisodes'} || '';
-                    next if (!looks_like_number($season));
+                    $season = $meta->{'Gracenote'}->{'season'};
+                    my $totalSeasons = $meta->{'Gracenote'}->{'totalSeasons'};
+                    $episode = $meta->{'Gracenote'}->{'episode'};
+                    my $totalEpisodes = $meta->{'Gracenote'}->{'totalEpisodes'};
+                    next if (!defined($season));
+                    $season = '0' if (!looks_like_number($season));
+                    $totalSeasons = '' if (!looks_like_number($totalSeasons));
+                    $episode = '0' if (!looks_like_number($episode));
+                    $totalEpisodes = '' if (!looks_like_number($totalEpisodes));
                     $season = $season - 1;
-                    $episode = $episode - 1 if looks_like_number($episode);
-                    $episode = "$episode / $total" if ($total ne '');
-                    $w->dataElement('episode-num', " $season . $episode . ", 'system' => 'xmltv_ns');
+                    $season = '' if ($season < 0);
+                    $season = "$season / $totalSeasons" if ($totalSeasons ne '');
+                    $episode = $episode - 1;
+                    $episode = '' if ($episode < 0);
+                    $episode = "$episode / $totalEpisodes" if ($totalEpisodes ne '');
+                    last;
                   }
               }
+          }
+        if (defined($scheduleDetails->{'multipart'}))
+          {
+            $part = $scheduleDetails->{'multipart'}->{'partNumber'};
+            my $totalParts = $scheduleDetails->{'multipart'}->{'totalParts'};
+            $part = 0 if (!looks_like_number($part));
+            $part = $part - 1;
+            $part = '' if ($part < 0);
+            $totalParts = '' if (!looks_like_number($totalParts));
+            $part = "$part / $totalParts" if ($totalParts ne '');
+          }
+        if (($season ne '') || ($episode ne '') || ($part ne ''))
+          {
+            $w->dataElement('episode-num', " $season . $episode . $part ", 'system' => 'xmltv_ns');
           }
 
         if (defined($scheduleDetails->{'videoProperties'}))
@@ -2279,11 +2361,17 @@ sub getLineup
                         }
                     }
 
-                  if ($SDtype eq 'DVB-T')
+                  if (($SDtype eq 'DVB-T') || ($SDtype eq 'DVB-S') | ($SDtype eq 'DVB-C'))
                     {
                       $w->startTag('dvb-channel');
-                        my $networkID = $c->{'networkID'} || 0;
-                        if (looks_like_number($networkID))
+                        my $freq = $c->{'frequencyHz'};
+                        if (defined($freq) && looks_like_number($freq))
+                          {
+                            $freq = 0 + $freq;
+                            $w->dataElement('frequency', $freq);
+                          }
+                        my $networkID = $c->{'networkID'};
+                        if (defined($networkID) && looks_like_number($networkID))
                           {
                             $networkID = 0 + $networkID;
                             $w->dataElement('original-network-id', $networkID);
@@ -2294,27 +2382,19 @@ sub getLineup
                             $transportID = 0 + $transportID;
                             $w->dataElement('transport-id', $transportID);
                           }
-                        my $serviceID = $c->{'serviceID'} || 0;
-                        if (looks_like_number($serviceID))
+                        my $serviceID = $c->{'serviceID'};
+                        if (defined($serviceID) && looks_like_number($serviceID))
                           {
                             $serviceID = 0 + $serviceID;
                             $w->dataElement('service-id', $serviceID);
                           }
-                        if (defined($c->{'channel'}) && looks_like_number($c->{'channel'}))
+                        my $lcn = $c->{'channel'};
+                        if (defined($lcn) && looks_like_number($lcn))
                           {
-                            my $preset = $c->{'channel'};
-                            $preset = 0 + $preset;
-                            $w->dataElement('lcn', $preset);
+                            $lcn = 0 + $lcn;
+                            $w->dataElement('lcn', $lcn);
                           }
                       $w->endTag('dvb-channel');
-                    }
-
-                  if ($SDtype eq 'DVB-S')
-                    {
-                    }
-
-                  if ($SDtype eq 'DVB-C')
-                    {
                     }
 
               $w->endTag('lineup-entry');
@@ -2613,7 +2693,7 @@ sub SD_downloadLineups
       }
     $sql1 = "update lineups set name = ?, location = ?, transport = ?, details = ? where lineup = ?";
     $sth1 = $DBH->prepare_cached($sql1);
-    if (!defined($sth))
+    if (!defined($sth1))
       {
         print (STDERR "Unexpected error when preparing statement ($sql1): " . $DBH->errstr . "\n");
         exit(1);
@@ -2646,7 +2726,7 @@ sub SD_downloadLineups
         $sth1->execute();
         if ($sth1->err)
           {
-            print (STDERR "Unexpected error when executing statement ($sql): " . $sth1->errstr . "\n");
+            print (STDERR "Unexpected error when executing statement ($sql1): " . $sth1->errstr . "\n");
             exit(1);
           }
       }
@@ -4320,7 +4400,7 @@ sub mapTransport
 
     my $transportTypeMap =                 # Map for Schedules Direct transport to XMLTV type
       {
-        'DVB-C'          => 'STB',         # DVB-C (most use a STB?)
+        'DVB-C'          => 'DTV',         # DVB-C
         'DVB-T'          => 'DTV',         # DVB-T
         'DVB-S'          => 'DTV',         # DVB-S (should be STB?)
         'Cable'          => 'STB',         # Cable (most use a STB?)
@@ -4373,21 +4453,21 @@ sub mapRatingAgency
         'B.C. Film Classification Office'                                                  => 'BCFCO',
         'Saskatchewan Film and Video Classification Board'                                 => 'SFVCB',
         'Medietilsynet'                                                                    => 'NMA',
-        'Departamento de Justiça, Classificação, Títulos e Qualificação'                   => 'ClassInd',
+        'Departamento de JustiÃ§a, ClassificaÃ§Ã£o, TÃ­tulos e QualificaÃ§Ã£o'                   => 'ClassInd',
         'Alberta\'s Film Classification Board'                                             => 'AFR',
-        'The Régie du cinéma'                                                              => 'RCQ',
+        'The RÃ©gie du cinÃ©ma'                                                              => 'RCQ',
         'Ontario Film Review Board'                                                        => 'OFRB',
         'Maritime Film Classification Board'                                               => 'MFC',
         'Canadian Parental Rating'                                                         => 'CHVRS',
-        'Conseil Supérieur de l\'Audiovisuel'                                              => 'CSA',
-        'Dirección General de Radio, Televisión y Cinematografía'                          => 'RTC',
-        'Instituto de Cinematografía y de las Artes Visuales'                              => 'ICAA',
-        'Mediakasvatus- ja kuvaohjelmayksikkö'                                             => 'MEKU',
+        'Conseil SupÃ©rieur de l\'Audiovisuel'                                              => 'CSA',
+        'DirecciÃ³n General de Radio, TelevisiÃ³n y CinematografÃ­a'                          => 'RTC',
+        'Instituto de CinematografÃ­a y de las Artes Visuales'                              => 'ICAA',
+        'Mediakasvatus- ja kuvaohjelmayksikkÃ¶'                                             => 'MEKU',
         'UK Content Provider'                                                              => 'UK',
-        'Centre national du cinéma et de l\'image animée'                                  => 'CNC',
+        'Centre national du cinÃ©ma et de l\'image animÃ©e'                                  => 'CNC',
         'Irish Film Classification Office'                                                 => 'IFCO',    # Guess
-        'Statens filmgranskningsbyrå'                                                      => 'VET',     # Guess
-        'Nemzeti Média- és Hirközlési Hatóság'                                             => 'NMHH',    # Guess
+        'Statens filmgranskningsbyrÃ¥'                                                      => 'VET',     # Guess
+        'Nemzeti MÃ©dia- Ã©s HirkÃ¶zlÃ©si HatÃ³sÃ¡g'                                             => 'NMHH',    # Guess
         'Nederlands Instituut voor de Classificatie van Audiovisuele Media'                => 'NICAM',   # Guess
         'Office of Film and Literature Classification'                                     => 'OFLC',    # Guess
         'Board of Film Censors'                                                            => 'BFC',     # Guess
@@ -4545,9 +4625,11 @@ tv_grab_zz_sdjson_sqlite --get-lineup [--config-file FILE]
 =head1 DESCRIPTION
 
 Output TV listings in XMLTV format for many locations available in
-North America (US/CA).  The data come from
-L<http://www.schedulesdirect.org> and an account must be created
-on the Schedules Direct site in order to grab data.
+North America (US/CA) and other selected countries internationally.
+The data comes from L<http://www.schedulesdirect.org> and an account
+must be created on the Schedules Direct site in order to grab data.
+Refer to the Schedules Direct site for signup requirements and
+supported locations.
 
 This grabber uses a shared local database which allows for
 downloading only new/changed/updated information, and in
@@ -4556,11 +4638,12 @@ substantially reduce the download times (as some data such
 as schedules and program details are commonly shared between
 sources in the same location).
 
-First, you must run B<tv_grab_zz_sdjson_sqlite --manage-lineups> to manage
-the lineups available to your grabber configuration.
+First, you must run B<tv_grab_zz_sdjson_sqlite --manage-lineups>
+to manage the lineups available to your grabber configuration
+at the Schedules Direct service.
 
-Second, you must run B<tv_grab_zz_sdjson_sqlite --configure> to choose
-which lineup this configuration will grab (this grabber
+Second, you must run B<tv_grab_zz_sdjson_sqlite --configure> to
+choose which lineup this configuration will grab (this grabber
 will share the downloaded information for multiple lineups,
 and can substantially reduce the royal overheads in those
 cases).
@@ -4581,8 +4664,8 @@ configuration file.  Note that one must run --manage-lineups
 first to create and initialize the database and configure lineups.
 
 B<--config-file FILE> Set the name of the configuration file, the
-default is B<~/.xmltv/tv_grab_zz_sdjson_sqlite.conf>.  This is the file written by
-B<--configure> and read when grabbing.
+default is B<~/.xmltv/tv_grab_zz_sdjson_sqlite.conf>.  This is
+the file written by B<--configure> and read when grabbing.
 
 B<--output FILE> When grabbing, write output to FILE rather than
 standard output.
@@ -4638,8 +4721,8 @@ B<--info> Print a help page and exit.
 1.
 First you must signup for an account at Schedules Direct.
 This is a paid service providing EPG data for North America
-(and some other) locations.  See L<http://www.schedulesdirect.org>
-for signup requirements.
+and other selected countries.  See L<http://www.schedulesdirect.org>
+for signup requirements, and the countries served.
 
 2.
 Second you need to configure the lineups that you will have
@@ -4820,6 +4903,7 @@ package SchedulesDirect v20141201.0.0;
 # obtainPrograms               - return program data for programs
 # obtainAvailable              - return available counties/satellites
 # deleteMessage                - delete message
+# uriResolve                   - convert uri to absolute
 #
 
 require 5.016;
@@ -4831,7 +4915,8 @@ use warnings NONFATAL => qw(exec recursion internal malloc newline experimental 
 no warnings 'once';
 
 use Carp;
-use Digest::SHA1 qw(sha1 sha1_hex sha1_base64);
+use Digest::SHA qw(sha1 sha1_hex sha1_base64);
+use URI;
 use URI::Escape;
 use Compress::Zlib;
 use HTTP::Request;
@@ -4871,7 +4956,9 @@ sub new
     $self->{'_LWP'}->timing('1,2,5,10,20,20,20,20,20,20');
     $self->{'_LWP'}->default_header('Accept-Encoding' => scalar HTTP::Message::decodable(),
                                     'Accept' => 'application/json',
-                                    'Content_Type' => 'application/json');
+                                    'Content_Type' => 'application/json',
+                                    'Pragma' => 'no-cache',
+                                    'Cache-Control' => 'no-cache');
 
     bless($self, $class);
     return $self;
@@ -5153,6 +5240,32 @@ sub PasswordHash
 
     $return = $self->{'PasswordHash'};
     
+    print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
+
+    return $return;
+  }
+
+#
+# Resolve a possible relative uri to absolute URL
+#
+sub uriResolve
+  {
+    my $self = shift;
+
+    print (STDERR "DEBUG: Entering " . (caller(0))[3] . " with args: \n" . Data::Dumper->new(\@_)->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
+
+    my $uri = shift;
+
+    my $path = shift || '';
+
+    my $return;
+
+    # strip off leading /
+    # add trailing / if needed
+    #$rel = '/' . $rel . '/' if (defined($rel) && ($rel ne ''));
+
+    $return = URI->new_abs( $uri, "$self->{'RESTUrl'}" . $path . "/" )->as_string();
+
     print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
 
     return $return;
