@@ -334,7 +334,8 @@ sub tidy_title_text () {
 			$prog->{'title'}[$i][0] =~ s/\s+/ /g;
 
 			# remove trailing character if any of .,:;-| and not ellipsis
-			$prog->{'title'}[$i][0] =~ s/[|\.,:;-]$//  if $prog->{'title'}[$i][0] !~ m/\.{3}$/;
+			# bug #503 : don't remove trailing period if it could be an abbreviation, e.g. 'M.I.A.'
+			$prog->{'title'}[$i][0] =~ s/[|\.,:;-]$//  if $prog->{'title'}[$i][0] !~ m/\.{3}$/ && $prog->{'title'}[$i][0] !~ m/\..\.$/;
 		}
     }
 }
@@ -352,7 +353,8 @@ sub tidy_episode_text () {
 			$prog->{'sub-title'}[$i][0] =~ s/\s+/ /g;
 
 			# remove trailing character if any of .,:;-| and not ellipsis
-			$prog->{'sub-title'}[$i][0] =~ s/[|\.,:;-]$//g  if $prog->{'sub-title'}[$i][0] !~ m/\.{3}$/;
+			# bug #503 : don't remove trailing period if it could be an abbreviation, e.g. 'In the U.S.'
+			$prog->{'sub-title'}[$i][0] =~ s/[|\.,:;-]$//g  if $prog->{'sub-title'}[$i][0] !~ m/\.{3}$/ && $prog->{'sub-title'}[$i][0] !~ m/\..\.$/;
 		}
 	}
 
