@@ -902,7 +902,6 @@ my @opt_components
        prereqs => { 'DateTime' => 0,
                     'Digest::SHA' => 0,
                     'JSON' => 0,
-                    'List::MoreUtils' => 0,
                     'LWP::Protocol::https' => 0,
                     'LWP::UserAgent' => 0,
                     'Storable' => 0,
