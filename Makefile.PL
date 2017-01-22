@@ -914,7 +914,7 @@ my @opt_components
        prereqs => { 
 					'Encode' => 0,
 					'JSON' 	=> 0,
-					'Digest::SHA1'	=> 0,
+					'Digest::SHA'	=> 0,
 					'File::Basename'=> 0,
 					'File::Which' 	=> 0,
 					'File::HomeDir' => 0,
