@@ -510,22 +510,25 @@ my @opt_components
        prereqs => { 'IO::Uncompress::Unzip' => 0, },
      },
 
-     { name => 'tv_grab_hr',
-       blurb => 'Grabber for Croatia',
-       exes => [ 'grab/hr/tv_grab_hr' ],
-       pl_files => { 'grab/hr/tv_grab_hr.PL'
-                     => 'grab/hr/tv_grab_hr' },
-       to_clean => [ 'grab/hr/tv_grab_hr' ],
-       deps => [ 'grab/hr/tv_grab_hr'
-                 => [ 'grab/se_swedb/tv_grab_se_swedb.in' ] ],
-       prereqs => { 'XML::LibXML'    => 0,
-                    'Compress::Zlib' => 0,
-                    'IO::Stringy'    => 0,
-                    'HTTP::Cache::Transparent' => 0, },
-     },
+#
+# 2017-01-22 - source site (www.gonix.net/ gone. 
+#
+#     { name => 'tv_grab_hr',
+#       blurb => 'Grabber for Croatia',
+#       exes => [ 'grab/hr/tv_grab_hr' ],
+#       pl_files => { 'grab/hr/tv_grab_hr.PL'
+#                     => 'grab/hr/tv_grab_hr' },
+#       to_clean => [ 'grab/hr/tv_grab_hr' ],
+#       deps => [ 'grab/hr/tv_grab_hr'
+#                 => [ 'grab/se_swedb/tv_grab_se_swedb.in' ] ],
+#       prereqs => { 'XML::LibXML'    => 0,
+#                    'Compress::Zlib' => 0,
+#                    'IO::Stringy'    => 0,
+#                    'HTTP::Cache::Transparent' => 0, },
+#     },
 
      { name => 'tv_grab_huro',
-       blurb => 'Grabber for Hungary, Romania, Slovakia, Czech Republic',
+       blurb => 'Grabber for Slovakia (Hungary, Romania broken)',
        exes => [ 'grab/huro/tv_grab_huro' ],
        pl_files => { 'grab/huro/tv_grab_huro.PL'
                      => 'grab/huro/tv_grab_huro' },
@@ -694,17 +697,20 @@ my @opt_components
 #                    'HTTP::Cache::Transparent' => 0, },
 #     },
 
-     { name => 'tv_grab_pt',
-       blurb => 'Grabber for Portugal',
-       exes => [ 'grab/pt/tv_grab_pt' ],
-       prereqs => { 'Getopt::Long'      => 0,
-                    'HTML::TreeBuilder' => 0,
-                    'HTML::Entities'    => 1.27,
-                    'HTTP::Cache::Transparent' => 0,
-                    'DateTime'          => 0,
-                    'Encode'            => 0,
-                    'JSON::PP'          => 0, },
-     },
+#
+# 2017-01-22 Broken due to site changes
+#
+#     { name => 'tv_grab_pt',
+#       blurb => 'Grabber for Portugal',
+#       exes => [ 'grab/pt/tv_grab_pt' ],
+#       prereqs => { 'Getopt::Long'      => 0,
+#                    'HTML::TreeBuilder' => 0,
+#                    'HTML::Entities'    => 1.27,
+#                    'HTTP::Cache::Transparent' => 0,
+#                    'DateTime'          => 0,
+#                    'Encode'            => 0,
+#                    'JSON::PP'          => 0, },
+#     },
 
      { name => 'tv_grab_pt_meo',
        blurb => 'Grabber for Portugal (MEO)',
