@@ -907,6 +907,18 @@ my @opt_components
                     'Try::Tiny' => 0, },
      },
 
+     { name => 'tv_grab_zz_sdjson',
+       blurb => '$$ Grabber for schedulesDirect.org SD-JSON service (many countries)',
+       exes => [ 'grab/zz_sdjson/tv_grab_zz_sdjson' ],
+       prereqs => { 'DateTime' => 0,
+                    'Digest::SHA' => 0,
+                    'JSON' => 0,
+                    'LWP::Protocol::https' => 0,
+                    'LWP::UserAgent' => 0,
+                    'Storable' => 0,
+                    'Try::Tiny' => 0, },
+     },
+
      { name => 'tv_grab_zz_sdjson_sqlite',
        blurb => '$$ Grabber for schedulesDirect.org SD-JSON service (many countries)',
        exes => [ 'grab/zz_sdjson_sqlite/tv_grab_zz_sdjson_sqlite' ],
