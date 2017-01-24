@@ -138,7 +138,7 @@ use XMLTV::Date 0.005066 qw( time_xmltv_to_epoch );
 
 use Encode;
 
-our $VERSION = 0.005068;
+our $VERSION = 0.005069;
 
 use base 'Exporter';
 our @EXPORT = qw(setEncoding inputChannel augmentProgramme printInfo end);
