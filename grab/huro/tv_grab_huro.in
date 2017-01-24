@@ -121,6 +121,7 @@ recommended by the XMLTV DTD.
 # initializations
 #-------------------------------------------------------------------------------
 
+use utf8;
 use strict;
 use XMLTV::Version '$Id$';
 use XMLTV::Capabilities qw/baseline manualconfig cache/;
@@ -133,6 +134,10 @@ use HTML::TreeBuilder;
 use HTML::Entities; # parse entities
 use IO::File;
 use File::Basename;
+use JSON;
+use Encode;
+use Time::Piece ();
+use Time::Seconds;
 
 use XMLTV;
 use XMLTV::Memoize;
@@ -198,24 +203,60 @@ our %WORDS = (
 		cz => { episode => "Epizoda",
 				minute  =>  "minut",
 				links   => "Linky" },
-		hu => {	episode => "r�sz",
+		hu => {	episode => "rész",
 				minute =>  "perc",
 				links => "linkek" },
 		ro => { episode => "episodul",		# patch #84
 				minute => "minute",
 				links => "Linkuri" },
-		sk => { episode => "Epiz�da",
-				minute  =>  "min�t",	
+		sk => { episode => "Epizóda",
+				minute  =>  "minút",	
 				links   => "Linky" }
 	) ;
-
+our $DEFAULT_ENCODING = 'ISO-8859-2';
+our $rating_baseurl = 'http://media.port-network.com/page_elements/';
+our %AGE_LIMITS = ( # Todo: insert cz & sk translations
+		'ageLimitList-1' => [{'hu' => 'korhatárra tekintet nélkül megtekinthető', 'ro' => 'Audienţă generală'}, 'nmhh_akk/mobil_35x35/0_age_icon_mobil.png'],
+		'ageLimitList-5' => [{'hu' => '16 éven aluliak számára nem ajánlott', 'ro' => 'Acest program este interzis minorilor sub 16 ani'}, 'nmhh_akk/mobil_35x35/16_age_icon_mobil.png'],
+		'ageLimitList-3' => [{'hu' => '12 éven aluliak számára a megtekintése nagykorú felügyelete mellett ajánlott', 'ro' => 'Acest program este interzis minorilor sub 12 ani'}, 'nmhh_akk/mobil_35x35/12_age_icon_mobil.png'],
+		'ageLimitList-4' => [{'hu' => '14 éven alul nem ajánlott', 'ro' => 'Acest program este interzis minorilor sub 14 ani'}, 'm_14_age_mini_pix.png'],
+		'ageLimitList-6' => [{'hu' => '18 éven aluliak számára nem ajánlott', 'ro' => 'Acest program este interzis minorilor sub 18 ani'}, 'nmhh_akk/mobil_35x35/18_age_icon_mobil.png'],
+		'ageLimitList-8' => [{'hu' => '7 éven aluliak számára nem ajánlott', 'ro' => 'Acest program este interzis minorilor sub 7 ani'}, 'm_7_age_mini_pix.png'],
+		'ageLimitList-10' => [{'hu' => '6 éven aluliak számára nem ajánlott', 'ro' => 'Acest program este interzis minorilor sub 6 ani'}, 'nmhh_akk/mobil_35x35/6_age_icon_mobil.png'],
+		'ageLimitList-2' => [{'hu' => 'szülői engedéllyel', 'ro' => 'Recomandat acordul părinţilor'}, 'm_parental_guidance_mini_pix_hu.png'],
+		'ageLimitList-7' => [{'hu' => '15 éven aluliak számára nem ajánlott', 'ro' => 'Acest program este interzis minorilor sub 15 ani'}, 'm_15_age_mini_pix.png']);
+our %PROGRAM_CATEGORIES = ( # Todo: insert cz & sk translations
+		'tvEventType-0' => {'hu' => 'egyéb', 'ro' => 'nedefinit'},
+		'tvEventType-11' => {'hu' => 'vallási műsor', 'ro' => 'emisiune religioasă'},
+		'tvEventType-4' => {'hu' => 'gyermek műsor', 'ro' => 'copii'},
+		'tvEventType-10' => {'hu' => 'dokumentumfilm', 'ro' => 'documentar'},
+		'tvEventType-12' => {'hu' => 'filmsorozat', 'ro' => 'serial'},
+		'tvEventType-13' => {'hu' => 'szabadidős műsor', 'ro' => 'family'},
+		'tvEventType-14' => {'hu' => 'zenei műsor', 'ro' => 'muzica'},
+		'tvEventType-15' => {'hu' => 'hírműsor', 'ro' => 'ştiri'},
+		'tvEventType-1' => {'hu' => 'sportműsor', 'ro' => 'sport'},
+		'tvEventType-3' => {'hu' => 'hír-, politikai műsor', 'ro' => 'tv show'},
+		'tvEventType-7' => {'hu' => 'művészeti műsor', 'ro' => 'tv show'},
+		'tvEventType-8' => {'hu' => 'ismeretterjesztő műsor', 'ro' => 'stiinta'},
+		'tvEventType-9' => {'hu' => 'szappanopera', 'ro' => 'telenovelă'},
+		'tvEventType-18' => {'hu' => 'gasztronómiai műsor', 'ro' => 'gastro'},
+		'tvEventType-20' => {'hu' => 'életstílus', 'ro' => 'life style'},
+		'tvEventType-2' => {'hu' => 'film', 'ro' => 'film'},
+		'tvEventType-5' => {'hu' => 'szórakoztató műsor', 'ro' => 'reality show'},
+		'tvEventType-6' => {'hu' => 'szolgáltató műsor', 'ro' => 'tv show'},
+		'tvEventType-16' => {'hu' => 'divat', 'ro' => 'modă'},
+		'tvEventType-17' => {'hu' => 'felnőtt', 'ro' => 'pentru adulţi'},
+		'tvEventType-19' => {'hu' => 'reality', 'ro' => 'reality-show'});
 sub domain();
 sub xid( $ );
 sub xhead();
 sub process_table( $$$$ );
+sub process_json( $$$$ );
 sub parse_short_desc ( $ );
 sub get_channels( ;$ );
+sub get_channels_json( ;$ );
 sub get_infourl_data( $$ );
+sub get_infourl_data_json( $$ );
 sub add_person ( $$$ );
 sub extract_episode( $ );
 sub grab_icon( $ );
@@ -327,7 +368,7 @@ sub process_table( $$$$ ) {
 	#
 	# if the grabber runs in eraly hours (e.g. 01:00, 02:00) port.hu returns
 	# the yesterdays's program as today's program... so we have to check it,
-	# example.hu: <span class="ctxt">P�ntek (febru�r 27.)</span>
+	# example.hu: <span class="ctxt">Péntek (február 27.)</span>
 	# example.ro: <span class="ctxt">Duminic\u0103 (26 februarie)</span>
 	# if this failes, we construct the previous (or next?) day's url 
 
@@ -542,7 +583,7 @@ sub process_table( $$$$ ) {
 				$_ = join(' ', @tmp);
 				s/  +/ /g;
 				s/[^\w]*putbox\(\"[0-9][0-9]\"\)[\s\n\r]*//g;
-				s/Megv�s�rolhat� (DVD[ ]?-n|VHS[ ]?-en)//g;
+				s/Megvásárolható (DVD[ ]?-n|VHS[ ]?-en)//g;
                                 # strip leading &nbsp (and other spaces)
 				s/^[ \t\xA0]*//g;
                                 # turn left over &nbsp into normal ones
@@ -556,7 +597,7 @@ sub process_table( $$$$ ) {
 
 				# support ticket #202 
                 # get the rating if available
-				#    <img alt="(15)" title="nevhodn� do 15ti let" class="age_limit_icon" src="http://media.port-network.com/page_elements/15_age_mini_pix.png">
+				#    <img alt="(15)" title="nevhodné do 15ti let" class="age_limit_icon" src="http://media.port-network.com/page_elements/15_age_mini_pix.png">
 				if (my $img = $span[0]->parent()->look_down('_tag' => 'img', 'class' => 'age_limit_icon')) {
 				    t "age limit icon found";
 				    my $rating = $img->attr('alt');
@@ -691,6 +732,313 @@ sub process_table( $$$$ ) {
 	return @r;
 }
 
+#------------------------------------------------------------------------------
+# process_json
+#------------------------------------------------------------------------------
+# desc		: fetch a URL and process it
+# arguments	: 1- Date::Manip object, basedate/startdate of grabbing (e.g. 20060205)
+# 			  2- xmltv id of channel
+# 			  3- site id of channel
+# 			  4- dayindex of the requested page on port.hu|ro 
+# returns	: list of the programme hashes to write
+#------------------------------------------------------------------------------
+sub process_json( $$$$ ) {
+	my ($basedate, $ch_xmltv_id, $ch_port_id, $baseday) = @_;
+	
+#	$basedate = UnixDate(DateCalc(parse_date($basedate),"- 1 day"), '%Q');
+	$basedate = UnixDate(parse_date($basedate), '%Q');
+	
+	my $days_to_request = $DAYSPERPAGE;
+	my $basedateday = UnixDate(parse_date($basedate), '%e');
+	my $to_date = Time::Piece->strptime( $basedate, '%Y%m%d');
+	$to_date += ONE_DAY * $days_to_request;
+	$ch_port_id =~ s/^0+//;
+	my $d = domain();
+	my $urlfmt = "http://" . $d . (($COUNTRY eq 'hu') ? "/tvapi?channel_id=tvchannel-" : "/pls/w/tv_api.event_list?i_channel_id=").$ch_port_id.
+		"&i_datetime_from=%s&i_datetime_to=".$to_date->strftime('%Y-%m-%d');
+	my $url = "$urlfmt";
+	local $SIG{__WARN__} = sub {
+		warn "$url: $_[0]";
+	};
+
+	my $json_data;
+	my $lang = $COUNTRY;
+
+	# make (maximum) two loop to fetch program data:
+	#
+	# if the grabber runs in early hours (e.g. 01:00, 02:00) port.hu returns
+	# the yesterdays's program as today's program... so we have to check it,
+	# example.hu: <span class="ctxt">Péntek (február 27.)</span>
+	# example.ro: <span class="ctxt">Duminic\u0103 (26 februarie)</span>
+	# if this fails, we construct the previous (or next?) day's url 
+
+	my @daysonpage = ();
+	foreach (1, 2) {
+		$url = sprintf($urlfmt, UnixDate($basedate, '%Y-%m-%d'));
+
+		t "fetching url: $url";
+		worker("base-downloading");
+		$XMLTV::Get_nice::FailOnError = 1;
+		my $data=get_nice($url);
+		$data =~ s/<\/?span[^>]{0,}>\s?//g; # remove html elements
+
+		$json_data = (($DEFAULT_ENCODING !~ /utf\-?8/i) && ($COUNTRY eq 'hu')) ? JSON::XS->new->utf8(0)->decode(encode($DEFAULT_ENCODING,decode('utf-8', $data))) : JSON::XS->new->utf8(0)->decode($data) or
+			die "could not fetch/parse $url (json structure)\n";
+		worker("base-parsing");
+
+		foreach my $act_secs (sort(keys(%{$json_data}))) {
+			my $wday = UnixDate(($COUNTRY eq 'hu') ? $json_data->{$act_secs}->{'date_from'} : $json_data->{$act_secs}->{'datetime_from'}, '%d');
+			t "added founded date of the month on the grabbed page: $wday";
+			push @daysonpage, $wday;
+		}
+		if (@daysonpage) {
+			# check date ... is the first founded date on the page the requested?
+			last if ($basedateday == $daysonpage[0]);
+
+			t "requested from $basedate, but port.$COUNTRY returned programs from wrong day: $daysonpage[0]";
+			if (UnixDate(DateCalc($basedate, "- 1 days"), '%e') == $daysonpage[0]) {
+				# port.hu returned the programms from yesterday
+				$FETCHOFFSET += 1 ;
+			}
+			elsif (UnixDate(DateCalc($basedate, "+ 1 days"), '%e') == $daysonpage[0]) {
+				# port.hu returned the programms from tommorrow
+				$FETCHOFFSET -= -1 ;
+			}
+			else {
+				t "fetched HTML page do not contain 0, +1 or -1 day of the reuested one";
+				last;
+			}
+			t "global fetch offset was set to: $FETCHOFFSET";
+		}
+		else {
+			warn "no date data found on the fetched HTML page, trying to continue";
+			last;
+		}
+	}
+
+	if (! defined($json_data)) {
+		warn "Could not found the requested day's data on the grabbed JSON structure, " .
+			"some programs on $ch_xmltv_id channel will be not fetched.";
+		return;
+	}
+
+	my @programs;
+
+	# JSON structure
+	# <date_in_secs_since_1970> =>
+	#   {
+	#    'date_from' => 'YYYY-MM-DDTHH:MM:SS+HH:MM'
+	#    'date_to' => 'YYYY-MM-DDTHH:MM:SS+HH:MM'
+	#    'channels' => [{
+	#                    'date' => 'YYYY-MM-DDTHH:MM:SS+HH:MM' (date of query)
+	#                    'date_from' => 'YYYY-MM-DDTHH:MM:SS+HH:MM'
+	#                    'date_until' => 'YYYY-MM-DDTHH:MM:SS+HH:MM' (equals with date_to)
+	#                    'domain' => 'port.hu'
+	#                    'id' => 'tvchannel-N'
+	#                    'name' => 'Channel Name'
+	#                    ...
+	#                    'programs' => [{
+	#                                    'id' => 'event-t-NNNNNNNN'
+	#                                    'start_ts' => <date_in_secs_since_1970>
+	#                                    'start_datetime' => 'YYYY-MM-DDTHH:MM:SS+HH:MM'
+	#                                    'end_datetime' => 'YYYY-MM-DDTHH:MM:SS+HH:MM'
+	#                                    'start_time' => 'HH:MM'
+	#                                    'end_time' => 'HH:MM'
+	#                                    'title' => 'Show title'
+	#                                    'episode_title' => 'Ep title' or undef
+	#                                    'short_description' => 'Short desc.' or undef
+	#                                    'description' => 'Desc.' or undef
+	#                                    'film_url' => '/adatlap/film/tv/...'
+	#                                    'restriction' => { 'category' => 'tvEventType-N', 'age_limit' => 'ageLimitList-N' ]
+	#                                    'attributes_text' => '(ism.)' / '(élő)' / '(DS)' etc. or ''
+	#                                    'italics' => 'Feliratozva ...' or undef
+	#                                    ...
+	#
+	#                                  }]
+	#                  }]
+	#   }
+	foreach my $act_secs (sort(keys(%{$json_data}))) {
+		my $all_prog_data = $json_data->{$act_secs}->{'channels'}[0]->{'programs'};
+		foreach my $prog_data (@{$all_prog_data}) {
+			my %program;
+			$program{startdate} = UnixDate($prog_data->{'start_datetime'}, '%Q');
+			my $currday = $program{startdate};
+			$currday =~ s/^[0-9]{6}([0-9]{2})$/$1/;
+			$program{day} = $currday - $daysonpage[0] + 1;
+			# We skip those programs, that are out of the requested time frame
+			if ($program{day} != 1) {
+				next;
+			}
+			$program{time} = $prog_data->{'start_time'};
+			$program{time} =~ s/^([012]?[0-9]):([0-5][0-9])$/$1$2/;
+			$program{enddate} = UnixDate($prog_data->{'end_datetime'}, '%Q') if (defined($prog_data->{'end_datetime'}));
+			t "--- missing end_time (".$prog_data->{'title'}.") ".d $prog_data if (!defined($prog_data->{'end_time'}));
+			$program{endtime} = $prog_data->{'end_time'};
+			$program{endtime} =~ s/^([012]?[0-9]):([0-5][0-9])$/$1$2/ if (defined($program{endtime}));
+			$program{title} = (defined($prog_data->{'title'}) && $prog_data->{'title'} ne "") ? $prog_data->{'title'} : ' ';
+			if ($prog_data->{'short_description'}) {
+				$program{desc} = $prog_data->{'short_description'};
+			}
+			elsif ($prog_data->{'description'}) {
+				$program{desc} = $prog_data->{'description'};
+			}
+#			if ($prog_data->{'attributes_text'}) {
+#				$program{desc} = ($program{desc}) ? $program{desc}.', '.$prog_data->{'attributes_text'} : $prog_data->{'attributes_text'};
+#			}
+			if ($prog_data->{'episode_title'}) {
+				if (($program{desc}) && ($program{desc} =~ /$WORDS{$COUNTRY}->{episode}/)) {
+					$program{desc} =~ s/($WORDS{$COUNTRY}->{episode})/$1, $prog_data->{'episode_title'}/;
+				}
+				else {
+					$program{desc} = ($program{desc}) ? $program{desc}.', '.$prog_data->{'episode_title'} : $prog_data->{'episode_title'};
+				}
+			}
+			if ($program{desc}) {
+				$program{desc} =~ s/  +/ /g;
+				$program{desc} =~ s/Megvásárolható (DVD[ ]?-n|VHS[ ]?-en)//g;
+			}
+			if ($prog_data->{'film_url'}) {
+			        my @url = ((($COUNTRY eq 'hu') ? 'http://'.domain() : '').$prog_data->{'film_url'});
+				$program{infourl} = \@url;
+			}
+
+			# support ticket #202 
+			# get the rating if available
+			my $actcat = "";
+			if ($prog_data->{'restriction'}) {
+				$prog_data->{'restriction'}->{'age_limit'} =~ s/(\d+)/ageLimitList-$1/ if (($COUNTRY eq 'ro') && ($prog_data->{'restriction'}->{'age_limit'} !~ /ageLimitList/));
+				$prog_data->{'restriction'}->{'category'} =~ s/(\d+)/tvEventType-$1/ if (($COUNTRY eq 'ro') && ($prog_data->{'restriction'}->{'category'} !~ /tvEventType/));
+				if (($prog_data->{'restriction'}->{'age_limit'}) # 'ageLimitList-N'
+				 && ($AGE_LIMITS{$prog_data->{'restriction'}->{'age_limit'}})) {
+					my $rating = ($DEFAULT_ENCODING !~ /utf\-?8/i) ? encode($DEFAULT_ENCODING, $AGE_LIMITS{$prog_data->{'restriction'}->{'age_limit'}}[0]->{$lang}) : $AGE_LIMITS{$prog_data->{'restriction'}->{'age_limit'}}[0]->{$lang};
+					$program{rating} = [[ $rating, '', [{'src' => $rating_baseurl.$AGE_LIMITS{$prog_data->{'restriction'}->{'age_limit'}}[1] }] ]];
+				}
+				if (($prog_data->{'restriction'}->{'category'}) # 'tvEventType-N'
+				 && ($PROGRAM_CATEGORIES{$prog_data->{'restriction'}->{'category'}})) {
+					$actcat = ($DEFAULT_ENCODING !~ /utf\-?8/i) ? encode($DEFAULT_ENCODING, $PROGRAM_CATEGORIES{$prog_data->{'restriction'}->{'category'}}->{$lang}) : $PROGRAM_CATEGORIES{$prog_data->{'restriction'}->{'category'}}->{$lang};
+					$program{desc} = ($program{desc}) ? $program{desc}.', '.$actcat : $actcat; # insert actual category - see parse_short_desc
+				}
+			}
+			# add all parsed info, as program{time, title, desc, category, date}
+			parse_short_desc(\%program);
+                        if ((defined($program{desc})) && ($program{desc} =~ $actcat)) { # remove actual category
+				$program{desc} =~ s/[,\ ]{0,2}$actcat$//;
+				delete($program{desc}) if (!length($program{desc}));
+			}
+
+			worker("slow-parsing");	
+			foreach my $infourl (@{$program{infourl}}) {
+				# always read data from linked page (in --slow mode)
+				# in --get-full-description mode read if description ends in '...'
+				if ( ($opt_slow) ||
+						( $opt_full_desc && ( ((defined $program{desc}) && 
+						($program{desc} =~ m/\.\.\.$/) ) ||
+						((!$program{desc}) && (!$program{category}) && ($actcat eq $PROGRAM_CATEGORIES{'tvEventType-2'}->{$lang})) ) ) ) { # program without desc & category + actcat = 'film'?
+					get_infourl_data_json(\%program, $infourl);
+#					parse_short_desc(\%program);
+				}
+			}
+
+			t "pushing ".$program{title};
+
+			push @programs, \%program if (defined $program{time}) && (defined $program{title});
+		} # foreach $prog_data
+
+	} # foreach $json_data
+
+	if (not @programs) {
+		warn "no programs found, skipping\n";
+		return ();
+	}
+
+	# make a sort on programs, short compare function: cmp startdate, time
+	# stringwise (this gives the same rsult as comapre datewise)
+	# Date_Cmp(UnixDate($left->{time},'%H:%M'),UnixDate($right->{time},'%H:%M');
+
+#	sub bytime { 
+#		($a->{startdate}.$a->{time}) cmp ($b->{startdate}.$b->{time});
+#	}
+	@programs = sort {$a->{startdate}.$a->{time} cmp $b->{startdate}.$b->{time}} @programs;
+
+	t "programs in sorted order:";
+	t "program:" . d $_ foreach (@programs);
+
+	my (@r, $prev);
+	# assume lang == country
+#	my $lang = $COUNTRY;
+
+	foreach my $program (@programs) {
+		my $prog;
+		
+		$prog->{channel}=$ch_xmltv_id;
+
+		$prog->{title}=[ [ $program->{title}, $lang ] ];
+
+		my $start=parse_local_date("$program->{startdate} $program->{time}", $TZ);
+		my ($start_base, $start_tz) = @{date_to_local($start, $TZ)};
+		$prog->{start}=UnixDate($start_base, '%q') . " $start_tz";
+
+		if (defined($program->{enddate}) && defined($program->{endtime})) {
+			my $stop=parse_local_date("$program->{enddate} $program->{endtime}", $TZ);
+			my ($stop_base, $stop_tz) = @{date_to_local($stop, $TZ)};
+			$prog->{stop}=UnixDate($stop_base, '%q') . " $stop_tz";
+		}
+                else {
+			t "--- missing enddate + endtime - ch: ".$prog->{channel}.", title: ".$program->{title};
+                }
+
+		$prog->{desc} = [[ $program->{desc}, $lang ]] 
+			if defined $program->{desc};
+		$prog->{category} = $program->{category} 
+			if (defined $program->{category});
+		$prog->{date} = $program->{date} 
+			if defined $program->{date};
+		$prog->{qw(episode-num)} = $program->{qw(episode-num)} 
+			if defined $program->{qw(episode-num)};
+		$prog->{length} = $program->{length} 
+			if defined $program->{length};
+		$prog->{rating} = $program->{rating} 
+			if defined $program->{rating};          # support #202
+
+		# Setting stop date for the previous program
+		# Last program in the grabbed list has no stop attribute, sorry.
+		# Port.hu uses a virtual program as the last program
+		# anyway
+		if ((defined($prev)) && ((!defined($prev->{stop})) || $prev->{stop} ne $prog->{start})) {
+			if ($prev->{start} ne $prog->{start}) {
+				$prev->{stop} = $prog->{start};
+			}
+			else {
+				t "--- remove previous program: ".d @r;
+				pop(@r);
+			}
+		}
+
+		worker("base-parsing");
+
+		push @r, $prog;
+
+#		if ((defined($prev)) && $prev->{start} eq $prog->{start}) {
+			# starttime of previous and current programme is equal,
+			# therefore use clumpidx to express relation
+#			my $clumps_num = 2;
+
+#			if (defined($r[-2]->{q(clumpidx)})) {
+				# previous programme already has a clumpidx arg assigned.
+#				($clumps_num) = $r[-2]->{q(clumpidx)} =~ m|^\d+/(\d+)$|;
+#			}
+
+			# okay, assign new clumpidx values ...
+#			for (0 .. ($clumps_num-1)) {
+#				$r[-$clumps_num+$_]->{q(clumpidx)} = "$_/$clumps_num";
+#			}
+#		}
+
+		$prev = $prog;
+	}
+
+	return @r;
+}
 
 #-------------------------------------------------------------------------------
 # parse_short_desc
@@ -701,7 +1049,7 @@ sub process_table( $$$$ ) {
 # arguments	: 1- reference to a program HASH, there is the grabbed description in it
 # 			     and there should be attached the other newly found informations,
 # 			     such as:
-#			     ( category => [ [Animals, en], [Term�szet, hu], [..], ... ]
+#			     ( category => [ [Animals, en], [Természet, hu], [..], ... ]
 #				   date  => 2001 )
 # returns	: none
 #-------------------------------------------------------------------------------
@@ -722,8 +1070,8 @@ sub parse_short_desc ($) {
 	#
 	# examples:
 	# Hegylako - A hollo	(amerikai-francia-kanadai kalandfilmsorozat, 1998)
-	# Lisa.	Anim�ci�s sorozat.
-	# Slayers - A kis boszork�ny.	(12).	Japan animacios sorozat.
+	# Lisa.	Animációs sorozat.
+	# Slayers - A kis boszorkány.	(12).	Japan animacios sorozat.
 	#  
 	# sometimes only the proposed minimal age of watching person is
 	# presented in parentheses eg: (12), so parse this only if it is 
@@ -735,22 +1083,23 @@ sub parse_short_desc ($) {
 
 	t "parse_short_desc: text: '$cont'";
 	$WORDS{$COUNTRY}->{episode}="zdontmatchz" unless exists $WORDS{$COUNTRY}->{episode};
+t "episode (country: $COUNTRY): ".(defined($WORDS{$COUNTRY}->{episode}) ? $WORDS{$COUNTRY}->{episode} : "undef");
 	# port.hu episode style with season   (# patch #80)
-	if (m/\s*([IVX]+\.\/[0-9]+)\. $WORDS{$COUNTRY}->{episode}/) { $episode = $1; }
+	if ($cont =~ /\s*([IVX]+\.?\s?\/\s?[0-9]+)\. $WORDS{$COUNTRY}->{episode}/) { $episode = $1; }
 	# port.hu episode style without season
-	elsif (m/\s*([0-9\/]+)\. $WORDS{$COUNTRY}->{episode}/) { $episode = $1; }
+	elsif ($cont =~ /\s*([0-9\/]+)\. $WORDS{$COUNTRY}->{episode}/) { $episode = $1; }
 	# port.ro episode style with season   (# patch #74)
-	elsif (m/$WORDS{$COUNTRY}->{episode} \s*([0-9]+, [A-Za-z]+ [0-9])/) { $episode = $1; }
+	elsif ($cont =~ /$WORDS{$COUNTRY}->{episode} \s*([0-9]+, [A-Za-z]+ [0-9])/) { $episode = $1; }
 	# port.cz/.sk episode style with season
-	elsif (m/$WORDS{$COUNTRY}->{episode} \s*([0-9]+, [IVX]+)\./) { $episode = $1; }
+	elsif ($cont =~ /$WORDS{$COUNTRY}->{episode} \s*([0-9]+, [IVX]+)\./) { $episode = $1; }
 	# port.cz/.sk episode style for two episodes back to back in one slot
-	elsif (m/$WORDS{$COUNTRY}->{episode} \s*(\d+, \d+)/) { $episode = $1; }
+	elsif ($cont =~ /$WORDS{$COUNTRY}->{episode} \s*(\d+, \d+)/) { $episode = $1; }
 	# port.cz/.sk/.ro episode style without season
-	elsif (m/$WORDS{$COUNTRY}->{episode} \s*([0-9\/]+)/) { $episode = $1; }
+	elsif ($cont =~ /$WORDS{$COUNTRY}->{episode} \s*([0-9\/]+)/) { $episode = $1; }
 	
-	if (m/\s*(\d+)'/)           { $minutes = $1; }
-	if (m/\(.*?((?:19|20)[0-9]{2})/) { $year = $1 }		# bug #448 
-
+	if ($cont =~ /\s*(\d+)'/)           { $minutes = $1; }
+	if ($cont =~ /\(.*?((?:19|20)[0-9]{2})/) { $year = $1; }		# bug #448 
+	elsif ($cont =~ /$WORDS{$COUNTRY}->{episode},\s((?:19|20)[0-9]{2}),\s/) { $year = $1; } # ex.: '... II / 4. rész, 2016, ...'
 	t "found episode: '$episode'" if defined $episode;
 	t "found minutes: '$minutes'" if defined $minutes;
 	t "found year: '$year'"		  if defined $year;
@@ -856,6 +1205,55 @@ sub get_channels( ;$ ) {
 				} 
 			}
 		}
+	}
+	die "no CHANNELS could be found" if not %CHANNELS;
+	update $bar if not $opt_quiet;
+	$bar->finish() if not $opt_quiet;
+	t "CHANNELS:" . d \%CHANNELS;
+}
+
+
+#-------------------------------------------------------------------------------
+# get_channels_json
+#-------------------------------------------------------------------------------
+# desc		: get channel listing for a country
+# arguments	: none
+# returns	: sets global CHANNELS hash to the grabbed channels:
+#			  ( '$channel_id' => 
+#			  ( 'display-name' => [ [ $channel_name, $COUNTRY ] ],
+#				'id' => "$channel_id.$d",
+#				'icon' => [ { src => $iconurl } ] )
+#-------------------------------------------------------------------------------
+sub get_channels_json( ;$ ) {
+	my $mode = shift;
+	my $d = domain();
+	my $bar = new XMLTV::ProgressBar('getting list of channels', 1)
+		if not $opt_quiet;
+	my $url="http://www.$d/".(($COUNTRY eq 'hu') ? "tvapi/init" : "pls/w/tv_api.init?i_page_id=1");
+
+	worker("base-downloading");
+	t "fetching $url...";
+	$XMLTV::Get_nice::FailOnError = 1;
+	binmode(STDOUT,":encoding(UTF-8)");
+	my $data = get_nice($url);
+	my $json_data = (($DEFAULT_ENCODING !~ /utf\-?8/i) && ($COUNTRY eq 'hu')) ? JSON::XS->new->utf8(0)->decode(encode($DEFAULT_ENCODING,decode('utf-8', $data))) : JSON::XS->new->utf8(0)->decode($data) or
+	    die "could not fetch/parse $url (channel listing)";
+	worker("base-parsing");
+
+	foreach my $ch (@{$json_data->{'channels'}}) {
+		my $channel_id = $ch->{'id'};
+		$channel_id =~ s/^[^0-9]+//; # 'tvchannel-N' -> 'N'
+		$channel_id = sprintf("%03d", $channel_id); # 'N' -> '00N'
+		my @urls = (($COUNTRY eq 'hu') ? 'http://'.domain() : '').$ch->{'link'};
+		my %channel = (
+			'display-name' => [ [ $ch->{'name'}, $COUNTRY ] ],
+			'id' => "$channel_id.$d",
+			'url' => \@urls
+		);
+		if ($ch->{'logo'}) {
+			$channel{'icon'} = [ { src => $ch->{'logo'} } ];
+		}
+		$CHANNELS{$channel_id} = \%channel;
 	}
 	die "no CHANNELS could be found" if not %CHANNELS;
 	update $bar if not $opt_quiet;
@@ -994,7 +1392,7 @@ sub get_infourl_data( $$ ) {
 	# ICON
 	# anchor point: 
 	# the programme image will be tagged as follows:
-	#		<div class="random-media-wrapper"><img class="object_picture" src="http://media.port-network.com/picture/instance_2/92418_2.jpg" width="250" height="221" style="float:" alt="�nchisoarea �ngerilor - Tim Robbins" border="0" />
+	#		<div class="random-media-wrapper"><img class="object_picture" src="http://media.port-network.com/picture/instance_2/92418_2.jpg" width="250" height="221" style="float:" alt="Închisoarea îngerilor - Tim Robbins" border="0" />
 
 	t "programme icon parsing ...";
 	$anchor = $tree->look_down(_tag=>"div", class=>"random-media-wrapper");
@@ -1211,8 +1609,8 @@ sub get_infourl_data( $$ ) {
 			if ($section == 0) {
 				# duration, year, category
 				# possibilitys
-				# 1: amerikai filmdr�ma sorozat, 90 perc, 2000, 2. r�sz
-				# 12 �ven aluliak sz�m�ra ....
+				# 1: amerikai filmdráma sorozat, 90 perc, 2000, 2. rész
+				# 12 éven aluliak számára ....
 				#   added 2004-04-07 :
 				# (ro) Coreea de Sud, 2009, serial de aventuri, episodul 5
 
@@ -1240,7 +1638,7 @@ sub get_infourl_data( $$ ) {
 				# if a job is defined (hu-job) but not supported in the DTD
 				# we will add # the person(s) as:
 				# <actor> some_job: Foo Bar, Dummy Name, ...<actor>
-				# note: \b(.+): do not match to " �r�: ", because � is not
+				# note: \b(.+): do not match to " író: ", because í is not
 				# part of \b
 
 				# bug #451 [line deleted]
@@ -1322,6 +1720,90 @@ sub get_infourl_data( $$ ) {
 	$tree->delete;
 }
 		
+#-------------------------------------------------------------------------------
+# get_infourl_data_json
+#-------------------------------------------------------------------------------
+# desc		: merge data from linked info page into programme hash
+# arguments	: 1- reference to the program, whom detailed descr should be grabbed
+#			  2- url to fetch
+# returns	: none
+#-------------------------------------------------------------------------------
+sub get_infourl_data_json( $$ ) {
+	my $prog = shift;
+	my $d = domain();
+	my $url = shift;
+
+	# add port.hu/port.ro base url only if url is not contains the "://" uri separator
+	if (! ($url =~ "://")) {
+		$url = "http://www.$d" . $url;
+	}
+
+	# no info, so don't add it to anywhere
+	# -> calendar.event_popup 
+	if ($url =~ "calendar\.event_popup") {
+		t "SKIP fetching of slow url: $url";
+		return;
+	}
+
+	# do not grab:
+	# -> pictures: ... pls/me/picture.popup?i_area_id
+	# -> dvd rent links page: ... pls/w/logging.page_log?i_page_id=20...
+	# -> sample movie ... video.link_popup?i_object_id=18822
+	# -> dvd sales page: www.divido.hu...
+	# -> bet on a sport event -> sprotingbet
+	# -> general advert links: adverticum
+
+	if ($url =~ "(picture.popup|logging.page_log|video.link_popup|www\.divido\.hu|sportingbet|adverticum\.net)") {
+		# add this url to the program
+		push @{$prog->{q(url)}}, $url;
+		t "SKIP fetching of slow url: $url";
+		return;
+	}
+
+	t "fetching slow url" . d $url;
+
+	worker("slow-downloading");
+	t "fetching $url...";
+	$XMLTV::Get_nice::FailOnError = 0;
+	my $data;
+	if (! defined($data = get_nice($url))) {
+		worker("slow-parsing");
+		warn "Could not get URL: $url, the detailed description for the program [" .
+			$prog->{channel} . ", " . $prog->{title} . ", " . $prog->{start} .
+			"] will be not available. Error message: " . error_msg($url) . "." ;
+		return;
+	}
+	else {
+		if ($data =~ /<!\-\-\ title\ \-\->/) {
+			my $orig_title = substr($data, index($data, '<!-- title -->')+14, index($data, '<!-- /title -->', index($data, '<!-- title -->'))-(index($data, '<!-- title -->')+14));
+			$orig_title =~ s/<[^>]+>//g;
+			$orig_title =~ s/^\s+|\s+$//g; # trim spaces
+			$orig_title =~ s/^[^\n]+\n//g; # remove translated title
+			$orig_title =~ s/^[^\/]+\/(.*)\/$/($1)/g;
+			$orig_title = encode($DEFAULT_ENCODING, decode('utf-8', $orig_title)) if ($DEFAULT_ENCODING !~ /utf\-?8/i);
+			$prog->{q(desc)} = (defined($prog->{q(desc)}) && $prog->{q(desc)} ne "") ? $prog->{q(desc)}.' '.$orig_title : $orig_title;
+		}
+		if ($data =~ /<!\-\-\ summary\ \-\->/) {
+			my $sum = substr($data, index($data, '<!-- summary -->')+16, index($data, '<!-- /summary -->', index($data, '<!-- summary -->'))-(index($data, '<!-- summary -->')+16));
+			$sum =~ s/<[^>]+>//g;
+			$sum =~ s/^\s+|\s+$//g; # trim spaces
+			$sum =~ s/magyarul\ besz..l..\,\ //g;
+			$sum = encode($DEFAULT_ENCODING, decode('utf-8', $sum)) if ($DEFAULT_ENCODING !~ /utf\-?8/i);
+			$prog->{q(desc)} = (defined($prog->{q(desc)}) && $prog->{q(desc)} ne "") ? $prog->{q(desc)}.' '.$sum : $sum;
+		}
+		if ($data =~ /<div\ class="description">/) {
+			$data = substr($data, index($data, '<div class="description">')+25, index($data, '</div>', index($data, '<div class="description">'))-(index($data, '<div class="description">')+25));
+			$data =~ s/<\/?article>//ig;
+			$data =~ s/<br\/?>/ /ig;
+			$data =~ s/<strong>[^\<]+<\/strong>//ig; # <strong>Feliratozva a teletext ...</strong>
+			$data =~ s/<b>.*//ig; # <b>Forgalmazó:</> ... / <b>Bemutató dátuma:</b> ...
+			$data =~ s/^\s+|\s+$//g; # trim spaces
+			$data = encode($DEFAULT_ENCODING, decode('utf-8', $data)) if ($DEFAULT_ENCODING !~ /utf\-?8/i);
+			$prog->{q(desc)} = (defined($prog->{q(desc)}) && $prog->{q(desc)} ne "") ? $prog->{q(desc)}.', '.$data : $data;
+		}
+	    	worker("slow-parsing");
+	}
+}
 
 #-------------------------------------------------------------------------------
 # extract_episode
@@ -1781,7 +2263,7 @@ if ($mode eq 'configure') {
 	print CONF "country $COUNTRY\t# $cn\n";
 
 	# Ask about each channel.
-	get_channels();	# sets %CHANNELS
+	(($COUNTRY) && (($COUNTRY eq 'hu') || ($COUNTRY eq 'ro'))) ? get_channels_json() : get_channels; # sets %CHANNELS
 	my @portids = sort keys %CHANNELS;
 	my @names = map { $CHANNELS{$_}->{qw(display-name)}->[0][0] } @portids;
 	my @qs = map { "add channel $_?" } @names;
@@ -1808,12 +2290,12 @@ if ($mode eq 'configure') {
 
 # Options to be used for XMLTV::Writer.
 my %w_args;
+$w_args{encoding} = $DEFAULT_ENCODING;
 if (defined $opt_output) {
 	my $fh = new IO::File(">$opt_output");
 	die "cannot write to $opt_output: $!" if not defined $fh;
 	$w_args{OUTPUT} = $fh;
 }
-$w_args{encoding} = 'ISO-8859-2';
 
 #-------------------------------------------------------------------------------
 # only channel listing
@@ -1834,7 +2316,7 @@ if ($mode eq 'list-channels') {
 	my $writer = new XMLTV::Writer(%w_args);
 	$writer->start(xhead());
 	worker("base-parsing");
-	get_channels(); # sets %CHANNELS
+	(($COUNTRY) && (($COUNTRY eq 'hu') || ($COUNTRY eq 'ro'))) ? get_channels_json() : get_channels(); # sets %CHANNELS
 	# sort channels based on their portid
 	my @portids = sort keys %CHANNELS;
 	worker("xml-writing");
@@ -1858,7 +2340,7 @@ if ($mode eq 'grab') {
 	my @portids = load_configs();
 
 	# sets %CHANNELS
-	get_channels($mode);
+	(($COUNTRY) && (($COUNTRY eq 'hu') || ($COUNTRY eq 'ro'))) ? get_channels_json($mode) : get_channels($mode);
 
 	worker("xml-writing");
 	my $writer = new XMLTV::Writer(%w_args);
@@ -1889,7 +2371,7 @@ if ($mode eq 'grab') {
 		update $bar if not $opt_quiet;
 		worker("base-parsing");
 
-		if (my @churls = get_channel_urls( $ch_did )) {
+		if (($COUNTRY) && ($COUNTRY ne 'hu') && ($COUNTRY ne 'ro') && (my @churls = get_channel_urls( $ch_did ))) {
 			$channel{'url'} = \@churls;
 		}
 		update $bar if not $opt_quiet;
@@ -1900,19 +2382,24 @@ if ($mode eq 'grab') {
 	}
 	$bar->finish() if not $opt_quiet;
 
-	# The grabber's source allows requests of more than one day per page. This can
-	# be done by specifying the i_xday argument with the GET request.
-	#
-	# To not load their server too much (requesting e.g. 14 channels in one shot
-	# should 'cause quite some traffic to the SQL server) I think we shouldn't 
-	# query for more then 5 channels per page. With the default of requesting data
-	# for 8 days this leads to 2 requests per channel and grab ...
+	if (!defined($COUNTRY) || (($COUNTRY ne 'hu') && ($COUNTRY ne 'ro'))) { # old, HTML based pages
+		# The grabber's source allows requests of more than one day per page. This can
+		# be done by specifying the i_xday argument with the GET request.
+		#
+		# To not load their server too much (requesting e.g. 14 channels in one shot
+		# should 'cause quite some traffic to the SQL server) I think we shouldn't 
+		# query for more then 5 channels per page. With the default of requesting data
+		# for 8 days this leads to 2 requests per channel and grab ...
 
-	$DAYSPERPAGE = int($opt_days / 5) + (($opt_days % 5) ? 1 : 0);
-	$DAYSPERPAGE = int($opt_days / $DAYSPERPAGE);
+  		$DAYSPERPAGE = int($opt_days / 5) + (($opt_days % 5) ? 1 : 0);
+		$DAYSPERPAGE = int($opt_days / $DAYSPERPAGE);
 	
-	# We have to request at minimum of four days
-	$DAYSPERPAGE = 4 if ($DAYSPERPAGE<4);
+		# We have to request at minimum of four days
+		$DAYSPERPAGE = 4 if ($DAYSPERPAGE<4);
+	}
+	else { # JSON
+	    	$DAYSPERPAGE = 1;
+	}
 
 	t "requesting $DAYSPERPAGE days per scraped webpage ..."; 
 
@@ -1974,7 +2461,7 @@ if ($mode eq 'grab') {
 				warn "\nWARNING: Channel with port-id $ch_did no more exists on the site, skipping it's program grabbing!";
 				next;
 			}
-			my @ps = process_table($idate, xid($ch_did), $ch_did, $iday);
+			my @ps = (($COUNTRY) && (($COUNTRY eq 'hu') || ($COUNTRY eq 'ro'))) ? process_json($idate, xid($ch_did), $ch_did, $iday) : process_table($idate, xid($ch_did), $ch_did, $iday);
 			$some_success = 1 if @ps;
 			worker("xml-writing");
 			$writer->write_programme($_) foreach @ps;
