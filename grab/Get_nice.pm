@@ -130,10 +130,11 @@ sub get_nice_json( $;$$ ) {
 }
 
 my $last_get_time;
+my $last_get_from_cache;
 sub get_nice_aux( $ ) {
     my $url = shift;
 
-    if (defined $last_get_time) {
+    if (defined $last_get_time && (defined $last_get_from_cache && !$last_get_from_cache) ) {
         # A page has already been retrieved recently.  See if we need
         # to sleep for a while before getting the next page - being
         # nice to the server.
@@ -156,6 +157,9 @@ sub get_nice_aux( $ ) {
 
     # expose the response object for those grabbers which need to process the headers, status code, etc.
     $Response = $r;
+
+    # set flag if last fetch was from cache 
+    $last_get_from_cache = (defined $r->{'_headers'}{'x-cached'} && $r->{'_headers'}{'x-cached'} == 1);
 
     if ($r->is_error) {
         # At the moment download failures seem rare, so the script dies if
