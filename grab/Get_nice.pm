@@ -35,7 +35,8 @@ package XMLTV::Get_nice;
 # 0.005065 : expose the LWP response object ($Response)
 # 0.005066 : support unknown tags in HTML::TreeBuilder ($IncludeUnknownTags)
 # 0.005067 : new method post_nice_json()
-our $VERSION = 0.005067;
+# 0.005070 : skip get_nice sleep for cached pages
+our $VERSION = 0.005070;
 
 use base 'Exporter';
 our @EXPORT = qw(get_nice get_nice_tree get_nice_xml get_nice_json post_nice_json error_msg);
