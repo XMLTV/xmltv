@@ -12,6 +12,9 @@
 
 use IO::File;
 use XMLTV;
+
+# Perl 5.24.1+ does not include '.' in @INC but we need some libs during build
+use lib '.';
 require 'filter/Grep.pm';
 
 my $out = shift @ARGV; die "no output file given" if not defined $out;
