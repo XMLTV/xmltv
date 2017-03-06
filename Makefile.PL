@@ -542,7 +542,8 @@ my @opt_components
        deps => [ 'grab/huro/tv_grab_huro'
                  => [ 'grab/huro/tv_grab_huro.in' ] ],
        grab_need_share => [ 'huro' ],
-       prereqs => { 'HTML::TreeBuilder' => 0 },
+       prereqs => { 'HTML::TreeBuilder' => 0,
+                    'JSON' => 0, },
      },
 
      { name => 'tv_grab_il',
