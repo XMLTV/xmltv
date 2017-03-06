@@ -251,7 +251,7 @@ elsif ($opt_default) {
     *ask = sub { print "$_[0] $_[2]\n"; $_[2] };
 }
 else {
-    require 'lib/Ask/Term.pm';
+    require './lib/Ask/Term.pm';
     *ask = \&XMLTV::Ask::Term::ask_boolean;
 }
 
