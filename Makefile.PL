@@ -906,18 +906,6 @@ my @opt_components
                     'Data::Dumper'      => 0, },
      },
 
-     { name => 'tv_grab_sd_json',
-       blurb => '$$ Grabber for schedulesDirect.org SD-JSON service (many countries)',
-       exes => [ 'grab/sd_json/tv_grab_sd_json' ],
-       prereqs => { 'DateTime' => 0,
-                    'Digest::SHA' => 0,
-                    'JSON' => 0,
-                    'LWP::Protocol::https' => 0,
-                    'LWP::UserAgent' => 0,
-                    'Storable' => 0,
-                    'Try::Tiny' => 0, },
-     },
-
      { name => 'tv_grab_zz_sdjson',
        blurb => '$$ Grabber for schedulesDirect.org SD-JSON service (many countries)',
        exes => [ 'grab/zz_sdjson/tv_grab_zz_sdjson' ],
@@ -931,7 +919,7 @@ my @opt_components
      },
 
      { name => 'tv_grab_zz_sdjson_sqlite',
-       blurb => '$$ Grabber for schedulesDirect.org SD-JSON service (many countries)',
+       blurb => '$$ Grabber for schedulesDirect.org SD-JSON service (many countries, using sqlite)',
        exes => [ 'grab/zz_sdjson_sqlite/tv_grab_zz_sdjson_sqlite' ],
        prereqs => { 'Encode' => 0,
                     'JSON' => 0,
