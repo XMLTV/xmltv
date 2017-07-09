@@ -483,6 +483,7 @@ my @opt_components
        pl_files => { 'grab/fi/merge.PL' => 'grab/fi/tv_grab_fi' },
        to_clean => [ 'grab/fi/tv_grab_fi' ],
        prereqs  => { 'HTML::TreeBuilder' => 0,
+                     'JSON'              => 0,
                      'Time::Local'       => 0, },
      },
 
