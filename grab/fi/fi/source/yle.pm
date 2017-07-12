@@ -25,8 +25,8 @@ fi::common->import();
 sub description { 'yle.fi' }
 
 my %languages = (
-    "fi" => "ohjelmaopas",
-    "sv" => "programguide",
+    "fi" => [ "areena", "opas"  ],
+    "sv" => [ "arenan", "guide" ],
 );
 
 # Grab channel list
@@ -36,30 +36,37 @@ sub channels {
   # yle.fi offers program guides in multiple languages
   foreach my $code (sort keys %languages) {
 
-    # Fetch & parse HTML
-    my $root = fetchTree("http://$languages{$code}.yle.fi/tv/opas");
+    # Fetch & parse HTML (do not ignore HTML5 <time>)
+    my $root = fetchTree("http://$languages{$code}[0].yle.fi/tv/$languages{$code}[1]",
+                         undef, undef, 1);
     if ($root) {
 
       #
       # Channel list can be found from this list:
       #
-      #  <ul class="channel-lists ...">
-      #    <li><h1 id="yle-tv1">Yle TV1...</h1>...</li>
-      #    <li><h1 id="yle-tv2">Yle TV2...</h1>...</li>
-      #    ...
-      #  </ul>
+      #   <ul class="guide-channels">
+      #    <li class="guide-channels__channel">
+      #	    <h2 class="channel-header">
+      #      <a>...<div class="channel-header__logo " ... aria-label="Yle TV1"></div></a>
+      #	    </h2>
+      #     ...
+      #    </li>
+      #	   ...
+      #   </ul>
       #
-      if (my $container = $root->look_down("class" => qr/^channel-lists\s+/)) {
-	if (my @headers = $container->find("h1")) {
-	  debug(2, "Source ${code}.yle.fi found " . scalar(@headers) . " channels");
-	  foreach my $header (@headers) {
-	    my $id   = $header->attr("id");
-	    my $name = $header->as_text();
+      if (my @divs = $root->look_down("_tag"       => "div",
+                                      "aria-label" => qr/^.+$/)) {
+	debug(2, "Source ${code}.yle.fi found " . scalar(@divs) . " channels");
+	foreach my $div (@divs) {
+	  my $name = $div->attr("aria-label");
 
-	    if (defined($id) && length($id) && length($name)) {
-	      debug(3, "channel '$name' ($id)");
-	      $channels{"${id}.${code}.yle.fi"} = "$code $name";
-	    }
+	  if (defined($name) && length($name)) {
+	    # replace space with hyphen
+	    my $id;
+	    ($id = $name) =~ s/ /-/g;
+
+	    debug(3, "channel '$name' ($id)");
+	    $channels{"${id}.${code}.yle.fi"} = "$code $name";
 	  }
 	}
       }
@@ -82,9 +89,10 @@ sub grab {
 
   # Get channel number from XMLTV id
   return unless my($channel, $code) = ($id =~ /^([^.]+)\.([^.]+)\.yle\.fi$/);
+  $channel =~ s/-/ /g;
 
   # Fetch & parse HTML (do not ignore HTML5 <time>)
-  my $root = fetchTree("http://$languages{$code}.yle.fi/tv/opas?t=" . $today->ymdd(),
+  my $root = fetchTree("http://$languages{$code}[0].yle.fi/tv/$languages{$code}[1]?t=" . $today->ymdd(),
 		       undef, undef, 1);
   if ($root) {
     my @objects;
@@ -92,76 +100,66 @@ sub grab {
     #
     # Each programme can be found in a separate <li> node
     #
-    #  <ul class="channel-lists ...">
-    #    <li>
-    #      <h1 id="yle-tv1">Yle TV1...</h1>
-    #      <ul>
-    #        <li class="program-entry ...">
-    #          <div class="program-label">
-    #            <time class="dtstart" datetime="2014-06-15T01:30:00.000+03:00">01:30</time>
-    #            <time class="dtend" datetime="2014-06-15T04:30:00.000+03:00"></time>
-    #            <div class="program-title">
-    #              ...
-    #              <a class="link-grey" href="...">Suunnistuksen Jukolan viesti</a>
-    #              <span class="label movie">Elokuva</span>
-    #              ...
-    #            </div>
-    #          </div>
-    #          ...
-    #          <div class="program-desc">
-    #            <p>66. Jukolan viesti. Kolmas, neljäs ja viides osuus...
-    #            ...
-    #            </p>
-    #          </div>
-    #        </li>
-    #        ...
-    #      </ul>
+    #   <ul class="guide-channels">
+    #    <li class="guide-channels__channel">
+    #	  <h2 class="channel-header">
+    #      <a>...<div class="channel-header__logo " ... aria-label="Yle TV1"></div></a>
+    #	  </h2>
+    #     <ul class="schedule-list">
+    #      <li class="schedule-card ..." ... itemtype="http://schema.org/Movie">
+    #       ...
+    #       <time datetime="2017-07-11T06:25:00+03:00" itemprop="startDate">06.25</time>
+    #       <time datetime="2017-07-11T06:55:00+03:00" itemprop="endDate"></time>
+    #       ...
+    #       <span itemprop="name">Mikä meitä lihottaa?</span>
+    #       ...
+    #       <span itemprop="description">1/8. Lihavuusepidemia. ...</span>
+    #       ...
+    #      </li>
     #      ...
+    #     </ul>
     #    </li>
-    #  </ul>
+    #	 ...
+    #   </ul>
     #
-    if (my $container = $root->look_down("class" => qr/^channel-lists\s+/)) {
-      if (my $header = $container->look_down("_tag" => "h1",
-					     "id"   => $channel)) {
-	if (my $parent = $header->parent()) {
-	  if (my @programmes = $parent->look_down("class" => qr/^program-entry\s+/)) {
-	    foreach my $programme (@programmes) {
-	      my $start = $programme->look_down("class", "dtstart");
-	      my $end   = $programme->look_down("class", "dtend");
-	      my $title  = $programme->look_down("class", "program-title");
-	      my $desc  = $programme->look_down("class", "program-desc");
+    if (my $div = $root->look_down("_tag"       => "div",
+                                   "aria-label" => qr/^${channel}$/)) {
+      if (my $parent = $div->look_up("class" => "guide-channels__channel")) {
+	if (my @programmes = $parent->look_down("class" => qr/^schedule-card\s+/)) {
+	  foreach my $programme (@programmes) {
+	    my $start = $programme->look_down("itemprop", "startDate");
+	    my $end   = $programme->look_down("itemprop", "endDate");
+	    my $title = $programme->look_down("itemprop", "name");
+	    my $desc  = $programme->look_down("itemprop", "description");
 
-	      if ($start && $end && $title && $desc) {
-		$start = UnixDate($start->attr("datetime"), "%s");
-		$end   = UnixDate($end->attr("datetime"),   "%s");
+	    if ($start && $end && $title && $desc) {
+	      $start = UnixDate($start->attr("datetime"), "%s");
+	      $end   = UnixDate($end->attr("datetime"),   "%s");
 
-		my $link     = $title->find("a");
-		my $category = $title->look_down("class" => "label movie") ? "elokuvat" : undef;
+	      my $category = $programme->attr("itemtype") =~ /Movie/ ? "elokuvat" : undef;
 
-		# NOTE: entries with same start and end time are invalid
-		if ($start && $end && $link && ($start != $end)) {
+	      # NOTE: entries with same start and end time are invalid
+	      if ($start && $end && ($start != $end)) {
 
-		  $title = $link->as_text();
-		  $title =~ s/^\s+//;
-		  $title =~ s/\s+$//;
+		$title = $title->as_text();
+		$title =~ s/^\s+//;
+		$title =~ s/\s+$//;
 
-		  if (length($title)) {
+		if (length($title)) {
 
-		    $desc = $desc->find("p");
-		    $desc = $desc ? $desc->as_text() : "";
-		    $desc =~ s/^\s+//;
-		    $desc =~ s/\s+$//;
+		  $desc = $desc->as_text();
+		  $desc =~ s/^\s+//;
+		  $desc =~ s/\s+$//;
 
-		    debug(3, "List entry $channel ($start -> $end) $title");
-		    debug(4, $desc);
-		    debug(4, $category) if defined $category;
+		  debug(3, "List entry $channel ($start -> $end) $title");
+		  debug(4, $desc);
+		  debug(4, $category) if defined $category;
 
-		    # Create program object
-		    my $object = fi::programme->new($id, $code, $title, $start, $end);
-		    $object->category($category);
-		    $object->description($desc);
-		    push(@objects, $object);
-		  }
+		  # Create program object
+		  my $object = fi::programme->new($id, $code, $title, $start, $end);
+		  $object->category($category);
+		  $object->description($desc);
+		  push(@objects, $object);
 		}
 	      }
 	    }

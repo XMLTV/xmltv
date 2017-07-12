@@ -31,6 +31,41 @@ use Time::Local qw(timelocal);
 use HTML::TreeBuilder;
 use XMLTV::Get_nice;
 
+#
+# Work around <meta>-in-body bug in HTML::TreeBuilder, See
+#
+#    https://rt.cpan.org/Public/Bug/Display.html?id=76051
+#
+# Example:
+#
+#  <html>
+#   <head>
+#   </head>
+#   <body>
+#    <div>
+#     <div>
+#      <meta itemprop="test" content="test">
+#      <div>
+#      </div>
+#     </div>
+#    </div>
+#   </body>
+#  </html>
+#
+# is incorrectly parsed as ($tree->dump() output):
+#
+#  html
+#   head
+#    meta
+#   body
+#    div
+#     div
+#    div   <--- incorrect level for innermost <div>
+#
+# Enable <meta> as valid body element
+$HTML::Tagset::isBodyElement{meta}++;
+$HTML::Tagset::isHeadOrBodyElement{meta}++;
+
 # Normal message, disabled with --quiet
 {
   my $quiet = 0;

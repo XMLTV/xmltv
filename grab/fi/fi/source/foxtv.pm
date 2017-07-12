@@ -77,7 +77,7 @@ sub grab {
 
 	  if ($start && $title) {
 	    if (my($hour, $minute) =
-		$start->as_text() =~ /^(\d{2}):(\d{2})$/) {
+		$start->as_text() =~ /^(\d{2})[:.](\d{2})$/) {
 	      my $desc  = $programme->find("p");
 	      my $extra = $programme->find("h4");
 
