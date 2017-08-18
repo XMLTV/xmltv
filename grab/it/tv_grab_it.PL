@@ -355,9 +355,7 @@ close IN_FH or die "cannot close $in: $!";
 # stuff for setting share dir
 die "usage: $_ output_file share_dir" if @ARGV != 2;
 
-# Perl 5.24.1+ does not include '.' in @INC but we need some libs during build
-use lib '.';
-require 'lib/set_share_dir.pl';
+require './lib/set_share_dir.pl';
 
 #warn "faccio $ARGV[0] $ARGV[1]\n";
 #set_share_dir('grab/it/tv_grab_it.in2', $ARGV[0], $ARGV[1]);

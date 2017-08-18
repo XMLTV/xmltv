@@ -8,10 +8,8 @@ use strict;
 sub print_list( $$ );
 
 my $out = shift @ARGV; die "no output file given" if not defined $out;
-my $in = 'lib/XMLTV.pm.in';
+my $in = './lib/XMLTV.pm.in';
 
-# Perl 5.24.1+ does not include '.' in @INC but we need some libs during build
-use lib '.';
 require $in;
 
 open(IN_FH, $in) or die "cannot read $in: $!";
