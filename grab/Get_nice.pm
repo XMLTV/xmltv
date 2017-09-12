@@ -36,6 +36,7 @@ package XMLTV::Get_nice;
 # 0.005066 : support unknown tags in HTML::TreeBuilder ($IncludeUnknownTags)
 # 0.005067 : new method post_nice_json()
 # 0.005070 : skip get_nice sleep for cached pages
+# 0.005070 : support passing HTML::TreeBuilder options via a hashref
 our $VERSION = 0.005070;
 
 use base 'Exporter';
@@ -71,12 +72,15 @@ sub get_nice( $ ) {
 
 # Fetch page and return as HTML::Tree object.
 # Optional arguments:
-# i) a function to put the page data through (eg, to clean up bad
-# characters) before parsing.
-# ii) convert incoming page to UNICODE using this codepage (use "UTF-8" for  strict utf-8)
+#   i) a function to put the page data through (eg, to clean up bad characters)
+#      before parsing.
+#  ii) convert incoming page to UNICODE using this codepage (use "UTF-8" for
+#      strict utf-8)
+# iii) a hashref containing options to configure the HTML::TreeBuilder object 
+#      before parsing
 #
-sub get_nice_tree( $;$$ ) {
-    my ($uri, $filter, $codepage) = @_;
+sub get_nice_tree( $;$$$ ) {
+    my ($uri, $filter, $codepage, $htb_opts) = @_;
     require HTML::TreeBuilder;
     my $content = get_nice $uri;
     $content = $filter->($content) if $filter;
@@ -86,9 +90,15 @@ sub get_nice_tree( $;$$ ) {
     else {
         $content = decode('UTF-8', $content);
     }
+
     my $t = HTML::TreeBuilder->new();
-		$t->ignore_unknown(!$IncludeUnknownTags);
-		$t->parse($content) or die "cannot parse content of $uri\n";
+    $t->ignore_unknown(!$IncludeUnknownTags);
+
+    if (ref $htb_opts eq 'HASH') {
+        $t->$_($htb_opts->{$_}) foreach (keys %$htb_opts);
+    }
+
+    $t->parse($content) or die "cannot parse content of $uri\n";
     $t->eof;
     return $t;
 }
