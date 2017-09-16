@@ -353,8 +353,8 @@ sub ValidateGrabber {
     }
 
     if( !compare_files( "$output.sorted.xml", "${op}1_2-2.sorted.xml",
-			"${op}_1_2.diff" ) ) {
-	w "The data is not additive. See ${op}_1_2.diff";
+			"${op}1_2.diff" ) ) {
+	w "The data is not additive. See ${op}1_2.diff";
 	push @errors, "notadditive";
     }
 
