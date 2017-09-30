@@ -437,19 +437,20 @@ my @opt_components
                     'HTTP::Cache::Transparent' => 0, },
      },
 
-     { name => 'tv_grab_eu_egon',
-       blurb => 'Grabber for german speaking area (Egon zappt)',
-       exes => [ 'grab/eu_egon/tv_grab_eu_egon' ],
-       pl_files => { 'grab/eu_egon/tv_grab_eu_egon.PL'
-                     => 'grab/eu_egon/tv_grab_eu_egon' },
-       to_clean => [ 'grab/eu_egon/tv_grab_eu_egon' ],
-       deps => [ 'grab/eu_egon/tv_grab_eu_egon'
-                 => [ 'grab/se_swedb/tv_grab_se_swedb.in' ] ],
-       prereqs => { 'XML::LibXML'    => 0,
-                    'Compress::Zlib' => 0,
-                    'IO::Stringy'    => 0,
-                    'HTTP::Cache::Transparent' => 0, },
-     },
+     # knowledgejunkie 2017-09-30 disbled as no longer providing data
+     # { name => 'tv_grab_eu_egon',
+     #   blurb => 'Grabber for german speaking area (Egon zappt)',
+     #   exes => [ 'grab/eu_egon/tv_grab_eu_egon' ],
+     #   pl_files => { 'grab/eu_egon/tv_grab_eu_egon.PL'
+     #                 => 'grab/eu_egon/tv_grab_eu_egon' },
+     #   to_clean => [ 'grab/eu_egon/tv_grab_eu_egon' ],
+     #   deps => [ 'grab/eu_egon/tv_grab_eu_egon'
+     #             => [ 'grab/se_swedb/tv_grab_se_swedb.in' ] ],
+     #   prereqs => { 'XML::LibXML'    => 0,
+     #                'Compress::Zlib' => 0,
+     #                'IO::Stringy'    => 0,
+     #                'HTTP::Cache::Transparent' => 0, },
+     # },
 
      { name => 'tv_grab_eu_epgdata',
        blurb => '$$ Grabber for some European countries (epgdata.com)',
