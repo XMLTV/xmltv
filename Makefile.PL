@@ -939,7 +939,8 @@ my @opt_components
                     'DBI' => 0,
                     'DBD::SQLite' => 0,
                     'Scalar::Util' => 0,
-                    'Data::Dumper' => 0, },
+                    'Data::Dumper' => 0,
+                    'LWP::UserAgent::Determined' => 0, },
      },
 
 
