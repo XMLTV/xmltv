@@ -723,6 +723,14 @@ my @opt_components
                     'XML::LibXML' => 0,
                     'LWP'         => 0, },
      },
+     { name => 'tv_grab_pt_vodafone',
+       blurb => 'Grabber for Portugal (Vodafone)',
+       exes => [ 'grab/pt_vodafone/tv_grab_pt_vodafone' ],
+       prereqs => { 'DateTime'    => 0,
+                    'XML::LibXML' => 0,
+                    'JSON'        => 0,
+                    'LWP'         => 0, },
+     },
 
 # rmeden 2011-06-12 not working
 #    { name => 'tv_grab_re',

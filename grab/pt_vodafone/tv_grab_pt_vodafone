@@ -1,0 +1,393 @@
+#!/usr/bin/perl -w
+
+=pod
+
+=head1 NAME
+
+tv_grab_pt_vodafone - Grab TV listings for Vodafone in Portugal.
+
+=head1 SYNOPSIS
+
+tv_grab_pt_vodafone --help
+
+tv_grab_pt_vodafone --configure [--config-file FILE]
+
+tv_grab_pt_vodafone [--config-file FILE]
+                 [--days N] [--offset N] [--channel xmltvid,xmltvid,...]
+                 [--output FILE] [--quiet] [--debug]
+
+tv_grab_pt_vodafone --list-channels [--config-file FILE]
+                 [--output FILE] [--quiet] [--debug]
+
+
+=head1 DESCRIPTION
+
+Output TV and listings in XMLTV format for many stations
+available in Portugal. This program consumes the EPG service
+from Vodafone at L<https://tvnetvoz.vodafone.pt/sempre-consigo/>.
+
+First you must run B<tv_grab_pt_vodafone --configure> to choose which stations
+you want to receive.
+
+Then running B<tv_grab_pt_vodafone> with no arguments will get a listings for
+the stations you chose for all available days including today.
+
+=head1 OPTIONS
+
+B<--configure> Prompt for which stations to download and write the
+configuration file.
+
+B<--config-file FILE> Set the name of the configuration file, the
+default is B<~/.xmltv/tv_grab_pt_vodafone.conf>.  This is the file written by
+B<--configure> and read when grabbing.
+
+B<--output FILE> When grabbing, write output to FILE rather than
+standard output.
+
+B<--days N> When grabbing, grab N days rather than everything available.
+
+B<--offset N> Start grabbing at today + N days.
+
+B<--quiet> Only print error-messages on STDERR.
+
+B<--debug> Provide more information on progress to stderr to help in
+debugging.
+
+B<--list-channels>    Output a list of all channels that data is available
+                      for. The list is in xmltv-format.
+
+B<--capabilities> Show which capabilities the grabber supports. For more
+information, see L<http://wiki.xmltv.org/index.php/XmltvCapabilities>
+
+B<--version> Show the version of the grabber.
+
+B<--help> Print a help message and exit.
+
+=head1 ERROR HANDLING
+
+If the grabber fails to download data from webstep, it will print an
+errormessage to STDERR and then exit with a status code of 1 to indicate
+that the data is missing.
+
+=head1 ENVIRONMENT VARIABLES
+
+The environment variable HOME can be set to change where configuration
+files are stored. All configuration is stored in $HOME/.xmltv/. On Windows,
+it might be necessary to set HOME to a path without spaces in it.
+
+=head1 CREDITS
+Kevin Groeneveld (kgroeneveld at gmail dot com)
+
+This grabber uses code from tv_grab_pt_meo by Karl Dietz, dekarl -at- users -dot- sourceforge -dot- net.
+This grabber uses code from tv_grab_zz_sdjson by Kevin Groeneveld, kgroeneveld -at- gmail -dot- com.
+The original idea of this grabber came from higuita's shell script,
+see L<https://github.com/higuita/vodafone.pt-xmltv>.
+
+=head1 AUTHOR
+Nuno Sénica, nsenica -at- gmail -dot- com.
+
+=head1 BUGS
+
+None known.
+
+=cut
+
+use strict;
+use utf8;
+use DateTime;
+use Encode; # used to convert 'perl strings' into 'utf-8 strings'
+use XML::LibXML;
+use XMLTV::Configure::Writer;
+use XMLTV::Get_nice qw/get_nice/;
+use XMLTV::Options qw/ParseOptions/;
+use JSON;
+use JSON::XS;
+
+my $maxdays = 1+7; # data source is limited to n days (including today)
+
+my $grabber_name = 'tv_grab_pt_vodafone';
+my $grabber_version = '1.00';
+
+my $json_baseurl = 'https://tvnetvoz.vodafone.pt/';
+my $json_api = '/sempre-consigo/';
+$ENV{'PERL_LWP_SSL_VERIFY_HOSTNAME'} = 0;
+
+my $ua = LWP::UserAgent->new(agent => "$grabber_name $grabber_version");
+$ua->default_header('accept-encoding' => scalar HTTP::Message::decodable());
+
+my( $opt, $conf ) = ParseOptions( {
+    grabber_name => $grabber_name,
+    capabilities => [qw/apiconfig baseline manualconfig preferredmethod/],
+    listchannels_sub => \&list_channels,
+    stage_sub => \&config_stage,
+    version => '$Id: $grabber_name,v $grabber_version 2017/12/17 09:30:00 nsenica Exp $',
+    description => "Portugal (Vodafone)",
+    preferredmethod => 'allatonce',
+    defaults => { days => $maxdays, offset => 0, quiet => 1, debug => 0 },
+} );
+
+# limit to maxdays in the future
+if ($opt->{offset} + $opt->{days} > $maxdays) {
+    $opt->{days} = $maxdays - $opt->{offset};
+}
+
+if ($opt->{days} < 1) {
+    $opt->{days} = 0;
+}
+
+# Get the actual data and print it to stdout.
+my $is_success=1;
+
+my $startDate = DateTime->from_epoch( epoch => time () );
+$startDate->set_time_zone( 'Europe/Lisbon' );
+$startDate->truncate( to => 'day' );
+$startDate->add( days => $opt->{offset} );
+my $endDate=$startDate->clone()->add( days => $opt->{days} );
+$endDate->add( seconds => -1 );
+
+my %w_args = (
+    cutoff => '000000',
+    days => $opt->{days},
+    encoding => 'UTF-8',
+    offset => $opt->{offset},
+);
+
+my $writer = new XMLTV::Writer( %w_args );
+
+$writer->start({
+    'generator-info-name' => "XMLTV/".$opt->{version},
+    'generator-info-url' => 'http://www.xmltv.org/',
+    'source-info-name' => 'EPG Service for Vodafone',
+    'source-info-url' => $json_baseurl.$json_api."/guia-tv",
+});
+
+if ($opt->{days} > 0) {
+    if( !$opt->{quiet} ) {
+        print( STDERR "fetching data\n" );
+    }
+    get_epg( $writer, $startDate, $endDate );
+} else {
+    if( !$opt->{quiet} ) {
+        print( STDERR "no data available for the requested time period\n" );
+    }
+    $is_success = 0;
+}
+
+
+$writer->end();
+
+if( $is_success ) {
+     exit 0;
+} else {
+     exit 1;
+}
+
+sub config_stage
+{
+     my( $stage, $conf ) = @_;
+     die "Unknown stage $stage" if $stage ne "start";
+
+     my $result;
+     my $writer = new XMLTV::Configure::Writer( OUTPUT => \$result, encoding => 'utf-8' );
+     $writer->start( { grabber => 'tv_grab_pt_vodafone' } );
+     $writer->end( 'select-channels' );
+
+     return $result;
+}
+
+sub list_channels
+{
+     my( $conf, $opt ) = @_;
+
+     # Return a string containing an xmltv-document with <channel>-elements
+     # for all available channels.
+
+     my $channellist=json_request( 'get', 'datajson/epg/channels.jsp' );
+
+     $channellist = $channellist->{result}->{channels};
+
+     my $output=XML::LibXML::Document->new( '1.0', 'utf-8' );
+     my $root=XML::LibXML::Element->new( 'tv' );
+     $output->setDocumentElement( $root );
+
+     foreach my $channel( @$channellist ) {
+         my $name=$channel->{name};
+         my $sigla=$channel->{id};
+         my $tmp=XML::LibXML::Element->new( 'channel' );
+         $tmp->setAttribute( 'id', encode( 'UTF-8', $sigla ) );
+         $tmp->appendTextChild( 'display-name', encode( 'UTF-8', $name ) );
+         $root->appendChild( $tmp );
+     }
+
+     return $output->toString();
+}
+
+sub get_epg
+{
+    my( $writer, $startDate, $endDate ) = @_;
+
+    my $baseRequest = 'epg.do?action=getPrograms';
+    my @channelList = @{$conf->{channel}};
+
+    my $curDate = $startDate;
+
+    my %xmlchannels;
+    my %xmlprogs;
+    while ($curDate < $endDate) {
+
+        print( STDERR "requesting programme for ".$curDate->ymd()."\n" )  if( !$opt->{quiet} );
+        my $epgSource = json_request('post', $baseRequest, 'chanids='.(join ",",@channelList).'&day='.$curDate->ymd());
+
+        for my $channel ( @{ $epgSource->{result}->{channels} || [] }) {
+
+            my $channelId = make_channelid( $channel->{callLetter});
+            my %ch = (
+                'display-name' => [ [ sanitizeUTF8($channel->{name}), 'pt' ] ],
+                'id' => $channelId,
+                'icon' => [ { src =>  "https://tvnetvoz.vodafone.pt/sempre-consigo/imgs?action=logo_channel_tablet_details&chanid=" .$channel->{id}. "&mime=true&no_default=false" } ],
+            );
+
+            $xmlchannels{ $channelId } = \%ch ;
+
+            for my $programme ( @{ $channel->{programList} }) {
+
+                my %prog;
+                $prog{channel} = $channelId;
+                $prog{title} = [ [ parse_title(\%prog, sanitizeUTF8($programme->{programTitle})), 'pt' ] ];
+                $prog{desc} = [ [ sanitizeUTF8($programme->{programDetails}), 'pt' ] ];
+
+                my ($dtstart, $dtend) = make_dates($programme->{date}, $programme->{startTime}, $programme->{endTime});
+
+                $prog{start} = $dtstart;
+                $prog{stop} = $dtend;
+
+                # We can get the same programme for two different days if it goes past midnight.
+                # Lets remove duplicates here.
+                $xmlprogs{$channelId}{ $dtstart, $dtend } = \%prog;
+
+            }
+        }
+
+        $curDate->add( days => 1);
+    }
+
+    $writer->write_channel($_) for values %xmlchannels;
+    for my $ch (keys %xmlchannels) {
+        $writer->write_programme($_) for values %{ $xmlprogs{$ch} };
+    }
+}
+
+sub sanitizeUTF8 {
+    my ($str) = @_;
+
+    $str =~ s/[^[:print:]]+//g;
+
+#    my $octets = decode('UTF-8', $str, Encode::FB_DEFAULT);
+
+    return encode('UTF-8', $str, Encode::FB_CROAK);
+}
+
+sub json_request {
+    my ($method, $path, $content) = @_;
+
+    my $url;
+    if($path =~ /^\//) {
+        $url = $json_baseurl . $path;
+    }
+    else {
+        $url = $json_baseurl . $json_api . $path;
+    }
+
+    my @params;
+    push(@params, content_type => 'application/x-www-form-urlencoded; charset=UTF-8');
+    push(@params, content => $content) if defined $content;
+    my $response = $ua->$method($url, @params);
+    if($response->is_success()) {
+        return JSON::XS->new->utf8(0)->decode( $response->decoded_content());
+    }
+    else {
+        my $msg = $response->decoded_content();
+
+        if($response->header('content-type') =~ m{text/html;charset=UTF-8}i) {
+            my $error = decode_json($msg);
+
+            $msg = "Server (ID=$error->{'serverID'} Time=$error->{'datetime'}) returned an error:\n"
+                ."$error->{'message'} ($error->{'code'}/$error->{'response'})";
+        }
+
+        die $msg, "\n";
+    }
+}
+
+
+sub make_dates
+{
+    my( $date, $startTime, $endTime ) = @_;
+
+    my($day, $month, $year) =
+        ($date =~ m|(\d{2})-(\d{2})-(\d{4})|);
+
+    my ($startHour, $startMinute) = ( $startTime =~ m|(\d{1,2}):(\d{2})|);
+    my ($endHour, $endMinute) = ( $endTime =~ m|(\d{1,2}):(\d{2})|);
+
+    my $dtstart = DateTime->new( year   => $year,
+                            month  => $month,
+                            day    => $day,
+                            hour   => $startHour,
+                            minute => $startMinute,
+                            second => 0,
+                            time_zone => 'Europe/Lisbon',
+    );
+
+    my $dtend = DateTime->new( year   => $year,
+                            month  => $month,
+                            day    => $day,
+                            hour   => $endHour,
+                            minute => $endMinute,
+                            second => 0,
+                            time_zone => 'Europe/Lisbon',
+    );
+
+    if ($dtend < $dtstart) {
+        $dtend->add(days => 1);
+    }
+
+    return ($dtstart->strftime( '%Y%m%d%H%M%S %z' ), $dtend->strftime( '%Y%m%d%H%M%S %z' ));
+}
+
+sub make_channelid
+{
+    my( $id ) = @_;
+    $id = lc( $id );      # turn into lowercase
+    $id =~ s|\s+||g;      # remove whitespace
+    $id =~ s|&||g;        # remove ampersand
+    $id =~ s|!||g;        # remove !
+    $id =~ s|\x{e7}|c|g;  # turn c-cecille into plain c
+    $id =~ s|\+|-plus|g;  # turn + into -plus
+    $id .= '.tv.vodafone.pt'; # append domain part
+    return( $id );
+}
+
+sub parse_title
+{
+    my $prog = shift;
+    my $title = shift;
+
+    if (!defined ($title)) {
+        return undef;
+    }
+
+    if ($title =~ m|\s+T\d+\s+-\s+Ep\.\s+\d+$|) {
+        # found season and episode in title
+        my ($season, $episode) = ($title =~ m|\s+T(\d+)\s+-\s+Ep\.\s+(\d+)$|);
+        $title =~ s|\s+T\d+\s+-\s+Ep\.\s+\d+$||;
+        $prog->{'episode-num'} =  [ [ ($season - 1).' . '.($episode-1).' .', 'xmltv_ns' ] ];
+    } elsif ($title =~ m|\s+-\s+Ep\.\s+\d+$|) {
+        # found episode in title
+        my ($episode) = ($title =~ m|\s+-\s+Ep\.\s+(\d+)$|);
+        $title =~ s|\s+-\s+Ep\.\s+\d+$||;
+        $prog->{'episode-num'} = [ [ '. '.($episode-1).' .', 'xmltv_ns' ] ];
+    }
+
+    return $title;
+}
