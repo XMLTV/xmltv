@@ -84,7 +84,7 @@ sub LoadConfig
 	# the equal-sign. White-space after the equal-sign is considered
 	# part of the value, except for white-space at the end of the line
 	# which is ignored.
-	my( $key, $sign, $value ) = ($line=~ /^(\S+)([=!])(.*?)\s*(#.*)?$/ );
+	my( $key, $sign, $value ) = ($line=~ /^(\S+?)([=!])(.*?)\s*(#.*)?$/ );
 
 	return undef unless defined $key;
 	if( $sign eq '=' )
