@@ -485,7 +485,7 @@ my @opt_components
        prereqs  => { 'Encode'               => 0,
                      'HTML::TreeBuilder'    => 0,
                      'JSON'                 => 0,
-		     'LWP::Protocol::https' => 0,
+										 'LWP::Protocol::https' => 0,
                      'Time::Local'          => 0, },
      },
 
@@ -562,6 +562,17 @@ my @opt_components
 #                    'IO::Scalar' => 0,
 #                  },
 #     },
+
+     { name     => 'tv_grab_in_toi',
+       blurb => 'Grabber for India (Times of India)',
+       exes     => [ 'grab/in/tv_grab_in_toi' ],
+       prereqs => { 'XML::LibXML'  => 0,
+                    'LWP::Simple'  => 0,
+                    'Date::Calc'   => 0,
+                    'URI::Escape'  => 0,
+                    'JSON'         => 0,
+                    'Data::Dumper' => 0, },
+     },
 
      { name => 'tv_grab_is',
        blurb => 'Grabber for Iceland',
