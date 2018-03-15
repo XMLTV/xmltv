@@ -565,7 +565,7 @@ my @opt_components
 
      { name     => 'tv_grab_in_toi',
        blurb => 'Grabber for India (Times of India)',
-       exes     => [ 'grab/in/tv_grab_in_toi' ],
+       exes     => [ 'grab/in_toi/tv_grab_in_toi' ],
        prereqs => { 'XML::LibXML'  => 0,
                     'LWP::Simple'  => 0,
                     'Date::Calc'   => 0,
