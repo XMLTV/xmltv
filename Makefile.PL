@@ -289,19 +289,6 @@ my @opt_components
                     'Date::Language'    => 0, },
      },
 
-# 2008-11-09 disabled after ident string was blocked
-#     { name => 'tv_grab_be',
-#       blurb => 'Grabber for Belgium and Luxemburg',
-#       exes => [ 'grab/be/tv_grab_be' ],
-#       pl_files => { 'grab/be/tv_grab_be.PL' => 'grab/be/tv_grab_be' },
-#       share_files => { 'grab/be/channel_ids_fr' => 'tv_grab_be/channel_ids_fr',
-#                        'grab/be/channel_ids_nl' => 'tv_grab_be/channel_ids_nl' },
-#       to_clean => [ 'grab/be/tv_grab_be' ],
-#       deps => [ 'grab/be/tv_grab_be' => [ 'grab/be/tv_grab_be.in' ] ],
-#       grab_need_share => [ 'be' ],
-#       prereqs => { 'HTML::Entities' => 1.27 } ,
-#     },
-
 #     { name => 'tv_grab_br',
 #       blurb => 'Grabber for Brazil',
 #       exes => [ 'grab/br/tv_grab_br' ],
