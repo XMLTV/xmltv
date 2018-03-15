@@ -289,17 +289,6 @@ my @opt_components
                     'Date::Language'    => 0, },
      },
 
-# disabled since blocked by www.fernsehen.ch guys
-#     { name     => 'tv_grab_ch',
-#       blurb    => 'Grabber for Switzerland',
-#       exes     => [ 'grab/ch/tv_grab_ch' ],
-#       deps     => [ 'grab/ch/tv_grab_ch' => [ 'grab/ch/tv_grab_ch.in' ] ],
-#       pl_files => { 'grab/ch/tv_grab_ch.PL' => 'grab/ch/tv_grab_ch' },
-#       to_clean => [ 'grab/ch/tv_grab_ch' ],
-#       share_files => { 'grab/ch/channel_ids' => 'tv_grab_ch/channel_ids' },
-#       grab_need_share => [ 'ch' ],
-#     },
-
 # disabled after ident string was blocked
 #     { name     => 'tv_grab_ch_bluewin',
 #       blurb    => 'Grabber for Switzerland',
