@@ -573,36 +573,6 @@ my @opt_components
                     'File::Path'     => 0, },
      },
 
-#
-# 2017-01-22  tv_grab_uk_atlas removed due to site rule changes
-#
-#     { name => 'tv_grab_uk_atlas',
-#       blurb => 'Fast grabber for UK and Ireland using Atlas database',
-#       exes => [ 'grab/uk_atlas/tv_grab_uk_atlas' ],
-#       share_files => {
-#            'grab/uk_atlas/tv_grab_uk_atlas.user.map.conf'
-#                => 'tv_grab_uk_atlas/tv_grab_uk_atlas.user.map.conf',
-#            'grab/uk_atlas/tv_grab_uk_atlas.pa.genres.conf'
-#                => 'tv_grab_uk_atlas/tv_grab_uk_atlas.pa.genres.conf',
-#            'grab/uk_atlas/tv_grab_uk_atlas.map.genres.conf'
-#                => 'tv_grab_uk_atlas/tv_grab_uk_atlas.map.genres.conf',
-#            'grab/uk_atlas/tv_grab_uk_atlas.map.channels.conf'
-#                => 'tv_grab_uk_atlas/tv_grab_uk_atlas.map.channels.conf',
-#            'grab/uk_atlas/cgi-bin/getatlas.pl'
-#                => 'tv_grab_uk_atlas/cgi-bin/getatlas.pl', },
-#       prereqs => { 'HTTP::Cache::Transparent' => 1.0,
-#                    'LWP::UserAgent'  => 0,
-#                    'HTTP::Cookies'   => 0,
-#                    'JSON::PP'        => 0,
-#                    'DateTime'        => 0,
-#                    'Date::Parse'     => 0,
-#                    'Encode'          => 0,
-#                    'URI::Escape'     => 0,
-#                    'File::Path'      => 0,
-#                    'Data::Dumper'    => 0,
-#                    'Pod::Usage'      => 0, },
-#     },
-
      { name => 'tv_grab_uk_bleb',
        blurb => 'Fast alternative grabber for the UK',
        exes => [ 'grab/uk_bleb/tv_grab_uk_bleb' ],
