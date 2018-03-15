@@ -495,19 +495,6 @@ my @opt_components
          'HTML::TokeParser' => 0, },
      },
 
-# 2013-02-02 disabled after site changes broke grabber (no <IMG> tags!)
-#     { name     => 'tv_grab_na_icons',
-#       blurb    => 'Grabber for North American Channel Icons',
-#       exes     => [ 'grab/na_icons/tv_grab_na_icons' ],
-#       deps     => [ 'grab/na_icons/tv_grab_na_icons' => [ 'grab/na_icons/tv_grab_na_icons.in' ] ],
-#       pl_files => { 'grab/na_icons/tv_grab_na_icons.PL' => 'grab/na_icons/tv_grab_na_icons' },
-#       to_clean => [ 'grab/na_icons/tv_grab_na_icons' ],
-#       prereqs  => { 'HTML::TreeBuilder' => 0,
-#                     'XML::Twig'         => 3.28,
-#                     'WWW::Mechanize' => 1.02 },
-#       grab_need_share => [ 'na_icons' ],
-#     },
-
      { name => 'tv_grab_na_tvmedia',
        blurb => 'Grabber for North America (TVMedia)',
        exes => [ 'grab/na_tvmedia/tv_grab_na_tvmedia' ],
