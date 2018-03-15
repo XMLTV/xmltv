@@ -332,12 +332,6 @@ my @opt_components
        prereqs => { 'HTML::TreeBuilder' => 0, },
      },
 
-# rmeden 2012-06-11 broken since 2012-03-29
-#     { name => 'tv_grab_es_miguiatv',
-#       blurb => 'Alternative grabber for Spain using miguiatv.com',
-#       exes => [ 'grab/es_miguiatv/tv_grab_es_miguiatv' ],
-#       prereqs => { 'HTML::TreeBuilder' => 0 } },#
-
      { name => 'tv_grab_eu_dotmedia',
        blurb => 'Grabber for Europe (xmltv.se / dotmedia)',
        exes => [ 'grab/eu_dotmedia/tv_grab_eu_dotmedia' ],
