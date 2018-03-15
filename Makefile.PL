@@ -289,17 +289,6 @@ my @opt_components
                     'Date::Language'    => 0, },
      },
 
-# Disabled 2006-04-12 since it doesn't provide data anymore.
-#     { name     => 'tv_grab_au',
-#       blurb    => 'Grabber for Australia',
-#       exes     => [ 'grab/au/tv_grab_au' ],
-#       deps     => [ 'grab/au/tv_grab_au' => [ 'grab/au/tv_grab_au.in' ] ],
-#       pl_files => { 'grab/au/tv_grab_au.PL' => 'grab/au/tv_grab_au' },
-#       to_clean => [ 'grab/au/tv_grab_au' ],
-#       share_files => { 'grab/au/channel_ids' => 'tv_grab_au/channel_ids' },
-#       grab_need_share => [ 'au' ],
-#     },
-
 # 2008-11-09 disabled after ident string was blocked
 #     { name => 'tv_grab_be',
 #       blurb => 'Grabber for Belgium and Luxemburg',
