@@ -516,12 +516,6 @@ my @opt_components
                     'JSON::PP'     => 0, },
      },
 
-# 2008-07-12 - removed by rmeden, not getting programs for a while.
-#     { name => 'tv_grab_nl_wolf',
-#       blurb => 'Alternative grabber for the Netherlands',
-#       exes => [ 'grab/nl_wolf/tv_grab_nl_wolf' ],
-#       prereqs => { 'HTML::TreeBuilder' => 0 } },
-
 # depreciate tv_grab_no as it is no longer supported (per author, cwattengard@gmail.com)
 # has been replaced by tv_grab_no_gfeed
 #
