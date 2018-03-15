@@ -584,20 +584,6 @@ my @opt_components
        prereqs => { 'IO::Stringy' => 0, 'Archive::Zip' => 0, },
      },
 
-# [bilbo_uk] The Guardian have removed their online tv listings service @ 1/Oct/14
-#     { name => 'tv_grab_uk_guardian',
-#       blurb => 'Grabber for UK and Ireland using The Guardian website',
-#       exes => [ 'grab/uk_guardian/tv_grab_uk_guardian' ],
-#       share_files => {
-#            'grab/uk_guardian/tv_grab_uk_guardian.map.conf'
-#                => 'tv_grab_uk_guardian/tv_grab_uk_guardian.map.conf',
-#       },
-#       prereqs => { 'HTTP::Cache::Transparent' => 1.0,
-#                    'DateTime'        => 0,
-#                    'File::Path'      => 0,
-#                    'Encode'          => 0, },
-#     },
-
 # knowledgejunkie 2016-06-17 data feed turned off after nearly 12 years
 #    { name => 'tv_grab_uk_rt',
 #      blurb => 'Grabber for UK and Ireland (Radio Times)',
