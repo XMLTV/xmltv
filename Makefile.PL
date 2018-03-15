@@ -516,15 +516,6 @@ my @opt_components
                     'JSON::PP'     => 0, },
      },
 
-# depreciate tv_grab_no as it is no longer supported (per author, cwattengard@gmail.com)
-# has been replaced by tv_grab_no_gfeed
-#
-#     { name => 'tv_grab_no',
-#       blurb => 'Grabber for Norway',
-#       exes => [ 'grab/no/tv_grab_no' ],
-#       prereqs => { 'HTML::Entities' => 1.27 },
-#     },
-
 # 2016-03-16 - disabled by knowledgejunkie, not well for many months
 #              and data.epg.no server no longer online
 #     { name => 'tv_grab_no_gfeed',
