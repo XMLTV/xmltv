@@ -502,13 +502,6 @@ my @opt_components
                     'LWP::Simple' => 0, },
      },
 
-# rmeden 2008-02-13 disabled after site changes broke grabber
-#    { name => 'tv_grab_nc',
-#      blurb => 'Grabber for Nouvelle Caledonie Island (France)',
-#      exes => [ 'grab/nc/tv_grab_nc' ],
-#      prereqs => { 'HTML::TreeBuilder' => 0 ,
-#                   'HTML::Entities'    => 0 } },
-
      { name => 'tv_grab_nl',
        blurb => 'Grabber for the Netherlands',
        exes => [ 'grab/nl/tv_grab_nl' ],
