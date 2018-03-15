@@ -472,14 +472,6 @@ my @opt_components
                     'Time::HiRes' => 0, } ,
      },
 
-# 2009-03-05 rmeden - source site seems to be blocking our agent string
-#     { name => 'tv_grab_jp',
-#       blurb => 'Grabber for Japan',
-#       exes => [ 'grab/jp/tv_grab_jp' ],
-#       prereqs => { 'HTML::TreeBuilder' => 0,
-#                    'Text::Kakasi' => 0 },
-#     },
-
      { name     => 'tv_grab_na_dd',
        blurb => '$$ Grabber for North America-schedulesdirect.org',
        exes     => [ 'grab/na_dd/tv_grab_na_dd' ],
