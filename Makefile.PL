@@ -326,12 +326,6 @@ my @opt_components
                     'Date::Language'    => 0, },
      },
 
-# rmeden 2012-06-11 broken since 2011-11-25
-#     { name => 'tv_grab_ee',
-#       blurb => 'Grabber for Estonia',
-#       exes => [ 'grab/ee/tv_grab_ee' ],
-#       prereqs => { 'LWP::Simple' => 0 } },
-
 # 2009-03-08 removed due to breakage after source site changes
 #     { name => 'tv_grab_es',
 #       blurb => 'Grabber for Spain - Analogic Terrestrial/Cable',
