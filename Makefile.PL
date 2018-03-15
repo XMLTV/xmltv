@@ -289,14 +289,6 @@ my @opt_components
                     'Date::Language'    => 0, },
      },
 
-# disabled because it broke due to site changes 2009-03-08
-#     { name => 'tv_grab_br_net',
-#       blurb => 'Grabber for Brazil NET Cable',
-#       exes => [ 'grab/br_net/tv_grab_br_net' ],
-#       prereqs => { 'WWW::Mechanize' => 1.16 ,
-#                   'HTTP::Cookies' => 1.39 , }
-#     },
-
 # disabled since blocked by www.fernsehen.ch guys
 #     { name     => 'tv_grab_ch',
 #       blurb    => 'Grabber for Switzerland',
