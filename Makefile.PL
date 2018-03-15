@@ -696,22 +696,6 @@ my @opt_components
 #       prereqs => { 'HTML::Entities' => 1.27 },
 #     },
 
-# 2016-03-16 - disabled by knowledgejunkie, not well for many months
-#              and data.epg.no server no longer online
-#     { name => 'tv_grab_no_gfeed',
-#       blurb => 'Grabber for Norway (gfeed.info)',
-#       exes => [ 'grab/no_gfeed/tv_grab_no_gfeed' ],
-#       pl_files => { 'grab/no_gfeed/tv_grab_no_gfeed.PL'
-#                     => 'grab/no_gfeed/tv_grab_no_gfeed' },
-#       to_clean => [ 'grab/no_gfeed/tv_grab_no_gfeed' ],
-#       deps => [ 'grab/no_gfeed/tv_grab_no_gfeed'
-#                 => [ 'grab/se_swedb/tv_grab_se_swedb.in' ] ],
-#       prereqs => { 'XML::LibXML'    => 0,
-#                    'Compress::Zlib' => 0,
-#                    'IO::Stringy'    => 0,
-#                    'HTTP::Cache::Transparent' => 0, },
-#     },
-
 #
 # 2017-01-22 Broken due to site changes
 #
