@@ -426,15 +426,6 @@ my @opt_components
        exes => [ 'grab/il/tv_grab_il' ],
      },
 
-# 2013-05-13 xmltv feed disabled by What's On due to TOS violations. It may come back
-#     { name     => 'tv_grab_in',
-#       blurb => 'Grabber for India (zipazap.com)',
-#       exes     => [ 'grab/in/tv_grab_in' ],
-#       prereqs => { 'XML::LibXML' => 0,
-#                    'IO::Scalar' => 0,
-#                  },
-#     },
-
      { name     => 'tv_grab_in_toi',
        blurb => 'Grabber for India (Times of India)',
        exes     => [ 'grab/in_toi/tv_grab_in_toi' ],
