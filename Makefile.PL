@@ -516,21 +516,6 @@ my @opt_components
                     'JSON::PP'     => 0, },
      },
 
-#
-# 2017-01-22 Broken due to site changes
-#
-#     { name => 'tv_grab_pt',
-#       blurb => 'Grabber for Portugal',
-#       exes => [ 'grab/pt/tv_grab_pt' ],
-#       prereqs => { 'Getopt::Long'      => 0,
-#                    'HTML::TreeBuilder' => 0,
-#                    'HTML::Entities'    => 1.27,
-#                    'HTTP::Cache::Transparent' => 0,
-#                    'DateTime'          => 0,
-#                    'Encode'            => 0,
-#                    'JSON::PP'          => 0, },
-#     },
-
      { name => 'tv_grab_pt_meo',
        blurb => 'Grabber for Portugal (MEO)',
        exes => [ 'grab/pt_meo/tv_grab_pt_meo' ],
