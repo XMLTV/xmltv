@@ -289,13 +289,6 @@ my @opt_components
                     'Date::Language'    => 0, },
      },
 
-#     { name => 'tv_grab_br',
-#       blurb => 'Grabber for Brazil',
-#       exes => [ 'grab/br/tv_grab_br' ],
-#       prereqs => { 'HTML::TreeBuilder' => 0 ,
-#                    'HTML::Entities' => 1.27 , }
-#     },
-
 # disabled because it broke due to site changes 2009-03-08
 #     { name => 'tv_grab_br_net',
 #       blurb => 'Grabber for Brazil NET Cable',
