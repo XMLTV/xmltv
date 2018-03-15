@@ -532,13 +532,6 @@ my @opt_components
                     'LWP'         => 0, },
      },
 
-# rmeden 2011-06-12 not working
-#    { name => 'tv_grab_re',
-#       blurb => 'Grabber for Reunion Island (France)',
-#       exes => [ 'grab/re/tv_grab_re' ],
-#       prereqs => { 'HTML::TreeBuilder' => 0 ,
-#                    'HTML::Entities'    => 0 } },
-
      { name => 'tv_grab_se_swedb',
        blurb => 'Grabber for Sweden',
        exes => [ 'grab/se_swedb/tv_grab_se_swedb' ],
