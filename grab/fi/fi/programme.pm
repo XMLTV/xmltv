@@ -64,15 +64,23 @@ sub episode {
     push(@{ $self->{episode} }, [$episode, $language]);
   }
 }
-sub season_episode {
-  my($self, $season, $episode) = @_;
-  # only accept a pair of valid, positive integers
-  if (defined($season) && defined($episode)) {
-    $season  = int($season);
-    $episode = int($episode);
-    if (($season  > 0) && ($episode > 0)) {
-      $self->{season}         = $season;
-      $self->{episode_number} = $episode;
+sub episode_number {
+  my($self, $episode_number) = @_;
+  # only accept valid, positive integers
+  if (defined($episode_number)) {
+    $episode_number = int($episode_number);
+    if ($episode_number > 0) {
+      $self->{episode_number} = $episode_number;
+    }
+  }
+}
+sub season {
+  my($self, $season) = @_;
+  # only accept valid, positive integers
+  if (defined($season)) {
+    $season = int($season);
+    if ($season > 0) {
+      $self->{season} = $season;
     }
   }
 }
