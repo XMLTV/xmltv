@@ -116,7 +116,8 @@ sub grab {
 	      my $object = appendProgramme($opaque, $hour, $minute, $title);
 	      $object->description($desc);
 	      $object->episode($episode_name, "fi");
-	      $object->season_episode($season, $episode_number);
+	      $object->season($season);
+	      $object->episode_number($episode_number);
 	    }
 	  }
 	}
