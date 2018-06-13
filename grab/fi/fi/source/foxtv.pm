@@ -84,7 +84,7 @@ sub grab {
 	      $title = $title->as_text();
 
 	      my($episode_name, $season, $episode_number) =
-		$extra->as_text() =~ /^(.*)?,\s+Kausi\s+(\d+)\s+\S\s+Jakso\s+(\d+)$/
+		$extra->as_text() =~ /^(.*)?,\s+Kausi\s+(\d+)\s+\S\s+Jakso\s+(\d+)\s*$/
 		  if $extra;
 
 	      # Cleanup some of the most common inconsistencies....
