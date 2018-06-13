@@ -282,6 +282,17 @@ sub dump {
 	# Remainder is already the final episode description
 	$right = $remainder;
 	undef $special;
+
+    # Check for "<episode>/<# of episodes>. <sub-title>...."
+    } elsif (($desc_episode, $desc_total, $remainder) =
+	     ($description =~ m!^(\d+)/(\d+)\.\s+(.*)$!)) {
+	# default to season 1
+	$season  = 1              unless defined($season);
+	$episode = $desc_episode;
+	$total   = $desc_total;
+
+	# Repeat the above match on remaining description
+	($left, $special, $right) = ($remainder =~ $match_description);
     }
     if (defined($left)) {
 	unless (defined($special)) {
