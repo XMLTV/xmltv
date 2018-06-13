@@ -151,7 +151,7 @@ sub get_matcher( $$ ) {
 			 }
 			 return 0;
 		     } ];
-	} 
+	}
 	else { die }
     }
     elsif ($handler eq 'icon'
