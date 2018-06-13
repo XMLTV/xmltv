@@ -12,7 +12,7 @@ If a --version parameter is supplied on the command-line, it will
 be caught already by the "use" statement, a message will be printed
 to STDOUT and the program will exit.
 
-It is best to put the use XMLTV::Version statement before other module 
+It is best to put the use XMLTV::Version statement before other module
 imports, so that even if they fail --version will still work.
 
 =head1 SEE ALSO

@@ -4,7 +4,7 @@
 use strict;
 
 use IO::File;
-my( $out, $share ) = @ARGV; 
+my( $out, $share ) = @ARGV;
 
 die "no output file given" if not defined $out;
 die "no share-dir given" if not defined $share;

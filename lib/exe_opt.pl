@@ -32,7 +32,7 @@ print '-nologo
 -bind=libgcc_x86_470.dll[file=C:\strawberry\perl\bin\libgcc_x86_470.dll,extract]
 -bind=libeay32_.dll[file=C:\strawberry\c\bin\libeay32_.dll,extract]
 -bind=SSLeay32_.dll[file=C:\strawberry\c\bin\SSLeay32_.dll,extract]
--bind DateTime/Format/Builder/Parser/Regex.pm[file=c:\Strawberry\Perl\site\lib\DateTime\Format\Builder\Parser\Regex.pm,extract] 
+-bind DateTime/Format/Builder/Parser/Regex.pm[file=c:\Strawberry\Perl\site\lib\DateTime\Format\Builder\Parser\Regex.pm,extract]
 -trim=Class::MethodMaker::Scalar
 -trim=Class::MethodMaker::Engine
 -trim=JSON::PP58
