@@ -261,19 +261,9 @@ sub dump {
 	    $right = $remainder;
 	}
 
-    # Check for "Kausi <season>. Jakso <episode>/<# of episodes>. <sub-title>...."
+    # Check for "Kausi <season>[.,] (Jakso )?<episode>/<# of episodes>. <sub-title>...."
     } elsif (($desc_season, $desc_episode, $desc_total, $remainder) =
-	($description =~ m,^Kausi\s+(\d+)\.\s+Jakso\s+(\d+)(?:/(\d+))?\.\s*(.*)$,)) {
-	$season  = $desc_season;
-	$episode = $desc_episode;
-	$total   = $desc_total    if $desc_total;
-
-	# Repeat the above match on remaining description
-	($left, $special, $right) = ($remainder =~ $match_description);
-
-    # Check for "Kausi <season>, <episode>/<# of episodes>. <sub-title>...."
-    } elsif (($desc_season, $desc_episode, $desc_total, $remainder) =
-	($description =~ m!^Kausi\s+(\d+),\s+(\d+)(?:/(\d+))?\.\s*(.*)$!)) {
+	($description =~ m!^Kausi\s+(\d+)[.,]\s+(?:Jakso\s+)?(\d+)(?:/(\d+))?\.\s*(.*)$!)) {
 	$season  = $desc_season;
 	$episode = $desc_episode;
 	$total   = $desc_total    if $desc_total;
