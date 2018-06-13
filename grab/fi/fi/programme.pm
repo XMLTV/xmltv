@@ -74,6 +74,16 @@ sub episode_number {
     }
   }
 }
+sub episode_total {
+  my($self, $episode_total) = @_;
+  # only accept valid, positive integers
+  if (defined($episode_total)) {
+    $episode_total = int($episode_total);
+    if ($episode_total > 0) {
+      $self->{episode_total} = $episode_total;
+    }
+  }
+}
 sub season {
   my($self, $season) = @_;
   # only accept valid, positive integers
