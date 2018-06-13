@@ -262,7 +262,7 @@ sub utc_offset( $$ ) {
     my ($indate, $basetz) = @_;
     croak "empty date" if not defined $indate;
     croak "empty base TZ" if not defined $basetz;
-    $basetz = tz_to_num( $basetz ) 
+    $basetz = tz_to_num( $basetz )
       if $basetz !~ /^[-+]\d{4}$/;
 
     my $d = date_to_local(parse_local_date($indate, $basetz), $basetz);

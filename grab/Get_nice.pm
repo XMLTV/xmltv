@@ -76,7 +76,7 @@ sub get_nice( $ ) {
 #      before parsing.
 #  ii) convert incoming page to UNICODE using this codepage (use "UTF-8" for
 #      strict utf-8)
-# iii) a hashref containing options to configure the HTML::TreeBuilder object 
+# iii) a hashref containing options to configure the HTML::TreeBuilder object
 #      before parsing
 #
 sub get_nice_tree( $;$$$ ) {
@@ -169,7 +169,7 @@ sub get_nice_aux( $ ) {
     # expose the response object for those grabbers which need to process the headers, status code, etc.
     $Response = $r;
 
-    # set flag if last fetch was from cache 
+    # set flag if last fetch was from cache
     $last_get_from_cache = (defined $r->{'_headers'}{'x-cached'} && $r->{'_headers'}{'x-cached'} == 1);
 
     if ($r->is_error) {
@@ -187,7 +187,7 @@ sub get_nice_aux( $ ) {
 
 }
 
-# Fetch page via a JSON object in the Content and return as a JSON object.  
+# Fetch page via a JSON object in the Content and return as a JSON object.
 # Arguments:
 #    URI to post to
 #    JSON object with the AJAX data to be posted e.g. "{ 'programId':'123456', 'channel':'BBC'}"
@@ -200,7 +200,7 @@ sub post_nice_json( $$ ) {
 
     if (defined $last_get_time) {
         # A page has already been retrieved recently.  See if we need
-        # to sleep for a while before getting the next page 
+        # to sleep for a while before getting the next page
         #
         my $next_get_time = $last_get_time + (rand $Delay) + $MinDelay;
         my $sleep_time = $next_get_time - time();

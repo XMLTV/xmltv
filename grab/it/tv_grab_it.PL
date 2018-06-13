@@ -40,7 +40,7 @@ tv_grab_it [--config-file FILE] [--output FILE]
 
 Output TV listings for several channels available in Italy.
 The grabber relies on parsing HTML so it might stop working at any time.
-The data comes from different backends. This is to minimize blackouts 
+The data comes from different backends. This is to minimize blackouts
 in case of site changes but also to extend the number of channels.
 If the grabber canE<39>t find the data with the first backend it will
 try the second one, and so on. You can specify your order of preference
@@ -98,7 +98,7 @@ B<--slow> Downloads more details (descriptions, actors...). This means
 downloading a new file for each programme, so itE<39>s off by default to
 save time.
 
-B<--cache-slow> If you use the --cache option to speed up thing when you 
+B<--cache-slow> If you use the --cache option to speed up thing when you
 grab data several times a week, using this option you will cache only the
 --slow data, so you shouldnE<39>t miss changes in schedules.
 
@@ -106,7 +106,7 @@ B<--verbose> Prints out verbose information useful for debugging.
 
 B<--errors-in-xml> Outputs warnings as programmes in the xml file,
 so that you can see errors in your favorite frontend in addition
-to the default STDERR. 
+to the default STDERR.
 
 B<--backend> Set the backend (or backends) to use. See the examples.
 
@@ -124,12 +124,12 @@ empty (or optionally containing just warnings) xml file instead.
 The backendsE<39> data quality differs a lot. For example, mytv was very
 basic, yet complete and uses the least amount of bandwidth. Skytv has a
 lot of channels, but unless you use it with the --slow option the data
-is not very good (and in this case i would be VERY slow). wfactory is a 
+is not very good (and in this case i would be VERY slow). wfactory is a
 good overall site if you donE<39>t need the whole sky package.
 
 =head1 EXAMPLES
 
-=over 
+=over
 
 =item tv_grab_it --backend skylife --configure
 
@@ -147,7 +147,7 @@ grabs the full data for the next three days using the default backend order and 
 
 =head1 RECOMMENDED USAGE
 
-=over 
+=over
 
 =item tv_grab_it --cache --slow --cache-slow --errors-in-xml
 
@@ -187,7 +187,7 @@ tv_grab_it [--config-file FILE] [--output FILE]
 =head1 DESCRIZIONE
 
 Crea un file con i programmi TV di vari canali italiani.
-Il grabber eE<39> basato sullE<39>analisi del sorgente HTML dei siti, 
+Il grabber eE<39> basato sullE<39>analisi del sorgente HTML dei siti,
 quindi potrebbe smettere di funzionare in qualsiasi momento.
 I dati vengono presi da piuE<39> fonti per poter ridurre i periodi di
 blackout dovuti a cambiamenti nei siti, ma anche per aumentare
@@ -217,12 +217,12 @@ Le fonti configurate al momento sono: (in ordine di utilizzo):
 =back
 
 Per prima cosa esegui B<tv_grab_it --configure> per scegliere quali
-canali vuoi scaricare. In seguito lE<39>esecuzione di B<tv_grab_it> 
+canali vuoi scaricare. In seguito lE<39>esecuzione di B<tv_grab_it>
 senza opzioni manderE<39> sullo standard output i dati in formato XML.
 
 B<--configure> Chiede quali canali scaricare e scrive il file di configurazione.
 
-B<--config-file FILE> Imposta il nome del file di configurazione, di 
+B<--config-file FILE> Imposta il nome del file di configurazione, di
 default eE<39> B<~/.xmltv/tv_grab_it.conf>. Questo file viene scritto
 usando B<--configure> e letto durante il grabbing.
 
@@ -258,13 +258,13 @@ file XML vuoto (o opzionalmente con solo i warning).
 
 La qualitaE<39> dei dati delle varie sorgenti cambia molto. Per esempio, mytv
 era molto semplice, ma completa e usava la minor banda possibile. Skytv ha molti
-canali, ma i dati non sono molto buoni a meno che non si usi lE<39>opzione --slow, 
-(ed in quel caso serve MOLTO tempo). wfactory eE<39> tutto sommato un buon sito se 
+canali, ma i dati non sono molto buoni a meno che non si usi lE<39>opzione --slow,
+(ed in quel caso serve MOLTO tempo). wfactory eE<39> tutto sommato un buon sito se
 non hai bisogno di tutto il pacchetto sky.
 
 =head1 ESEMPI
 
-=over 
+=over
 
 =item tv_grab_it --backend skylife --configure
 
@@ -282,7 +282,7 @@ prende tutti i dati per i prossimi tre giorni ed usa una cache su disco (sempre 
 
 =head1 UTILIZZO CONSIGLIATO
 
-=over 
+=over
 
 =item tv_grab_it --cache --slow --cache-slow --errors-in-xml
 

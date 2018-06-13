@@ -1,4 +1,4 @@
-# Generate tv_grab_se_tvzon from tv_grab_se_swedb.in. 
+# Generate tv_grab_se_tvzon from tv_grab_se_swedb.in.
 #
 
 use strict;
