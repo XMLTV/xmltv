@@ -1,4 +1,4 @@
-# Generate tv_validate_grabber from tv_validate_grabber.in.  
+# Generate tv_validate_grabber from tv_validate_grabber.in.
 #
 # The second argument is the share directory for the final
 # installation.
