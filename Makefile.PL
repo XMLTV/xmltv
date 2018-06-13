@@ -161,6 +161,7 @@ my %prereqs
   = (
      'Date::Manip'   => 5.42,
      'File::Slurp'   => 0,
+     'JSON'          => 0,
      'LWP'           => 5.65,
      'Memoize'       => 0,
      'Storable'      => 2.04,
@@ -274,8 +275,7 @@ my @opt_components
        prereqs => { 'Date::Language'    => 0,
                     'HTML::Entities'    => 0,
                     'HTML::TreeBuilder' => 0,
-                    'HTTP::Cookies'     => 0,
-                    'JSON::PP'          => 0, },
+                    'HTTP::Cookies'     => 0, },
      },
 
      { name => 'tv_grab_ch_search',
@@ -296,8 +296,7 @@ my @opt_components
        blurb => 'Grabber for Denmark (dr.dk)',
        exes => [ 'grab/dk_dr/tv_grab_dk_dr' ],
        prereqs => { 'DateTime'       => 0,
-                    'IO::Scalar'     => 0,
-                    'JSON'           => 0, },
+                    'IO::Scalar'     => 0, },
      },
 
      { name => 'tv_grab_dtv_la',
@@ -306,8 +305,7 @@ my @opt_components
        prereqs => { 'Date::Language'    => 0,
                     'Date::Parse'       => 0,
                     'HTML::TreeBuilder' => 0,
-                    'HTTP::Cookies'     => 0,
-                    'JSON::PP'          => 0, },
+                    'HTTP::Cookies'     => 0, },
      },
 
      { name => 'tv_grab_es_laguiatv',
@@ -357,7 +355,6 @@ my @opt_components
        pl_files => { 'grab/fi/merge.PL' => 'grab/fi/tv_grab_fi' },
        to_clean => [ 'grab/fi/tv_grab_fi' ],
        prereqs => { 'HTML::TreeBuilder'    => 0,
-                    'JSON'                 => 0,
                     'LWP::Protocol::https' => 0, },
      },
 
@@ -401,7 +398,6 @@ my @opt_components
        grab_need_share => [ 'huro' ],
        prereqs => { 'HTML::Entities' => 0,
                     'HTML::TreeBuilder' => 0,
-                    'JSON' => 0,
                     'Time::Piece' => 0,
                     'Time::Seconds' => 0, },
      },
@@ -416,7 +412,6 @@ my @opt_components
        blurb => 'Grabber for India (Times of India)',
        exes     => [ 'grab/in_toi/tv_grab_in_toi' ],
        prereqs => { 'Date::Calc'   => 0,
-                    'JSON'         => 0,
                     'URI::Escape'  => 0, },
      },
 
@@ -480,7 +475,6 @@ my @opt_components
        prereqs => {
          'DateTime'         => 0,
          'HTTP::Cookies'    => 0,
-         'JSON::PP'         => 0,
          'URI'              => 0,
          'URI::Escape'      => 0, },
      },
@@ -512,8 +506,6 @@ my @opt_components
        blurb => 'Grabber for Portugal (Vodafone)',
        exes => [ 'grab/pt_vodafone/tv_grab_pt_vodafone' ],
        prereqs => { 'DateTime'    => 0,
-                    'JSON'        => 0,
-                    'JSON::XS'    => 0,
                     'XML::LibXML' => 0, },
      },
 
@@ -588,7 +580,6 @@ my @opt_components
        prereqs => { 'DateTime' => 0,
                     'Digest::SHA' => 0,
                     'HTTP::Message' => 0,
-                    'JSON' => 0,
                     'LWP::Protocol::https' => 0,
                     'Try::Tiny' => 0, },
      },
@@ -605,7 +596,6 @@ my @opt_components
                     'Digest::SHA' => 0,
                     'File::HomeDir' => 0,
                     'File::Which' => 0,
-                    'JSON' => 0,
                     'List::MoreUtils' => 0,
                     'LWP::UserAgent::Determined' => 0, },
      },

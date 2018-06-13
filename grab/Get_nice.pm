@@ -124,7 +124,7 @@ sub get_nice_xml( $;$$ ) {
     return $t;
 }
 
-# Fetch page and return as JSON::PP object.
+# Fetch page and return as JSON object.
 # Optional arguments:
 # i) a function to put the page data through (eg, to clean up bad
 # characters) before parsing.
@@ -132,11 +132,11 @@ sub get_nice_xml( $;$$ ) {
 #
 sub get_nice_json( $;$$ ) {
     my ($uri, $filter, $utf8) = @_;
-    require JSON::PP;
+    require JSON;
     my $content = get_nice $uri;
     $content = $filter->($content) if $filter;
     $utf8 = defined $utf8 ? 1 : 0;
-    my $t = JSON::PP->new()->utf8($utf8)->decode($content) or die "cannot parse content of $uri\n";
+    my $t = JSON->new()->utf8($utf8)->decode($content) or die "cannot parse content of $uri\n";
     return $t;
 }
 
@@ -196,7 +196,7 @@ sub post_nice_json( $$ ) {
     my $url = shift;
     my $json = shift;
 
-    require JSON::PP;
+    require JSON;
 
     if (defined $last_get_time) {
         # A page has already been retrieved recently.  See if we need
@@ -219,7 +219,7 @@ sub post_nice_json( $$ ) {
         $errors{$url} = $r->status_line;
         return undef;
     } else {
-        my $content = JSON::PP->new()->utf8(1)->decode($r->content) or die "cannot parse content of $url\n";
+        my $content = JSON->new()->utf8(1)->decode($r->content) or die "cannot parse content of $url\n";
         return $content;
     }
 }
