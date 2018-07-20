@@ -21,7 +21,6 @@ BEGIN {
 
 # Import from internal modules
 fi::common->import();
-fi::programmeStartOnly->import();
 
 # Description
 sub description { 'telkku.com' }
