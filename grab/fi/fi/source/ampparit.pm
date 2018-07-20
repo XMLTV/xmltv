@@ -19,6 +19,7 @@ BEGIN {
 
 # Import from internal modules
 fi::common->import();
+fi::programmeStartOnly->import();
 
 # Description
 sub description { 'ampparit.com' }
@@ -91,6 +92,73 @@ sub channels {
 
 # Grab one day
 sub grab {
+  my($self, $id, $yesterday, $today, $tomorrow, $offset) = @_;
+
+  # Get channel number from XMLTV id
+  return unless my($channel) = ($id =~ /^([^.]+)\.ampparit\.com$/);
+
+  # Fetch & parse HTML (do not ignore HTML5 <time>)
+  my $root = fetchTree("https://www.ampparit.com/tv/$channel?aika=paiva&pvm=" . $today->ymdd(),
+		       undef, undef, 1);
+  if ($root) {
+    my $opaque = startProgrammeList($id, "fi");
+
+    #
+    # Each programme can be found in a separate <div class="program"> node
+    #
+    #   <div class="channel-container">
+    #    ...
+    #    <div class="programs">
+    #     <div data-tip="..." data-for="..." class="program">
+    #      <time class="program-start-time" title="ke 25.7. 6:00" datetime="2018-07-25T03:00:00.000Z">
+    #       06:00
+    #      </time>
+    #      <div class="program-right">
+    #       <div class="program-title">Aamun AVAus</div>
+    #       <div class="program-description">
+    #        ...
+    #       </div>
+    #      </div>
+    #     </div>
+    #     ...
+    #    </div>
+    #   </div>
+    #
+    if (my $container = $root->look_down("class" => "programs")) {
+      if (my @programmes = $container->look_down("class" => "program")) {
+	foreach my $programme (@programmes) {
+	  my $start = $programme->look_down("_tag"  => "time",
+					    "class" => "program-start-time");
+	  my $title = $programme->look_down("class" => "program-title");
+	  my $desc  = $programme->look_down("class" => "program-description");
+
+	  if ($start && $title && $desc) {
+	    if (my($hour, $minute) =
+		$start->as_text() =~ /^(\d{2})[:.](\d{2})$/) {
+	      $title = $title->as_text();
+	      $desc  = $desc->as_text();
+
+	      debug(3, "List entry ${id} ($hour:$minute) $title");
+	      debug(4, $desc) if $desc;
+
+	      my $object = appendProgramme($opaque, $hour, $minute, $title);
+	      $object->description($desc);
+	    }
+	  }
+	}
+      }
+    }
+
+    # Done with the HTML tree
+    $root->delete();
+
+    # Convert list to program objects
+    #
+    # First entry always starts on $today -> don't use $yesterday
+    # Last entry always ends on $tomorrow.
+    return(convertProgrammeList($opaque, undef, $today, $tomorrow));
+  }
+
   return;
 }
 
