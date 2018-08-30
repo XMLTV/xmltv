@@ -44,6 +44,7 @@
 #
 # Version history:
 #
+# 2018/08/30 - 1.44 - multi-lineup plumbing - getLineup
 # 2018/08/30 - 1.43 - multi-lineup plumbing - SD_isLineupFetchRequired
 # 2018/08/30 - 1.42 - multi-lineup plumbing - lineupValidate
 # 2018/08/30 - 1.41 - multi-lineup plumbing - channelWriter
@@ -133,7 +134,7 @@ use Data::Dumper;
 my $RFC2838_COMPLIANT          = 1;            # RFC2838 compliant station ids, which makes XMLTV
                                                # validate even though the docs say "SHOULD" not "MUST"
 
-my $SCRIPT_VERSION             = '$Id: tv_grab_zz_sdjson_sqlite,v 1.43 2018/08/30 05:05:00 gtb Exp ed $';
+my $SCRIPT_VERSION             = '$Id: tv_grab_zz_sdjson_sqlite,v 1.44 2018/08/30 15:25:00 gtb Exp ed $';
 my $SCRIPT_URL                 = 'https://github.com/garybuhrmaster/tv_grab_zz_sdjson_sqlite';
 my $SCRIPT_NAME                = basename("$0");
 my $SCRIPT_NAME_DIR            = dirname("$0");
@@ -2491,6 +2492,10 @@ sub getLineup
   {
     my ($conf, $opt, undef) = @_;
 
+    my $sql;
+    my $sth;
+    my $param;
+
     configValidate($conf, $opt);
 
     $debug = $opt->{'debug'};
@@ -2560,12 +2565,12 @@ sub getLineup
       }
 
     #
-    # Collect some lineup information
+    # Collect some lineup information.  We use the first lineup (or only) lineup for details
     #
 
-    my $sql = "select lineup, name, transport, location, details from lineups where lineup = ?";
+    $sql = "select lineup, name, transport, location, details from lineups where lineup = ?";
 
-    my $sth = $DBH->prepare_cached($sql);
+    $sth = $DBH->prepare_cached($sql);
     if (!defined($sth))
       {
         print (STDERR "Unexpected error when preparing statement ($sql): " . $DBH->errstr . "\n");
@@ -2615,7 +2620,7 @@ sub getLineup
           # Process each channel/station in the lineup
           #
 
-          $sql = "select channels.station, channels.details, stations.details from channels as channels left join stations as stations on stations.station = channels.station where channels.lineup = ? and channels.selected = 1";
+          $sql = 'select distinct channels.station, channels.details, stations.details, lineups.transport from channels as channels left join stations as stations on stations.station = channels.station left join lineups as lineups on lineups.lineup = channels.lineup where channels.lineup in ( ' . join(', ', ('?') x scalar(@{$conf->{'lineup'}})) . ' ) and channels.selected = 1';
 
           $sth = $DBH->prepare_cached($sql);
           if (!defined($sth))
@@ -2624,7 +2629,12 @@ sub getLineup
               exit(1);
             }
 
-          $sth->bind_param( 1, $conf->{'lineup'}->[0], SQL_VARCHAR );
+          $param = 1;
+          for (my $i=0; $i < scalar(@{$conf->{'lineup'}}); $i++)
+            {
+              $sth->bind_param( $param, @{$conf->{'lineup'}}[$i]);
+              $param++;
+            }
 
           $sth->execute();
 
@@ -2637,12 +2647,15 @@ sub getLineup
           $sth->bind_col( 1, undef, SQL_VARCHAR );
           $sth->bind_col( 2, undef, SQL_VARCHAR );
           $sth->bind_col( 3, undef, SQL_VARCHAR );
+          $sth->bind_col( 4, undef, SQL_VARCHAR );
 
           while (my $r = $sth->fetchrow_arrayref())
             {
               my $sID = $r->[0];
               my $c = $JSON->decode($r->[1]);
               my $s = $JSON->decode($r->[2]);
+              my $SDtype = $r->[3] || 'Unknown';
+              my $type = mapTransport($r->[3]);
 
               $w->startTag('lineup-entry');
 
