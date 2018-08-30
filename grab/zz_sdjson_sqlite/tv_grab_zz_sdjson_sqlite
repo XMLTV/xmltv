@@ -44,6 +44,7 @@
 #
 # Version history:
 #
+# 2018/08/30 - 1.42 - multi-lineup plumbing - lineupValidate
 # 2018/08/30 - 1.41 - multi-lineup plumbing - channelWriter
 # 2018/08/29 - 1.40 - multi-lineup plumbing - SD_cleanLineups
 # 2018/08/29 - 1.39 - multi-lineup plumbing - canonical lineup details
@@ -131,7 +132,7 @@ use Data::Dumper;
 my $RFC2838_COMPLIANT          = 1;            # RFC2838 compliant station ids, which makes XMLTV
                                                # validate even though the docs say "SHOULD" not "MUST"
 
-my $SCRIPT_VERSION             = '$Id: tv_grab_zz_sdjson_sqlite,v 1.41 2018/08/30 00:25:00 gtb Exp ed $';
+my $SCRIPT_VERSION             = '$Id: tv_grab_zz_sdjson_sqlite,v 1.42 2018/08/30 01:10:00 gtb Exp ed $';
 my $SCRIPT_URL                 = 'https://github.com/garybuhrmaster/tv_grab_zz_sdjson_sqlite';
 my $SCRIPT_NAME                = basename("$0");
 my $SCRIPT_NAME_DIR            = dirname("$0");
@@ -291,7 +292,7 @@ if ($opt->{'force-download'})
 #
 if (!$download)
   {
-    lineupValidate($conf->{'lineup'}->[0]);
+    lineupValidate($conf->{'lineup'});
     goto skipDownload;
   }
 
@@ -351,7 +352,7 @@ else
 #
 # Validate that the configured lineup exists in our database
 #
-lineupValidate($conf->{'lineup'}->[0]);
+lineupValidate($conf->{'lineup'});
 
 #
 # Get our current Schedules Direct maps (channels and
@@ -2227,7 +2228,7 @@ sub listChannels
         # Need to validate here to not try to download maps
         # for lineups not in account (which would throw error)
         #
-        lineupValidate($conf->{'lineup'}->[0]);
+        lineupValidate($conf->{'lineup'});
 
         if ($fetchLineupRequired)
           {
@@ -2241,7 +2242,7 @@ sub listChannels
       }
     else
       {
-        lineupValidate($conf->{'lineup'}->[0]);
+        lineupValidate($conf->{'lineup'});
       }
 
     my $w = XML::Writer->new( 'ENCODING' => 'UTF-8',
@@ -2526,7 +2527,7 @@ sub getLineup
         # Need to validate here to not try to download maps
         # for lineups not in account (which would throw error)
         #
-        lineupValidate($conf->{'lineup'}->[0]);
+        lineupValidate($conf->{'lineup'});
 
         if ($fetchLineupRequired)
           {
@@ -2540,7 +2541,7 @@ sub getLineup
       }
     else
       {
-        lineupValidate($conf->{'lineup'}->[0]);
+        lineupValidate($conf->{'lineup'});
       }
 
     #
@@ -3401,21 +3402,23 @@ sub SD_downloadLineupMaps
 #
 # lineupValidate
 #
-# Convenience routine to validate that the configured
-# lineup is still in our Schedules Direct lineup
+# Convenience routine to validate that the specified
+# lineup(s) are still in our Schedules Direct lineup
 #
 # If the lineup is not valid we write a message and exit
 #
 #   Input:
-#              lineup      - Lineup to validate
+#              lineup(s)    - Lineup(s) to validate
 #   Output:
 #              <none>
 #
 sub lineupValidate
   {
-    my ($lineup, undef) = @_;
+    my ($lineups, undef) = @_;
 
-    my $sql = "select lineup, name, transport, location, details from lineups where lineup = ?";
+    my $fatal = 0;
+
+    my $sql = 'select lineup, name, transport, location, details from lineups where lineup = ?';
 
     my $sth = $DBH->prepare_cached($sql);
     if (!defined($sth))
@@ -3424,45 +3427,53 @@ sub lineupValidate
         exit(1);
       }
 
-    $sth->bind_param( 1, $lineup, SQL_VARCHAR );
-
-    $sth->execute();
-
-    if ($sth->err())
+    foreach my $lineup (@{$lineups})
       {
-        print (STDERR "Unexpected error when executing statement ($sql): " . $sth->errstr . "\n");
-        exit(1)
+        $sth->bind_param( 1, $lineup, SQL_VARCHAR );
+
+        $sth->execute();
+
+        if ($sth->err())
+          {
+            print (STDERR "Unexpected error when executing statement ($sql): " . $sth->errstr . "\n");
+            exit(1)
+           }
+
+        $sth->bind_col( 1, undef, SQL_VARCHAR );
+        $sth->bind_col( 2, undef, SQL_VARCHAR );
+        $sth->bind_col( 3, undef, SQL_VARCHAR );
+        $sth->bind_col( 4, undef, SQL_VARCHAR );
+        $sth->bind_col( 5, undef, SQL_VARCHAR );
+
+        my $llu = $sth->fetchrow_arrayref();
+
+        $sth->finish();
+
+        if (!defined($llu))
+          {
+            print (STDERR "Lineup $lineup is no longer configured in your account at Schedules Direct.\n");
+            print (STDERR "Please run $SCRIPT_NAME --manage-lineups to manage your Schedules Direct lineups,\n");
+            print (STDERR "and/or $SCRIPT_NAME --configure to change the configured lineups.\n");
+            $fatal = 1;
+          }
+        else
+          {
+            my $lineupDeleted = $JSON->utf8->decode($llu->[4])->{'isDeleted'};
+
+            if (defined($lineupDeleted) && $lineupDeleted)
+              {
+                print (STDERR "Lineup $lineup has been deleted at Schedules Direct.\n");
+                print (STDERR "Please run $SCRIPT_NAME --manage-lineups to manage your Schedules Direct lineups,\n");
+                print (STDERR "and/or $SCRIPT_NAME --configure to change the configured lineups.\n");
+                $fatal = 1;
+              }
+          }
       }
 
-    $sth->bind_col( 1, undef, SQL_VARCHAR );
-    $sth->bind_col( 2, undef, SQL_VARCHAR );
-    $sth->bind_col( 3, undef, SQL_VARCHAR );
-    $sth->bind_col( 4, undef, SQL_VARCHAR );
-    $sth->bind_col( 5, undef, SQL_VARCHAR );
-
-    my $llu = $sth->fetchrow_arrayref();
-
-    $sth->finish();
-
-    if (!defined($llu))
+    if ($fatal)
       {
-        print (STDERR "Lineup $lineup is no longer configured at Schedules Direct\n");
-        print (STDERR "Please run $SCRIPT_NAME --manage-lineups to manage your Schedules Direct lineups\n");
-        print (STDERR "and/or $SCRIPT_NAME --configure to change the configured lineup\n");
         exit(1);
       }
-
-    my $lineupDeleted = $JSON->utf8->decode($llu->[4])->{'isDeleted'};
-
-    if (defined($lineupDeleted) && $lineupDeleted)
-      {
-        print (STDERR "Lineup $lineup has been deleted at Schedules Direct\n");
-        print (STDERR "Please run $SCRIPT_NAME --manage-lineups to manage your Schedules Direct lineups\n");
-        print (STDERR "and/or $SCRIPT_NAME --configure to change the configured lineup\n");
-        exit(1);
-      }
-
-    return;
   }
 
 #
