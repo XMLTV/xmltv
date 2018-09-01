@@ -44,6 +44,7 @@
 #
 # Version history:
 #
+# 2018/08/30 - 1.45 - multi-lineup plumbing - mainline code
 # 2018/08/30 - 1.44 - multi-lineup plumbing - getLineup
 # 2018/08/30 - 1.43 - multi-lineup plumbing - SD_isLineupFetchRequired
 # 2018/08/30 - 1.42 - multi-lineup plumbing - lineupValidate
@@ -134,7 +135,7 @@ use Data::Dumper;
 my $RFC2838_COMPLIANT          = 1;            # RFC2838 compliant station ids, which makes XMLTV
                                                # validate even though the docs say "SHOULD" not "MUST"
 
-my $SCRIPT_VERSION             = '$Id: tv_grab_zz_sdjson_sqlite,v 1.44 2018/08/30 15:25:00 gtb Exp ed $';
+my $SCRIPT_VERSION             = '$Id: tv_grab_zz_sdjson_sqlite,v 1.45 2018/08/30 18:35:00 gtb Exp ed $';
 my $SCRIPT_URL                 = 'https://github.com/garybuhrmaster/tv_grab_zz_sdjson_sqlite';
 my $SCRIPT_NAME                = basename("$0");
 my $SCRIPT_NAME_DIR            = dirname("$0");
@@ -371,9 +372,7 @@ for my $lineup(@{$conf->{'lineup'}})
 #
 # We can skip downloading station schedules if our data is current
 #
-
-$sql = "select 1 from lineups l1 where (l1.lineup = ? and l1.downloaded <= ?) " .
-         "union select 1 where not exists (select 1 from lineups l2 where l2.lineup = ?)";
+$sql = 'select 1 from lineups l1 where (l1.downloaded <= ? and l1.lineup in ( ' . join(', ', ('?') x scalar(@{$conf->{'lineup'}})) . ' )) union select 1 where not exists (select 1 from lineups l2 where l2.lineup in ( ' . join(', ', ('?') x scalar(@{$conf->{'lineup'}})) . ' ))';
 
 $sth = $DBH->prepare_cached($sql);
 if (!defined($sth))
@@ -382,9 +381,19 @@ if (!defined($sth))
     exit(1);
   }
 
-$sth->bind_param( 1, $conf->{'lineup'}->[0], SQL_VARCHAR );
-$sth->bind_param( 2, DateTime::Format::SQLite->format_datetime($dataLastUpdatedDateTime), SQL_DATETIME );
-$sth->bind_param( 3, $conf->{'lineup'}->[0], SQL_VARCHAR );
+$param = 1;
+$sth->bind_param( $param, DateTime::Format::SQLite->format_datetime($dataLastUpdatedDateTime), SQL_DATETIME );
+$param++;
+for (my $i=0; $i < scalar(@{$conf->{'lineup'}}); $i++)
+  {
+    $sth->bind_param( $param, @{$conf->{'lineup'}}[$i]);
+    $param++;
+  }
+for (my $i=0; $i < scalar(@{$conf->{'lineup'}}); $i++)
+  {
+    $sth->bind_param( $param, @{$conf->{'lineup'}}[$i]);
+    $param++;
+  }
 
 $sth->execute();
 
@@ -416,8 +425,7 @@ else
     # and deal with potential errors due to out of
     # range issues.
     #
-    $sql = "select distinct stations.station from stations as stations where stations.station in " .
-             " (select distinct channels.station from channels as channels where channels.lineup = ? and channels.selected = 1) " ;
+    $sql = 'select distinct stations.station from stations as stations where stations.station in (select distinct channels.station from channels as channels where channels.lineup in ( ' . join(', ', ('?') x scalar(@{$conf->{'lineup'}})) . ' ) and channels.selected = 1)';
 
     $sth = $DBH->prepare_cached($sql);
     if (!defined($sth))
@@ -426,7 +434,12 @@ else
         exit(1);
       }
 
-    $sth->bind_param( 1, $conf->{'lineup'}->[0], SQL_VARCHAR );
+    $param = 1;
+    for (my $i=0; $i < scalar(@{$conf->{'lineup'}}); $i++)
+      {
+        $sth->bind_param( $param, @{$conf->{'lineup'}}[$i]);
+        $param++;
+      }
 
     $sth->execute();
 
@@ -511,15 +524,21 @@ else
     #
     # Indicate we have downloaded the data
     #
-    $sql = "update lineups set downloaded = ? where lineup = ?";
+    $sql = 'update lineups set downloaded = ? where lineup in ( ' . join(', ', ('?') x scalar(@{$conf->{'lineup'}})) . ' )';
     $sth = $DBH->prepare_cached($sql);
     if (!defined($sth))
       {
         print (STDERR "Unexpected error when preparing statement ($sql): " . $DBH->errstr . "\n");
         exit(1);
       }
-    $sth->bind_param( 1, $nowDateTimeSQLite, SQL_DATETIME );
-    $sth->bind_param( 2, $conf->{'lineup'}->[0], SQL_VARCHAR );
+    $param = 1;
+    $sth->bind_param( $param, $nowDateTimeSQLite, SQL_DATETIME );
+    $param++;
+    for (my $i=0; $i < scalar(@{$conf->{'lineup'}}); $i++)
+      {
+        $sth->bind_param( $param, @{$conf->{'lineup'}}[$i]);
+        $param++;
+      }
     $sth->execute();
     if ($sth->err())
       {
@@ -558,7 +577,8 @@ for (my $retry = 0; $retry < 7; $retry++)
            " left outer join schedules_hash as schedules_hash on stations_schedules_hash.station = schedules_hash.station " .
            " AND stations_schedules_hash.day = schedules_hash.day " .
            " where (stations_schedules_hash.station in (select distinct channels.station " .
-           " from channels as channels where channels.lineup = ? and channels.selected = 1)) " .
+           " from channels as channels where channels.lineup in ( " .  join(', ', ('?') x scalar(@{$conf->{'lineup'}})) . " ) " .
+           " and channels.selected = 1)) " .
            " AND (schedules_hash.station is NULL OR schedules_hash.hash != stations_schedules_hash.hash) " .
            " AND stations_schedules_hash.day >= ? AND stations_schedules_hash.day < ? " .
            " ORDER by stations_schedules_hash.station, stations_schedules_hash.day";
@@ -570,9 +590,16 @@ for (my $retry = 0; $retry < 7; $retry++)
         exit(1);
       }
 
-    $sth->bind_param( 1, $conf->{'lineup'}->[0], SQL_VARCHAR );
-    $sth->bind_param( 2, DateTime::Format::SQLite->format_date($startDateTime), SQL_DATE );
-    $sth->bind_param( 3, DateTime::Format::SQLite->format_date($endDateTime), SQL_DATE );
+    $param = 1;
+    for (my $i=0; $i < scalar(@{$conf->{'lineup'}}); $i++)
+      {
+        $sth->bind_param( $param, @{$conf->{'lineup'}}[$i]);
+        $param++;
+      }
+    $sth->bind_param( $param, DateTime::Format::SQLite->format_date($startDateTime), SQL_DATE );
+    $param++;
+    $sth->bind_param( $param, DateTime::Format::SQLite->format_date($endDateTime), SQL_DATE );
+    $param++;
 
     $sth->execute();
     if ($sth->err)
@@ -772,7 +799,8 @@ for (my $retry = 0; $retry < 7; $retry++)
            " where (schedules.station in (select distinct stations.station " .
            " from stations as stations where stations.station " .
            " in (select distinct channels.station from channels channels " .
-           " where channels.lineup = ? and channels.selected = 1)) AND (programs.program is null OR schedules.program_hash != programs.hash)) " .
+           " where channels.lineup in ( " .  join(', ', ('?') x scalar(@{$conf->{'lineup'}})) . " ) and channels.selected = 1)) " .
+           " AND (programs.program is null OR schedules.program_hash != programs.hash)) " .
            " AND schedules.day >= ? AND schedules.day < ?" ;
 
     $sth = $DBH->prepare_cached($sql);
@@ -782,9 +810,16 @@ for (my $retry = 0; $retry < 7; $retry++)
         exit(1);
       }
 
-    $sth->bind_param( 1, $conf->{'lineup'}->[0], SQL_VARCHAR );
-    $sth->bind_param( 2, DateTime::Format::SQLite->format_date($startDateTime), SQL_DATE );
-    $sth->bind_param( 3, DateTime::Format::SQLite->format_date($endDateTime), SQL_DATE );
+    $param = 1;
+    for (my $i=0; $i < scalar(@{$conf->{'lineup'}}); $i++)
+      {
+        $sth->bind_param( $param, @{$conf->{'lineup'}}[$i]);
+        $param++;
+      }
+    $sth->bind_param( $param, DateTime::Format::SQLite->format_date($startDateTime), SQL_DATE );
+    $param++;
+    $sth->bind_param( $param, DateTime::Format::SQLite->format_date($endDateTime), SQL_DATE );
+    $param++;
 
     $sth->execute();
 
@@ -919,7 +954,8 @@ for (my $retry = 0; $retry < 7; $retry++)
            "    and p1.program in ( select schedules.program from schedules as schedules " .
            "      where (schedules.station in (select distinct stations.station from stations as stations " .
            "        where stations.station in (select distinct channels.station from channels channels " .
-           "          where channels.lineup = ? and channels.selected = 1)) " .
+           "          where channels.lineup in ( " .  join(', ', ('?') x scalar(@{$conf->{'lineup'}})) . " ) " .
+           "          and channels.selected = 1)) " .
            "        and schedules.day >= ? and schedules.day < ? ) ) ";
 
     $sth = $DBH->prepare_cached($sql);
@@ -929,9 +965,16 @@ for (my $retry = 0; $retry < 7; $retry++)
         exit(1);
       }
 
-    $sth->bind_param( 1, $conf->{'lineup'}->[0], SQL_VARCHAR );
-    $sth->bind_param( 2, DateTime::Format::SQLite->format_date($startDateTime), SQL_DATE );
-    $sth->bind_param( 3, DateTime::Format::SQLite->format_date($endDateTime), SQL_DATE );
+    $param = 1;
+    for (my $i=0; $i < scalar(@{$conf->{'lineup'}}); $i++)
+      {
+        $sth->bind_param( $param, @{$conf->{'lineup'}}[$i]);
+        $param++;
+      }
+    $sth->bind_param( $param, DateTime::Format::SQLite->format_date($startDateTime), SQL_DATE );
+    $param++;
+    $sth->bind_param( $param, DateTime::Format::SQLite->format_date($endDateTime), SQL_DATE );
+    $param++;
 
     $sth->execute();
 
@@ -1219,7 +1262,7 @@ $w->startTag('tv',
   # desirable, but when you get back 40-50% of the cpu
   # it is a necessary compromise
   #
-  $sql = "select schedules.station, schedules.starttime, schedules.duration, schedules.program, schedules.details, programs.details, strftime('%Y%m%d%H%M%S', schedules.starttime), strftime('%Y%m%d%H%M%S', datetime(schedules.starttime, '+' || schedules.duration || ' seconds')), stations.details, supplemental.details from schedules as schedules left join programs as programs on programs.program = schedules.program left join stations as stations on stations.station = schedules.station left join programs as supplemental on programs.program_supplemental = supplemental.program where schedules.station in (select distinct stations.station from stations as stations where stations.station in ( select distinct channels.station from channels as channels where channels.lineup = ? and channels.selected = 1)) AND schedules.day >= ? and schedules.day < ? order by schedules.station, schedules.starttime";
+  $sql = "select schedules.station, schedules.starttime, schedules.duration, schedules.program, schedules.details, programs.details, strftime('%Y%m%d%H%M%S', schedules.starttime), strftime('%Y%m%d%H%M%S', datetime(schedules.starttime, '+' || schedules.duration || ' seconds')), stations.details, supplemental.details from schedules as schedules left join programs as programs on programs.program = schedules.program left join stations as stations on stations.station = schedules.station left join programs as supplemental on programs.program_supplemental = supplemental.program where schedules.station in (select distinct stations.station from stations as stations where stations.station in ( select distinct channels.station from channels as channels where channels.lineup in ( " .  join(', ', ('?') x scalar(@{$conf->{'lineup'}})) . " ) and channels.selected = 1)) AND schedules.day >= ? and schedules.day < ? order by schedules.station, schedules.starttime";
 
   $sth = $DBH->prepare_cached($sql);
   if (!defined($sth))
@@ -1234,9 +1277,16 @@ $w->startTag('tv',
   my $startDay = DateTime->now(time_zone => 'UTC')->add(days => $opt->{'offset'});
   my $endDay = DateTime->now(time_zone => 'UTC')->add(days => $opt->{'offset'})->add(days => $opt->{'days'});
 
-  $sth->bind_param( 1, $conf->{'lineup'}->[0], SQL_VARCHAR );
-  $sth->bind_param( 2, DateTime::Format::SQLite->format_date($startDay), SQL_DATE );
-  $sth->bind_param( 3, DateTime::Format::SQLite->format_date($endDay), SQL_DATE );
+  $param = 1;
+  for (my $i=0; $i < scalar(@{$conf->{'lineup'}}); $i++)
+    {
+      $sth->bind_param( $param, @{$conf->{'lineup'}}[$i]);
+      $param++;
+    }
+  $sth->bind_param( $param, DateTime::Format::SQLite->format_date($startDay), SQL_DATE );
+  $param++;
+  $sth->bind_param( $param, DateTime::Format::SQLite->format_date($endDay), SQL_DATE );
+  $param++;
 
   $sth->execute();
 
