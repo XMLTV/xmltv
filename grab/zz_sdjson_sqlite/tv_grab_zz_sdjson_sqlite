@@ -44,6 +44,7 @@
 #
 # Version history:
 #
+# 2018/09/03 - 1.48 - use available channum
 # 2018/09/02 - 1.47 - remove dead code
 # 2018/09/02 - 1.46 - fix grammer
 # 2018/08/30 - 1.45 - multi-lineup plumbing - mainline code
@@ -137,7 +138,7 @@ use Data::Dumper;
 my $RFC2838_COMPLIANT          = 1;            # RFC2838 compliant station ids, which makes XMLTV
                                                # validate even though the docs say "SHOULD" not "MUST"
 
-my $SCRIPT_VERSION             = '$Id: tv_grab_zz_sdjson_sqlite,v 1.47 2018/09/02 18:30:00 gtb Exp ed $';
+my $SCRIPT_VERSION             = '$Id: tv_grab_zz_sdjson_sqlite,v 1.48 2018/09/03 18:15:00 gtb Exp ed $';
 my $SCRIPT_URL                 = 'https://github.com/garybuhrmaster/tv_grab_zz_sdjson_sqlite';
 my $SCRIPT_NAME                = basename("$0");
 my $SCRIPT_NAME_DIR            = dirname("$0");
@@ -2381,7 +2382,7 @@ sub channelWriter
     while (my $r = $sth->fetchrow_arrayref())
       {
         my $sID = $r->[0];
-        my $channum = $r->[1] || '';
+        my $channum = $r->[1];
         my $c = $JSON->decode($r->[2]);
         my $s = {};
         if (defined($r->[3]))
@@ -2669,7 +2670,7 @@ sub getLineup
           # Process each channel/station in the lineup
           #
 
-          $sql = 'select distinct channels.station, channels.details, stations.details, lineups.transport from channels as channels left join stations as stations on stations.station = channels.station left join lineups as lineups on lineups.lineup = channels.lineup where channels.lineup in ( ' . join(', ', ('?') x scalar(@{$conf->{'lineup'}})) . ' ) and channels.selected = 1';
+          $sql = 'select distinct channels.station, channels.channum, channels.details, stations.details, lineups.transport from channels as channels left join stations as stations on stations.station = channels.station left join lineups as lineups on lineups.lineup = channels.lineup where channels.lineup in ( ' . join(', ', ('?') x scalar(@{$conf->{'lineup'}})) . ' ) and channels.selected = 1';
 
           $sth = $DBH->prepare_cached($sql);
           if (!defined($sth))
@@ -2697,48 +2698,22 @@ sub getLineup
           $sth->bind_col( 2, undef, SQL_VARCHAR );
           $sth->bind_col( 3, undef, SQL_VARCHAR );
           $sth->bind_col( 4, undef, SQL_VARCHAR );
+          $sth->bind_col( 5, undef, SQL_VARCHAR );
 
           while (my $r = $sth->fetchrow_arrayref())
             {
               my $sID = $r->[0];
-              my $c = $JSON->decode($r->[1]);
-              my $s = $JSON->decode($r->[2]);
-              my $SDtype = $r->[3] || 'Unknown';
-              my $type = mapTransport($r->[3]);
+              my $channum = $r->[1];
+              my $c = $JSON->decode($r->[2]);
+              my $s = $JSON->decode($r->[3]);
+              my $SDtype = $r->[4] || 'Unknown';
+              my $type = mapTransport($r->[4]);
 
               $w->startTag('lineup-entry');
 
-                if (($SDtype eq 'Cable') || ($SDtype eq 'Satellite'))
+                if (defined($channum) && ($channum ne ''))
                   {
-                    my $preset = $c->{'channel'};
-                    if (looks_like_number($preset))
-                      {
-                        $preset = 0 + $preset;
-                        $w->dataElement('preset', $preset);
-                      }
-                  }
-
-                if ($SDtype eq 'Antenna')
-                  {
-                    my $atscMajor = $c->{'atscMajor'};
-                    my $atscMinor = $c->{'atscMinor'};
-                    if (defined($atscMajor) && defined($atscMinor) &&
-                        looks_like_number($atscMajor) && looks_like_number($atscMinor))
-                      {
-                        $atscMajor = 0 + $atscMajor;
-                        $atscMinor = 0 + $atscMinor;
-                        $w->dataElement('preset', "$atscMajor.$atscMinor");
-                      }
-                  }
-
-                if ($SDtype eq 'DVB-T')
-                  {
-                    my $preset = $c->{'channel'};
-                    if (looks_like_number($preset))
-                      {
-                        $preset = 0 + $preset;
-                        $w->dataElement('preset', $preset);
-                      }
+                    $w->dataElement('preset', $channum);
                   }
 
                 $w->startTag('station', 'rfc2838' => generateRFC2838($sID) );
@@ -2789,7 +2764,6 @@ sub getLineup
                     {
                       my $atscMajor = $c->{'atscMajor'};
                       my $atscMinor = $c->{'atscMinor'};
-                      my $number = $c->{'uhfVhf'} || "0";
 
                       my $ATSC = (defined($atscMajor) && defined($atscMinor) &&
                                   looks_like_number($atscMajor) && looks_like_number($atscMinor));
@@ -2798,7 +2772,6 @@ sub getLineup
                         {
                           $atscMajor = 0 + $atscMajor;
                           $atscMinor = 0 + $atscMinor;
-                          $number = "$atscMajor.$atscMinor";
                           $w->startTag('atsc-channel');
                             $w->dataElement('system', 'US-ATSC');
                         }
@@ -2808,7 +2781,10 @@ sub getLineup
                             $w->dataElement('system', 'NTSC-M');
                         }
 
-                        $w->dataElement('number', $number);
+                        if (defined($channum) && ($channum ne ''))
+                          {
+                            $w->dataElement('number', $channum);
+                          }
 
                         my $fccChan = $c->{'uhfVhf'};
                         if (defined($fccChan))
@@ -2868,11 +2844,16 @@ sub getLineup
                             $serviceID = 0 + $serviceID;
                             $w->dataElement('service-id', $serviceID);
                           }
-                        my $lcn = $c->{'channel'};
+                        my $lcn = $c->{'logicalChannelNumber'};
                         if (defined($lcn) && looks_like_number($lcn))
                           {
                             $lcn = 0 + $lcn;
                             $w->dataElement('lcn', $lcn);
+                          }
+                        my $provider = $c->{'providerCallsign'};
+                        if (defined($provider))
+                          {
+                            $w->dataElement('provider-name', $provider);
                           }
                       $w->endTag('dvb-channel');
                     }
@@ -4891,7 +4872,7 @@ sub manageLineups
                     my $rowid = 0;
                     my $selected = 1;
                     my $station = '';
-                    my $channum = '0';
+                    my $channum = '';
                     my $cdetails = '';
                     my $sdetails = '';
                     my $sql = "select channels.rowid, channels.station, channels.channum, channels.selected, channels.details, stations.details from channels as channels left join stations as stations on stations.station = channels.station where channels.lineup = ?";
@@ -4933,9 +4914,13 @@ sub manageLineups
                         my $callsign;
                         $callsign = $s->{'callsign'} if (defined($s->{'callsign'}));
                         my $i = '';
-                        $i .= "$channum " if (defined($channum));
+                        $i .= "$channum " if ($channum ne '');
                         $i .= "$name " if (defined($name));
                         $i .= "$callsign " if (defined($callsign));
+                        if ($i eq '')
+                          {
+                            $i = 'Unknown';
+                          }
                         my $ans = ask_boolean($i, $selected);
                         $ans = $selected if (!defined($ans));
                         $sthupd->bind_param( 1, $ans, SQL_INTEGER );
