@@ -44,6 +44,7 @@
 #
 # Version history:
 #
+# 2018/09/15 - 1.56 - enhance obtainAvailble to use uri
 # 2018/09/14 - 1.55 - support explicit lineup name for --manage-lineup add
 # 2018/09/13 - 1.54 - revise previously-shown (new is new and no supplemental)
 # 2018/09/05 - 1.53 - multi-lineup plumbing - configure
@@ -145,7 +146,7 @@ use Data::Dumper;
 my $RFC2838_COMPLIANT          = 1;            # RFC2838 compliant station ids, which makes XMLTV
                                                # validate even though the docs say "SHOULD" not "MUST"
 
-my $SCRIPT_VERSION             = '$Id: tv_grab_zz_sdjson_sqlite,v 1.55 2018/09/14 00:10:00 gtb Exp ed $';
+my $SCRIPT_VERSION             = '$Id: tv_grab_zz_sdjson_sqlite,v 1.56 2018/09/15 15:50:00 gtb Exp ed $';
 my $SCRIPT_URL                 = 'https://github.com/garybuhrmaster/tv_grab_zz_sdjson_sqlite';
 my $SCRIPT_NAME                = basename("$0");
 my $SCRIPT_NAME_DIR            = dirname("$0");
@@ -7046,6 +7047,12 @@ sub obtainAvailable
 
     my $type = shift;
 
+    my $path = shift;
+
+    $type = '' if (!defined($type));
+
+    $path = '' if (!defined($path));
+
     $self->_resetError;
 
     if (!$self->isOnline)
@@ -7064,11 +7071,16 @@ sub obtainAvailable
         return $return;
       }
 
-    $type = '' if (!defined($type));
+    if (($path ne '') && ($type eq ''))
+      {
+        $return = undef;
+        $self->_setErrorString("obtainAvailable request is not valid (type=$type, path=$path)");
+        $self->_CroakOrCarp;
+        print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
+        return $return;
+      }
 
-    $type = uri_escape($type);
-
-    my $request = HTTP::Request->new(GET => "$self->{'RESTUrl'}/available/$type");
+    my $request = HTTP::Request->new(GET => "$self->{'RESTUrl'}/available");
 
     $request->header('Token' => "$self->{'_Token'}");
 
@@ -7121,8 +7133,111 @@ sub obtainAvailable
         return $return;
       }
 
-    $return = $r;
+    if ($type eq '')
+      {
+        $return = $r;
+        print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
+        return $return;
+      }
 
+    if (ref($r) ne 'ARRAY')
+      {
+        $return = undef;
+        $self->_setErrorString("HTTP response content was malformed (not an array)");
+        $self->_CroakOrCarp;
+        print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
+        return $return;
+      }
+
+    foreach my $e(@{$r})
+      {
+        if (ref($e) ne 'HASH')
+          {
+            $return = undef;
+            $self->_setErrorString("HTTP response content was malformed (not an array of hashes)");
+            $self->_CroakOrCarp;
+            print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
+            return $return;
+          }
+        if (defined($e->{'type'}) && ($e->{'type'} eq "$type"))
+          {
+            if (defined($e->{'uri'}))
+              {
+                my $uri = $e->{'uri'};
+
+                $uri =~ s/\/\{.*?\}$//;        # Bad adjustment?
+
+                $request = HTTP::Request->new(GET => $self->uriResolve($uri) . "$path");
+
+                $request->header('Token' => "$self->{'_Token'}");
+
+                print (STDERR "DEBUG:   HTTP request:\n" . Data::Dumper->new([$request])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
+
+                $response = $self->{'_LWP'}->request($request);
+
+                print (STDERR "DEBUG:   HTTP response:\n" . Data::Dumper->new([$response])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
+
+                $responseCode = $response->code();
+                $responseContent = $response->decoded_content();
+
+                print (STDERR "DEBUG:   HTTP decoded response content:\n" . Data::Dumper->new([$responseContent])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
+
+                if ($responseCode != 200)
+                  {
+                    $return = undef;
+                    $self->_setErrorString("HTTP response code was not successful ($responseCode)");
+                    $self->_CroakOrCarp;
+                    print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
+                    return $return;
+                  }
+
+                if (!defined($responseContent))
+                  {
+                    $return = undef;
+                    $self->_setErrorString("HTTP response content could not be decoded");
+                    $self->_CroakOrCarp;
+                    print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
+                    return $return;
+                  }
+
+                if ($responseContent eq '')
+                  {
+                    $return = undef;
+                    $self->_setErrorString("HTTP response content was empty");
+                    $self->_CroakOrCarp;
+                    print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
+                    return $return;
+                  }
+
+                $r = eval { $self->{'_JSON'}->convert_blessed->decode($responseContent) };
+
+                if (!defined($r))
+                  {
+                    $return = undef;
+                    $self->_setErrorString("HTTP response content was not parseable: $responseContent");
+                    $self->_CroakOrCarp;
+                    print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
+                    return $return;
+                  }
+
+                $return = $r;
+                print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
+                return $return;
+              }
+            else
+              {
+                $return = undef;
+                $self->_setErrorString("HTTP response content was malformed (uri not specified in available response)");
+                $self->_CroakOrCarp;
+                print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
+                return $return;
+              }
+          }
+      }
+
+    $return = undef;
+    $self->_setErrorString("HTTP response did not match type=$type");
+    $self->_CroakOrCarp;
     print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
     return $return;
   }
