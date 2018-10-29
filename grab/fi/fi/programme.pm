@@ -161,7 +161,7 @@ sub dump {
   # Programme post-processing
   #
   # Parental level removal (catch also the duplicates)
-  $title =~ s/(?:\s+\((?:S|T|7|9|12|16|18)\))+\s*$//
+  $title =~ s/(?:\s+\((?:S|T|K?7|K?9|K?12|K?16|K?18)\))+\s*$//
       if $title_strip_parental;
   #
   # Title mapping
