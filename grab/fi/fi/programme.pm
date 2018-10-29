@@ -368,9 +368,9 @@ sub parseConfigLine {
     }
   } elsif ($command eq "title") {
       if (($keyword eq "map") &&
-	  # Accept "title" and 'title' for each parameter
+	  # Accept "title" and 'title' for each parameter - 2nd may be empty
 	  (my(undef, $from, undef, $to) =
-	   ($param =~ /^([\'\"])([^\1]+)\1\s+([\'\"])([^\3]+)\3/))) {
+	   ($param =~ /^([\'\"])([^\1]+)\1\s+([\'\"])([^\3]*)\3/))) {
 	  debug(3, "title mapping from '$from' to '$to'");
 	  $from = qr/^\Q$from\E/;
 	  push(@title_map, sub { $_[0] =~ s/$from/$to/ });
