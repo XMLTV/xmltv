@@ -14,6 +14,7 @@ use strict;
 use warnings;
 use Carp;
 use POSIX qw(strftime);
+use URI::Escape qw(uri_unescape);
 
 # Import from internal modules
 fi::common->import();
@@ -356,6 +357,11 @@ sub parseConfigLine {
 
   # Extract words
   my($command, $keyword, $param) = split(' ', $line, 3);
+
+  # apply URI unescaping if string contains '%XX'
+  if ($param =~ /%[0-9A-Fa-f]{2}/) {
+      $param = uri_unescape($param);
+  }
 
   if ($command eq "series") {
     if ($keyword eq "description") {
