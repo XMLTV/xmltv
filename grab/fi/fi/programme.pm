@@ -14,6 +14,7 @@ use strict;
 use warnings;
 use Carp;
 use POSIX qw(strftime);
+use URI::Escape qw(uri_unescape);
 
 # Import from internal modules
 fi::common->import();
@@ -161,7 +162,7 @@ sub dump {
   # Programme post-processing
   #
   # Parental level removal (catch also the duplicates)
-  $title =~ s/(?:\s+\((?:S|T|7|9|12|16|18)\))+\s*$//
+  $title =~ s/(?:\s+\((?:S|T|K?7|K?9|K?12|K?16|K?18)\))+\s*$//
       if $title_strip_parental;
   #
   # Title mapping
@@ -357,6 +358,11 @@ sub parseConfigLine {
   # Extract words
   my($command, $keyword, $param) = split(' ', $line, 3);
 
+  # apply URI unescaping if string contains '%XX'
+  if ($param =~ /%[0-9A-Fa-f]{2}/) {
+      $param = uri_unescape($param);
+  }
+
   if ($command eq "series") {
     if ($keyword eq "description") {
       $series_description{$param}++;
@@ -368,9 +374,9 @@ sub parseConfigLine {
     }
   } elsif ($command eq "title") {
       if (($keyword eq "map") &&
-	  # Accept "title" and 'title' for each parameter
+	  # Accept "title" and 'title' for each parameter - 2nd may be empty
 	  (my(undef, $from, undef, $to) =
-	   ($param =~ /^([\'\"])([^\1]+)\1\s+([\'\"])([^\3]+)\3/))) {
+	   ($param =~ /^([\'\"])([^\1]+)\1\s+([\'\"])([^\3]*)\3/))) {
 	  debug(3, "title mapping from '$from' to '$to'");
 	  $from = qr/^\Q$from\E/;
 	  push(@title_map, sub { $_[0] =~ s/$from/$to/ });

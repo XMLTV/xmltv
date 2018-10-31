@@ -355,7 +355,8 @@ my @opt_components
        pl_files => { 'grab/fi/merge.PL' => 'grab/fi/tv_grab_fi' },
        to_clean => [ 'grab/fi/tv_grab_fi' ],
        prereqs => { 'HTML::TreeBuilder'    => 0,
-                    'LWP::Protocol::https' => 0, },
+                    'LWP::Protocol::https' => 0,
+                    'URI::Escape'          => 0, },
      },
 
      { name => 'tv_grab_fi_sv',

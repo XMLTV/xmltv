@@ -21,7 +21,6 @@ BEGIN {
 
 # Import from internal modules
 fi::common->import();
-fi::programmeStartOnly->import();
 
 # Description
 sub description { 'telkku.com' }
@@ -45,7 +44,7 @@ sub _getJSON($$$) {
     #    window.__INITIAL_STATE__ = {...};
     # </script>
     #
-    my($match) = ($text =~ /window.__INITIAL_STATE__ = ({.+});/);
+    my($match) = ($text =~ /window.__INITIAL_STATE__ = (\{.+\});/);
 
     if ($match) {
       my $decoded = JSON->new->decode($match);
