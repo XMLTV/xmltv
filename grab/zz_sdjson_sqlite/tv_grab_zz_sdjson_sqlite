@@ -44,6 +44,7 @@
 #
 # Version history:
 #
+# 2018/12/13 - 1.61 - add tvdb metadata
 # 2018/11/10 - 1.60 - include subscription info in additional paths
 # 2018/11/03 - 1.59 - additional protection against bad data
 # 2018/10/30 - 1.58 - initial protections against bad data
@@ -150,7 +151,7 @@ use Data::Dumper;
 my $RFC2838_COMPLIANT          = 1;            # RFC2838 compliant station ids, which makes XMLTV
                                                # validate even though the docs say "SHOULD" not "MUST"
 
-my $SCRIPT_VERSION             = '$Id: tv_grab_zz_sdjson_sqlite,v 1.60 2018/11/10 19:15:00 gtb Exp ed $';
+my $SCRIPT_VERSION             = '$Id: tv_grab_zz_sdjson_sqlite,v 1.61 2018/12/13 23:35:00 gtb Exp ed $';
 my $SCRIPT_URL                 = 'https://github.com/garybuhrmaster/tv_grab_zz_sdjson_sqlite';
 my $SCRIPT_NAME                = basename("$0");
 my $SCRIPT_NAME_DIR            = dirname("$0");
@@ -1747,20 +1748,37 @@ $w->startTag('tv',
         my $showTotalSeasons;
         my $showingPart;
         my $showingTotalParts;
+        my $TVDBseriesID;
+        my $TVDBepisodeID;
         if (defined($supplementalDetails->{'metadata'}))
           {
             foreach my $meta(@{$supplementalDetails->{'metadata'}})
               {
-                last if ((!defined($supplementalDetails->{'programID'})) ||
-                         ('SH' ne substr($supplementalDetails->{'programID'}, 0, 2)));
-                # We only support Gracenote season/episode metadata
                 if (defined($meta->{'Gracenote'}))
                   {
-                    $showSeason = $meta->{'Gracenote'}->{'season'};
-                    $showEpisode = $meta->{'Gracenote'}->{'episode'};
-                    $showTotalSeasons = $meta->{'Gracenote'}->{'totalSeasons'};
-                    $showTotalEpisodes = $meta->{'Gracenote'}->{'totalEpisodes'};
-                    last;
+                    if ((defined($supplementalDetails->{'programID'})) &&
+                        ('SH' eq substr($supplementalDetails->{'programID'}, 0, 2)))
+                      {
+                        $showSeason = $meta->{'Gracenote'}->{'season'};
+                        $showEpisode = $meta->{'Gracenote'}->{'episode'};
+                        $showTotalSeasons = $meta->{'Gracenote'}->{'totalSeasons'};
+                        $showTotalEpisodes = $meta->{'Gracenote'}->{'totalEpisodes'};
+                      }
+                  }
+                if (defined($meta->{'TheTVDB'}))
+                  {
+                    if ((defined($meta->{'TheTVDB'}->{'episodeID'})) &&
+                        (looks_like_number($meta->{'TheTVDB'}->{'episodeID'})) &&
+                        ($meta->{'TheTVDB'}->{'episodeID'} > 0))
+                      {
+                        $TVDBepisodeID = 0 + $meta->{'TheTVDB'}->{'episodeID'};
+                      }
+                    if ((defined($meta->{'TheTVDB'}->{'seriesID'})) &&
+                        (looks_like_number($meta->{'TheTVDB'}->{'seriesID'})) &&
+                        ($meta->{'TheTVDB'}->{'seriesID'} > 0))
+                      {
+                        $TVDBseriesID = 0 + $meta->{'TheTVDB'}->{'seriesID'};
+                      }
                   }
               }
           }
@@ -1768,7 +1786,6 @@ $w->startTag('tv',
           {
             foreach my $meta(@{$programDetails->{'metadata'}})
               {
-                # We only support Gracenote season/episode metadata
                 if (defined($meta->{'Gracenote'}))
                   {
                     if (substr($pID, 0, 2) eq 'SH')
@@ -1784,7 +1801,21 @@ $w->startTag('tv',
                         $programEpisode = $meta->{'Gracenote'}->{'episode'};
                         $programTotalEpisodes = $meta->{'Gracenote'}->{'totalEpisodes'};
                       }
-                    last;
+                  }
+                if (defined($meta->{'TheTVDB'}))
+                  {
+                    if ((defined($meta->{'TheTVDB'}->{'episodeID'})) &&
+                        (looks_like_number($meta->{'TheTVDB'}->{'episodeID'})) &&
+                        ($meta->{'TheTVDB'}->{'episodeID'} > 0))
+                      {
+                        $TVDBepisodeID = 0 + $meta->{'TheTVDB'}->{'episodeID'};
+                      }
+                    if ((defined($meta->{'TheTVDB'}->{'seriesID'})) &&
+                        (looks_like_number($meta->{'TheTVDB'}->{'seriesID'})) &&
+                        ($meta->{'TheTVDB'}->{'seriesID'} > 0))
+                      {
+                        $TVDBseriesID = 0 + $meta->{'TheTVDB'}->{'seriesID'};
+                      }
                   }
               }
           }
@@ -1801,6 +1832,14 @@ $w->startTag('tv',
         if (($season ne '') || ($episode ne '') || ($part ne ''))
           {
             $w->dataElement('episode-num', " $season . $episode . $part ", 'system' => 'xmltv_ns');
+          }
+        if ((defined($TVDBepisodeID)) && (!exists($GRABBER_FIXUPS->{'NO_3RD_PARTY_METADATA'})))
+          {
+            $w->dataElement('episode-num', "episode/" . $TVDBepisodeID, 'system' => 'thetvdb.com');
+          }
+        if ((defined($TVDBseriesID)) && (!exists($GRABBER_FIXUPS->{'NO_3RD_PARTY_METADATA'})))
+          {
+            $w->dataElement('episode-num', "series/" . $TVDBseriesID, 'system' => 'thetvdb.com');
           }
 
         if (defined($scheduleDetails->{'videoProperties'}))
@@ -5601,8 +5640,9 @@ specific functionality.  The fixups can be combined by separating
 them with colons.  Available fixups are NO_XMLTV_NS_TOTAL_SEASONS
 (do not include the total seasons in the generated xmltv_ns episode
 numbering), NO_PREVIOUSLY_SHOWN_ZONE_OFFSET (do not include the
-zone offset in previously-shown), and NO_STATION_LOGOS (do not include
-station logos in the output).  The fixups are intended to be temporary
+zone offset in previously-shown), NO_STATION_LOGOS (do not include
+station logos in the output), and NO_3RD_PARTY_METADATA (do not include
+3rd party metadata references).  The fixups are intended to be temporary
 until the application(s) can be updated.
 
 =head1 SUPPORTED CHANNELS
@@ -5692,7 +5732,7 @@ on the shoulders of those that came before us.
 
 =head1 COPYRIGHT
 
-Copyright (c) 2016, 2017 Gary Buhrmaster <gary.buhrmaster@gmail.com>
+Copyright (c) 2016, 2017, 2018 Gary Buhrmaster <gary.buhrmaster@gmail.com>
 
 This code is distributed under the GNU General Public License v2 (GPLv2)
 
