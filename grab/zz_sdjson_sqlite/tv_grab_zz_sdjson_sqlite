@@ -44,6 +44,7 @@
 #
 # Version history:
 #
+# 2018/12/16 - 1.64 - add support for gracenote rating body advisories
 # 2018/12/15 - 1.63 - remove (no longer existing) schedule ratings
 # 2018/12/14 - 1.62 - 3rdparty metadata emission via configure
 # 2018/12/13 - 1.61 - add tvdb metadata
@@ -153,7 +154,7 @@ use Data::Dumper;
 my $RFC2838_COMPLIANT          = 1;            # RFC2838 compliant station ids, which makes XMLTV
                                                # validate even though the docs say "SHOULD" not "MUST"
 
-my $SCRIPT_VERSION             = '$Id: tv_grab_zz_sdjson_sqlite,v 1.63 2018/12/15 22:35:00 gtb Exp ed $';
+my $SCRIPT_VERSION             = '$Id: tv_grab_zz_sdjson_sqlite,v 1.64 2018/12/16 08:50:00 gtb Exp ed $';
 my $SCRIPT_URL                 = 'https://github.com/garybuhrmaster/tv_grab_zz_sdjson_sqlite';
 my $SCRIPT_NAME                = basename("$0");
 my $SCRIPT_NAME_DIR            = dirname("$0");
@@ -1950,13 +1951,37 @@ $w->startTag('tv',
         # Carried forward from audio eval to match DTD
         $w->emptyTag('subtitles', 'type' => 'teletext') if ($audioHasCC);
 
-        # Schedules Direct data can have duplicate ratings for
-        # a body (one in the schedule, one in the program, and
-        # one for the show/series), so we store only the last,
-        # if multiple exist.  We remap the rating agency to the
-        # MythTV standard, as it is as good of a standard as
-        # anything else, and makes importing the data much easier.
+        # XMLTV ratings (and the system) are arbitrary values, and
+        # have no implied priority or order.  However, for
+        # Schedules Direct data there maybe different ratings for
+        # a body (one in the show/series, and one in the program,
+        # so we store only the more specific if multiple exist.
+        # We remap the rating agency to the MythTV standard, as
+        # it is as good of a standard as anything else, and makes
+        # importing the data much easier.  A value add for
+        # Schedules Direct is that they also provide contentAdvisory
+        # markings at the top level.  Gracenote (the upstream) is
+        # adding advisories to the individual ratings body in the
+        # contentRating, which is usually correct, as any advisory
+        # mostly only apply to the agency like VCHIP ratings such
+        # as TV-14, with an advisory of Dialog (VCHIP is one of
+        # the few ratings with such advisory modifiers).  That
+        # said, various advisories have been seen in other ratings
+        # systems occasionally, and some movies appear to have
+        # advisories marked even without a VCHIP rating applied.
+        # Also note that an advisory is rating specific.  A dialog
+        # that causes an advisory for a TV-PG rating might very
+        # well not result in an advisory for a TV-14 rating where
+        # the more mature audiences can handle the specific dialog.
+        # This is a work in progress, and currently there are
+        # anomalies in the data.  As part of the transition from
+        # where we were to where we will eventually be, we will at
+        # this time just collect all possible advisories and add
+        # them to the eventual advisory ratings.  This will likely
+        # change as Gracenote (and Schedules Direct) modify their
+        # approach and get their data more consistent.
         my $ratings = {};
+        my $advisories = {};
         # Supplemental can have generic show ratings
         if (defined($supplementalDetails->{'contentRating'}))
           {
@@ -1969,6 +1994,20 @@ $w->startTag('tv',
                   {
                     $ratings->{$body} = $code;
                   }
+                if ((defined($rating->{'contentAdvisory'})) && (ref($rating->{'contentAdvisory'}) eq 'ARRAY'))
+                  {
+                    foreach my $advisory(@{$rating->{'contentAdvisory'}})
+                      {
+                        $advisories->{$advisory} = 1;
+                      }
+                  }
+              }
+          }
+        if (defined($supplementalDetails->{'contentAdvisory'}))
+          {
+            foreach my $advisory(@{$supplementalDetails->{'contentAdvisory'}})
+              {
+                $advisories->{$advisory} = 1;
               }
           }
         # Programs can have rating for this specific program
@@ -1983,23 +2022,13 @@ $w->startTag('tv',
                   {
                     $ratings->{$body} = $code;
                   }
-              }
-          }
-        # Write out the the collected ratings
-        foreach my $rating(sort keys %{$ratings})
-          {
-            $w->startTag('rating', 'system' => $rating);
-              $w->dataElement('value', $ratings->{$rating});
-            $w->endTag('rating');
-          }
-
-        # XMLTV advisories are arbitrary values.  Collect from program and supplemental
-        my $advisories = {};
-        if (defined($supplementalDetails->{'contentAdvisory'}))
-          {
-            foreach my $advisory(@{$supplementalDetails->{'contentAdvisory'}})
-              {
-                $advisories->{$advisory} = 1;
+                if ((defined($rating->{'contentAdvisory'})) && (ref($rating->{'contentAdvisory'}) eq 'ARRAY'))
+                  {
+                    foreach my $advisory(@{$rating->{'contentAdvisory'}})
+                      {
+                        $advisories->{$advisory} = 1;
+                      }
+                  }
               }
           }
         if (defined($programDetails->{'contentAdvisory'}))
@@ -2008,6 +2037,13 @@ $w->startTag('tv',
               {
                 $advisories->{$advisory} = 1;
               }
+          }
+        # Write out the the collected ratings and advisories
+        foreach my $rating(sort keys %{$ratings})
+          {
+            $w->startTag('rating', 'system' => $rating);
+              $w->dataElement('value', $ratings->{$rating});
+            $w->endTag('rating');
           }
         foreach my $advisory(sort keys %{$advisories})
           {
