@@ -35,7 +35,7 @@ sub _getJSON($$$) {
   my($date, $page, $keys) = @_;
 
   # Fetch raw text
-  my $text = fetchRaw("http://www.telkku.com/tv-ohjelmat/$date/patch/koko-paiva");
+  my $text = fetchRaw("http://www.telkku.com/tv-ohjelmat/$date/$page/koko-paiva");
   if ($text) {
     #
     # All data is encoded in JSON in a script node
@@ -147,7 +147,7 @@ sub grab {
   my($self, $id, $yesterday, $today, $tomorrow, $offset) = @_;
 
   # Get channel number from XMLTV id
-  return unless my($channel, $group) = ($id =~ /^([\w-]+)\.(\w+)\.telkku\.com$/);
+  return unless my($channel, $group) = ($id =~ /^([\w-]+)\.([\w-]+)\.telkku\.com$/);
 
   # Fetch & extract JSON sub-part
   my $data = _getJSON($today, $group,
