@@ -28,7 +28,7 @@ sub channels {
   my %channels;
 
   # Fetch & parse HTML
-  my $root = fetchTree("https://www.telsu.fi/");
+  my $root = fetchTree("https://www.telsu.fi/tanaan/kaikki");
 
   if ($root) {
 
