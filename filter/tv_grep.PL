@@ -6,9 +6,6 @@
 # file - but then we'd need a separate step for producing
 # documentation.  The input file tv_grep.in is also a legal Perl
 # program, so debugging should not be any harder than it was.
-#
-# $Id$
-#
 
 use IO::File;
 use XMLTV;

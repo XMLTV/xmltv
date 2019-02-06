@@ -1,9 +1,6 @@
 # Just some routines related to the Memoize module that are used in
 # more than one place in XMLTV.  But not general enough to merge back
 # into Memoize.
-#
-# $Id$
-#
 
 package XMLTV::Memoize;
 use strict;

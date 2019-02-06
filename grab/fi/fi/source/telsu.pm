@@ -6,8 +6,6 @@
 #
 # Setup
 #
-# VERSION: $Id$
-#
 # INSERT FROM HERE ############################################################
 package fi::source::telsu;
 use strict;

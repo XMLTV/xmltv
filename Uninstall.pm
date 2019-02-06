@@ -3,9 +3,7 @@
 # 'uninstall' target in the Makefile, for which you will need to
 # modify your Makefile.PL.  I kept well away from the deprecated and
 # no-longer-working uninstall stuff in MakeMaker itself.
-#
-# $Id$
-#
+
 package Uninstall;
 use strict;
 use base 'Exporter'; our @EXPORT = qw(uninstall);

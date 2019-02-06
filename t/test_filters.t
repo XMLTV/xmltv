@@ -7,8 +7,6 @@
 # input filename and the --output option.
 #
 # -- Ed Avis, ed@membled.com, 2002-02-14
-# $Id$
-#
 
 use strict;
 use Getopt::Long;

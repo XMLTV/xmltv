@@ -133,7 +133,7 @@ The entries in the hash configure the behaviour of ParseOptions.
 
   my( $opt, $conf ) = ParseOptions( {
     grabber_name => 'tv_grab_test',
-    version => '$Id$',
+    version => '1.2',
     description => 'Sweden (tv.swedb.se)',
     capabilities => [qw/baseline manualconfig apiconfig lineups/],
     stage_sub => \&config_stage,
@@ -305,7 +305,7 @@ Optional. A value to return when the grabber is called with the
 
   my( $opt, $conf ) = ParseOptions( {
     grabber_name => 'tv_grab_test',
-    version => '$Id$',
+    version => '1.2',
     description => 'Sweden (tv.swedb.se)',
     capabilities => [qw/baseline manualconfig apiconfig preferredmethod/],
     stage_sub => \&config_stage,

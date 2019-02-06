@@ -8,8 +8,6 @@
 # generated from input data against the expected output for each rule type.
 #
 # -- Nick Morrott, knowledgejunkie@gmail.com, 2016-07-07
-# $Id$
-#
 
 use warnings;
 use strict;

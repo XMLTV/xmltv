@@ -3,9 +3,6 @@
 #
 # The second argument is the share directory for the final
 # installation.
-#
-# $Id$
-#
 
 # 15/07/2005
 # we switch the pod in the file according to the locale.

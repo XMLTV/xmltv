@@ -6,7 +6,7 @@ XMLTV::Version - Adds a --version argument to XMLTV grabbers
 
 Add a --version argument to your program, eg
 
-  use XMLTV::Version '$Id$';
+  use XMLTV::Version '1.2';
 
 If a --version parameter is supplied on the command-line, it will
 be caught already by the "use" statement, a message will be printed

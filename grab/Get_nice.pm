@@ -1,5 +1,3 @@
-# $Id$
-#
 # Library to wrap LWP::UserAgent to put in a random delay between
 # requests and set the User-Agent string.  We really should be using
 # LWP::RobotUI but this is better than nothing.
@@ -23,7 +21,6 @@
 # get_nice_tree().
 # Alternatively, get_nice_json() will get you a JSON object,
 # or get_nice_xml() will get a XML::Parser 'Tree' object
-#
 
 use strict;
 

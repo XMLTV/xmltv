@@ -1,8 +1,5 @@
 # Generate XMLTV.pm from XMLTV.pm.PL.  This is to generate part of
 # the pod documentation from the list of handlers.
-#
-# $Id$
-#
 
 use strict;
 sub print_list( $$ );

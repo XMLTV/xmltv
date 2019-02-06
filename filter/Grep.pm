@@ -1,8 +1,6 @@
 # This is intended mostly as a helper library for tv_grep and not for
 # general purpose use (yet).
-#
-# $Id$
-#
+
 package XMLTV::Grep;
 use strict;
 use XMLTV;

@@ -3,9 +3,7 @@
 # Input filename to read from
 # Output filename to write to
 # Share directory to set
-#
-# $Id$
-#
+
 use IO::File;
 use strict;
 sub set_share_dir( $$$ ) {

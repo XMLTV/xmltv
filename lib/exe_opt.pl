@@ -1,13 +1,10 @@
 #!perl -w
 #
-# $Id$
-#
 # This is a simple script to generate options so PerlApp can make the EXE
 # it needs time values, so might as well put it in a perl script!
 # (windows has a limited date function)
 #
 # Robert Eden rmeden@yahoo.com
-#
 
 use File::Spec;
 

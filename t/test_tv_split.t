@@ -6,8 +6,6 @@
 # seem to match.
 #
 # -- Ed Avis, ed@membled.com, 2003-10-04
-# $Id$
-#
 
 use warnings;
 use strict;

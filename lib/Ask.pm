@@ -1,9 +1,6 @@
 # A few routines for asking the user questions.  Used in --configure
 # and also by Makefile.PL, so this file should not depend on any
 # nonstandard libraries.
-#
-# $Id$
-#
 
 package XMLTV::Ask;
 use strict;

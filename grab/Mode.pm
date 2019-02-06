@@ -1,5 +1,3 @@
-# $Id$
-#
 # A simple library to handle mutually exclusive choices.  For example
 #
 # my $mode = XMLTV::Mode::mode('eat', # default
@@ -12,7 +10,6 @@
 # otherwise return one of the strings 'eat', 'walk' or 'sleep'.
 #
 # TODO find some way of getting this cleanly into Getopt::Long.
-#
 
 package XMLTV::Mode;
 sub mode( $@ ) {

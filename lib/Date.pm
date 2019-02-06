@@ -1,4 +1,3 @@
-# $Id$
 =pod
 
 =head1 NAME

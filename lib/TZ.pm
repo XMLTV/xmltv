@@ -1,9 +1,6 @@
 # Miscellaneous timezone routines.  The code in DST.pm builds on
 # these for handling summer time conventions.  This should
 # probably be moved into Date::Manip somehow.
-#
-# $Id$
-#
 
 package XMLTV::TZ;
 use Carp;

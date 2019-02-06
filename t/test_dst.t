@@ -1,5 +1,4 @@
 #!/usr/bin/perl
-# $Id$
 use warnings;
 use strict;
 use XMLTV::DST;

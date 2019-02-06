@@ -1,6 +1,3 @@
-#
-# $Id$
-#
 # The IMDB file contains two packages:
 # 1. XMLTV::IMDB::Cruncher package which parses and manages IMDB "lists" files
 #    from ftp.imdb.com

@@ -23,9 +23,6 @@
 # and it will modify the other programmes in the clump.
 #
 # Again, this all works but a better mechanism is needed.
-#
-# $Id$
-#
 
 package XMLTV::Clumps;
 use XMLTV::Date;

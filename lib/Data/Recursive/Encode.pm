@@ -1,5 +1,3 @@
-# $Id$
-#
 # A wrapper around Data::Recursive::Encode from Tokuhiro Matsuno
 # http://search.cpan.org/~tokuhirom/Data-Recursive-Encode-0.04/lib/Data/Recursive/Encode.pm
 #

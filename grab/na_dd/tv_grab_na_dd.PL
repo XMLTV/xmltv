@@ -4,10 +4,8 @@
 # The second argument is the share directory for the final
 # installation.
 #
-# $Id$
-#
 # note: stolen from tv_grab_uk_rt.PL!
-#
+
 use IO::File;
 my $out = shift @ARGV; die "no output file given" if not defined $out;
 my $share_dir = shift @ARGV;
