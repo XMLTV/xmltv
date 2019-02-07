@@ -43,10 +43,7 @@ sub import( $$ ) {
     print "could not load XMLTV module, xmltv is not properly installed\n"
       if $@;
     for ($_[1]) {
-	if (m!\$Id: ([^,]+),v (\S+) ([0-9/: -]+)!) {
-	    print "This is $1 version $2, $3\n";
-	}
-	else {
+	if (m/^(?:\d+)(?:\.\d+){0,2}$/) {
 	    print "This program version $_\n";
 	}
     }

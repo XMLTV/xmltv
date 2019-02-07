@@ -246,7 +246,8 @@ for a region or country).
 
 =item version
 
-Required. This shall be a cvs Id field.
+Required. The version number of the grabber to be displayed. Supported version
+string formats include "x", "x.y", and "x.y.z".
 
 =item capabilities
 
@@ -420,9 +421,13 @@ sub ParseOptions
 	} or print
 	    "could not load XMLTV module, xmltv is not properly installed\n";
 
-	if( $p->{version} =~ m!\$Id: [^,]+,v (\S+) ([0-9/: -]+)! )
+	if( $p->{version} =~ m/^(?:\d+)(?:\.\d+){0,2}$/)
 	{
-	    print "This is $p->{grabber_name} version $1, $2\n";
+	    print "This is $p->{grabber_name} version $p->{version}\n";
+	}
+	elsif( $p->{version} =~ m!\$Id: [^,]+,v (\S+) ([0-9/: -]+)! )
+	{
+	    print "This is $p->{grabber_name} version $1\n";
 	}
 	else
 	{

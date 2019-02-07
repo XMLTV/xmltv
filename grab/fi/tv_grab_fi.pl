@@ -8,7 +8,8 @@ use 5.008; # we process Unicode texts
 use strict;
 use warnings;
 
-use constant VERSION => '$Id$ ';
+use XMLTV;
+use constant VERSION => "$XMLTV::VERSION";
 
 ###############################################################################
 # INSERT: SOURCES
