@@ -129,8 +129,12 @@ sub grab {
 	    my $end   = timeToEpoch($offsets[0], $end_h,   $end_m);
 
 	    # Detect end time on next day
-	    $end = timeToEpoch($offsets[1], $end_h, $end_m)
-	      if ($end < $start);
+	    if ($end < $start) {
+	      # Are there enough day offsets left to handle a day change?
+	      # No -> more programmes than we asked for, exit loop
+	      last if @offsets < 2;
+	      $end = timeToEpoch($offsets[1], $end_h, $end_m);
+	    }
 
 	    debug(3, "List entry ${id} ($start -> $end) $title");
 	    debug(4, $desc) if $desc;
