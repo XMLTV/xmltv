@@ -166,8 +166,11 @@ sub get_nice_aux( $ ) {
     # expose the response object for those grabbers which need to process the headers, status code, etc.
     $Response = $r;
 
-    # set flag if last fetch was from cache
-    $last_get_from_cache = (defined $r->{'_headers'}{'x-cached'} && $r->{'_headers'}{'x-cached'} == 1);
+    # Set flag if last fetch was from local HTTP::Cache::Transparent cache.
+    # Check for presence of both x-content-unchanged and x-cached headers.
+    $last_get_from_cache = (defined $r->{'_headers'}{'x-content-unchanged'}
+                         && defined $r->{'_headers'}{'x-cached'}
+                         && $r->{'_headers'}{'x-cached'} == 1);
 
     if ($r->is_error) {
         # At the moment download failures seem rare, so the script dies if
