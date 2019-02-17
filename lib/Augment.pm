@@ -1202,16 +1202,26 @@ sub extract_numbering () {
 	}
 
 
-	# Check that source episode number is not greater than number of episodes
-	# Rather than discard the episode number, we discard the total instead which
+	# Check that a programme's given series/episode/part number is not greater than
+    # the total number of series/episodes/parts.
+    #
+	# Rather than discard the given number, we discard the total instead, which
 	# is more likely to be incorrect based on observation.
 	#
-	if (defined $prog->{'_episode_total'}) {
-		if ($prog->{'_episode_num'} > $prog->{'_episode_total'}) {
-			l(sprintf("\t Bad episode total found: episode %s of %s, discarding total (from %s)",$prog->{'_episode_num'}, $prog->{'_episode_total'}, $field));
-			$prog->{'_episode_total'} = 0;
-		}
-	}
+    my @comps = ( [ 'series',  '_series_num',  '_series_total',  ],
+                  [ 'episode', '_episode_num', '_episode_total', ],
+                  [ 'part',    '_part_num',    '_part_total',    ],
+                );
+
+    foreach (@comps) {
+        my ($key, $key_num, $key_total) = @$_;
+        if (defined $prog->{$key_num} && defined $prog->{$key_total}) {
+            if ($prog->{$key_num} > $prog->{$key_total}) {
+                l(sprintf("\t Bad %s total found: %s %s of %s, discarding total (from %s)", $key, $key, $prog->{$key_num}, $prog->{$key_total}, $field));
+                $prog->{$key_total} = 0;
+            }
+        }
+    }
 
 }
 
