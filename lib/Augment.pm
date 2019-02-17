@@ -1102,7 +1102,7 @@ sub extract_numbering () {
     #   In the Mix. ( 2/6 ).
     #
     # Should not match --v
-    #   £20,000.
+    #   Â£20,000.
     #   20,000
     #   the 24.
     #   go 24.
