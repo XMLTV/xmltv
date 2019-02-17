@@ -1193,7 +1193,7 @@ sub extract_numbering () {
 		if (defined $val && $val ne '' && $val > 0) {
 			# do we already have a number?
 			if (defined $prog->{$key}  &&  $prog->{$key} != $val) {
-				l(sprintf("\t %s number (%s) already defined. Ignoring different %s number (%s) in %s.", ucfirst($text), $prog->{'_episode_num'}, $text, $val, $field));
+				l(sprintf("\t %s number (%s) already defined. Ignoring different %s number (%s) in %s.", ucfirst($text), $prog->{$key}, $text, $val, $field));
 			} else {
 				l(sprintf("\t %s number found: %s %s (from %s)", ucfirst($text), $text, $val, $field));
 				$prog->{$key} = $val;
