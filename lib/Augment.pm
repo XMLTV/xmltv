@@ -812,7 +812,11 @@ sub extract_numbering () {
     #        also the 'series', 'season' and 'episode' text in the regexs
     my $lang_words = qr/one|two|three|four|five|six|seven|eight|nine/i;
 
-    #
+    # By default, we do not update existing numbering if also extracted from
+    # series/episode/part fields
+    $self->{'options'}{'update_existing_numbering'} = 0
+            unless exists $self->{'options'}{'update_existing_numbering'};
+
     _d(4,"\t extract_numbering: $field : in  : ","<$prog->{$elem}>");
 
     # Theoretically it's possible to do this in one regex but it gets too unwieldy when we start catering
@@ -1192,8 +1196,14 @@ sub extract_numbering () {
 		my ($text, $key, $val) = @$_;
 		if (defined $val && $val ne '' && $val > 0) {
 			# do we already have a number?
-			if (defined $prog->{$key}  &&  $prog->{$key} != $val) {
-				l(sprintf("\t %s number (%s) already defined. Ignoring different %s number (%s) in %s.", ucfirst($text), $prog->{$key}, $text, $val, $field));
+			if (defined $prog->{$key} && $prog->{$key} != $val) {
+                if ($self->{'options'}{'update_existing_numbering'}) {
+                    l(sprintf("\t %s number (%s) already defined. Updating with new %s number (%s) in %s.", ucfirst($text), $prog->{$key}, $text, $val, $field));
+                    $prog->{$key} = $val;
+                }
+                else {
+                    l(sprintf("\t %s number (%s) already defined. Ignoring different %s number (%s) in %s.", ucfirst($text), $prog->{$key}, $text, $val, $field));
+                }
 			} else {
 				l(sprintf("\t %s number found: %s %s (from %s)", ucfirst($text), $text, $val, $field));
 				$prog->{$key} = $val;
