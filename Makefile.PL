@@ -317,7 +317,7 @@ my @opt_components
      # },
 
      { name => 'tv_grab_eu_dotmedia',
-       blurb => 'Grabber for Europe (xmltv.se / dotmedia)',
+       blurb => 'Grabber for Europe (DEPRECATED, xmltv.se / dotmedia)',
        exes => [ 'grab/eu_dotmedia/tv_grab_eu_dotmedia' ],
        prereqs => { 'Compress::Zlib' => 0,
                     'HTTP::Cache::Transparent' => 0,
@@ -333,6 +333,14 @@ my @opt_components
                     'DateTime::Format::Strptime' => 0,
                     'HTML::Entities' => 0,
                     'HTTP::Request::Common' => 0, },
+     },
+
+     { name => 'tv_grab_eu_xmltvse',
+       blurb => 'Grabber for Europe (xmltv.se / xmltvse)',
+       exes => [ 'grab/eu_xmltvse/tv_grab_eu_xmltvse' ],
+       prereqs => { 'Compress::Zlib' => 0,
+                    'HTTP::Cache::Transparent' => 0,
+                    'IO::Scalar'     => 0, },
      },
 
      { name  => 'tv_grab_fi',
@@ -525,7 +533,7 @@ my @opt_components
      },
 
      { name => 'tv_grab_se_tvzon',
-       blurb => 'Grabber for Sweden (tvzon.se)',
+       blurb => 'Grabber for Sweden (DEPRECATED, tvzon.se)',
        exes => [ 'grab/se_tvzon/tv_grab_se_tvzon' ],
        pl_files => { 'grab/se_tvzon/tv_grab_se_tvzon.PL'
                      => 'grab/se_tvzon/tv_grab_se_tvzon' },
