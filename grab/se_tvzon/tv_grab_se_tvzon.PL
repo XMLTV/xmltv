@@ -11,9 +11,9 @@ my $in_fh = new IO::File "< $in" or die "cannot read $in: $!";
 my $seen = 0;
 while (<$in_fh>) {
     s/\@\@name/tv_grab_se_tvzon/;
-    s/\@\@nspc/          /;
+    s/\@\@nspc/                /;
     s/\@\@country/Sweden/;
-    s/\@\@desc/Sweden (TVZon)/;
+    s/\@\@desc/Sweden (DEPRECATED, TVZon)/;
     s%\@\@url%http://xmltv.xmltv.se/channels.xml.gz%;
     s%\@\@site%http://xmltv.xmltv.se/%;
     print $out_fh $_;
