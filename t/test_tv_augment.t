@@ -54,7 +54,7 @@ foreach my $input (@inputs) {
     my $input_basename = File::Basename::basename($input);
     my $output="$tmpDir/".$input_basename."-output";
 
-    my $cmd="$cmds_dir/tv_augment --rule $tests_dir/rules/test_tv_augment.rules --config $tests_dir/configs/$input_basename.conf --input $input --output $output --nostats 2>&1";
+    my $cmd="$cmds_dir/tv_augment --rule $tests_dir/rules/test_tv_augment.rules --config $tests_dir/configs/$input_basename.conf --input $input --output $output 2>&1";
     # my $cmd="perl -I blib/lib $cmds_dir/tv_augment --rule $tests_dir/rules/test_tv_augment.rules --config $tests_dir/configs/$input_basename.conf --input $input --output $output --log $tmpDir/$input_basename.log --debug 5 >$tmpDir/$input_basename.debug 2>&1";
 
     my $r = system($cmd);

@@ -49,7 +49,7 @@ Print the lists of actions taken and suggestions for further fixups.
 
 =item B<B<end>>
 
-Do any final processing before exit (e.g. close the log file).
+Do any final processing before exit (e.g. close the log file if necessary).
 
 =back
 
@@ -62,7 +62,7 @@ Possible parameters:
       config     => filename of config file to read (if omitted then no config file will be used)
       encoding   => assumed encoding of the rules file (default = UTF-8)
       stats      => whether to print the audit stats in the log (values = 0,1) (default = 1)
-      log        => filename of output log (default = augment.log)
+      log        => filename of output log
       debug      => debug level (values 0-10) (default = no debug)
                         note debug level > 3 is not likely to be of much use unless you are developing code
 
@@ -95,7 +95,7 @@ Possible parameters:
         # log the stats
         $augment->printInfo();
 
-        # close the log file
+        # close the log file if necessary
         $augment->end();
 
 Note: you are responsible for reading/writing to the XMLTV .xml file; the package
@@ -191,7 +191,12 @@ sub new
 	# Turn on debug. Note: debug is a 'level between 1-10.
     $debug = ( $self->{'debug'} || 0 );
 
-	open_log( $self->{'log'} || '' );
+	if (exists $self->{'log'} && defined $self->{'log'} && $self->{'log'} ne '') {
+		open_log( $self->{'log'} );
+	}
+	else {
+		$self->{'stats'} = 0;
+	}
 
 	# Load the requested options from the config file
 	$self->{'options_all'} = 1;
@@ -3903,7 +3908,6 @@ sub trim {
 # open log file
 sub open_log (;$) {
 	my $fn = shift;
-	$fn = 'augment.log' if !defined $fn || $fn eq '';
 	my $mode = ($debug ? '>>' : '>');	# open append while debugging - avoids issue with tail on truncated files
 	open(my $fh, $mode, $fn)
 			or die "cannot open $fn: $!";
@@ -3914,8 +3918,10 @@ sub open_log (;$) {
 
 # close log file
 sub close_log () {
-	close($logh)
-			or warn "close failed on log file: $!";
+	if ($logh) {
+		close($logh)
+				or warn "close failed on log file: $!";
+	}
 }
 
 # write to log file
