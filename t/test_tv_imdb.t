@@ -1,11 +1,8 @@
 #!/usr/bin/perl
 #
-# Run tv_split on some input files and check the output looks
-# reasonable.  This is not done by diffing against expected output but
-# by reading the files generated and making sure channels and dates
-# seem to match.
+# Run tv_imdb on various input files and check the output is as expected.
 #
-# -- Ed Avis, ed@membled.com, 2003-10-04
+# -- Nick Morrott <knowledgejunkie@gmail.com>, 2019-02-28
 
 use warnings;
 use strict;
@@ -14,14 +11,14 @@ use Cwd;
 use File::Temp qw(tempdir);
 use File::Copy;
 use XMLTV::Usage <<END
-$0: test suite for tv_split
-usage: $0 [--tests-dir DIR] [--verbose]
+$0: test suite for tv_imdb
+usage: $0 [--tests-dir DIR] [--cmds-dir DIR] [--verbose]
 END
   ;
 
 my $tests_dir = 't/data-tv_imdb'; # where to find input XML files
 die "no directory $tests_dir" if not -d $tests_dir;
-my $cmds_dir = 'blib/script'; # directory tv_split lives in
+my $cmds_dir = 'blib/script'; # directory tv_imdb lives in
 die "no directory $cmds_dir" if not -d $cmds_dir;
 my $verbose = 0;
 
@@ -83,7 +80,7 @@ INPUT: foreach my $input (@inputs) {
     use File::Basename;
     my $output="$tmpDir/".File::Basename::basename($input)."-output.xml";
 
-    # Make temporary directory and split into it.
+    # Build command line for test
     my $cmd="$cmds_dir/tv_imdb --quiet --imdbdir '$tmpDir' --with-keywords --with-plot --output '$output' '$input' 2>&1";
     if ( $input=~m/movies-only/ ) {
 	$cmd="$cmds_dir/tv_imdb --movies-only --quiet --imdbdir '$tmpDir' --with-keywords --with-plot --output '$output' '$input' 2>&1";
