@@ -84,9 +84,9 @@ INPUT: foreach my $input (@inputs) {
     my $output="$tmpDir/".File::Basename::basename($input)."-output.xml";
 
     # Make temporary directory and split into it.
-    my $cmd="$cmds_dir/tv_imdb --quiet --imdbdir '$tmpDir' --with-keywords --with-plot < $input > '$output' 2>&1";
+    my $cmd="$cmds_dir/tv_imdb --quiet --imdbdir '$tmpDir' --with-keywords --with-plot --output '$output' '$input' 2>&1";
     if ( $input=~m/movies-only/ ) {
-	$cmd="$cmds_dir/tv_imdb --movies-only --quiet --imdbdir '$tmpDir' --with-keywords --with-plot < $input > '$output' 2>&1";
+	$cmd="$cmds_dir/tv_imdb --movies-only --quiet --imdbdir '$tmpDir' --with-keywords --with-plot --output '$output' '$input' 2>&1";
     }
     #print STDERR "\nRUN:$cmd\n";
     my $r = system($cmd);
