@@ -116,7 +116,7 @@ sub grab {
 
 	if ($title && $time && $desc) {
 	  if (my($new, $start_h, $start_m, $end_h, $end_m) =
-	      $time->as_text() =~ /^(.+)\s(\d{2}):(\d{2})\s-\s(\d{2}):(\d{2})/) {
+	      $time->as_text() =~ /^(.+)\s(\d{2})[:.](\d{2})\s-\s(\d{2})[:.](\d{2})/) {
 	    $title = $title->as_text();
 	    $desc  = $desc->as_text();
 
