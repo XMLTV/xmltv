@@ -1,6 +1,6 @@
 # -*- mode: perl; coding: utf-8 -*- ###########################################
 #
-# tv_grab_fi: source specific grabber code for http://www.telkku.com
+# tv_grab_fi: source specific grabber code for https://www.telkku.com
 #
 ###############################################################################
 #
@@ -33,7 +33,7 @@ sub _getJSON($$$) {
   my($date, $page, $keys) = @_;
 
   # Fetch raw text
-  my $text = fetchRaw("http://www.telkku.com/tv-ohjelmat/$date/$page/koko-paiva");
+  my $text = fetchRaw("https://www.telkku.com/tv-ohjelmat/$date/$page/koko-paiva");
   if ($text) {
     #
     # All data is encoded in JSON in a script node
