@@ -1,6 +1,6 @@
 # -*- mode: perl; coding: utf-8 -*- ###########################################
 #
-# tv_grab_fi: source specific grabber code for http://www.yle.fi
+# tv_grab_fi: source specific grabber code for https://www.yle.fi
 #
 ###############################################################################
 #
