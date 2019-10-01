@@ -143,13 +143,26 @@ sub grab {
   # Get channel number from XMLTV id
   return unless my($channel, $group) = ($id =~ /^([\w-]+)\.([\w-]+)\.telkku\.com$/);
 
-  # Fetch & extract JSON sub-part
-  my $data = _getJSON("default_builtin_channelgroup1/offering?endTime=00:00:00.000&limit=1000&startTime=00:00:00.000&view=PublicationDetails&tvDate=$today");
+  # Map group name to API ID
+  return unless my $api_id = _group2id($group);
+
+  #
+  # API parameters:
+  #
+  #  - date is $today
+  #  - range is 24 hours (start 00:00:00.000 - end 00:00:00.000)
+  #  - max. 1000 entries per channel
+  #  - detailed information
+  #
+  # Response will include programmes from $yesterday that end $today, to
+  # $tomorrow where a programme of $today ends.
+  #
+  my $data = _getJSON("$api_id/offering?endTime=00:00:00.000&limit=1000&startTime=00:00:00.000&view=PublicationDetails&tvDate=" . $today->ymdd());
 
   #
   # Programme data has the following structure
   #
-  #  [
+  #  publicationsByChannel => [
   #    {
   #      channel      => {
   #                        id => "yle-tv1",
@@ -170,10 +183,11 @@ sub grab {
   #    ...
   #  ]
   #
-  if (ref($data) eq "ARRAY") {
+  if ((ref($data)                          eq "HASH")  &&
+      (ref($data->{publicationsByChannel}) eq "ARRAY")) {
     my @objects;
 
-    foreach my $item (@{$data}) {
+    foreach my $item (@{ $data->{publicationsByChannel} }) {
       if ((ref($item)                 eq "HASH")  &&
 	  (ref($item->{channel})      eq "HASH")  &&
 	  (ref($item->{publications}) eq "ARRAY") &&
