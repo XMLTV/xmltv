@@ -28,42 +28,23 @@ my %categories = (
   MOVIE  => "elokuvat",
 );
 
-# Fetch raw HTML and extract & parse JSON
-sub _getJSON($$$) {
-  my($date, $page, $keys) = @_;
+#
+# Unfortunately the embedded JSON data generated into the HTML page by
+# the server is (temporarily?) broken and unreliable. The web application
+# is not affected by this, because it always updates its state via XHR
+# calls to the JSON API endpoints.
+#
+sub _getJSON($) {
+  my($api_path) = @_;
 
-  # Fetch raw text
-  my $text = fetchRaw("https://www.telkku.com/tv-ohjelmat/$date/$page/koko-paiva");
+  # Fetch raw JSON text directly from API endpoint
+  my $text = fetchRaw("https://www.telkku.com/api/channel-groups/$api_path");
   if ($text) {
-    #
-    # All data is encoded in JSON in a script node
-    #
-    # <script>
-    #    window.__INITIAL_STATE__ = {...};
-    # </script>
-    #
-    my($match) = ($text =~ /window.__INITIAL_STATE__ = (\{.+\});/);
+    my $decoded = JSON->new->decode($text);
 
-    if ($match) {
-      my $decoded = JSON->new->decode($match);
-
-      if (ref($decoded) eq "HASH") {
-	my $data = $decoded;
-
-        #debug(5, JSON->new->pretty->encode($decoded));
-
-	# step through hashes using key sequence
-	foreach my $key (@{$keys}) {
-	  debug(5, "Looking for JSON key $key");
-	  return unless exists $data->{$key};
-	  $data = $data->{$key};
-	}
-	debug(5, "Found JSON data");
-
-	#debug(5, JSON->new->pretty->encode($data));
-	#debug(5, "KEYS: ", join(", ", sort keys %{$data}));
-	return($data);
-      }
+    if (ref($decoded) eq "HASH") {
+      # debug(5, JSON->new->pretty->encode($decoded));
+      return $decoded->{response};
     }
   }
 
@@ -74,15 +55,14 @@ sub _getJSON($$$) {
 sub channels {
 
   # Fetch & extract JSON sub-part
-  my $data = _getJSON("tanaan", "peruskanavat",
-		      ["channelGroups",
-		       "channelGroupsArray"]);
+  my $data = _getJSON("");
 
   #
-  # Channels data has the following structure
+  # channel-groups response has the following structure
   #
   #  [
   #    {
+  #      id       => "default_builtin_channelgroup1"
   #      slug     => "peruskanavat",
   #      channels => [
   #                    {
@@ -148,11 +128,7 @@ sub grab {
   return unless my($channel, $group) = ($id =~ /^([\w-]+)\.([\w-]+)\.telkku\.com$/);
 
   # Fetch & extract JSON sub-part
-  my $data = _getJSON($today, $group,
-		      ["offeringByChannelGroup",
-		       $group,
-		       "offering",
-		       "publicationsByChannel"]);
+  my $data = _getJSON("default_builtin_channelgroup1/offering?endTime=00:00:00.000&limit=1000&startTime=00:00:00.000&view=PublicationDetails&tvDate=$today");
 
   #
   # Programme data has the following structure
