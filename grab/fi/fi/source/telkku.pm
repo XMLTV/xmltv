@@ -51,6 +51,9 @@ sub _getJSON($) {
   return;
 }
 
+# cache for group name to API ID mapping
+my %group2id;
+
 # Grab channel list
 sub channels {
 
@@ -83,15 +86,19 @@ sub channels {
 
     foreach my $item (@{$data}) {
       if ((ref($item)             eq "HASH")  &&
+	  (exists $item->{id})                &&
 	  (exists $item->{slug})              &&
 	  (exists $item->{channels})          &&
 	  (ref($item->{channels}) eq "ARRAY")) {
-	my $group    = $item->{slug};
-	my $channels = $item->{channels};
+	my($api_id, $group, $channels) = @{$item}{qw(id slug channels)};
 
-	if (defined($group) && length($group) &&
+	if (defined($api_id) && length($api_id) &&
+	    defined($group)  && length($group)  &&
 	    (ref($channels) eq "ARRAY")) {
-	  debug(2, "Source telkku.com found group '$group' with " . scalar(@{$channels}) . " channels");
+	  debug(2, "Source telkku.com found group '$group' ($api_id) with " . scalar(@{$channels}) . " channels");
+
+	  # initialize group name to API ID map
+	  $group2id{$group} = $api_id;
 
 	  foreach my $channel (@{$channels}) {
 	    if (ref($channel) eq "HASH") {
@@ -118,6 +125,15 @@ sub channels {
   }
 
   return;
+}
+
+sub _group2id($) {
+  my($group) = @_;
+
+  # Make sure group to ID map is initialized
+  channels() unless %group2id;
+
+  return $group2id{$group};
 }
 
 # Grab one day
