@@ -367,13 +367,6 @@ my @opt_components
                     'HTML::TreeBuilder'  => 0, },
      },
 
-     # { name => 'tv_grab_fr_kazer',
-     #   blurb => 'Grabber for France (Kazer)',
-     #   exes => [ 'grab/fr_kazer/tv_grab_fr_kazer' ],
-     #   prereqs => { 'DateTime'    => 0,
-     #                'IO::Uncompress::Unzip' => 0, },
-     # },
-
      { name => 'tv_grab_huro',
        blurb => 'Grabber for Slovakia (Hungary, Romania broken)',
        exes => [ 'grab/huro/tv_grab_huro' ],
