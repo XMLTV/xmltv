@@ -298,15 +298,6 @@ my @opt_components
                     'IO::Scalar'     => 0, },
      },
 
-     { name => 'tv_grab_dtv_la',
-       blurb => 'Grabber for Latin America & Caribbean',
-       exes => [ 'grab/dtv_la/tv_grab_dtv_la' ],
-       prereqs => { 'Date::Language'    => 0,
-                    'Date::Parse'       => 0,
-                    'HTML::TreeBuilder' => 0,
-                    'HTTP::Cookies'     => 0, },
-     },
-
      { name => 'tv_grab_eu_epgdata',
        blurb => '$$ Grabber for some European countries (epgdata.com)',
        exes => [ 'grab/eu_epgdata/tv_grab_eu_epgdata' ],
