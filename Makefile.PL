@@ -307,15 +307,6 @@ my @opt_components
                     'HTTP::Cookies'     => 0, },
      },
 
-     # { name => 'tv_grab_es_laguiatv',
-     #   blurb => 'Alternative grabber for Spain',
-     #   exes => [ 'grab/es_laguiatv/tv_grab_es_laguiatv' ],
-     #   prereqs => { 'DateTime'          => 0,
-     #                'HTML::Entities'    => 0,
-     #                'HTML::TreeBuilder' => 0,
-     #                'HTTP::Cache::Transparent' => 0, },
-     # },
-
      { name => 'tv_grab_eu_epgdata',
        blurb => '$$ Grabber for some European countries (epgdata.com)',
        exes => [ 'grab/eu_epgdata/tv_grab_eu_epgdata' ],
