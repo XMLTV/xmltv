@@ -316,14 +316,6 @@ my @opt_components
      #                'HTTP::Cache::Transparent' => 0, },
      # },
 
-     { name => 'tv_grab_eu_dotmedia',
-       blurb => 'Grabber for Europe (DEPRECATED, xmltv.se / dotmedia)',
-       exes => [ 'grab/eu_dotmedia/tv_grab_eu_dotmedia' ],
-       prereqs => { 'Compress::Zlib' => 0,
-                    'HTTP::Cache::Transparent' => 0,
-                    'IO::Scalar'     => 0, },
-     },
-
      { name => 'tv_grab_eu_epgdata',
        blurb => '$$ Grabber for some European countries (epgdata.com)',
        exes => [ 'grab/eu_epgdata/tv_grab_eu_epgdata' ],
