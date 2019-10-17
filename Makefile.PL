@@ -462,17 +462,6 @@ my @opt_components
        prereqs => { 'XML::LibXML' => 0, },
      },
 
-     # { name => 'tv_grab_nl',
-     #   blurb => 'Grabber for the Netherlands',
-     #   exes => [ 'grab/nl/tv_grab_nl' ],
-     #   prereqs => { 'Date::Format' => 0,
-     #                'Date::Parse'  => 0,
-     #                'DateTime'     => 0,
-     #                'HTML::Entities'    => 0,
-     #                'HTML::TreeBuilder' => 0,
-     #                'HTTP::Cache::Transparent' => 0, },
-     # },
-
      { name => 'tv_grab_pt_meo',
        blurb => 'Grabber for Portugal (MEO)',
        exes => [ 'grab/pt_meo/tv_grab_pt_meo' ],
