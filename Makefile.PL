@@ -392,13 +392,6 @@ my @opt_components
        prereqs => { 'DateTime' => 0, },
      },
 
-     # { name     => 'tv_grab_in_toi',
-     #   blurb => 'Grabber for India (Times of India)',
-     #   exes     => [ 'grab/in_toi/tv_grab_in_toi' ],
-     #   prereqs => { 'Date::Calc'   => 0,
-     #                'URI::Escape'  => 0, },
-     # },
-
      { name => 'tv_grab_is',
        blurb => 'Grabber for Iceland',
        exes => [ 'grab/is/tv_grab_is' ],
