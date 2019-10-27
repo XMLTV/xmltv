@@ -69,10 +69,11 @@ B<--help> print a help message and exit.
 
 L<xmltv(5)>.
 
-=head1 AUTHOR
+=head1 AUTHORS
 
 Daniel Bittel <betlit@gmx.net>. Inspired by tv_grab_ch by Stefan Siegl.
 Patric Mueller <bhaak@gmx.net>.
+Markus Keller <markus.kell.r@gmail.com>.
 
 =head1 BUGS
 
@@ -135,7 +136,6 @@ BEGIN {
 sub get_channels();
 sub channel_id($);
 sub get_page($);
-sub grab_channel($);
 
 ## attributes of xmltv root element
 my $head = {
@@ -215,12 +215,19 @@ elsif($mode eq 'grab' || $mode eq 'list-channels') {
 else { die("never heard of XMLTV mode $mode, sorry :-(") }
 
 
+## initialize user agent, so that cookie jar can be filled and passed on
+my $ua = LWP::UserAgent->new(keep_alive => 300);
+my $cookies = HTTP::Cookies->new();
+$ua->cookie_jar($cookies);
+$ua->agent("xmltv/$XMLTV::VERSION");
+$ua->env_proxy;
+
 
 ## hey, we can't live without channel data, so let's get those now!
 my $bar = new XMLTV::ProgressBar( 'getting list of channels', 1 )
     if not $opt_quiet;
 
-my %channels = get_channels();
+my ($secret, %channels) = get_channels();
 $bar->update() if not $opt_quiet;
 $bar->finish() if not $opt_quiet;
 
@@ -321,7 +328,7 @@ die "No channels specified, run me with --configure flag\n" unless(scalar(@reque
 
 
 ## write out <channel> tags
-my $paramstr ="";
+my $paramstr ="&secret=".$secret;
 foreach(@requests) {
     my $id = channel_id($_);
     my %channel = ('id'           => $id,
@@ -341,17 +348,11 @@ my $cur_month = DateTime->now()->month();
 my $url=$head->{q(source-data-url)};
 
 
-my $ua = LWP::UserAgent->new(keep_alive => 300);
-$ua->cookie_jar(HTTP::Cookies->new());
-$ua->agent("xmltv/$XMLTV::VERSION");
-$ua->env_proxy;
-
 my $req = HTTP::Request->new(POST => $url);
 $req->content_type('application/x-www-form-urlencoded');
 $req->content(substr ( $paramstr, 1));
 
-# FIXME what is this request doing? It fills the cookie jar
-$ua->request($req);
+# store the selected channels
 $ua->request($req);
 
 ## write out <programme> tags
@@ -557,9 +558,14 @@ sub get_channels() {
     my $url=$head->{q(source-data-url)};
 
     my $tb=new HTML::TreeBuilder();
-    $tb->parse(get_page($url))
+    # For some reason, we need to fetch this page twice. Probably a bug in search.ch.
+    # If you open https://tv.search.ch/channels as first page in private mode in Firefox, the first click on the Save button doesn't work either.
+    $ua->get($url);
+    $tb->parse($ua->get($url)->content)
         or die "cannot parse content of $url";
     $tb->eof;
+    
+    my $secret = ($tb->look_down('name', 'secret'))->attr('value');
 
     ## getting the channels directly selectable
     foreach($tb->look_down('_tag' => 'label')) {
@@ -571,7 +577,7 @@ sub get_channels() {
     }
     $tb->delete;
 
-    return %channels;
+    return ($secret, %channels);
 }
 
 
