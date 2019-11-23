@@ -122,7 +122,7 @@ sub grab {
     #
     if (my $div = $root->look_down("_tag"       => "div",
                                    "aria-label" => qr/^${channel}$/)) {
-      if (my $parent = $div->look_up("class" => "guide-channels__channel")) {
+      if (my $parent = $div->look_up("class" => qr/guide-channels__channel/)) {
 	if (my @programmes = $parent->look_down("class" => qr/^schedule-card\s+/)) {
 	  foreach my $programme (@programmes) {
 	    my $start = $programme->look_down("itemprop", "startDate");
