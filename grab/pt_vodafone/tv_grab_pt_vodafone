@@ -106,6 +106,7 @@ use utf8;
 use XMLTV;
 use XMLTV::Version "$XMLTV::VERSION";
 use DateTime;
+use DateTime::Format::Strptime;
 use Encode; # used to convert 'perl strings' into 'utf-8 strings'
 use XML::LibXML;
 use XMLTV::Configure::Writer;
@@ -113,15 +114,16 @@ use XMLTV::Get_nice qw/get_nice/;
 use XMLTV::Options qw/ParseOptions/;
 use JSON;
 use URI::Escape qw/ uri_escape /;
+use URI::Encode qw/ uri_encode uri_decode/;
 #use Data::Dump qw/pp/; # uncomment to debug
 
-my $maxdays = 1+7; # data source is limited to n days (including today)
+my $maxdays = 1+6; # data source is limited to n days (including today)
 
 my $grabber_name = 'tv_grab_pt_vodafone';
-my $grabber_version = '1.00';
+my $grabber_version = '2.00';
 
-my $json_baseurl = 'https://tvnetvoz.vodafone.pt';
-my $json_api = '/sempre-consigo/';
+my $json_baseurl = 'https://web.ott-red.vodafone.pt';
+my $json_api = '/ott3_webapp/';
 $ENV{'PERL_LWP_SSL_VERIFY_HOSTNAME'} = 0;
 
 my $ua = LWP::UserAgent->new(agent => "$grabber_name $grabber_version");
@@ -214,9 +216,9 @@ sub list_channels
      # Return a string containing an xmltv-document with <channel>-elements
      # for all available channels.
 
-     my $channellist=json_request( 'get', 'datajson/epg/channels.jsp' );
+     my $channellist=json_request( 'get', 'v1/channels' );
 
-     $channellist = $channellist->{result}->{channels};
+     $channellist = $channellist->{data};
 
      my $output=XML::LibXML::Document->new( '1.0', 'utf-8' );
      my $root=XML::LibXML::Element->new( 'tv' );
@@ -240,47 +242,52 @@ sub get_epg
 {
     my( $writer, $startDate, $endDate ) = @_;
 
-    my $baseRequest = 'epg.do?action=getPrograms';
+    my $baseRequest = 'v1.5/programs/grids/';
     my @channelList = @{$conf->{channel}};
 
     my $curDate = $startDate;
 
     my %xmlchannels;
     my %xmlprogs;
-    while ($curDate < $endDate) {
 
-        print( STDERR "requesting EPG for ".$curDate->ymd()."\n" )  if( !$opt->{quiet} );
-        print( STDERR " POST ".$json_baseurl.$json_api.$baseRequest." payload: chanids=".(join ",",@channelList)."&day=".$curDate->ymd()."\n" )  if( $opt->{debug} );
+    my $nr_days = $startDate->delta_days($endDate)->delta_days();
 
-        my $epgSource = json_request('post', $baseRequest, 'chanids='.(join ",",@channelList).'&day='.$curDate->ymd());
+    for my $day (0..$nr_days) {
 
-        if ( $epgSource->{result} == 500 ){
-            die("Bad EPG download, probably channel list is outdated, rerun the grabber configure to update the list.\n" );
-        };
+        for my $channel (@channelList) {
 
-        for my $channel ( @{ $epgSource->{result}->{channels} || [] }) {
-            #pp( $channel ) if( $opt->{debug} ); # uncomment to debug
+            my $encoded_channel = uri_encode($channel);
 
-            my $channelId = make_channelid( $channel->{callLetter});
+            print( STDERR "requesting EPG for ".$curDate->ymd()."\n" )  if( !$opt->{quiet} );
+            print( STDERR " GET ".$json_baseurl.$json_api.$baseRequest." payload: channel=".$encoded_channel."&day=".$day."\n" )  if( $opt->{debug} );
+
+            my $epgSource = json_request('get', $baseRequest."/".$encoded_channel."/".$day);
+
+            if ( ! $epgSource ){
+                die("Bad EPG download, probably channel list is outdated, rerun the grabber configure to update the list.\n" );
+            };
+
+            my $data = $epgSource->{data};
+
+            my $channelId = make_channelid( $data->[0]->{channel}->{id} );
             my %ch = (
-                'display-name' => [ [ sanitizeUTF8($channel->{name}), 'pt' ] ],
+                'display-name' => [ [ sanitizeUTF8( $data->[0]->{channel}->{name} ), 'pt' ] ],
                 'id' => $channelId,
-                'icon' => [ { src =>  "https://tvnetvoz.vodafone.pt/sempre-consigo/imgs?action=logo_channel_tablet_details&chanid=" .$channel->{id}. "&mime=true&no_default=false" } ],
+                'icon' => [ { src =>  $data->[0]->{channel}->{logo} } ],
             );
 
             $xmlchannels{ $channelId } = \%ch ;
 
-            for my $programme ( @{ $channel->{programList} }) {
-
+            for my $programme ( @{ $data }) {
                 my %prog;
                 $prog{channel} = $channelId;
-                $prog{title} = [ [ parse_title(\%prog, sanitizeUTF8($programme->{programTitle})), 'pt' ] ];
-                $prog{desc} = [ [ sanitizeUTF8($programme->{programDetails}), 'pt' ] ];
-                if ($programme->{pid}) {
-                    $prog{icon} = [ { src =>  "http://web.ottimg.vodafone.pt/iptvimageserver/Get/" .uri_escape($channel->{callLetter}). "_".$programme->{pid}."/16_9/325/244" } ];
+                $prog{title} = [ [ parse_title(\%prog, sanitizeUTF8($programme->{title})), 'pt' ] ];
+                $prog{desc} = [ [ sanitizeUTF8($programme->{description}), 'pt' ] ];
+                if ($programme->{image}) {
+                    $prog{icon} = [ { src => $programme->{image} } ];
                 }
 
-                my ($dtstart, $dtend) = make_dates($programme->{date}, $programme->{startTime}, $programme->{endTime}, $programme->{duration});
+                my ($dtstart, $dtend) = make_dates($programme->{startTime}, $programme->{endTime}, $programme->{duration});
 
                 $prog{start} = $dtstart;
                 $prog{stop} = $dtend;
@@ -291,6 +298,7 @@ sub get_epg
 
             }
         }
+
 
         $curDate->add( days => 1);
     }
@@ -305,8 +313,6 @@ sub sanitizeUTF8 {
     my ($str) = @_;
 
     $str =~ s/[^[:print:]]+//g;
-
-#    my $octets = decode('UTF-8', $str, Encode::FB_DEFAULT);
 
     return encode('UTF-8', $str, Encode::FB_CROAK);
 }
@@ -327,7 +333,7 @@ sub json_request {
     push(@params, content => $content) if defined $content;
     my $response = $ua->$method($url, @params);
     if($response->is_success()) {
-        return JSON->new->utf8(0)->decode( $response->decoded_content());
+        return JSON->new->utf8(1)->decode( $response->decoded_content());
     }
     else {
         my $msg = $response->decoded_content();
@@ -346,24 +352,15 @@ sub json_request {
 
 sub make_dates
 {
-    my( $date, $startTime, $endTime, $duration ) = @_;
+    my( $startTime, $endTime, $duration ) = @_;
 
-    my($day, $month, $year) =
-        ($date =~ m/(\d{2})-(\d{2})-(\d{4})/);
+    my $strp = new DateTime::Format::Strptime(
+                                pattern     => '%FT%TZ',
+                        );
 
-    my ($startHour, $startMinute) = ( $startTime =~ m/(\d{1,2}):(\d{2})/);
-    my ($endHour, $endMinute) = ( $endTime =~ m/(\d{1,2}):(\d{2})/);
+    my $dtstart = $strp->parse_datetime($startTime);
 
-    my $dtstart = DateTime->new( year   => $year,
-                            month  => $month,
-                            day    => $day,
-                            hour   => $startHour,
-                            minute => $startMinute,
-                            second => 0,
-                            time_zone => 'Europe/Lisbon',
-    );
-
-    my $dtend = $dtstart->clone()->add(minutes => $duration);
+    my $dtend = $strp->parse_datetime($endTime);
 
     return ($dtstart->strftime( '%Y%m%d%H%M%S %z' ), $dtend->strftime( '%Y%m%d%H%M%S %z' ));
 }
