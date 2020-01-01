@@ -258,8 +258,8 @@ sub get_epg
 
             my $encoded_channel = uri_encode($channel);
 
-            print( STDERR "requesting EPG for ".$curDate->ymd()."\n" )  if( !$opt->{quiet} );
-            print( STDERR " GET ".$json_baseurl.$json_api.$baseRequest." payload: channel=".$encoded_channel."&day=".$day."\n" )  if( $opt->{debug} );
+            print( STDERR "requesting EPG from " . $curDate->ymd() . " for " . $encoded_channel . "\n" )  if( !$opt->{quiet} );
+            print( STDERR " GET ".$json_baseurl.$json_api.$baseRequest.$encoded_channel."/".$day."\n" )  if( $opt->{debug} );
 
             my $epgSource = json_request('get', $baseRequest."/".$encoded_channel."/".$day);
 
@@ -272,6 +272,9 @@ sub get_epg
             my $channelId = make_channelid( $data->[0]->{channel}->{id} );
             my %ch = (
                 'display-name' => [ [ sanitizeUTF8( $data->[0]->{channel}->{name} ), 'pt' ] ],
+
+                # multiple display-names are ok, but need to find a way to set then without overwriting the other ones
+                #'display-name' => [ [ sanitizeUTF8( $data->[0]->{channel}->{id} ), 'pt' ] ],
                 'id' => $channelId,
                 'icon' => [ { src =>  $data->[0]->{channel}->{logo} } ],
             );
@@ -281,10 +284,25 @@ sub get_epg
             for my $programme ( @{ $data }) {
                 my %prog;
                 $prog{channel} = $channelId;
-                $prog{title} = [ [ parse_title(\%prog, sanitizeUTF8($programme->{title})), 'pt' ] ];
-                $prog{desc} = [ [ sanitizeUTF8($programme->{description}), 'pt' ] ];
-                if ($programme->{image}) {
-                    $prog{icon} = [ { src => $programme->{image} } ];
+                $prog{title} = [ [ sanitizeUTF8($programme->{title}), 'pt' ] ];
+                $prog{desc} = [ [ sanitizeUTF8($programme->{description}), 'pt' ] ]                     if ($programme->{description});
+                $prog{length} = ( $programme->{duration} )                                              if ($programme->{duration});
+                $prog{icon} = [ { src => $programme->{image} } ]                                        if ($programme->{image});
+
+                $prog{category} = [ [ sanitizeUTF8($programme->{channel}{category}), 'pt' ] ]           if ($programme->{channel}{category});
+                $prog{'sub-title'}   = [ [ sanitizeUTF8($programme->{series}{episodeTitle}), 'pt' ] ]   if ($programme->{series}->{episodeTitle}) ;
+                # multiple episode-num are ok, but need to find a way to set then without overwriting the other ones
+                #$prog{'episode-num'} = [ [ $programme->{series}{season} - 1 . "." . $programme->{series}{episode} -1 . ".", 'xmltv_ns' ] ];
+
+                my $season = sanitizeUTF8($programme->{series}{seasonLabel})                            if ($programme->{series}{seasonLabel}) ;
+                my $episode = sanitizeUTF8($programme->{series}{episodeLabel})                          if ($programme->{series}{episodeLabel}) ;
+
+                if ( defined $season && defined $episode ) {
+                    $prog{'episode-num'} = [ [ $season ." ". $episode , 'onscreen' ] ]; }
+                elsif ( defined $season ) {
+                    $prog{'episode-num'} = [ [ $season , 'onscreen' ] ]; }
+                elsif ( defined $episode ) {
+                    $prog{'episode-num'} = [ [ $episode , 'onscreen' ] ];
                 }
 
                 my ($dtstart, $dtend) = make_dates($programme->{startTime}, $programme->{endTime}, $programme->{duration});
@@ -362,7 +380,10 @@ sub make_dates
 
     my $dtend = $strp->parse_datetime($endTime);
 
-    return ($dtstart->strftime( '%Y%m%d%H%M%S %z' ), $dtend->strftime( '%Y%m%d%H%M%S %z' ));
+    # dates look like utc, so no timezone should be defined
+    # they are optional, yet tv_validate_file report they missing, but it is ok
+    #return ($dtstart->strftime( '%Y%m%d%H%M%S %z' ), $dtend->strftime( '%Y%m%d%H%M%S %z' ));
+    return ($dtstart->strftime( '%Y%m%d%H%M%S' ), $dtend->strftime( '%Y%m%d%H%M%S' ));
 }
 
 sub make_channelid
@@ -376,30 +397,4 @@ sub make_channelid
     $id =~ s/\+/-plus/g;  # turn + into -plus
     $id .= '.tv.vodafone.pt'; # append domain part
     return( $id );
-}
-
-sub parse_title
-{
-    my $prog = shift;
-    my $title = shift;
-
-    if (!defined ($title)) {
-        return undef;
-    }
-
-    if ($title =~ m/(\s+|:)T\d+\s+-?\s*Ep\.\s*\d+$/) {
-        # found season and episode in title
-        my ($delimiter,$season, $episode) = ($title =~ m/(\s+|:)T(\d+)\s+-?\s*Ep\.\s*(\d+)$/);
-        # uncomment to get the simplified title, without season and episode
-        #$title =~ s/(\s+|:)T\d+\s+-?\s*Ep\.\s*\d+$//;
-        $prog->{'episode-num'} =  [ [ ($season - 1).'.'.($episode-1).'.', 'xmltv_ns' ] ];
-    } elsif ($title =~ m/\s+Ep\.\s*\d+$/) {
-        # found episode in title
-        my ($episode) = ($title =~ m/\s+Ep\.\s*(\d+)$/);
-        # uncomment to get the simplified title, without season and episode
-        #$title =~ s/\s+Ep\.\s*\d+$//;
-        $prog->{'episode-num'} = [ [ '.'.($episode-1).'.', 'xmltv_ns' ] ];
-    }
-
-    return $title;
 }
