@@ -51,8 +51,10 @@ my %cap_options = (
 		   baseline => [qw/
 			   days=i
 			   offset=i
+			   timeout=i
 			   quiet
 			   output=s
+			   agent=s			   
 			   debug
 			   config-file=s
 			   /],
@@ -92,7 +94,9 @@ my %cap_defaults = (
 			   quiet => 0,
 			   days => 5,
 			   offset => 0,
+			   timeout => 240,			   
 			   output => undef,
+			   agent => 'Mozilla/5.0 (Linux) XmlTv',			   
 			   debug => 0,
 			   gui => undef,
 			   },
@@ -214,6 +218,10 @@ The grabber must check the following options on its own:
 =item --days
 
 =item --offset
+
+=item --timeout
+
+=item --agent
 
 =item --quiet
 
@@ -572,7 +580,7 @@ $gn --description
     {
 	print qq/
 $gn [--config-file FILE]
-$en [--days N] [--offset N]
+$en [--days N] [--offset N] [--timeout N] [--agent STRING]
 $en [--output FILE] [--quiet] [--debug]
 /;
     }
