@@ -44,6 +44,7 @@
 #
 # Version history:
 #
+# 2020/03/22 - 1.72 - reuse existing token when possible
 # 2020/03/18 - 1.71 - handle obtainAvailable undef
 # 2020/03/18 - 1.70 - minor whitespace cleanup
 # 2020/03/17 - 1.69 - stable output order
@@ -161,7 +162,7 @@ use Data::Dumper;
 my $RFC2838_COMPLIANT          = 1;            # RFC2838 compliant station ids, which makes XMLTV
                                                # validate even though the docs say "SHOULD" not "MUST"
 
-my $SCRIPT_VERSION             = '$Id: tv_grab_zz_sdjson_sqlite,v 1.71 2020/03/19 00:05:00 gtb Exp ed $';
+my $SCRIPT_VERSION             = '$Id: tv_grab_zz_sdjson_sqlite,v 1.72 2020/03/22 15:00:00 gtb Exp ed $';
 my $SCRIPT_URL                 = 'https://github.com/garybuhrmaster/tv_grab_zz_sdjson_sqlite';
 my $SCRIPT_NAME                = basename("$0");
 my $SCRIPT_NAME_DIR            = dirname("$0");
@@ -322,6 +323,8 @@ if ($opt->{'force-download'})
 if (!$download)
   {
     lineupValidate($conf->{'lineup'});
+    my $token = DB_settingsGet('token');
+    $SD->Token($token) if (defined($token));
     goto skipDownload;
   }
 
@@ -2435,6 +2438,8 @@ sub listChannels
     else
       {
         lineupValidate($conf->{'lineup'});
+        my $token = DB_settingsGet('token');
+        $SD->Token($token) if (defined($token));
       }
 
     my $w = XML::Writer->new( 'ENCODING' => 'UTF-8',
@@ -2641,6 +2646,11 @@ sub listLineups
         print (STDERR "Downloading lineups from Schedules Direct\n") if (!$quiet);
         SD_downloadLineups();
       }
+    else
+      {
+        my $token = DB_settingsGet('token');
+        $SD->Token($token) if (defined($token));
+      }
 
     $sql = 'select lineup, name, transport, location, details from lineups order by lineup';
     $sth = $DBH->prepare_cached($sql);
@@ -2798,6 +2808,8 @@ sub getLineup
     else
       {
         lineupValidate($conf->{'lineup'});
+        my $token = DB_settingsGet('token');
+        $SD->Token($token) if (defined($token));
       }
 
     #
@@ -3096,6 +3108,7 @@ sub SD_login
   {
     my $username = DB_settingsGet('username');
     my $passwordhash = $passwordHash || DB_settingsGet('passwordhash');
+    my $token = DB_settingsGet('token');
 
     if ((!defined($username)) || (!defined($passwordhash)))
       {
@@ -3105,10 +3118,16 @@ sub SD_login
         exit(1);
       }
 
-    if (!defined($SD->obtainToken($username, undef, $passwordhash)))
+    if (!defined($token = $SD->obtainToken($username, undef, $passwordhash, $token)))
       {
         print (STDERR "Unable to authenticate to Schedules Direct: " . $SD->ErrorString() . "\n");
         exit(1);
+      }
+
+    if (defined($token))
+      {
+        DB_settingsSet('token', $token);
+        $DBH->commit();
       }
 
     if (!defined($SD->obtainStatus()))
@@ -4597,12 +4616,14 @@ sub manageLineups
   {
     my $username;
     my $passwordhash;
+    my $token;
 
     if ((defined($conf->{'database'}->[0])) && (-f $conf->{'database'}->[0]))
       {
         DB_open($conf->{'database'}->[0]);
         $username = DB_settingsGet('username');
         $passwordhash = $passwordHash || DB_settingsGet('passwordhash');
+        $token = DB_settingsGet('token');
       }
 
     # Try obtained username/password, but allow re-entry
@@ -4623,12 +4644,19 @@ sub manageLineups
             $auth_prompted = 1;
           }
 
-        last if (defined($SD->obtainToken($username, undef, $passwordhash)));
+        last if (defined($token = $SD->obtainToken($username, undef, $passwordhash, $token)));
 
         print (STDERR "Unable to authenticate to Schedules Direct: " . $SD->ErrorString() . "\n");
         $username = undef;
         $passwordhash = undef;
+        $token = undef;
         $auth_prompted = 1;
+      }
+
+    if (defined($token))
+      {
+        DB_settingsSet('token', $token);
+        $DBH->commit();
       }
 
     if (!defined($SD->obtainStatus()))
@@ -5863,6 +5891,7 @@ package SchedulesDirect v20141201.0.0;
 # Username                     - set/return username to use
 # Password                     - set/return passwordhash to use
 # PasswordHash                 - set/return passwordhash to use
+# Token                        - set/return SD Token to use
 # obtainToken                  - obtain and return SD token
 # obtainStatus                 - obtain and return SD status
 # isOnline                     - return true if SD systems online
@@ -5919,7 +5948,18 @@ sub new
     $self->{'RaiseError'} = 0 unless $self->{'RaiseError'};    # Not (yet) implemented
     $self->{'PrintError'} = 0 unless $self->{'PrintError'};    # Not (yet) implemented
     $self->{'_Token'} = undef;
-    $self->{'_TokenAcquired'} = 0;     # Refresh token every 12 hours
+    $self->{'_TokenAcquired'} = 0;     # Refresh token every 20 hours
+    $self->{'_TokenValidated'} = 0;
+    if (defined($self->{'Token'}))
+      {
+        my ($token, $acquired) = split(' ', $self->{'Token'}, 2);
+        if (defined($token) && ($token =~ /^[0-9A-Fa-f]+$/) && defined($acquired) && ($acquired =~ /^-?\d+\.?\d*$/))
+          {
+            $self->{'_Token'} = $token;
+            $self->{'_TokenAcquired'} = $acquired;
+          }
+      }
+    delete $self->{'Token'};
     $self->{'_Error'} = 0;
     $self->{'_ErrorString'} = '';
     $self->{'_Status'} = undef;
@@ -5936,6 +5976,7 @@ sub new
                                     'Cache-Control' => 'no-cache');
 
     bless($self, $class);
+
     return $self;
   }
 
@@ -6215,6 +6256,46 @@ sub PasswordHash
       }
 
     $return = $self->{'PasswordHash'};
+
+    print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
+
+    return $return;
+  }
+
+#
+# set/return the (extended) SDToken
+#
+sub Token
+  {
+    my $self = shift;
+        print (STDERR "DEBUG: Entering " . (caller(0))[3] . " with args: \n" . Data::Dumper->new(\@_)->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
+
+    my $return;
+
+    if (@_)
+      {
+        $self->_resetSession;
+        my $t = shift;
+        if (defined($t))
+          {
+            my ($token, $acquired) = split(' ', $t, 2);
+            if (defined($token) && ($token =~ /^[0-9A-Fa-f]+$/) && defined($acquired) && ($acquired =~ /^-?\d+\.?\d*$/)) 
+              {
+                $self->{'_Token'} = $token;
+                $self->{'_TokenAcquired'} = $acquired;
+                $self->{'_TokenValidated'} = 0;
+              }
+          }
+      }
+
+    if (defined($self->{'_Token'}))
+      {
+        $return = "$self->{'_Token'} $self->{'_TokenAcquired'}";
+      }
+    else
+      {
+        $return = undef;
+      }
 
     print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
 
@@ -7613,7 +7694,7 @@ sub obtainToken
 
     my $return;
 
-    my ($username, $password, $passwordHash, undef) = @_;
+    my ($username, $password, $passwordHash, $existingtoken, undef) = @_;
 
     $self->_resetError;
 
@@ -7622,6 +7703,47 @@ sub obtainToken
     $self->Username($username) if defined($username);
     $self->Password($password) if defined($password);
     $self->PasswordHash($passwordHash) if defined($passwordHash);
+    $self->Token($existingtoken) if defined($existingtoken);
+
+    # Reuse existing token if available, acquired < 20 hours ago, and validated or we can validate
+    if (defined($self->{'_Token'}) && ($self->{'_TokenAcquired'} > ($now - 72000)))
+      {
+        if ($self->{'_TokenValidated'})
+          {
+            print (STDERR "DEBUG:   (re)using current token\n") if ($self->{'Debug'});
+            $return = $self->Token;
+            print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
+            return $return;
+          }
+        else
+          {
+            # Try a status request with the token
+
+            my $request = HTTP::Request->new(GET => "$self->{'RESTUrl'}/status");
+
+            $request->header('Token' => "$self->{'_Token'}");
+
+            print (STDERR "DEBUG:   HTTP request:\n" . Data::Dumper->new([$request])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
+
+            my $response = $self->{'_LWP'}->request($request);
+
+            print (STDERR "DEBUG:   HTTP response:\n" . Data::Dumper->new([$response])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
+
+            my $responseCode = $response->code();
+            my $responseContent = $response->decoded_content();
+
+            print (STDERR "DEBUG:   HTTP decoded response content:\n" . Data::Dumper->new([$responseContent])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
+
+            if ($responseCode == 200)
+              {
+                $self->{'_TokenValidated'} = 1;
+                print (STDERR "DEBUG:   (re)using validated token\n") if ($self->{'Debug'});
+                $return = $self->Token;
+                print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
+                return $return;
+              }
+          }
+      }
 
     if (!defined($self->{'Username'}))
       {
@@ -7636,15 +7758,6 @@ sub obtainToken
         $return = undef;
         $self->_setErrorString("Password not provided for obtaining Schedules Direct token");
         $self->_CroakOrCarp;
-        print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
-        return $return;
-      }
-
-    # Reuse existing token if in current session and last token update < 12 hours ago
-    if (defined($self->{'_Token'}) && ($self->{'_TokenAcquired'} > ($now - 43200)))
-      {
-        print (STDERR "DEBUG:   (re)using current token\n") if ($self->{'Debug'});
-        $return = $self->{'_Token'};
         print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
         return $return;
       }
@@ -7799,8 +7912,9 @@ sub obtainToken
 
     $self->{'_Token'} = $token;
     $self->{'_TokenAcquired'} = $now;
+    $self->{'_TokenValidated'} = 1;
 
-    $return = $self->{'_Token'};
+    $return = $self->Token;
 
     print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
 
