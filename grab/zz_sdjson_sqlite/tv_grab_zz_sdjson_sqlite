@@ -44,7 +44,8 @@
 #
 # Version history:
 #
-# 2020/03/33 - 1.73 - allow Schedules Direct endpoint redirects
+# 2020/03/23 - 1.74 - refactor obtainLineups to return lineup array
+# 2020/03/22 - 1.73 - allow Schedules Direct endpoint redirects
 # 2020/03/22 - 1.72 - reuse existing token when possible
 # 2020/03/18 - 1.71 - handle obtainAvailable undef
 # 2020/03/18 - 1.70 - minor whitespace cleanup
@@ -163,7 +164,7 @@ use Data::Dumper;
 my $RFC2838_COMPLIANT          = 1;            # RFC2838 compliant station ids, which makes XMLTV
                                                # validate even though the docs say "SHOULD" not "MUST"
 
-my $SCRIPT_VERSION             = '$Id: tv_grab_zz_sdjson_sqlite,v 1.73 2020/03/22 22:00:00 gtb Exp ed $';
+my $SCRIPT_VERSION             = '$Id: tv_grab_zz_sdjson_sqlite,v 1.74 2020/03/23 14:30:00 gtb Exp ed $';
 my $SCRIPT_URL                 = 'https://github.com/garybuhrmaster/tv_grab_zz_sdjson_sqlite';
 my $SCRIPT_NAME                = basename("$0");
 my $SCRIPT_NAME_DIR            = dirname("$0");
@@ -3352,18 +3353,10 @@ sub SD_downloadLineups
     #
     # Obtain our lineups
     #
-    $lu = $SD->obtainLineups();
-    if (!defined($lu))
-      {
-        print (STDERR "Fatal error obtaining lineups: " . $SD->ErrorString() . "\n");
-        print (STDERR "Please re-run $SCRIPT_NAME --manage-lineups\n");
-        print (STDERR "and/or $SCRIPT_NAME --configure\n");
-        exit(1);
-      }
-    $lineups = $lu->{'lineups'};
+    $lineups = $SD->obtainLineups();
     if (!defined($lineups))
       {
-        print (STDERR "Fatal error obtaining lineups\n");
+        print (STDERR "Fatal error obtaining lineups: " . $SD->ErrorString() . "\n");
         print (STDERR "Please re-run $SCRIPT_NAME --manage-lineups\n");
         print (STDERR "and/or $SCRIPT_NAME --configure\n");
         exit(1);
@@ -3392,6 +3385,7 @@ sub SD_downloadLineups
 
     for my $l (@{$lineups})
       {
+        next if (ref($l) ne 'HASH');
         my $id = $l->{'lineup'};
         next if (!defined($id));
         my $name = $l->{'name'} || '';
@@ -4678,17 +4672,10 @@ sub manageLineups
 
     while ($choice ne 'Exit')
       {
-        my $lu = $SD->obtainLineups();
-        if (!defined($lu))
-          {
-            print (STDERR "Fatal error obtaining lineups: " . $SD->ErrorString() . "\n");
-            print (STDERR "Please re-run $SCRIPT_NAME --manage-lineups and/or $SCRIPT_NAME --configure\n");
-            exit(1);
-          }
-        my $lineups = $lu->{'lineups'};
+        my $lineups = $SD->obtainLineups();
         if (!defined($lineups))
           {
-            print (STDERR "Fatal error obtaining lineups\n");
+            print (STDERR "Fatal error obtaining lineups: " . $SD->ErrorString() . "\n");
             print (STDERR "Please re-run $SCRIPT_NAME --manage-lineups and/or $SCRIPT_NAME --configure\n");
             exit(1);
           }
@@ -4699,6 +4686,7 @@ sub manageLineups
         $prompt .= "======================================================================\n";
         for my $l (@{$lineups})
           {
+            next if (ref($l) ne 'HASH');
             my $desc = '';
             if (defined($l->{'isDeleted'}) && $l->{'isDeleted'})
               {
@@ -6487,6 +6475,9 @@ sub addLineup
         return $return;
       }
 
+    # After add (success or failure) make sure we get a new Status
+    $self->{'_Status'} = undef;
+
     my $request = HTTP::Request->new(PUT => "$self->{'RESTUrl'}/lineups/$lineup");
 
     $request->header(Token => "$self->{'_Token'}");
@@ -6632,6 +6623,9 @@ sub deleteLineup
         return $return;
       }
 
+    # After delete (success or failure) make sure we get a new Status
+    $self->{'_Status'} = undef;
+
     my $request = HTTP::Request->new(DELETE => "$self->{'RESTUrl'}/lineups/$lineup");
 
     $request->header(Token => "$self->{'_Token'}");
@@ -6762,13 +6756,7 @@ sub obtainLineups
             my $r = eval { $self->{'_JSON'}->decode($responseContent) };
             if (defined($r) && defined($r->{'code'}) && ($r->{'code'} == 4102))
               {
-                $return = {};
-                $return->{'datetime'} = $r->{'datetime'} || '1970-01-01T00:00:00Z';
-                $return->{'serverID'} = $r->{'serverID'} || 'internal';
-                $return->{'response'} = $r->{'response'} || 'NO_LINEUPS';
-                $return->{'message'} = $r->{'message'} || 'No lineups have been added to this account';
-                $return->{'code'} = 4102;
-                $return->{'lineups'} = [];
+                $return = [];
                 print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
                 return $return;
               }
@@ -6823,7 +6811,34 @@ sub obtainLineups
         return $return;
       }
 
-    $return = $r;
+    if (ref($r) ne 'HASH')
+      {
+        $return = undef;
+        $self->_setErrorString("HTTP response content was not a hash: $responseContent");
+        $self->_CroakOrCarp;
+        print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
+        return $return;
+      }
+
+    if (!defined($r->{'lineups'}))
+      {
+        $return = undef;
+        $self->_setErrorString("HTTP response content was not a hash containing a lineup entity: $responseContent");
+        $self->_CroakOrCarp;
+        print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
+        return $return;
+      }
+
+    if (ref($r->{'lineups'}) ne 'ARRAY')
+      {
+        $return = undef;
+        $self->_setErrorString("HTTP response content was not a hash containing the lineup array: $responseContent");
+        $self->_CroakOrCarp;
+        print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
+        return $return;
+      }
+
+    $return = $r->{'lineups'};
 
     print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
     return $return;
