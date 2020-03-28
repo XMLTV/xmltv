@@ -373,6 +373,7 @@ my @opt_components
        grab_need_share => [ 'huro' ],
        prereqs => { 'HTML::Entities' => 0,
                     'HTML::TreeBuilder' => 0,
+                    'LWP::Protocol::https' => 0,
                     'Time::Piece' => 0,
                     'Time::Seconds' => 0, },
      },
