@@ -15,6 +15,7 @@ tv_grab_na_dtv --configure [--config-file FILE]
 tv_grab_na_dtv [--config-file FILE]
                  [--days N] [--offset N] [--processes N]
                  [--output FILE] [--quiet] [--debug]
+                 [--timeout N] [--agent STRING]
 
 tv_grab_na_dtv --list-channels [--config-file FILE]
                  [--output FILE] [--quiet] [--debug]
@@ -44,6 +45,10 @@ standard output.
 B<--days N> When grabbing, grab N days rather than 5.
 
 B<--offset N> Start grabbing at today + N days.
+
+B<--timeout N> Set request timeout in seconds. Default is 240 seconds.
+
+B<--agent STRING> Specify browser agent string, as provided to remote server.
 
 B<--processes N> Number of processes to run to fetch program details.
 8 is a good number to try. You could try more with plenty of CPU and
@@ -168,6 +173,10 @@ my $timeZone;
 # chNum, chCall, chName, chLogoUrl, chId
 my %ch = ();
 
+# Create running time for debugging messages
+my $start_runtime = time();
+
+#
 ######################################################################
 #                      Main logic starts here                        #
 ######################################################################
@@ -294,7 +303,7 @@ exit 0;
 ######################################################################
 
 sub getBrowser {
-  my ($conf) = @_;
+  my ($opt, $conf) = @_;
 
   my $ua = LWP::UserAgent->new;
 
@@ -305,11 +314,8 @@ sub getBrowser {
 
   $cookies->set_cookie(0, 'dtve-prospect-zip', "$zip", '/', 'www.directv.com');
 
-  # Define user agent type
-  $ua->agent('Mozilla/5.0 (Linux) XmlTv');
-
-  # Define timouts
-  $ua->timeout(240);
+  $ua->timeout($opt->{timeout});
+  $ua->agent($opt->{agent});
 
   # Use proxy if set in http_proxy etc.
   $ua->proxy( [ 'http', 'https' ], $conf->{proxy}->[0] )
@@ -372,8 +378,8 @@ sub prepare_queue {
       listchannels_sub => \&list_channels,
       version          => "$XMLTV::VERSION",
       description      => "North America using www.directv.com",
-      extra_options    => [qw/procs=i processes=i/],      # allow 'procs' as a synonym for 'processes'
-      defaults         => {'procs'=>0, 'processes'=>'0'}
+      extra_options    => [qw/procs=i processes=i timeout=i agent=s/],      # allow 'procs' as a synonym for 'processes'
+      defaults         => {'procs' => 0, 'processes' => 0, 'timeout' => 240, 'agent' => "xmltv/$XMLTV::VERSION"},
     }
   );
 
@@ -389,7 +395,7 @@ sub prepare_queue {
   $timeZone = $conf->{timezone}[0];
   $timeZone = "America/New_York" if !$timeZone; # Default to EST
 
-  $browser = getBrowser($conf);
+  $browser = getBrowser($opt, $conf);
 
   # Populate %ch hash
   &scrape_channel_list( $browser, $conf->{zip}[0], $conf->{channel}, \%ch );
@@ -450,10 +456,16 @@ sub rfc2838 {
 sub scrape_channel_list {
   my ( $browser, $zip, $channels, $ch ) = @_;
 
-  print STDERR "Getting channel list\n" if ($DEBUG);
-  my $resp = $browser->get($CHANNEL_LIST_URL);
-  my $json = $resp->content();
-  my $data = decode_json $json;
+  print STDERR "Requesting channel list using url: '$CHANNEL_LIST_URL' \n" if ($DEBUG);
+
+  my $can_accept = HTTP::Message::decodable;
+  my $resp = $browser->get($CHANNEL_LIST_URL, 'Accept-Encoding' => $can_accept, 'Accept-Language' => "en-US,en;q=0.9",);
+
+  #my $json = $resp->decoded_content();
+  my $data = eval { decode_json( $resp->decoded_content() ) };
+  if ($@) {
+    print STDERR "Decoding JSON response failed. \n" if ($VERBOSE);
+  }
 
   # Check status code
   if ( !$data->{success} ) {
@@ -687,11 +699,22 @@ sub scrape_channel_day {
   my $url = URI->new($SCHEDULE_URL);
   #TODO: Include chIds parameter (comma-sep list of channel IDs corresponding to channel numbers)
   $url->query_form('channels' => $shortNum, 'startTime' => $starttime, 'hours' => $blockduration);
-  my $resp = $browser->get($url);
-  my $json = $resp->content();
+
+  if ($DEBUG) {
+     my $exec_duration = time() - $start_runtime;
+     print STDERR "$exec_duration - Requesting channel's daily data using url: '$url' \n";
+  }
+
+  my $can_accept = HTTP::Message::decodable;
+  my $resp = $browser->get($url, 'Accept-Encoding' => $can_accept, 'Accept-Language' => "en-US,en;q=0.9",);
+
+  #my $json = $resp->decoded_content();
 
   # Parse JSON
-  my $data = decode_json $json;
+  my $data = eval { decode_json( $resp->decoded_content() ) };
+  if ($@) {
+    print STDERR "Decoding JSON response failed. \n" if ($VERBOSE);
+  }
 
   # Check status code
   if ( $data->{errors} ) {
@@ -736,6 +759,8 @@ sub scrape_program_details {
   my $length     = $program_data->{duration};
   my $hd         = $program_data->{hd};
 
+  my $exec_duration;
+
   return "" if $program_id eq "-1";
 
   # Append '-1' to channel number if this is an HD broadcast on a dual-numbered channel
@@ -753,16 +778,30 @@ sub scrape_program_details {
 
   # Get program details page
   my $programDetailsUrl = $DETAILS_URL . "/${program_id}";
-  print STDERR "Retrieving details for program id $program_id: $programDetailsUrl\n" if ($DEBUG);
-  my $resp = $browser->get( $programDetailsUrl );
+  if ($DEBUG) {
+     $exec_duration = time() - $start_runtime;
+     print STDERR "$exec_duration : Retrieving details for program id $program_id: $programDetailsUrl\n";
+  }
+
+  my $can_accept = HTTP::Message::decodable;
+  #my $resp = $browser->get($programDetailsUrl, 'Accept-Encoding' => $can_accept, );
+
+  my $resp = $browser->get($programDetailsUrl, 'Accept-Encoding' => $can_accept, 'Accept-Language' => "en-US,en;q=0.9",);
+
+
   if(! $resp->is_success()) {
     print STDERR "Error getting program details for $program_id: " . $resp->status_line() . "\n";
+    if ($DEBUG) {
+       $exec_duration = time() - $start_runtime;
+       print STDERR "$exec_duration : $programDetailsUrl \n";
+    }
     return "";
-	}
+  }
 
-  # my $detailContent = $resp->content();
-  # my $parser = HTML::TokeParser->new( \$detailContent );
-  my $detail_js = decode_json $resp->content();
+  my $detail_js = eval { decode_json( $resp->decoded_content() ) };
+  if ($@) {
+    print STDERR "Decoding JSON response failed. \n" if ($VERBOSE);
+  }
   my $detail = $detail_js->{"programDetail"};
 
   # Extract program details
