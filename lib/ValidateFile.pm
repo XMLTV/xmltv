@@ -74,35 +74,26 @@ ValidateFile checks the following:
 
 The file is not well-formed XML.
 
-=item notdtd
+=item notvalid
 
 The file does not follow the XMLTV DTD.
+
+=item invalidid
+
+An xmltvid does not look like a proper id, i.e. it does not match
+/^[-a-zA-Z0-9]+(\.[-a-zA-Z0-9]+)+$/.
+
+=item duplicateid
+
+More than one channel-entry found for a channelid.
 
 =item unknownid
 
 No channel-entry found for a channelid that is used in a programme-entry.
 
-=item duplicatechannel
-
-More than one channel-entry found for a channelid.
-
 =item noprogrammes
 
 No programme entries were found in the file.
-
-=item channelnoprogramme
-
-There are no programme entries for one of the channels listed with a
-channel-entry.
-
-=item invalidid
-
-An xmltvid does not look like a proper id, i.e. it does not  match
-/^[-a-zA-Z0-9]+(\.[-a-zA-Z0-9]+)+$/.
-
-=item noid
-
-A programme-entry without an id was found.
 
 =item emptytitle
 
@@ -125,11 +116,19 @@ A programme entry with an invalid stop-time was found.
 
 A programme entry with an invalid episode number was found.
 
+=item missingtimezone
+
+The start/stop time for a programme entry does not include a timezone.
+
+=item invalidtimezone
+
+The start/stop time for a programme entry contains an invalid timezone.
+
 =item badiso8859
 
 The file is encoded in iso-8859 but contains characters that
 have no meaning in iso-8859 (or are control characters).
-If it's iso-8859-1 aka Latin 1 it might be some characters in windows-1252 encoding.
+If it's iso-8859-1 (aka Latin 1) it might be some characters in windows-1252 encoding.
 
 =item badutf8
 
@@ -137,6 +136,10 @@ The file is encoded in utf-8 but contains characters that look strange.
 1) Mis-encoded single characters represented with [EF][BF][BD] bytes
 2) Mis-encoded single characters represented with [C3][AF][C2][BF][C2][BD] bytes
 3) Mis-encoded single characters in range [C2][80-9F]
+
+=item badentity
+
+The file contains one or more undefined XML entities.
 
 =back
 
