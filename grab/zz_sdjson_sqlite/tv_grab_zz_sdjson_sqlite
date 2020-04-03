@@ -44,6 +44,7 @@
 #
 # Version history:
 #
+# 2020/04/02 - 1.80 - remove location from lineup displays
 # 2020/04/01 - 1.79 - do not validate postal code via regex
 # 2020/03/30 - 1.78 - robustify token reuse validation
 # 2020/03/28 - 1.77 - use obtainLineups where appropriate
@@ -169,7 +170,7 @@ use Data::Dumper;
 my $RFC2838_COMPLIANT          = 1;            # RFC2838 compliant station ids, which makes XMLTV
                                                # validate even though the docs say "SHOULD" not "MUST"
 
-my $SCRIPT_VERSION             = '$Id: tv_grab_zz_sdjson_sqlite,v 1.79 2020/04/01 16:40:00 gtb Exp ed $';
+my $SCRIPT_VERSION             = '$Id: tv_grab_zz_sdjson_sqlite,v 1.80 2020/04/02 15:40:00 gtb Exp ed $';
 my $SCRIPT_URL                 = 'https://github.com/garybuhrmaster/tv_grab_zz_sdjson_sqlite';
 my $SCRIPT_NAME                = basename("$0");
 my $SCRIPT_NAME_DIR            = dirname("$0");
@@ -2261,12 +2262,14 @@ sub configureGrabber
         for my $l (@{$lu})
           {
             my $id = $l->[0];
-            my $desc = "$l->[1] $l->[2] $l->[3]";
+            my $lineupDesc = $l->[1];
+            $lineupDesc =~ s/^\s+|\s+$//g;
+            $lineupDesc = $lineupDesc . " ($l->[2])" if ("$l->[2]" ne '');
             $writer->write_option
               (
                 {
                   value => $id,
-                  text => [ [ "$id - $desc", 'en' ] ]
+                  text => [ [ "$id - $lineupDesc", 'en' ] ]
                 }
               );
           }
@@ -2698,7 +2701,9 @@ sub listLineups
       for my $l (@{$lu})
         {
           my $id = $l->[0];
-          my $lineupDesc = "$l->[1] $l->[2] $l->[3]";
+          my $lineupDesc = $l->[1];
+          $lineupDesc =~ s/^\s+|\s+$//g;
+          $lineupDesc = $lineupDesc . " ($l->[2])" if ("$l->[2]" ne '');
           $w->startTag('xmltv-lineup', 'id' => $id );
             my $type = mapTransport($l->[2]);
             $w->dataElement('type', $type);
@@ -2871,7 +2876,9 @@ sub getLineup
       for my $l (@{$lu})
         {
           my $id = $l->[0];
-          my $lineupDesc = "$l->[1] $l->[2] $l->[3]";
+          my $lineupDesc = $l->[1];
+          $lineupDesc =~ s/^\s+|\s+$//g;
+          $lineupDesc = $lineupDesc . " ($l->[2])" if ("$l->[2]" ne '');
           $w->startTag('xmltv-lineup', 'id' => $id );
             my $type = mapTransport($l->[2]);
             $w->dataElement('type', $type);
@@ -3376,12 +3383,11 @@ sub SD_downloadLineups
 
     for my $l (@{$lineups})
       {
-        next if (ref($l) ne 'HASH');
+        next if ((ref($l) ne 'HASH') || (!defined($l->{'lineup'})));
         my $id = $l->{'lineup'};
-        next if (!defined($id));
         my $name = $l->{'name'} || '';
         my $transport = $l->{'transport'} || '';
-        my $location = $l->{'location'} || '';
+        my $location = '';
         my $details = $JSON->utf8->canonical->encode($l);
         $sth->bind_param( 1, $id, SQL_VARCHAR );
         $sth->bind_param( 2, $name, SQL_VARCHAR );
@@ -4677,20 +4683,19 @@ sub manageLineups
         $prompt .= "======================================================================\n";
         for my $l (@{$lineups})
           {
-            next if (ref($l) ne 'HASH');
-            my $desc = '';
+            next if ((ref($l) ne 'HASH') || (!defined($l->{'lineup'})));
+            my $lineupDesc = '';
             if (defined($l->{'isDeleted'}) && $l->{'isDeleted'})
               {
-                $desc = "DELETED LINEUP";
+                $lineupDesc = "DELETED LINEUP";
               }
             else
               {
-                my $name = $l->{'name'} || 'None';
-                my $transport = $l->{'transport'} || 'None';
-                my $location = $l->{'location'} || 'None';
-                $desc = "$name ($transport $location)";
+                $lineupDesc = $l->{'name'};
+                $lineupDesc =~ s/^\s+|\s+$//g;
+                $lineupDesc = $lineupDesc . " ($l->{'transport'})" if ((defined($l->{'transport'})) && ("$l->{'transport'}" ne ''));
               }
-            $prompt .= sprintf("%-20s %s\n", $l->{'lineup'}, $desc);
+            $prompt .= sprintf("%-20s %s\n", $l->{'lineup'}, $lineupDesc);
           }
 
         $prompt .= "Specify a Schedules Direct account lineup management action";
@@ -4881,20 +4886,27 @@ sub manageLineups
                 my $aprompt = '';
                 for (my $i = 0; $i < scalar(@{$headends}); $i++)
                   {
-                    $transport = @{$headends}[$i]->{'transport'} || 'None';
-                    $location = @{$headends}[$i]->{'location'} || 'None';
+                    $transport = @{$headends}[$i]->{'transport'} || '';
+                    $location = @{$headends}[$i]->{'location'} || '';
                     foreach my $lu (@{$headends}[$i]->{'lineups'})
                       {
                         for my $l (@{$lu})
                           {
                             my $lineup = $l->{'lineup'};
+                            my $lineupDesc = $l->{'name'} || '';
+                            $lineupDesc =~ s/^\s+|\s+$//g;
+                            $lineupDesc = $lineupDesc . " (" if (("$transport" ne '') || ("$location" ne ''));
+                            $lineupDesc = $lineupDesc . "$transport" if ("$transport" ne '');
+                            $lineupDesc = $lineupDesc . ' ' if (("$transport" ne '') && ("$location" ne ''));
+                            $lineupDesc = $lineupDesc . "$location" if ("$location" ne '');
+                            $lineupDesc = $lineupDesc . ")" if (("$transport" ne '') || ("$location" ne ''));
                             if (scalar(@choices) < 10)
                               {
-                                push (@choices, [ "$lineup", sprintf (" %-20s %s", $lineup, "$l->{'name'} ($transport $location)") ]);
+                                push (@choices, [ "$lineup", sprintf (" %-20s %s", $lineup, "$lineupDesc") ]);
                               }
                             else
                               {
-                                push (@choices, [ "$lineup", sprintf ("%-20s %s", $lineup, "$l->{'name'} ($transport $location)") ]);
+                                push (@choices, [ "$lineup", sprintf ("%-20s %s", $lineup, "$lineupDesc") ]);
                               }
                           }
                       }
@@ -4928,19 +4940,18 @@ sub manageLineups
             my @choices = ();
             for my $l (@{$lineups})
               {
-                my $desc = '';
+                my $lineupDesc = '';
                 if (defined($l->{'isDeleted'}) && $l->{'isDeleted'})
                   {
-                    $desc = "DELETED LINEUP";
+                    $lineupDesc = "DELETED LINEUP";
                   }
                 else
                   {
-                    my $name = $l->{'name'} || 'None';
-                    my $transport = $l->{'transport'} || 'None';
-                    my $location = $l->{'location'} || 'None';
-                    $desc = "$name ($transport $location)";
+                    $lineupDesc = $l->{'name'};
+                    $lineupDesc =~ s/^\s+|\s+$//g;
+                    $lineupDesc = $lineupDesc . " ($l->{'transport'})" if ((defined($l->{'transport'})) && ("$l->{'transport'}" ne ''));
                   }
-                push (@choices, [ $l->{'lineup'}, sprintf("%-20s %s", $l->{'lineup'}, $desc) ]);;
+                push (@choices, [ $l->{'lineup'}, sprintf("%-20s %s", $l->{'lineup'}, $lineupDesc) ]);;
               }
 
             my $lineup_to_delete = askChoice("\nLineup to delete (ctrl-D to skip)", undef, @choices);
@@ -5024,11 +5035,10 @@ sub manageLineups
             @choices = ();
             for my $l (@{$lineups})
               {
-                my $name = $l->{'name'} || 'None';
-                my $transport = $l->{'transport'} || 'None';
-                my $location = $l->{'location'} || 'None';
-                my $desc = "$name ($transport $location)";
-                push (@choices, [ $l->{'lineup'}, sprintf("%-20s %s", $l->{'lineup'}, $desc) ]);;
+                my $lineupDesc = $l->{'name'};
+                $lineupDesc =~ s/^\s+|\s+$//g;
+                $lineupDesc = $lineupDesc . " ($l->{'transport'})" if ((defined($l->{'transport'})) && ("$l->{'transport'}" ne ''));
+                push (@choices, [ $l->{'lineup'}, sprintf("%-20s %s", $l->{'lineup'}, $lineupDesc) ]);;
               }
 
             $lineup = askChoice("\nLineup to manage channels (ctrl-D to skip)", undef, @choices);
