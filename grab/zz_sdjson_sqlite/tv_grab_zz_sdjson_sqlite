@@ -44,6 +44,7 @@
 #
 # Version history:
 #
+# 2020/04/04 - 1.81 - refactor/rename obtainHeadends
 # 2020/04/02 - 1.80 - remove location from lineup displays
 # 2020/04/01 - 1.79 - do not validate postal code via regex
 # 2020/03/30 - 1.78 - robustify token reuse validation
@@ -170,7 +171,7 @@ use Data::Dumper;
 my $RFC2838_COMPLIANT          = 1;            # RFC2838 compliant station ids, which makes XMLTV
                                                # validate even though the docs say "SHOULD" not "MUST"
 
-my $SCRIPT_VERSION             = '$Id: tv_grab_zz_sdjson_sqlite,v 1.80 2020/04/02 15:40:00 gtb Exp ed $';
+my $SCRIPT_VERSION             = '$Id: tv_grab_zz_sdjson_sqlite,v 1.81 2020/04/04 20:00:00 gtb Exp ed $';
 my $SCRIPT_URL                 = 'https://github.com/garybuhrmaster/tv_grab_zz_sdjson_sqlite';
 my $SCRIPT_NAME                = basename("$0");
 my $SCRIPT_NAME_DIR            = dirname("$0");
@@ -4866,49 +4867,41 @@ sub manageLineups
                 $postal_code = $postal_code_example;
               }
 
-            my $headends = $SD->obtainHeadends($country_code, $postal_code);
-            if (!defined($headends))
+            my $availablelineups = $SD->obtainLineupsAvailable($country_code, $postal_code);
+            if (!defined($availablelineups))
               {
-                print (STDERR "Fatal error obtaining headends: " . $SD->ErrorString() . "\n");
-                print (STDERR "Please re-run $SCRIPT_NAME --manage-lineups and/or $SCRIPT_NAME --configure\n");
+                print (STDERR "Fatal error obtaining available lineups: " . $SD->ErrorString() . "\n");
                 exit(1);
               }
 
-            if ((ref($headends) ne 'ARRAY') || (scalar(@{$headends})) == 0)
+            if ((ref($availablelineups) ne 'ARRAY') || (scalar(@{$availablelineups})) == 0)
               {
                 $prompt .= "Unable to add lineup, Schedules Direct has no lineups in $country_code/$postal_code\n";
               }
             else
               {
-                my $location;
-                my $transport;
                 my @choices = ();
                 my $aprompt = '';
-                for (my $i = 0; $i < scalar(@{$headends}); $i++)
+                for my $l (@{$availablelineups})
                   {
-                    $transport = @{$headends}[$i]->{'transport'} || '';
-                    $location = @{$headends}[$i]->{'location'} || '';
-                    foreach my $lu (@{$headends}[$i]->{'lineups'})
+                    next if ((ref($l) ne 'HASH') || (!defined($l->{'lineupID'})));
+                    my $transport = $l->{'transport'} || '';
+                    my $location = $l->{'location'} || '';
+                    my $lineup = $l->{'lineupID'};
+                    my $lineupDesc = $l->{'name'} || '';
+                    $lineupDesc =~ s/^\s+|\s+$//g;
+                    $lineupDesc = $lineupDesc . " (" if (("$transport" ne '') || ("$location" ne ''));
+                    $lineupDesc = $lineupDesc . "$transport" if ("$transport" ne '');
+                    $lineupDesc = $lineupDesc . ' ' if (("$transport" ne '') && ("$location" ne ''));
+                    $lineupDesc = $lineupDesc . "$location" if ("$location" ne '');
+                    $lineupDesc = $lineupDesc . ")" if (("$transport" ne '') || ("$location" ne ''));
+                    if (scalar(@choices) < 10)
                       {
-                        for my $l (@{$lu})
-                          {
-                            my $lineup = $l->{'lineup'};
-                            my $lineupDesc = $l->{'name'} || '';
-                            $lineupDesc =~ s/^\s+|\s+$//g;
-                            $lineupDesc = $lineupDesc . " (" if (("$transport" ne '') || ("$location" ne ''));
-                            $lineupDesc = $lineupDesc . "$transport" if ("$transport" ne '');
-                            $lineupDesc = $lineupDesc . ' ' if (("$transport" ne '') && ("$location" ne ''));
-                            $lineupDesc = $lineupDesc . "$location" if ("$location" ne '');
-                            $lineupDesc = $lineupDesc . ")" if (("$transport" ne '') || ("$location" ne ''));
-                            if (scalar(@choices) < 10)
-                              {
-                                push (@choices, [ "$lineup", sprintf (" %-20s %s", $lineup, "$lineupDesc") ]);
-                              }
-                            else
-                              {
-                                push (@choices, [ "$lineup", sprintf ("%-20s %s", $lineup, "$lineupDesc") ]);
-                              }
-                          }
+                        push (@choices, [ "$lineup", sprintf (" %-20s %s", $lineup, "$lineupDesc") ]);
+                      }
+                    else
+                      {
+                        push (@choices, [ "$lineup", sprintf ("%-20s %s", $lineup, "$lineupDesc") ]);
                       }
                   }
 
@@ -5891,7 +5884,7 @@ package SchedulesDirect v20141201.0.0;
 # deleteLineup                 - delete lineup from account
 # obtainLineups                - return lineups in account
 # obtainLineupMaps             - return maps for lineup
-# obtainHeadends               - return headends in country/postal
+# obtainLineupsAvailable       - return lineups available in country/postal
 # obtainStationsSchedules      - return stations schedules
 # obtainStationsSchedulesHash  - return stations schedules hash
 # obtainPrograms               - return program data for programs
@@ -6960,9 +6953,9 @@ sub obtainLineupMaps
   }
 
 #
-# Return list of headends in country/postal code
+# Return list of lineups available in country/postal code
 #
-sub obtainHeadends
+sub obtainLineupsAvailable
   {
     my $self = shift;
 
@@ -6974,18 +6967,18 @@ sub obtainHeadends
 
     $self->_resetError;
 
-    if (!defined($country))
+    if (!defined($country) || ($country eq ''))
       {
         $return = undef;
-        $self->_setErrorString("Country code not provided for headend list");
+        $self->_setErrorString("Country code not provided for lineup list");
         $self->_CroakOrCarp;
         print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
         return $return;
       }
-    if (!defined($postalcode))
+    if (!defined($postalcode) || ($postalcode eq ''))
       {
         $return = undef;
-        $self->_setErrorString("Postal code code not provided for headend list");
+        $self->_setErrorString("Postal code code not provided for lineup list");
         $self->_CroakOrCarp;
         print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
         return $return;
@@ -7039,12 +7032,12 @@ sub obtainHeadends
                 if ($code == 2102)
                   {
                     $return = [];
-                    $self->_setErrorString("No headends in specified country/postalcode");
+                    $self->_setErrorString("No lineups in specified country/postalcode");
                     print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
                     return $return;
                   }
                 $return = undef;
-                $self->_setErrorString("Error obtaining headends ($code): $msg");
+                $self->_setErrorString("Error obtaining lineups ($code): $msg");
                 $self->_CroakOrCarp;
                 print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
                 return $return;
@@ -7095,7 +7088,34 @@ sub obtainHeadends
         return $return;
       }
 
-    $return = $r;
+    if (ref($r) ne 'ARRAY')
+      {
+        $return = undef;
+        $self->_setErrorString("HTTP response content was not an array ($responseContent)");
+        $self->_CroakOrCarp;
+        print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
+        return $return;
+      }
+
+    $return = [];
+
+    for my $e(@{$r})
+      {
+        next if ((ref($e) ne 'HASH') || (!defined($e->{'lineups'})));
+        my $lineups = $e->{'lineups'};
+        next if (ref($lineups) ne 'ARRAY');
+        for my $lu(@{$lineups})
+          {
+             my $el = {};
+             next if ((ref($lu) ne 'HASH') || (!defined($lu->{'lineup'})));
+             $el->{'lineupID'} = $lu->{'lineup'};
+             $el->{'transport'} = $e->{'transport'} if (defined($e->{'transport'}));
+             $el->{'location'} = $e->{'location'} if (defined($e->{'location'}));
+             $el->{'name'} = $lu->{'name'} if (defined($lu->{'name'}));
+             $el->{'uri'} = $lu->{'uri'} if (defined($lu->{'uri'}));
+             push(@{$return}, $el);
+          }
+      }
 
     print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
     return $return;
