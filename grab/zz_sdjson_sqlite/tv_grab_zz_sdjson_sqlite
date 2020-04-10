@@ -44,6 +44,7 @@
 #
 # Version history:
 #
+# 2020/04/10 - 1.86 - refactor obtainStationsSchedulesHash
 # 2020/04/07 - 1.85 - partially revert location removal
 # 2020/04/07 - 1.84 - fix for manage-lineups channel selection
 # 2020/04/06 - 1.83 - fix for manage-lineups with no database
@@ -175,7 +176,7 @@ use Data::Dumper;
 my $RFC2838_COMPLIANT          = 1;            # RFC2838 compliant station ids, which makes XMLTV
                                                # validate even though the docs say "SHOULD" not "MUST"
 
-my $SCRIPT_VERSION             = '$Id: tv_grab_zz_sdjson_sqlite,v 1.85 2020/04/07 22:30:00 gtb Exp ed $';
+my $SCRIPT_VERSION             = '$Id: tv_grab_zz_sdjson_sqlite,v 1.86 2020/04/10 22:00:00 gtb Exp ed $';
 my $SCRIPT_URL                 = 'https://github.com/garybuhrmaster/tv_grab_zz_sdjson_sqlite';
 my $SCRIPT_NAME                = basename("$0");
 my $SCRIPT_NAME_DIR            = dirname("$0");
@@ -459,14 +460,6 @@ else
     # Obtain the current schedule hash values for our
     # lineup stations and feed to our DB
     #
-    # Note that there is no (substantial) advantage in
-    # requesting only the days we will be processing
-    # as tests have shown that Schedules Direct takes
-    # about the same time to return all vs just one,
-    # and it complicates matters to request ranges
-    # and deal with potential errors due to out of
-    # range issues.
-    #
     $sql = 'select distinct stations.station from stations as stations where stations.station in (select distinct channels.station from channels as channels where channels.lineup in ( ' . join(', ', ('?') x scalar(@{$conf->{'lineup'}})) . ' ) and channels.selected = 1)';
 
     $sth = $DBH->prepare_cached($sql);
@@ -529,34 +522,37 @@ else
             exit(1);
           }
 
-        if (ref($r) ne 'HASH')
+        if (ref($r) ne 'ARRAY')
           {
             print (STDERR "Unexpected return data type " . ref($r) . " when obtaining station schedules hashes.\n");
             exit(1);
           }
 
-        foreach my $station(keys %{$r})
+        foreach my $e(@{$r})
           {
-            if (ref($r->{$station}) ne 'HASH')
+            if (ref($e) ne 'HASH')
               {
-                # print (STDERR "Unexpected return data type " . ref($r->{$station}) . " for station $station while obtaining station schedules hashes\n");
+                # print (STDERR "Unexpected return data type " . ref($e) . " while iterating station schedules hashes\n");
                 next;
               }
-            foreach my $day(keys %{$r->{$station}})
+            if ((!defined($e->{'stationID'})) || (!defined($e->{'date'})))
               {
-                my $s = $r->{$station}->{$day};
-                my $hash = $s->{'md5'} || '';
-                my $details = $JSON->utf8->encode($s);
-                $sth->bind_param( 1, $station, SQL_VARCHAR );
-                $sth->bind_param( 2, $day, SQL_DATE );
-                $sth->bind_param( 3, $hash, SQL_VARCHAR );
-                $sth->bind_param( 4, $details, SQL_VARCHAR );
-                $sth->execute();
-                if ($sth->err)
-                  {
-                    print (STDERR "Unexpected error when executing statement ($sql): " . $sth->errstr . "\n");
-                    exit(1);
-                  }
+                # print (STDERR "Station or date not provided while iterating station schedules hashes\n");
+                next;
+              }
+            my $station = $e->{'stationID'};
+            my $date = $e->{'date'};
+            my $hash = $e->{'MD5'} || '';
+            my $details = $JSON->utf8->encode($e);
+            $sth->bind_param( 1, $station, SQL_VARCHAR );
+            $sth->bind_param( 2, $date, SQL_DATE );
+            $sth->bind_param( 3, $hash, SQL_VARCHAR );
+            $sth->bind_param( 4, $details, SQL_VARCHAR );
+            $sth->execute();
+            if ($sth->err)
+              {
+                print (STDERR "Unexpected error when executing statement ($sql): " . $sth->errstr . "\n");
+                exit(1);
               }
           }
 
@@ -7429,7 +7425,35 @@ sub obtainStationsSchedulesHash
         return $return;
       }
 
-    $return = $r;
+    if (ref($r) ne 'HASH')
+      {
+        $return = undef;
+        $self->_setErrorString("HTTP response content was not a hash: $responseContent");
+        $self->_CroakOrCarp;
+        print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
+        return $return;
+      }
+
+    $return = [];
+
+    for my $station(keys %{$r})
+      {
+        if (ref($r->{$station}) eq 'HASH')
+          {
+            for my $date(keys %{$r->{$station}})
+              {
+                my $e = {};
+                $e->{'stationID'} = $station;
+                $e->{'date'} = $date;
+                $e->{'code'} = $r->{$station}->{$date}->{'code'} if (defined($r->{$station}->{$date}->{'code'}));
+                $e->{'MD5'} = $r->{$station}->{$date}->{'md5'} if (defined($r->{$station}->{$date}->{'md5'}));
+                $e->{'message'} = $r->{$station}->{$date}->{'message'} if (defined($r->{$station}->{$date}->{'message'}));
+                $e->{'lastModified'} = $r->{$station}->{$date}->{'lastModified'} if (defined($r->{$station}->{$date}->{'lastModified'}));
+                $e->{'response'} = "OK" if ($r->{$station}->{$date}->{'code'} eq 0);
+                push(@{$return}, $e);
+              }
+          }
+      }
 
     print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
     return $return;
