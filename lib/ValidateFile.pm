@@ -269,28 +269,12 @@ sub verify_time
 {
     my( $timestamp ) = @_;
 
+    # $tz is optional per the XMLTV DTD
     my( $date, $time, $tz ) =
-	($timestamp =~ /^(\d{8})(\d{4,6})(\s+([A-Z]+|[+-]\d{4})){0,1}$/ );
+	($timestamp =~ /^(\d{8})(\d{4,6})(\s+([A-Z]+|[+-]\d{4}))?$/ );
 
+    return 0 unless defined $date;
     return 0 unless defined $time;
-
-    if( not defined( $tz ) )
-    {
-	if( not defined( $timezoneerrors{$tz} ) ) {
-	    w( "No timezone specified", 'missingtimezone' );
-	    $timezoneerrors{$tz}++;
-	    return 0;
-	}
-    }
-
-    if( $tz =~ /[a-zA-Z]/ ) {
-	if( not defined( $timezoneerrors{$tz} ) ) {
-	    w( "Invalid timezone '$tz'", 'invalidtimezone' );
-	    $timezoneerrors{$tz}++;
-	    return 0;
-	}
-    }
-
     return 1;
 }
 
