@@ -44,6 +44,7 @@
 #
 # Version history:
 #
+# 2020/04/23 - 1.88 - reorganize database open/validation
 # 2020/04/13 - 1.87 - additional validation of returned data
 # 2020/04/10 - 1.86 - refactor obtainStationsSchedulesHash
 # 2020/04/07 - 1.85 - partially revert location removal
@@ -177,7 +178,7 @@ use Data::Dumper;
 my $RFC2838_COMPLIANT          = 1;            # RFC2838 compliant station ids, which makes XMLTV
                                                # validate even though the docs say "SHOULD" not "MUST"
 
-my $SCRIPT_VERSION             = '$Id: tv_grab_zz_sdjson_sqlite,v 1.87 2020/04/13 23:30:00 gtb Exp ed $';
+my $SCRIPT_VERSION             = '$Id: tv_grab_zz_sdjson_sqlite,v 1.88 2020/04/23 20:00:00 gtb Exp ed $';
 my $SCRIPT_URL                 = 'https://github.com/garybuhrmaster/tv_grab_zz_sdjson_sqlite';
 my $SCRIPT_NAME                = basename("$0");
 my $SCRIPT_NAME_DIR            = dirname("$0");
@@ -3850,6 +3851,9 @@ sub DB_open
   {
     my ($dbname, undef) = @_;
 
+    my $version;
+    my $rc;
+
     #
     # Quick exit if we already have the database open
     #
@@ -3889,33 +3893,19 @@ sub DB_open
       }
 
     #
-    # SQLite specific optimizations (if it works, it works)
+    # Validate DB version support by first checking
+    # if the database seems to be initialized.
     #
-    $DBH->{'AutoCommit'} = 1;
-    $DBH->do("PRAGMA page_size=4096");
-    $DBH->do("PRAGMA auto_vacuum=2");
-    $DBH->do("PRAGMA journal_mode=WAL");
-    $DBH->{'AutoCommit'} = 0;
-
-    #
-    # Create settings tables if needed
-    #
-    my $rc = $DBH->do("create table if not exists settings (" .
-                        "tag varchar(256) not null primary key, " .
-                        "value varchar(256))");
+    $rc = $DBH->do("select value from settings where tag = 'version'");
     if ((!defined($rc)) || ($rc < 0))
       {
-        print (STDERR "Unable to create settings table in database $dbname: " . $DBH->errstr . "\n");
-        $DBH->rollback();
-        exit(1);
+        $version = 0;
       }
-    $DBH->commit();
-
-    #
-    # Validate DB version support
-    #
-    my $version = DB_settingsGet('version');
-    $version = 0 if (!defined($version));
+    else
+      {
+         $version = DB_settingsGet('version');
+         $version = 0 if (!defined($version));
+      }
     if ($version =~ /^\d+$/)
       {
         $version = 0 + $version;
@@ -3926,142 +3916,161 @@ sub DB_open
         exit(1);
       }
 
-    if (0 == $version)  ## Initial database creation
-      {
-        print (STDERR "Initializing database $dbname\n") if (!$quiet);
-        my $rc;
-        $rc = $DBH->do("create table lineups ( " .
-                         "lineup varchar(128) not null primary key, " .
-                         "name varchar(128) not null, " .
-                         "location varchar(128) not null, " .
-                         "transport varchar(64) not null, " .
-                         "downloaded datetime not null default '1970-01-01 00:00:00', " .
-                         "modified datetime not null default '1970-01-01 00:00:00', " .
-                         "new_channels_selected integer not null default 1, " .
-                         "details blob not null )");
-        if ((!defined($rc)) || ($rc < 0))
-          {
-            print (STDERR "Unable to create lineups table in database $dbname: " . $DBH->errstr . "\n");
-            $DBH->rollback();
-            exit(1);
-          }
-        $rc = $DBH->do("create table programs ( " .
-                         "program varchar(128) not null primary key, " .
-                         "hash varchar(64) not null, " .
-                         "details blob not null )");
-        if ((!defined($rc)) || ($rc < 0))
-          {
-            print (STDERR "Unable to create programs table in database $dbname: " . $DBH->errstr . "\n");
-            $DBH->rollback();
-            exit(1);
-          }
-        $rc = $DBH->do("create table stations ( " .
-                         "station varchar(128) not null primary key, " .
-                         "details blob not null )");
-        if ((!defined($rc)) || ($rc < 0))
-          {
-            print (STDERR "Unable to create stations table in database $dbname: " . $DBH->errstr . "\n");
-            $DBH->rollback();
-            exit(1);
-          }
-        $rc = $DBH->do("create table stations_schedules_hash ( " .
-                         "station varchar(128) not null, " .
-                         "day date not null, " .
-                         "hash varchar(64) not null, " .
-                         "details blob not null, " .
-                         "primary key(station, day) )");
-        if ((!defined($rc)) || ($rc < 0))
-          {
-            print (STDERR "Unable to create stations_schedules_hash table in database $dbname: " . $DBH->errstr . "\n");
-            $DBH->rollback();
-            exit(1);
-          }
-        $rc = $DBH->do("create index stations_schedules_hash_index_hash on stations_schedules_hash (hash)");
-        if ((!defined($rc)) || ($rc < 0))
-          {
-            print (STDERR "Unable to create stations schedules hash index in database $dbname: " . $DBH->errstr . "\n");
-            $DBH->rollback();
-            exit(1);
-          }
-        $rc = $DBH->do("create table channels ( " .
-                         "lineup varchar(128) not null, " .
-                         "station varchar(128) not null, " .
-                         "channum varchar(128) not null default '', " .
-                         "selected integer not null default 1, " .
-                         "details blob not null )");
-        if ((!defined($rc)) || ($rc < 0))
-          {
-            print (STDERR "Unable to create channels table in database $dbname: " . $DBH->errstr . "\n");
-            $DBH->rollback();
-            exit(1);
-          }
-        $rc = $DBH->do("create index channels_index_lineup_station on channels (lineup, station)");
-        if ((!defined($rc)) || ($rc < 0))
-          {
-            print (STDERR "Unable to create channel index in database $dbname: " . $DBH->errstr . "\n");
-            $DBH->rollback();
-            exit(1);
-          }
-        $rc = $DBH->do("create table schedules_hash ( " .
-                         "station varchar(128) not null, " .
-                         "day date not null, " .
-                         "hash varchar(64) not null, " .
-                         "primary key (station, day) )");
-        if ((!defined($rc)) || ($rc < 0))
-          {
-            print (STDERR "Unable to create schedules_hash table in database $dbname: " . $DBH->errstr . "\n");
-            $DBH->rollback();
-            exit(1);
-          }
-        $rc = $DBH->do("create index schedules_hash_index_hash on schedules_hash (hash)");
-        if ((!defined($rc)) || ($rc < 0))
-          {
-            print (STDERR "Unable to create schedules hash index in database $dbname: " . $DBH->errstr . "\n");
-            $DBH->rollback();
-            exit(1);
-          }
-        $rc = $DBH->do("create table schedules ( " .
-                         "station varchar(128) not null, " .
-                         "day date not null, " .
-                         "starttime datetime not null, " .
-                         "duration integer not null, " .
-                         "program varchar(128) not null, " .
-                         "program_hash varchar(64) not null, " .
-                         "details blob not null, " .
-                         "primary key (station, day, starttime, duration) )");
-        if ((!defined($rc)) || ($rc < 0))
-          {
-            print (STDERR "Unable to create schedules table in database $dbname: " . $DBH->errstr . "\n");
-            $DBH->rollback();
-            exit(1);
-          }
-        $rc = $DBH->do("create index schedules_index_station_starttime on schedules (station, starttime)");
-        if ((!defined($rc)) || ($rc < 0))
-          {
-            print (STDERR "Unable to create schedules index in database $dbname: " . $DBH->errstr . "\n");
-            $DBH->rollback();
-            exit(1);
-          }
-        $rc = $DBH->do("create index schedules_index_program on schedules (program)");
-        if ((!defined($rc)) || ($rc < 0))
-          {
-            print (STDERR "Unable to create schedules program index in database $dbname: " . $DBH->errstr . "\n");
-            $DBH->rollback();
-            exit(1);
-          }
-
-        $version = 1;
-        DB_settingsSet('version', 1);
-        $DBH->commit();
-      }
-
     if ($version > $SCRIPT_DB_VERSION)
       {
-        print (STDERR "Database version $version is not supported (newer than grabber version $SCRIPT_DB_VERSION)\n");
+        print (STDERR "Database version $version is not supported (newer than grabber supported version $SCRIPT_DB_VERSION)\n");
         exit(1);
       }
     elsif ($version < $SCRIPT_DB_VERSION)
       {
+        if (0 == $version)  ## Initial database creation
+          {
+            $version = 1;
+            print (STDERR "Initializing database $dbname\n") if (!$quiet);
+
+            #
+            # SQLite specific optimizations that need to
+            # be applied at initial database creation.
+            #
+            $DBH->{'AutoCommit'} = 1;
+            $DBH->do('PRAGMA page_size=4096');
+            $DBH->do('PRAGMA journal_mode=WAL');
+            $DBH->do('PRAGMA auto_vacuum=2');
+            $DBH->do('vacuum');
+            $DBH->{'AutoCommit'} = 0;
+
+            $rc = $DBH->do("create table if not exists settings (" .
+                             "tag varchar(256) not null primary key, " .
+                             "value varchar(256))");
+            if ((!defined($rc)) || ($rc < 0))
+              {
+                print (STDERR "Unable to create settings table in database $dbname: " . $DBH->errstr . "\n");
+               $DBH->rollback();
+               exit(1);
+              }
+            $rc = $DBH->do("create table lineups ( " .
+                             "lineup varchar(128) not null primary key, " .
+                             "name varchar(128) not null, " .
+                             "location varchar(128) not null, " .
+                             "transport varchar(64) not null, " .
+                             "downloaded datetime not null default '1970-01-01 00:00:00', " .
+                             "modified datetime not null default '1970-01-01 00:00:00', " .
+                             "new_channels_selected integer not null default 1, " .
+                             "details blob not null )");
+            if ((!defined($rc)) || ($rc < 0))
+              {
+                print (STDERR "Unable to create lineups table in database $dbname: " . $DBH->errstr . "\n");
+                $DBH->rollback();
+                exit(1);
+              }
+            $rc = $DBH->do("create table programs ( " .
+                             "program varchar(128) not null primary key, " .
+                             "hash varchar(64) not null, " .
+                             "details blob not null )");
+            if ((!defined($rc)) || ($rc < 0))
+              {
+                print (STDERR "Unable to create programs table in database $dbname: " . $DBH->errstr . "\n");
+                $DBH->rollback();
+                exit(1);
+              }
+            $rc = $DBH->do("create table stations ( " .
+                             "station varchar(128) not null primary key, " .
+                             "details blob not null )");
+            if ((!defined($rc)) || ($rc < 0))
+              {
+                print (STDERR "Unable to create stations table in database $dbname: " . $DBH->errstr . "\n");
+                $DBH->rollback();
+                exit(1);
+              }
+            $rc = $DBH->do("create table stations_schedules_hash ( " .
+                             "station varchar(128) not null, " .
+                             "day date not null, " .
+                             "hash varchar(64) not null, " .
+                             "details blob not null, " .
+                             "primary key(station, day) )");
+            if ((!defined($rc)) || ($rc < 0))
+              {
+                print (STDERR "Unable to create stations_schedules_hash table in database $dbname: " . $DBH->errstr . "\n");
+                $DBH->rollback();
+                exit(1);
+              }
+            $rc = $DBH->do("create index stations_schedules_hash_index_hash on stations_schedules_hash (hash)");
+            if ((!defined($rc)) || ($rc < 0))
+              {
+                print (STDERR "Unable to create stations schedules hash index in database $dbname: " . $DBH->errstr . "\n");
+                $DBH->rollback();
+                exit(1);
+              }
+            $rc = $DBH->do("create table channels ( " .
+                             "lineup varchar(128) not null, " .
+                             "station varchar(128) not null, " .
+                             "channum varchar(128) not null default '', " .
+                             "selected integer not null default 1, " .
+                             "details blob not null )");
+            if ((!defined($rc)) || ($rc < 0))
+              {
+                print (STDERR "Unable to create channels table in database $dbname: " . $DBH->errstr . "\n");
+                $DBH->rollback();
+                exit(1);
+              }
+            $rc = $DBH->do("create index channels_index_lineup_station on channels (lineup, station)");
+            if ((!defined($rc)) || ($rc < 0))
+              {
+                print (STDERR "Unable to create channel index in database $dbname: " . $DBH->errstr . "\n");
+                $DBH->rollback();
+                exit(1);
+              }
+            $rc = $DBH->do("create table schedules_hash ( " .
+                             "station varchar(128) not null, " .
+                             "day date not null, " .
+                             "hash varchar(64) not null, " .
+                             "primary key (station, day) )");
+            if ((!defined($rc)) || ($rc < 0))
+              {
+                print (STDERR "Unable to create schedules_hash table in database $dbname: " . $DBH->errstr . "\n");
+                $DBH->rollback();
+                exit(1);
+              }
+            $rc = $DBH->do("create index schedules_hash_index_hash on schedules_hash (hash)");
+            if ((!defined($rc)) || ($rc < 0))
+              {
+                print (STDERR "Unable to create schedules hash index in database $dbname: " . $DBH->errstr . "\n");
+                $DBH->rollback();
+                exit(1);
+              }
+            $rc = $DBH->do("create table schedules ( " .
+                             "station varchar(128) not null, " .
+                             "day date not null, " .
+                             "starttime datetime not null, " .
+                             "duration integer not null, " .
+                             "program varchar(128) not null, " .
+                             "program_hash varchar(64) not null, " .
+                             "details blob not null, " .
+                             "primary key (station, day, starttime, duration) )");
+            if ((!defined($rc)) || ($rc < 0))
+              {
+                print (STDERR "Unable to create schedules table in database $dbname: " . $DBH->errstr . "\n");
+                $DBH->rollback();
+                exit(1);
+              }
+            $rc = $DBH->do("create index schedules_index_station_starttime on schedules (station, starttime)");
+            if ((!defined($rc)) || ($rc < 0))
+              {
+                print (STDERR "Unable to create schedules index in database $dbname: " . $DBH->errstr . "\n");
+                $DBH->rollback();
+                exit(1);
+              }
+            $rc = $DBH->do("create index schedules_index_program on schedules (program)");
+            if ((!defined($rc)) || ($rc < 0))
+              {
+                print (STDERR "Unable to create schedules program index in database $dbname: " . $DBH->errstr . "\n");
+                $DBH->rollback();
+                exit(1);
+              }
+            DB_settingsSet('version', $version);
+            $DBH->commit();
+          }
+
         if (1 == $version)
           {
             $version = 2;
@@ -4130,7 +4139,6 @@ sub DB_open
             $DBH->commit();
           }
 
-        ##
         ##  if (2 == $version   ## Example upgrade (version 2 to 3)
         ##    {
         ##      $version = 3;
@@ -4140,6 +4148,7 @@ sub DB_open
         ##      $DBH->commit();
         ##    }
       }
+    $DBH->commit();
     return;
   }
 
