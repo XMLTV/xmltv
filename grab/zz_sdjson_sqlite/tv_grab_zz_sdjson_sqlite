@@ -44,6 +44,7 @@
 #
 # Version history:
 #
+# 2020/04/26 - 1.89 - increase potential grabber concurrency phase 1
 # 2020/04/23 - 1.88 - reorganize database open/validation
 # 2020/04/13 - 1.87 - additional validation of returned data
 # 2020/04/10 - 1.86 - refactor obtainStationsSchedulesHash
@@ -178,7 +179,7 @@ use Data::Dumper;
 my $RFC2838_COMPLIANT          = 1;            # RFC2838 compliant station ids, which makes XMLTV
                                                # validate even though the docs say "SHOULD" not "MUST"
 
-my $SCRIPT_VERSION             = '$Id: tv_grab_zz_sdjson_sqlite,v 1.88 2020/04/23 20:00:00 gtb Exp ed $';
+my $SCRIPT_VERSION             = '$Id: tv_grab_zz_sdjson_sqlite,v 1.89 2020/04/26 12:00:00 gtb Exp ed $';
 my $SCRIPT_URL                 = 'https://github.com/garybuhrmaster/tv_grab_zz_sdjson_sqlite';
 my $SCRIPT_NAME                = basename("$0");
 my $SCRIPT_NAME_DIR            = dirname("$0");
@@ -452,6 +453,10 @@ my $fetchStationSchedulesRequired = $sth->fetchrow_array() || 0;;
 
 $sth->finish();
 
+$DBH->commit();
+
+undef $sth;
+
 if ((!$fetchStationSchedulesRequired) && (!$fetchLineupRequired))
   {
     print (STDERR "   not downloading station schedule hashes (data current)\n") if (!$quiet);
@@ -492,15 +497,11 @@ else
 
     $sth->finish();
 
-    print (STDERR "   downloading station schedule hashes for " . scalar(@{$stationsSchedulesHashList}) . " stations\n") if (!$quiet);
+    $DBH->commit();
 
-    $sql = "replace into stations_schedules_hash (station, day, hash, details) values ( ?, ?, ?, ?)";
-    $sth = $DBH->prepare_cached($sql);
-    if (!defined($sth))
-      {
-        print (STDERR "Unexpected error when preparing statement ($sql): " . $DBH->errstr . "\n");
-        exit(1);
-      }
+    undef $sth;
+
+    print (STDERR "   downloading station schedule hashes for " . scalar(@{$stationsSchedulesHashList}) . " stations\n") if (!$quiet);
 
     my $stationsSchedulesHashIter;
     $stationsSchedulesHashIter = natatime $SD_SCHEDULE_HASH_CHUNK, @{$stationsSchedulesHashList};
@@ -527,6 +528,15 @@ else
         if (ref($r) ne 'ARRAY')
           {
             print (STDERR "Unexpected return data type " . ref($r) . " when obtaining station schedules hashes.\n");
+            exit(1);
+          }
+
+        $sql = "replace into stations_schedules_hash (station, day, hash, details) values ( ?, ?, ?, ?)";
+
+        $sth = $DBH->prepare_cached($sql);
+        if (!defined($sth))
+          {
+            print (STDERR "Unexpected error when preparing statement ($sql): " . $DBH->errstr . "\n");
             exit(1);
           }
 
@@ -562,6 +572,8 @@ else
           }
 
         $DBH->commit();
+
+        undef $sth;
       }
 
     #
@@ -589,6 +601,8 @@ else
         exit(1)
       }
     $DBH->commit();
+
+    undef $sth;
   }
 
 #
@@ -658,6 +672,10 @@ for (my $retry = 0; $retry < 7; $retry++)
 
     $sth->finish();
 
+    $DBH->commit();
+
+    undef $sth;
+
     if (scalar(@{$stationsSchedulesList}) == 0)
       {
         if ($retry == 0)
@@ -670,29 +688,6 @@ for (my $retry = 0; $retry < 7; $retry++)
     print (STDERR "   downloading " . scalar(@{$stationsSchedulesList}) . " new, updated, or missing daily schedules" . (($retry == 0) ? "" : " (retry $retry)") . "\n") if (!$quiet);
 
     sleep(min(30, (10 * $retry)));
-
-    $sql1 = "delete from schedules where station = ? and day = ?";
-    $sql2 = "replace into schedules (station, day, starttime, duration, program, program_hash, details) values (?, ?, ?, ?, ?, ?, ?)";
-    $sql3 = "replace into schedules_hash (station, day, hash) values (?, ?, ?)";
-
-    $sth1 = $DBH->prepare_cached($sql1);
-    if (!defined($sth1))
-      {
-        print (STDERR "Unexpected error when preparing statement ($sql1): " . $DBH->errstr . "\n");
-        exit(1);
-      }
-    $sth2 = $DBH->prepare_cached($sql2);
-    if (!defined($sth2))
-      {
-        print (STDERR "Unexpected error when preparing statement ($sql2): " . $DBH->errstr . "\n");
-        exit(1);
-      }
-    $sth3 = $DBH->prepare_cached($sql3);
-    if (!defined($sth3))
-      {
-        print (STDERR "Unexpected error when preparing statement ($sql3): " . $DBH->errstr . "\n");
-        exit(1);
-      }
 
     my $schedulesIter;
     $schedulesIter = natatime $SD_SCHEDULE_CHUNK, @{$stationsSchedulesList};
@@ -730,6 +725,29 @@ for (my $retry = 0; $retry < 7; $retry++)
             print (STDERR "Unexpected error when obtaining station schedules: " . $SD->ErrorString() . " (will retry)\n") if (!$quiet);
             $downloadQueued = 1;
             next;
+          }
+
+        $sql1 = "delete from schedules where station = ? and day = ?";
+        $sql2 = "replace into schedules (station, day, starttime, duration, program, program_hash, details) values (?, ?, ?, ?, ?, ?, ?)";
+        $sql3 = "replace into schedules_hash (station, day, hash) values (?, ?, ?)";
+
+        $sth1 = $DBH->prepare_cached($sql1);
+        if (!defined($sth1))
+          {
+            print (STDERR "Unexpected error when preparing statement ($sql1): " . $DBH->errstr . "\n");
+            exit(1);
+          }
+        $sth2 = $DBH->prepare_cached($sql2);
+        if (!defined($sth2))
+          {
+            print (STDERR "Unexpected error when preparing statement ($sql2): " . $DBH->errstr . "\n");
+            exit(1);
+          }
+        $sth3 = $DBH->prepare_cached($sql3);
+        if (!defined($sth3))
+          {
+            print (STDERR "Unexpected error when preparing statement ($sql3): " . $DBH->errstr . "\n");
+            exit(1);
           }
 
         foreach my $sched(@{$r})
@@ -807,6 +825,10 @@ for (my $retry = 0; $retry < 7; $retry++)
           }
 
         $DBH->commit();
+
+        undef $sth1;
+        undef $sth2;
+        undef $sth3;
       }
 
     # We are done unless one (or more) entities indicate that the server queued the request
@@ -878,6 +900,10 @@ for (my $retry = 0; $retry < 7; $retry++)
 
     $sth->finish();
 
+    $DBH->commit();
+
+    undef $sth;
+
     if (scalar(@{$programsList}) == 0)
       {
         if ($retry == 0)
@@ -890,15 +916,6 @@ for (my $retry = 0; $retry < 7; $retry++)
     print (STDERR "   downloading " . scalar(@{$programsList}) . " new, updated, or missing programs" . (($retry == 0) ? "" : " (retry $retry)") . "\n") if (!$quiet);
 
     sleep(min(30, (10 * $retry)));
-
-    $sql1 = "replace into programs (program, hash, details, program_supplemental, downloaded) values (?, ?, ?, ?, ?)";
-
-    $sth1 = $DBH->prepare_cached($sql1);
-    if (!defined($sth1))
-      {
-        print (STDERR "Unexpected error when preparing statement ($sql1): " . $DBH->errstr . "\n");
-        exit(1);
-      }
 
     my $programsIter;
     $programsIter = natatime $SD_PROGRAM_CHUNK, @{$programsList};
@@ -935,6 +952,15 @@ for (my $retry = 0; $retry < 7; $retry++)
             next;
           }
 
+        $sql1 = "replace into programs (program, hash, details, program_supplemental, downloaded) values (?, ?, ?, ?, ?)";
+
+        $sth1 = $DBH->prepare_cached($sql1);
+        if (!defined($sth1))
+          {
+            print (STDERR "Unexpected error when preparing statement ($sql1): " . $DBH->errstr . "\n");
+            exit(1);
+          }
+
         foreach my $program(@{$r})
           {
             my $pID = $program->{'programID'};
@@ -969,6 +995,8 @@ for (my $retry = 0; $retry < 7; $retry++)
               }
           }
         $DBH->commit();
+
+        undef $sth1;
       }
 
     # We are done unless one (or more) entities indicate that the server queued the request
@@ -1033,6 +1061,10 @@ for (my $retry = 0; $retry < 7; $retry++)
 
     $sth->finish();
 
+    $DBH->commit();
+
+    undef $sth;
+
     if (scalar(@{$programsList}) == 0)
       {
         if ($retry == 0)
@@ -1045,15 +1077,6 @@ for (my $retry = 0; $retry < 7; $retry++)
     print (STDERR "   downloading " . scalar(@{$programsList}) . " new, updated, or missing programs for supplemental data" . (($retry == 0) ? "" : " (retry $retry)") . "\n") if (!$quiet);
 
     sleep(min(30, (10 * $retry)));
-
-    $sql1 = "replace into programs (program, hash, details, program_supplemental, downloaded) values (?, ?, ?, ?, ?)";
-
-    $sth1 = $DBH->prepare_cached($sql1);
-    if (!defined($sth1))
-      {
-        print (STDERR "Unexpected error when preparing statement ($sql1): " . $DBH->errstr . "\n");
-        exit(1);
-      }
 
     my $programsIter;
     $programsIter = natatime $SD_PROGRAM_CHUNK, @{$programsList};
@@ -1092,6 +1115,15 @@ for (my $retry = 0; $retry < 7; $retry++)
             exit(1);
           }
 
+        $sql1 = "replace into programs (program, hash, details, program_supplemental, downloaded) values (?, ?, ?, ?, ?)";
+
+        $sth1 = $DBH->prepare_cached($sql1);
+        if (!defined($sth1))
+          {
+            print (STDERR "Unexpected error when preparing statement ($sql1): " . $DBH->errstr . "\n");
+            exit(1);
+          }
+
         foreach my $program(@{$r})
           {
             my $pID = $program->{'programID'};
@@ -1126,6 +1158,8 @@ for (my $retry = 0; $retry < 7; $retry++)
               }
           }
         $DBH->commit();
+
+        undef $sth1;
       }
 
     # We are done unless one (or more) entities indicate that the server queued the request
@@ -2244,6 +2278,10 @@ sub configureGrabber
 
         $sth->finish();
 
+        $DBH->commit();
+
+        undef $sth;
+
         if (scalar(@{$lu}) == 0)
           {
             print (STDERR "No lineups are defined in your Schedules Direct account\n");
@@ -2586,6 +2624,11 @@ sub channelWriter
 
         $channelsWritten++;
       }
+
+    $DBH->commit();
+
+    undef $sth;
+
     return ($channelsWritten);
   }
 
@@ -2691,6 +2734,10 @@ sub listLineups
     my $lu = $sth->fetchall_arrayref();
 
     $sth->finish();
+
+    $DBH->commit();
+
+    undef $sth;
 
     my $w = XML::Writer->new( 'ENCODING' => 'UTF-8', 'DATA_MODE' => 1, 'DATA_INDENT' => 1, OUTPUT => 'self' );
     $w->xmlDecl('UTF-8');
@@ -2863,6 +2910,10 @@ sub getLineup
     my $lu = $sth->fetchall_arrayref();
 
     $sth->finish();
+
+    $DBH->commit();
+
+    undef $sth;
 
     my $w = XML::Writer->new( 'ENCODING' => 'UTF-8', 'DATA_MODE' => 1, 'DATA_INDENT' => 1, OUTPUT => 'self' );
     $w->xmlDecl('UTF-8');
@@ -3079,6 +3130,10 @@ sub getLineup
                 $w->endTag('lineup-entry');
               }
 
+          $DBH->commit();
+
+          undef $sth;
+
           $w->endTag('xmltv-lineup');
         }
 
@@ -3256,6 +3311,10 @@ sub SD_isLineupFetchRequired
         $sth->finish();
 
       }
+
+    $DBH->commit();
+
+    undef $sth;
 
     return ($fetchRequired);
   }
@@ -3689,17 +3748,20 @@ sub lineupValidate
 
     my $fatal = 0;
 
-    my $sql = 'select lineup, name, transport, location, details from lineups where lineup = ?';
-
-    my $sth = $DBH->prepare_cached($sql);
-    if (!defined($sth))
-      {
-        print (STDERR "Unexpected error when preparing statement ($sql): " . $DBH->errstr . "\n");
-        exit(1);
-      }
+    my $sql;
+    my $sth;
 
     foreach my $lineup (@{$lineups})
       {
+        $sql = 'select lineup, name, transport, location, details from lineups where lineup = ?';
+
+        $sth = $DBH->prepare_cached($sql);
+        if (!defined($sth))
+          {
+            print (STDERR "Unexpected error when preparing statement ($sql): " . $DBH->errstr . "\n");
+            exit(1);
+          }
+
         $sth->bind_param( 1, $lineup, SQL_VARCHAR );
 
         $sth->execute();
@@ -3708,7 +3770,7 @@ sub lineupValidate
           {
             print (STDERR "Unexpected error when executing statement ($sql): " . $sth->errstr . "\n");
             exit(1)
-           }
+          }
 
         $sth->bind_col( 1, undef, SQL_VARCHAR );
         $sth->bind_col( 2, undef, SQL_VARCHAR );
@@ -3739,6 +3801,10 @@ sub lineupValidate
                 $fatal = 1;
               }
           }
+
+        $DBH->commit();
+
+        undef $sth;
       }
 
     if ($fatal)
@@ -3884,13 +3950,19 @@ sub DB_open
       }
 
     $DBH = DBI->connect("DBI:SQLite:dbname=$dbname", "", "",
-                        { RaiseError => 0, PrintError => 0, AutoCommit => 0 });
+                        { RaiseError => 0, PrintError => 0, AutoCommit => 0,
+                          sqlite_use_immediate_transaction => 0 });
 
     if (!defined($DBH))
       {
         print (STDERR "Unable to open database file $dbname: " . $DBH->errstr . "\n");
         exit(1);
       }
+
+    #
+    # Set extended timeout
+    #
+    $DBH->sqlite_busy_timeout(30000);
 
     #
     # Validate DB version support by first checking
@@ -4168,9 +4240,12 @@ sub DB_settingsGet
 
     my $value;
 
-    my $sql = "select value from settings where tag = ?";
+    my $sql;
+    my $sth;
 
-    my $sth = $DBH->prepare_cached($sql);
+    $sql = "select value from settings where tag = ?";
+
+    $sth = $DBH->prepare_cached($sql);
     if (!defined($sth))
       {
         print (STDERR "Unexpected error when preparing statement ($sql): " . $DBH->errstr . "\n");
@@ -4198,6 +4273,10 @@ sub DB_settingsGet
 
     $sth->finish();
 
+    $DBH->commit();
+
+    undef $sth;
+
     return ($value);
   }
 
@@ -4216,9 +4295,12 @@ sub DB_settingsSet
   {
     my ($tag, $value, undef) = @_;
 
-    my $sql = "replace into settings (tag, value) values (?, ?)";
+    my $sql;
+    my $sth;
 
-    my $sth = $DBH->prepare_cached($sql);
+    $sql = "replace into settings (tag, value) values (?, ?)";
+
+    $sth = $DBH->prepare_cached($sql);
     if (!defined($sth))
       {
         print (STDERR "Unexpected error when preparing statement ($sql): " . $DBH->errstr . "\n");
@@ -4238,6 +4320,10 @@ sub DB_settingsSet
       }
 
     $sth->finish();
+
+    $DBH->commit();
+
+    undef $sth;
 
     return;
   }
@@ -4472,14 +4558,15 @@ sub DB_prune
 
     $DBH->commit();
 
+    undef $sth;
+
     #
     # Because the database may not have the needed configuration
     # for incremental vacuum, we issue the command, but do not
     # check the results of the execution (it works, or not)
     #
     $DBH->{'AutoCommit'} = 1;
-    $sql = "PRAGMA incremental_vacuum";
-    $DBH->do($sql);
+    $DBH->do('PRAGMA incremental_vacuum');
     $DBH->{'AutoCommit'} = 0;
 
     #
@@ -4499,17 +4586,13 @@ sub DB_prune
 
     #
     # In many (real world) runs, substantive data has been
-    # added/deleted/updated, so update any statistics for
-    # future optimizer choices
+    # added/deleted/updated, so inform sqlite to consider
+    # updating the database statistics for future query
+    # planner activity.
     #
-    $sql = "analyze";
-    $rc = $DBH->do($sql);
-    if ((!defined($rc)) || ($rc < 0))
-      {
-        print (STDERR "Unable to analyze data in database: " . $DBH->errstr . "\n");
-      }
-
-    $DBH->commit();
+    $DBH->{'AutoCommit'} = 1;
+    $DBH->do('PRAGMA optimize');
+    $DBH->{'AutoCommit'} = 0;
 
     return;
   }
@@ -4532,6 +4615,7 @@ sub DB_clean
     my $sql;
     my $rc;
 
+#
 #   We do not delete the lineups, channels, or stations in order to try to
 #   preserve any channel (de)selection that may have occurred.  By setting
 #   the downloaded and modified dates to long ago, we will refresh those.
@@ -4557,6 +4641,8 @@ sub DB_clean
 #       print (STDERR "Unable to delete stations in database: " . $DBH->errstr . "\n");
 #       exit(1);
 #     }
+#
+
     $sql = "update lineups set downloaded = '1970-01-01 00:00:00', modified = '1970-01-01 00:00:00'";
     $rc = $DBH->do($sql);
     if ((!defined($rc)) || ($rc < 0))
@@ -4592,6 +4678,7 @@ sub DB_clean
         print (STDERR "Unable to delete programs in database: " . $DBH->errstr . "\n");
         exit(1);
       }
+
     $DBH->commit();
 
     return;
@@ -5218,8 +5305,8 @@ sub manageLineups
                             $DBH->rollback();
                             exit(1);
                           }
-                        $DBH->commit();
                       }
+                    $DBH->commit();
                   }
               }
           }
