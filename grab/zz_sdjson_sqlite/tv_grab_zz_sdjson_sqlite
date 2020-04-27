@@ -44,6 +44,7 @@
 #
 # Version history:
 #
+# 2020/04/27 - 1.90 - increase potential grabber concurrency phase 2
 # 2020/04/26 - 1.89 - increase potential grabber concurrency phase 1
 # 2020/04/23 - 1.88 - reorganize database open/validation
 # 2020/04/13 - 1.87 - additional validation of returned data
@@ -179,7 +180,7 @@ use Data::Dumper;
 my $RFC2838_COMPLIANT          = 1;            # RFC2838 compliant station ids, which makes XMLTV
                                                # validate even though the docs say "SHOULD" not "MUST"
 
-my $SCRIPT_VERSION             = '$Id: tv_grab_zz_sdjson_sqlite,v 1.89 2020/04/26 12:00:00 gtb Exp ed $';
+my $SCRIPT_VERSION             = '$Id: tv_grab_zz_sdjson_sqlite,v 1.90 2020/04/27 00:00:00 gtb Exp ed $';
 my $SCRIPT_URL                 = 'https://github.com/garybuhrmaster/tv_grab_zz_sdjson_sqlite';
 my $SCRIPT_NAME                = basename("$0");
 my $SCRIPT_NAME_DIR            = dirname("$0");
@@ -2570,8 +2571,14 @@ sub channelWriter
     $sth->bind_col( 3, undef, SQL_VARCHAR );
     $sth->bind_col( 4, undef, SQL_VARCHAR );
 
+    my $channels = $sth->fetchall_arrayref();
+
+    $DBH->commit();
+
+    undef $sth;
+
     # Process each channel in our lineup
-    while (my $r = $sth->fetchrow_arrayref())
+    foreach my $r(@{$channels})
       {
         my $sID = $r->[0];
         my $channum = $r->[1];
@@ -2624,10 +2631,6 @@ sub channelWriter
 
         $channelsWritten++;
       }
-
-    $DBH->commit();
-
-    undef $sth;
 
     return ($channelsWritten);
   }
@@ -2964,7 +2967,13 @@ sub getLineup
             $sth->bind_col( 4, undef, SQL_VARCHAR );
             $sth->bind_col( 5, undef, SQL_VARCHAR );
 
-            while (my $r = $sth->fetchrow_arrayref())
+            my $channels = $sth->fetchall_arrayref();
+
+            $DBH->commit();
+
+            undef $sth;
+
+            foreach my $r(@{$channels})
               {
                 my $sID = $r->[0];
                 my $channum = $r->[1];
@@ -3267,16 +3276,6 @@ sub SD_isLineupFetchRequired
         exit(1);
       }
 
-    $sql = 'select 1 from lineups l1 where (l1.lineup = ? and l1.modified <= ?) ' .
-             'union select 1 where not exists (select 1 from lineups l2 where l2.lineup = ?)';
-
-    $sth = $DBH->prepare_cached($sql);
-    if (!defined($sth))
-      {
-        print (STDERR "Unexpected error when preparing statement ($sql): " . $DBH->errstr . "\n");
-        exit(1);
-      }
-
     # Since each lineup has a (potential) different modified date, we will do it the long way
     for my $lineup(@{$lineups})
       {
@@ -3294,6 +3293,16 @@ sub SD_isLineupFetchRequired
 
         $accountLineupModifiedDateTime = $nowDateTime->clone() if (!defined($accountLineupModifiedDateTime));
 
+        $sql = 'select 1 from lineups l1 where (l1.lineup = ? and l1.modified <= ?) ' .
+                 'union select 1 where not exists (select 1 from lineups l2 where l2.lineup = ?)';
+
+        $sth = $DBH->prepare_cached($sql);
+        if (!defined($sth))
+          {
+            print (STDERR "Unexpected error when preparing statement ($sql): " . $DBH->errstr . "\n");
+            exit(1);
+          }
+
         $sth->bind_param( 1, $lineup, SQL_VARCHAR );
         $sth->bind_param( 2, DateTime::Format::SQLite->format_datetime($accountLineupModifiedDateTime), SQL_DATETIME );
         $sth->bind_param( 3, $lineup, SQL_VARCHAR );
@@ -3310,11 +3319,11 @@ sub SD_isLineupFetchRequired
 
         $sth->finish();
 
+        $DBH->commit();
+
+        undef $sth;
+
       }
-
-    $DBH->commit();
-
-    undef $sth;
 
     return ($fetchRequired);
   }
@@ -3782,6 +3791,10 @@ sub lineupValidate
 
         $sth->finish();
 
+        $DBH->commit();
+
+        undef $sth;
+
         if (!defined($llu))
           {
             print (STDERR "Lineup $lineup is no longer configured in your account at Schedules Direct.\n");
@@ -3801,10 +3814,6 @@ sub lineupValidate
                 $fatal = 1;
               }
           }
-
-        $DBH->commit();
-
-        undef $sth;
       }
 
     if ($fatal)
