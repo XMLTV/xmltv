@@ -44,6 +44,7 @@
 #
 # Version history:
 #
+# 2020/05/05 - 1.91 - increase potential grabber concurrency phase 3
 # 2020/04/27 - 1.90 - increase potential grabber concurrency phase 2
 # 2020/04/26 - 1.89 - increase potential grabber concurrency phase 1
 # 2020/04/23 - 1.88 - reorganize database open/validation
@@ -180,7 +181,7 @@ use Data::Dumper;
 my $RFC2838_COMPLIANT          = 1;            # RFC2838 compliant station ids, which makes XMLTV
                                                # validate even though the docs say "SHOULD" not "MUST"
 
-my $SCRIPT_VERSION             = '$Id: tv_grab_zz_sdjson_sqlite,v 1.90 2020/04/27 00:00:00 gtb Exp ed $';
+my $SCRIPT_VERSION             = '$Id: tv_grab_zz_sdjson_sqlite,v 1.91 2020/05/05 14:00:00 gtb Exp ed $';
 my $SCRIPT_URL                 = 'https://github.com/garybuhrmaster/tv_grab_zz_sdjson_sqlite';
 my $SCRIPT_NAME                = basename("$0");
 my $SCRIPT_NAME_DIR            = dirname("$0");
@@ -5251,12 +5252,6 @@ sub manageLineups
                     #
                     # two by two, hands of blue
                     #
-                    my $rowid = 0;
-                    my $selected = 1;
-                    my $station = '';
-                    my $channum = '';
-                    my $cdetails = '';
-                    my $sdetails = '';
                     my $sql = "select channels.rowid, channels.station, channels.channum, channels.selected, channels.details, stations.details from channels as channels left join stations as stations on stations.station = channels.station where channels.lineup = ? order by channels.station";
                     my $sth = $DBH->prepare_cached($sql);
                     if (!defined($sth))
@@ -5271,7 +5266,6 @@ sub manageLineups
                         print (STDERR "Unexpected error when preparing statement ($sqlupd): " . $DBH->errstr . "\n");
                         exit(1);
                       }
-
                     $sth->bind_param( 1, $lineup, SQL_VARCHAR );
                     $sth->execute();
                     if ($sth->err)
@@ -5280,17 +5274,27 @@ sub manageLineups
                         $DBH->rollback();
                         exit(1);
                       }
-                    $sth->bind_col( 1, \$rowid, SQL_INTEGER );
-                    $sth->bind_col( 2, \$station, SQL_VARCHAR );
-                    $sth->bind_col( 3, \$channum, SQL_VARCHAR );
-                    $sth->bind_col( 4, \$selected, SQL_INTEGER );
-                    $sth->bind_col( 5, \$cdetails, SQL_VARCHAR );
-                    $sth->bind_col( 6, \$sdetails, SQL_VARCHAR );
-                    while($sth->fetch())
+                    $sth->bind_col( 1, undef, SQL_INTEGER );
+                    $sth->bind_col( 2, undef, SQL_VARCHAR );
+                    $sth->bind_col( 3, undef, SQL_VARCHAR );
+                    $sth->bind_col( 4, undef, SQL_INTEGER );
+                    $sth->bind_col( 5, undef, SQL_VARCHAR );
+                    $sth->bind_col( 6, undef, SQL_VARCHAR );
+                    my $channelsSelect = $sth->fetchall_arrayref();
+                    $DBH->commit();
+                    undef $sth;
+                    foreach my $channelSelect(@{$channelsSelect})
                       {
-                        my $c = $JSON->decode($cdetails);
+                        my $rowid = $channelSelect->[0];
+                        my $station = $channelSelect->[1];
+                        my $channum = $channelSelect->[2];
+                        my $selected = $channelSelect->[3];
+                        my $cdetails = $channelSelect->[4];
+                        my $sdetails = $channelSelect->[5];
+                        my $c = {};
+                        $c = $JSON->decode($cdetails) if (defined($cdetails) && ($cdetails ne ''));
                         my $s = {};
-                        $s = $JSON->decode($sdetails) if (defined($sdetails));
+                        $s = $JSON->decode($sdetails) if (defined($sdetails) && ($sdetails ne ''));
                         my $name;
                         $name = $s->{'name'} if (defined($s->{'name'}));
                         my $callsign;
@@ -5314,8 +5318,8 @@ sub manageLineups
                             $DBH->rollback();
                             exit(1);
                           }
+                        $DBH->commit();
                       }
-                    $DBH->commit();
                   }
               }
           }
