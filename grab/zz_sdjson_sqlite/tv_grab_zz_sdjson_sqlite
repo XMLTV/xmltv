@@ -44,6 +44,7 @@
 #
 # Version history:
 #
+# 2020/05/08 - 1.93 - refactor obtainStationsSchedules
 # 2020/05/05 - 1.92 - error checking and handling improvements
 # 2020/05/05 - 1.91 - increase potential grabber concurrency phase 3
 # 2020/04/27 - 1.90 - increase potential grabber concurrency phase 2
@@ -182,7 +183,7 @@ use Data::Dumper;
 my $RFC2838_COMPLIANT          = 1;            # RFC2838 compliant station ids, which makes XMLTV
                                                # validate even though the docs say "SHOULD" not "MUST"
 
-my $SCRIPT_VERSION             = '$Id: tv_grab_zz_sdjson_sqlite,v 1.92 2020/05/05 22:00:00 gtb Exp ed $';
+my $SCRIPT_VERSION             = '$Id: tv_grab_zz_sdjson_sqlite,v 1.93 2020/05/08 01:00:00 gtb Exp ed $';
 my $SCRIPT_URL                 = 'https://github.com/garybuhrmaster/tv_grab_zz_sdjson_sqlite';
 my $SCRIPT_NAME                = basename("$0");
 my $SCRIPT_NAME_DIR            = dirname("$0");
@@ -772,8 +773,9 @@ for (my $retry = 0; $retry < 7; $retry++)
 
         foreach my $sched(@{$r})
           {
-            my $hash;
+            my $hash = $sched->{'MD5'};
             my $dayDateTime;
+            $dayDateTime = DateTime::Format::ISO8601->parse_datetime($sched->{'date'}) if (defined($sched->{'date'}));
             my $sID = $sched->{'stationID'};
             my $code = $sched->{'code'} || 0;
             if ($code != 0)
@@ -783,15 +785,6 @@ for (my $retry = 0; $retry < 7; $retry++)
                     $downloadQueued = 1;
                   }
                 next;
-              }
-            my $meta = $sched->{'metadata'};
-            if (defined($meta))
-              {
-                $hash = $meta->{'md5'};
-                if (defined($meta->{'startDate'}))
-                  {
-                    $dayDateTime = DateTime::Format::ISO8601->parse_datetime($meta->{'startDate'});
-                  }
               }
             my $programs = $sched->{'programs'};
             if ((!defined($hash)) || (!defined($dayDateTime)) || (!defined($programs)))
@@ -816,7 +809,7 @@ for (my $retry = 0; $retry < 7; $retry++)
                 my $details = $JSON->utf8->encode($program);
                 if ((!defined($duration)) || (!defined($phash)) || (!defined($pID)) || (!defined($airDateTime)))
                   {
-                    print (STDERR "Unexpected parsing error in program (data malformed) in schedule for $sID on " . $meta->{'startDate'} . ", skipping\n") if (!$quiet);
+                    print (STDERR "Unexpected parsing error in program (data malformed) in schedule for $sID on " . $sched->{'date'} . ", skipping\n") if (!$quiet);
                     next;
                   }
                 my $starttime = DateTime::Format::ISO8601->parse_datetime($airDateTime);
@@ -7534,6 +7527,40 @@ sub obtainStationsSchedules
         $self->_CroakOrCarp;
         print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
         return $return;
+      }
+
+    if (ref($r) ne 'ARRAY')
+      {
+        $return = undef;
+        $self->_setErrorString("HTTP response content was malformed (not an array)");
+        $self->_CroakOrCarp;
+        print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
+        return $return;
+      }
+
+    foreach my $e(@{$r})
+      {
+        if (ref($e) ne 'HASH')
+          {
+            $return = undef;
+            $self->_setErrorString("HTTP response content was malformed (not an array of hashes)");
+            $self->_CroakOrCarp;
+            print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
+            return $return;
+          }
+        my $hash = $e->{'metadata'}->{'md5'};
+        my $startDate = $e->{'metadata'}->{'startDate'};
+        my $modified = $e->{'metadata'}->{'modified'};
+        $e->{'MD5'} = $hash if (defined($hash));
+        $e->{'date'} = $startDate if (defined($startDate));
+        $e->{'modified'} = $modified if (defined($modified));
+        if ((defined($hash)) && (defined($startDate)) && (defined($modified)))
+          {
+            $e->{'code'} = 0 if (!defined($e->{'code'}));
+            $e->{'message'} = 'OK' if (!defined($e->{'message'}));
+            $e->{'response'} = 'OK' if (!defined($e->{'response'}));
+          }
+        delete $e->{'metadata'};
       }
 
     $return = $r;
