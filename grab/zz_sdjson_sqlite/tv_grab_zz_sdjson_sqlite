@@ -44,6 +44,7 @@
 #
 # Version history:
 #
+# 2020/05/09 - 1.96 - improve passwordhash option handling
 # 2020/05/08 - 1.95 - improve metadata names based on feedback
 # 2020/05/08 - 1.94 - extend metadata with schedules direct values
 # 2020/05/08 - 1.93 - refactor obtainStationsSchedules
@@ -161,6 +162,7 @@ use XMLTV::Options qw/ParseOptions/;
 use XMLTV::Configure::Writer;
 use XMLTV::Configure qw/LoadConfig SaveConfig/;
 use XMLTV::Ask;
+use Getopt::Long;
 use XML::Writer;
 use Encode qw/decode encode/;
 use JSON;
@@ -185,7 +187,7 @@ use Data::Dumper;
 my $RFC2838_COMPLIANT          = 1;            # RFC2838 compliant station ids, which makes XMLTV
                                                # validate even though the docs say "SHOULD" not "MUST"
 
-my $SCRIPT_VERSION             = '$Id: tv_grab_zz_sdjson_sqlite,v 1.95 2020/05/08 20:00:00 gtb Exp ed $';
+my $SCRIPT_VERSION             = '$Id: tv_grab_zz_sdjson_sqlite,v 1.96 2020/05/09 18:00:00 gtb Exp ed $';
 my $SCRIPT_URL                 = 'https://github.com/garybuhrmaster/tv_grab_zz_sdjson_sqlite';
 my $SCRIPT_NAME                = basename("$0");
 my $SCRIPT_NAME_DIR            = dirname("$0");
@@ -229,6 +231,15 @@ my $passwordHash;
 my $opt;
 my $conf;
 
+#
+# We attempt to pick off the --passwordhash option due to
+# the XMLTV ParseOptions not allowing extra_options to be
+# processed in the configure stage.
+#
+Getopt::Long::Configure("pass_through");
+GetOptions('passwordhash=s' => \$passwordHash);
+Getopt::Long::Configure("no_pass_through");
+
 ( $opt, $conf ) = ParseOptions
   (
     {
@@ -249,7 +260,6 @@ my $conf;
 
 $debug = $opt->{'debug'};
 $quiet = $opt->{'quiet'};
-$passwordHash = $opt->{'passwordhash'};
 
 $SD->Debug(1) if ($debug);
 
@@ -3306,24 +3316,36 @@ sub loadOldConfig
 sub SD_login
   {
     my $username = DB_settingsGet('username');
-    my $passwordhash = $passwordHash || DB_settingsGet('passwordhash');
-    my $token = DB_settingsGet('token');
+    my $passwordhash = DB_settingsGet('passwordhash');
+    my $pswdhash = $passwordHash || $passwordhash;
+    my $token = DB_settingsGet('token') if (!defined($passwordHash));
 
-    if ((!defined($username)) || (!defined($passwordhash)))
+    if (!defined($username))
       {
-        print (STDERR "Your database is not configured to access the Schedules Direct service\n");
-        print (STDERR "(the username or the password hash is not available in the settings table)\n");
-        print (STDERR "Please re-run $SCRIPT_NAME --manage-lineups and then $SCRIPT_NAME --configure\n");
+        print (STDERR "Your database is not configured to access the Schedules Direct\n");
+        print (STDERR "service (the username is not available in the settings table).\n");
+        print (STDERR "Please re-run $SCRIPT_NAME --manage-lineups to\n");
+        print (STDERR "initialize the database\n");
         exit(1);
       }
 
-    if (!defined($token = $SD->obtainToken($username, undef, $passwordhash, $token)))
+    if (!defined($pswdhash))
+      {
+        print (STDERR "Your database is not configured to access the Schedules Direct\n");
+        print (STDERR "service automatically without manually entering the passwordhash.\n");
+        print (STDERR "Either invoke the grabber specifying the --passwordhash option,\n");
+        print (STDERR "or re-run $SCRIPT_NAME --manage-lineups to initialize\n");
+        print (STDERR "and update the database to store the hash in the database.\n");
+        exit(1);
+      }
+
+    if (!defined($token = $SD->obtainToken($username, undef, $pswdhash, $token)))
       {
         print (STDERR "Unable to authenticate to Schedules Direct: " . $SD->ErrorString() . "\n");
         exit(1);
       }
 
-    if (defined($token))
+    if ((defined($token)) && (defined($passwordhash)) && (!defined($passwordHash)))
       {
         DB_settingsSet('token', $token);
         $DBH->commit();
@@ -4482,6 +4504,53 @@ sub DB_settingsSet
   }
 
 #
+# DB_settingsDelete
+#
+# Convenience routine to delete a setting from the database
+#
+#   Input:
+#              tag         - the tag
+#   Output:
+#              <none>
+#
+sub DB_settingsDelete
+  {
+    my ($tag, undef) = @_;
+
+    my $value;
+
+    my $sql;
+    my $sth;
+
+    $sql = "delete from settings where tag = ?";
+
+    $sth = $DBH->prepare_cached($sql);
+    if (!defined($sth))
+      {
+        print (STDERR "Unexpected error when preparing statement ($sql): " . $DBH->errstr . "\n");
+        exit(1);
+      }
+
+    $sth->bind_param( 1, $tag, SQL_VARCHAR );
+
+    $sth->execute();
+    if ($sth->err)
+      {
+        print (STDERR "Unexpected error when executing statement ($sql): " . $sth->errstr . "\n");
+        $DBH->rollback();
+        exit(1);
+      }
+
+    $sth->finish();
+
+    $DBH->commit();
+
+    undef $sth;
+
+    return;
+  }
+
+#
 # DB_prune
 #
 # Convenience routine to prune the database of old
@@ -4856,14 +4925,16 @@ sub manageLineups
   {
     my $username;
     my $passwordhash;
+    my $pswdhash;
     my $token;
 
     if ((defined($conf->{'database'}->[0])) && (-f $conf->{'database'}->[0]))
       {
         DB_open($conf->{'database'}->[0]);
         $username = DB_settingsGet('username');
-        $passwordhash = $passwordHash || DB_settingsGet('passwordhash');
-        $token = DB_settingsGet('token');
+        $passwordhash = DB_settingsGet('passwordhash');
+        $pswdhash = $passwordHash || $passwordhash;
+        $token = DB_settingsGet('token') if (!defined($passwordHash));
       }
 
     # Try obtained username/password, but allow re-entry
@@ -4873,27 +4944,28 @@ sub manageLineups
         if (!defined($username))
           {
             $username = ask("Enter your username at Schedules Direct:");
-            $passwordhash = undef;
+            $pswdhash = undef;
             $auth_prompted = 1;
           }
 
-        if (!defined($passwordhash))
+        if (!defined($pswdhash))
           {
             my $password = ask_password("Enter your password for $username at Schedules Direct:");
-            $passwordhash = sha1_hex($password);
+            $pswdhash = sha1_hex($password);
             $auth_prompted = 1;
           }
 
-        last if (defined($token = $SD->obtainToken($username, undef, $passwordhash, $token)));
+        last if (defined($token = $SD->obtainToken($username, undef, $pswdhash, $token)));
 
         print (STDERR "Unable to authenticate to Schedules Direct: " . $SD->ErrorString() . "\n");
         $username = undef;
         $passwordhash = undef;
+        $pswdhash = undef;
         $token = undef;
         $auth_prompted = 1;
       }
 
-    if ((defined($DBH)) && (defined($token)))
+    if ((defined($DBH)) && (!$auth_prompted) && (defined($token)) && (defined($passwordhash)) && (!defined($passwordHash)))
       {
         DB_settingsSet('token', $token);
         $DBH->commit();
@@ -4950,6 +5022,7 @@ sub manageLineups
                      [ 'Add',                   'Add an additional lineup to your account' ],
                      [ 'Delete',                'Delete an existing lineup from your account' ],
                      [ 'Display Password Hash', 'Display your password hash'],
+                     [ 'Delete Password Hash',  'Delete any password hash stored in the database'],
                      [ 'Initialize Database'  , 'Initialize/update the local database'],
                      [ 'Channel Selection',     'Manage database lineup channel selection'],
                    );
@@ -5196,7 +5269,13 @@ sub manageLineups
           }
         elsif ($choice eq 'Display Password Hash')
           {
-            $prompt .= "Your password hash is: $passwordhash\n";
+            $prompt .= "Your password hash is: $pswdhash\n";
+          }
+        elsif ($choice eq 'Delete Password Hash')
+          {
+            DB_settingsDelete('passwordhash');
+            DB_settingsDelete('token');
+            $prompt .= "Password hash deleted from the database\n";
           }
         elsif ($choice eq 'Initialize Database')
           {
@@ -5232,13 +5311,14 @@ sub manageLineups
 
             if ($storehash)
               {
-                DB_settingsSet('passwordhash', $passwordhash);
-                $prompt .= "Schedules Direct username/passwordhash stored in database";
+                DB_settingsSet('passwordhash', $pswdhash);
+                $prompt .= "Schedules Direct username/passwordhash stored in database\n";
               }
             else
               {
-                DB_settingsSet('passwordhash', undef);
-                $prompt .= "Schedules Direct Username stored in database";
+                DB_settingsDelete('passwordhash');
+                DB_settingsDelete('token');
+                $prompt .= "Schedules Direct username stored in database\n";
               }
             $DBH->commit();
           }
