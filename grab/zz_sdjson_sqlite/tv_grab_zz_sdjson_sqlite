@@ -44,6 +44,7 @@
 #
 # Version history:
 #
+# 2020/05/18 - 1.98 - support ordering of station logos
 # 2020/05/17 - 1.97 - explicitly specify stable sort
 # 2020/05/09 - 1.96 - improve passwordhash option handling
 # 2020/05/08 - 1.95 - improve metadata names based on feedback
@@ -189,7 +190,7 @@ use sort 'stable';
 my $RFC2838_COMPLIANT          = 1;            # RFC2838 compliant station ids, which makes XMLTV
                                                # validate even though the docs say "SHOULD" not "MUST"
 
-my $SCRIPT_VERSION             = '$Id: tv_grab_zz_sdjson_sqlite,v 1.97 2020/05/17 01:00:00 gtb Exp ed $';
+my $SCRIPT_VERSION             = '$Id: tv_grab_zz_sdjson_sqlite,v 1.98 2020/05/18 01:00:00 gtb Exp ed $';
 my $SCRIPT_URL                 = 'https://github.com/garybuhrmaster/tv_grab_zz_sdjson_sqlite';
 my $SCRIPT_NAME                = basename("$0");
 my $SCRIPT_NAME_DIR            = dirname("$0");
@@ -2496,6 +2497,59 @@ sub configureGrabber
           );
         $writer->end_selectone();
 
+        $writer->end('station-logo-order');
+      }
+    elsif ($stage eq 'station-logo-order')
+      {
+        $writer->start_selectone
+          (
+            {
+              id => 'station-logo-order',
+              title => [ [ 'Station logo ordering', 'en' ], ],
+              description =>
+                [ [
+                  'Specify the order of station logos',
+                  'en'
+                ] ],
+            }
+          );
+        $writer->write_option
+          (
+            {
+              value => '',
+              text => [ [ 'None specified (order as received)', 'en' ] ]
+            }
+          );
+        $writer->write_option
+          (
+            {
+              value => 'Gracenote/dark',
+              text => [ [ 'Gracenote/dark ordered first (Gracenote logo for dark backgrounds)', 'en' ] ]
+            }
+          );
+        $writer->write_option
+          (
+            {
+              value => 'Gracenote/light',
+              text => [ [ 'Gracenote/light ordered first (Gracenote logo for light backgrounds)', 'en' ] ]
+            }
+          );
+        $writer->write_option
+          (
+            {
+              value => 'Gracenote/gray',
+              text => [ [ 'Gracenote/gray ordered first (Gracenote logo with grayscale for light backgrounds)', 'en' ] ]
+            }
+          );
+        $writer->write_option
+          (
+            {
+              value => 'Gracenote/white',
+              text => [ [ 'Gracenote/white ordered first (Gracenote logo with all white for dark backgrounds)', 'en' ] ]
+            }
+          );
+        $writer->end_selectone();
+
         $writer->end('select-channels');
       }
     else
@@ -2518,7 +2572,7 @@ sub configureGrabber
 #
 sub listChannels
   {
-    my ($conf, $opt, undef) = @_;
+    ($conf, $opt, undef) = @_;
 
     configValidate($conf, $opt);
 
@@ -2727,8 +2781,9 @@ sub channelWriter
               (ref($s->{'stationLogo'}) eq 'ARRAY') &&
               (!exists($GRABBER_FIXUPS->{'NO_STATION_LOGOS'})))
             {
-              for my $sl (@{$s->{'stationLogo'}})
+              for my $sl (sort { logoPriority($b) <=> logoPriority($a) } @{$s->{'stationLogo'}})
                 {
+                  next if (ref($sl) ne 'HASH');
                   if(defined($sl->{'URL'}))
                     {
                       if (defined($sl->{'width'}) && defined($sl->{'height'}))
@@ -2766,8 +2821,8 @@ sub channelWriter
 #
 sub listLineups
   {
-    my ($opt, undef) = @_;
-    my $conf = LoadConfig($opt->{'config-file'});
+    ($opt, undef) = @_;
+    $conf = LoadConfig($opt->{'config-file'});
 
     my $sql;
     my $sth;
@@ -2905,7 +2960,7 @@ sub listLineups
 #
 sub getLineup
   {
-    my ($conf, $opt, undef) = @_;
+    ($conf, $opt, undef) = @_;
 
     my $sql;
     my $sth;
@@ -3137,8 +3192,9 @@ sub getLineup
                         (ref($s->{'stationLogo'}) eq 'ARRAY') &&
                         (!exists($GRABBER_FIXUPS->{'NO_STATION_LOGOS'})))
                       {
-                        for my $sl (@{$s->{'stationLogo'}})
+                        for my $sl (sort { logoPriority($b) <=> logoPriority($a) } @{$s->{'stationLogo'}})
                           {
+                            next if (ref($sl) ne 'HASH');
                             if(defined($sl->{'URL'}))
                               {
                                 if (defined($sl->{'width'}) && defined($sl->{'height'}))
@@ -5875,6 +5931,53 @@ sub mapUSATSCChannelToFrequency
     $frequency = $USATSCFrequenciesMap->{$channel} || '0';
 
     return $frequency;
+  }
+
+#
+# logoPriority
+#
+# Return the station logo priority based on
+# the configuration station-logo-order.
+#
+#   Input:
+#              stationLogo - the station logo hash
+#   Output:
+#              priority    - the logo priority
+#
+sub logoPriority
+  {
+    my ($stationLogo, undef) = @_;
+    my $source;
+    my $category;
+
+    state $logoPrio = logoPriorityInit($conf);
+
+    return 0 if (ref($stationLogo) ne 'HASH');
+
+    $source = $stationLogo->{'source'} || '';
+    $source =~ s/^\s+|\s+$//g;
+    $category = $stationLogo->{'category'} || '';
+    $category =~ s/^\s+|\s+$//g;
+    return $logoPrio->{"$source/$category"} || 0;
+
+    #
+    # Internal one-time priority mapping initialization
+    #
+    sub logoPriorityInit
+      {
+        my $priority = {};
+        my $pnum = 9999;
+        if (defined($conf->{'station-logo-order'}->[0]))
+          {
+            foreach my $o(split(',', $conf->{'station-logo-order'}->[0]))
+              {
+                $o =~ s/^\s+|\s+$//g;
+                next if ($o eq '');
+                $priority->{$o} = $pnum--;
+              }
+          }
+        return $priority;
+      }
   }
 
 #
