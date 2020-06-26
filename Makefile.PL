@@ -92,7 +92,7 @@ our %extra_constants;
 # because it is accessed by some code we add to MakeMaker.
 #
 our @docs;
-@docs = qw(doc/COPYING doc/QuickStart doc/README.win32 README);
+@docs = qw(doc/COPYING doc/QuickStart doc/README.win32 README.md);
 
 # Executables to be installed.
 my @exes
