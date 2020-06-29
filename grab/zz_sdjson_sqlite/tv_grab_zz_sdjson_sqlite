@@ -44,6 +44,40 @@
 #
 # Version history:
 #
+# 2020/06/21 - 1.101 - rename scaledownload to scale-download
+# 2020/06/20 - 1.100 - add support for --scaledownload
+# 2020/06/12 - 1.99 - include programID in metadata
+# 2020/05/18 - 1.98 - support ordering of station logos
+# 2020/05/17 - 1.97 - explicitly specify stable sort
+# 2020/05/09 - 1.96 - improve passwordhash option handling
+# 2020/05/08 - 1.95 - improve metadata names based on feedback
+# 2020/05/08 - 1.94 - extend metadata with schedules direct values
+# 2020/05/08 - 1.93 - refactor obtainStationsSchedules
+# 2020/05/05 - 1.92 - error checking and handling improvements
+# 2020/05/05 - 1.91 - increase potential grabber concurrency phase 3
+# 2020/04/27 - 1.90 - increase potential grabber concurrency phase 2
+# 2020/04/26 - 1.89 - increase potential grabber concurrency phase 1
+# 2020/04/23 - 1.88 - reorganize database open/validation
+# 2020/04/13 - 1.87 - additional validation of returned data
+# 2020/04/10 - 1.86 - refactor obtainStationsSchedulesHash
+# 2020/04/07 - 1.85 - partially revert location removal
+# 2020/04/07 - 1.84 - fix for manage-lineups channel selection
+# 2020/04/06 - 1.83 - fix for manage-lineups with no database
+# 2020/04/05 - 1.82 - change lineup to lineupID for obtainLineups
+# 2020/04/04 - 1.81 - refactor/rename obtainHeadends
+# 2020/04/02 - 1.80 - remove location from lineup displays
+# 2020/04/01 - 1.79 - do not validate postal code via regex
+# 2020/03/30 - 1.78 - robustify token reuse validation
+# 2020/03/28 - 1.77 - use obtainLineups where appropriate
+# 2020/03/28 - 1.76 - supplement lineup data with status data
+# 2020/03/27 - 1.75 - remove legacy (20131021) api name
+# 2020/03/23 - 1.74 - refactor obtainLineups to return lineup array
+# 2020/03/22 - 1.73 - allow Schedules Direct endpoint redirects
+# 2020/03/22 - 1.72 - reuse existing token when possible
+# 2020/03/18 - 1.71 - handle obtainAvailable undef
+# 2020/03/18 - 1.70 - minor whitespace cleanup
+# 2020/03/17 - 1.69 - stable output order
+# 2020/03/17 - 1.68 - return all icons for channels unless fixup
 # 2019/11/08 - 1.67 - handle no-download for list-lineups
 # 2018/12/21 - 1.66 - default 3rdparty metadata in configure to disabled
 # 2018/12/17 - 1.65 - clean up whitespace and duplicate lines
@@ -133,6 +167,7 @@ use XMLTV::Options qw/ParseOptions/;
 use XMLTV::Configure::Writer;
 use XMLTV::Configure qw/LoadConfig SaveConfig/;
 use XMLTV::Ask;
+use Getopt::Long;
 use XML::Writer;
 use Encode qw/decode encode/;
 use JSON;
@@ -153,11 +188,12 @@ use DBI qw(:sql_types);
 use DBD::SQLite;
 use Scalar::Util qw/looks_like_number/;
 use Data::Dumper;
+use sort 'stable';
 
 my $RFC2838_COMPLIANT          = 1;            # RFC2838 compliant station ids, which makes XMLTV
                                                # validate even though the docs say "SHOULD" not "MUST"
 
-my $SCRIPT_VERSION             = '$Id: tv_grab_zz_sdjson_sqlite,v 1.67 2019/11/08 16:41:00 gtb Exp ed $';
+my $SCRIPT_VERSION             = '$Id: tv_grab_zz_sdjson_sqlite,v 1.101 2020/06/21 20:30:00 gtb Exp ed $';
 my $SCRIPT_URL                 = 'https://github.com/garybuhrmaster/tv_grab_zz_sdjson_sqlite';
 my $SCRIPT_NAME                = basename("$0");
 my $SCRIPT_NAME_DIR            = dirname("$0");
@@ -175,6 +211,10 @@ my $SD_COMMENT                 = 'Note: This data has been downloaded from Sched
 my $SD_SCHEDULE_HASH_CHUNK     = 250;          # Request stations schedules hash in chunk sizes
 my $SD_SCHEDULE_CHUNK          = 1000;         # Request stations schedules in chunk sizes
 my $SD_PROGRAM_CHUNK           = 4000;         # Request program data in chunk sizes
+
+my $SD_SCHEDULE_HASH_CHUNK_MAX = 5000;         # Schedules Direct max request size
+my $SD_SCHEDULE_CHUNK_MAX      = 5000;         # Schedules Direct max request size
+my $SD_PROGRAM_CHUNK_MAX       = 5000;         # Schedules Direct max request size
 
 my $JSON                       = JSON->new()->shrink(1)->utf8(1);
 
@@ -201,6 +241,15 @@ my $passwordHash;
 my $opt;
 my $conf;
 
+#
+# We attempt to pick off the --passwordhash option due to
+# the XMLTV ParseOptions not allowing extra_options to be
+# processed in the configure stage.
+#
+Getopt::Long::Configure("pass_through");
+GetOptions('passwordhash=s' => \$passwordHash);
+Getopt::Long::Configure("no_pass_through");
+
 ( $opt, $conf ) = ParseOptions
   (
     {
@@ -214,14 +263,13 @@ my $conf;
       preferredmethod => 'allatonce',
       version => "$SCRIPT_VERSION",
       description => 'Multinational (Schedules Direct JSON web services with SQLite DB)',
-      extra_options => [qw/manage-lineups force-download download-only no-download passwordhash=s/],
+      extra_options => [qw/manage-lineups force-download download-only no-download passwordhash=s scale-download=f/],
       defaults => { days => 30 },
     }
   );
 
 $debug = $opt->{'debug'};
 $quiet = $opt->{'quiet'};
-$passwordHash = $opt->{'passwordhash'};
 
 $SD->Debug(1) if ($debug);
 
@@ -264,6 +312,12 @@ if ($opt->{'days'} < 0)
     exit(1);
   }
 
+if (defined($opt->{'scale-download'}) && looks_like_number($opt->{'scale-download'}))
+  {
+    $SD_SCHEDULE_HASH_CHUNK = min($SD_SCHEDULE_HASH_CHUNK_MAX, max(1, int($SD_SCHEDULE_HASH_CHUNK * $opt->{'scale-download'})));
+    $SD_SCHEDULE_CHUNK = min($SD_SCHEDULE_CHUNK_MAX, max(1, int($SD_SCHEDULE_CHUNK * $opt->{'scale-download'})));
+    $SD_PROGRAM_CHUNK = min($SD_PROGRAM_CHUNK_MAX, max(1, int($SD_PROGRAM_CHUNK * $opt->{'scale-download'})));
+  }
 
 if (!defined(eval {require JSON::XS}))
   {
@@ -318,6 +372,8 @@ if ($opt->{'force-download'})
 if (!$download)
   {
     lineupValidate($conf->{'lineup'});
+    my $token = DB_settingsGet('token');
+    $SD->Token($token) if (defined($token));
     goto skipDownload;
   }
 
@@ -418,16 +474,26 @@ for (my $i=0; $i < scalar(@{$conf->{'lineup'}}); $i++)
   }
 
 $sth->execute();
-
 if ($sth->err())
   {
     print (STDERR "Unexpected error when executing statement ($sql): " . $sth->errstr . "\n");
-    exit(1)
+    $DBH->rollback();
+    exit(1);
   }
 
 my $fetchStationSchedulesRequired = $sth->fetchrow_array() || 0;;
+if ($sth->err())
+  {
+    print (STDERR "Unexpected error when executing fetch after execute of statement ($sql): " . $sth->errstr . "\n");
+    $DBH->rollback();
+    exit(1);
+  }
 
 $sth->finish();
+
+$DBH->commit();
+
+undef $sth;
 
 if ((!$fetchStationSchedulesRequired) && (!$fetchLineupRequired))
   {
@@ -438,14 +504,6 @@ else
     #
     # Obtain the current schedule hash values for our
     # lineup stations and feed to our DB
-    #
-    # Note that there is no (substantial) advantage in
-    # requesting only the days we will be processing
-    # as tests have shown that Schedules Direct takes
-    # about the same time to return all vs just one,
-    # and it complicates matters to request ranges
-    # and deal with potential errors due to out of
-    # range issues.
     #
     $sql = 'select distinct stations.station from stations as stations where stations.station in (select distinct channels.station from channels as channels where channels.lineup in ( ' . join(', ', ('?') x scalar(@{$conf->{'lineup'}})) . ' ) and channels.selected = 1)';
 
@@ -464,28 +522,28 @@ else
       }
 
     $sth->execute();
-
     if ($sth->err())
       {
         print (STDERR "Unexpected error when executing statement ($sql): " . $sth->errstr . "\n");
-        exit(1)
+        $DBH->rollback();
+        exit(1);
       }
 
     $sth->bind_col( 1, undef, SQL_VARCHAR );
 
     my $stationsSchedulesHashList = $sth->fetchall_arrayref([0]);
-
-    $sth->finish();
-
-    print (STDERR "   downloading station schedule hashes for " . scalar(@{$stationsSchedulesHashList}) . " stations\n") if (!$quiet);
-
-    $sql = "replace into stations_schedules_hash (station, day, hash, details) values ( ?, ?, ?, ?)";
-    $sth = $DBH->prepare_cached($sql);
-    if (!defined($sth))
+    if ($sth->err())
       {
-        print (STDERR "Unexpected error when preparing statement ($sql): " . $DBH->errstr . "\n");
+        print (STDERR "Unexpected error when executing fetch after execute of statement ($sql): " . $sth->errstr . "\n");
+        $DBH->rollback();
         exit(1);
       }
+
+    $DBH->commit();
+
+    undef $sth;
+
+    print (STDERR "   downloading station schedule hashes for " . scalar(@{$stationsSchedulesHashList}) . " stations\n") if (!$quiet);
 
     my $stationsSchedulesHashIter;
     $stationsSchedulesHashIter = natatime $SD_SCHEDULE_HASH_CHUNK, @{$stationsSchedulesHashList};
@@ -509,38 +567,56 @@ else
             exit(1);
           }
 
-        if (ref($r) ne 'HASH')
+        if (ref($r) ne 'ARRAY')
           {
             print (STDERR "Unexpected return data type " . ref($r) . " when obtaining station schedules hashes.\n");
             exit(1);
           }
 
-        foreach my $station(keys %{$r})
+        $sql = "replace into stations_schedules_hash (station, day, hash, details) values ( ?, ?, ?, ?)";
+
+        $sth = $DBH->prepare_cached($sql);
+        if (!defined($sth))
           {
-            if (ref($r->{$station}) ne 'HASH')
+            print (STDERR "Unexpected error when preparing statement ($sql): " . $DBH->errstr . "\n");
+            exit(1);
+          }
+
+        foreach my $e(@{$r})
+          {
+            if (ref($e) ne 'HASH')
               {
-                # print (STDERR "Unexpected return data type " . ref($r->{$station}) . " for station $station while obtaining station schedules hashes\n");
+                # print (STDERR "Unexpected return data type " . ref($e) . " while iterating station schedules hashes\n");
                 next;
               }
-            foreach my $day(keys %{$r->{$station}})
+            if ((!defined($e->{'stationID'})) ||
+                (!defined($e->{'date'})) ||
+                ((substr($e->{'date'}, 0, 10)) !~ /^\d{4}-\d{2}-\d{2}$/) ||
+                (!defined($e->{'MD5'})))
               {
-                my $s = $r->{$station}->{$day};
-                my $hash = $s->{'md5'} || '';
-                my $details = $JSON->utf8->encode($s);
-                $sth->bind_param( 1, $station, SQL_VARCHAR );
-                $sth->bind_param( 2, $day, SQL_DATE );
-                $sth->bind_param( 3, $hash, SQL_VARCHAR );
-                $sth->bind_param( 4, $details, SQL_VARCHAR );
-                $sth->execute();
-                if ($sth->err)
-                  {
-                    print (STDERR "Unexpected error when executing statement ($sql): " . $sth->errstr . "\n");
-                    exit(1);
-                  }
+                # print (STDERR "Station, date, or hash not provided while iterating station schedules hashes\n");
+                next;
+              }
+            my $station = $e->{'stationID'};
+            my $date = substr($e->{'date'}, 0, 10);
+            my $hash = $e->{'MD5'};
+            my $details = $JSON->utf8->encode($e);
+            $sth->bind_param( 1, $station, SQL_VARCHAR );
+            $sth->bind_param( 2, $date, SQL_DATE );
+            $sth->bind_param( 3, $hash, SQL_VARCHAR );
+            $sth->bind_param( 4, $details, SQL_VARCHAR );
+            $sth->execute();
+            if ($sth->err)
+              {
+                print (STDERR "Unexpected error when executing statement ($sql): " . $sth->errstr . "\n");
+                $DBH->rollback();
+                exit(1);
               }
           }
 
         $DBH->commit();
+
+        undef $sth;
       }
 
     #
@@ -565,9 +641,12 @@ else
     if ($sth->err())
       {
         print (STDERR "Unexpected error when executing statement ($sql): " . $sth->errstr . "\n");
-        exit(1)
+        $DBH->rollback();
+        exit(1);
       }
     $DBH->commit();
+
+    undef $sth;
   }
 
 #
@@ -627,6 +706,7 @@ for (my $retry = 0; $retry < 7; $retry++)
     if ($sth->err)
       {
         print (STDERR "Unexpected error when executing statement ($sql): " . $sth->errstr . "\n");
+        $DBH->rollback();
         exit(1);
       }
 
@@ -634,8 +714,16 @@ for (my $retry = 0; $retry < 7; $retry++)
     $sth->bind_col( 2, undef, SQL_DATE );
 
     my $stationsSchedulesList = $sth->fetchall_arrayref();
+    if ($sth->err())
+      {
+        print (STDERR "Unexpected error when executing fetch after execute of statement ($sql): " . $sth->errstr . "\n");
+        $DBH->rollback();
+        exit(1);
+      }
 
-    $sth->finish();
+    $DBH->commit();
+
+    undef $sth;
 
     if (scalar(@{$stationsSchedulesList}) == 0)
       {
@@ -649,29 +737,6 @@ for (my $retry = 0; $retry < 7; $retry++)
     print (STDERR "   downloading " . scalar(@{$stationsSchedulesList}) . " new, updated, or missing daily schedules" . (($retry == 0) ? "" : " (retry $retry)") . "\n") if (!$quiet);
 
     sleep(min(30, (10 * $retry)));
-
-    $sql1 = "delete from schedules where station = ? and day = ?";
-    $sql2 = "replace into schedules (station, day, starttime, duration, program, program_hash, details) values (?, ?, ?, ?, ?, ?, ?)";
-    $sql3 = "replace into schedules_hash (station, day, hash) values (?, ?, ?)";
-
-    $sth1 = $DBH->prepare_cached($sql1);
-    if (!defined($sth1))
-      {
-        print (STDERR "Unexpected error when preparing statement ($sql1): " . $DBH->errstr . "\n");
-        exit(1);
-      }
-    $sth2 = $DBH->prepare_cached($sql2);
-    if (!defined($sth2))
-      {
-        print (STDERR "Unexpected error when preparing statement ($sql2): " . $DBH->errstr . "\n");
-        exit(1);
-      }
-    $sth3 = $DBH->prepare_cached($sql3);
-    if (!defined($sth3))
-      {
-        print (STDERR "Unexpected error when preparing statement ($sql3): " . $DBH->errstr . "\n");
-        exit(1);
-      }
 
     my $schedulesIter;
     $schedulesIter = natatime $SD_SCHEDULE_CHUNK, @{$stationsSchedulesList};
@@ -711,10 +776,34 @@ for (my $retry = 0; $retry < 7; $retry++)
             next;
           }
 
+        $sql1 = "delete from schedules where station = ? and day = ?";
+        $sql2 = "replace into schedules (station, day, starttime, duration, program, program_hash, details) values (?, ?, ?, ?, ?, ?, ?)";
+        $sql3 = "replace into schedules_hash (station, day, hash) values (?, ?, ?)";
+
+        $sth1 = $DBH->prepare_cached($sql1);
+        if (!defined($sth1))
+          {
+            print (STDERR "Unexpected error when preparing statement ($sql1): " . $DBH->errstr . "\n");
+            exit(1);
+          }
+        $sth2 = $DBH->prepare_cached($sql2);
+        if (!defined($sth2))
+          {
+            print (STDERR "Unexpected error when preparing statement ($sql2): " . $DBH->errstr . "\n");
+            exit(1);
+          }
+        $sth3 = $DBH->prepare_cached($sql3);
+        if (!defined($sth3))
+          {
+            print (STDERR "Unexpected error when preparing statement ($sql3): " . $DBH->errstr . "\n");
+            exit(1);
+          }
+
         foreach my $sched(@{$r})
           {
-            my $hash;
+            my $hash = $sched->{'MD5'};
             my $dayDateTime;
+            $dayDateTime = DateTime::Format::ISO8601->parse_datetime($sched->{'date'}) if (defined($sched->{'date'}));
             my $sID = $sched->{'stationID'};
             my $code = $sched->{'code'} || 0;
             if ($code != 0)
@@ -724,15 +813,6 @@ for (my $retry = 0; $retry < 7; $retry++)
                     $downloadQueued = 1;
                   }
                 next;
-              }
-            my $meta = $sched->{'metadata'};
-            if (defined($meta))
-              {
-                $hash = $meta->{'md5'};
-                if (defined($meta->{'startDate'}))
-                  {
-                    $dayDateTime = DateTime::Format::ISO8601->parse_datetime($meta->{'startDate'});
-                  }
               }
             my $programs = $sched->{'programs'};
             if ((!defined($hash)) || (!defined($dayDateTime)) || (!defined($programs)))
@@ -745,7 +825,8 @@ for (my $retry = 0; $retry < 7; $retry++)
             if ($sth1->err)
               {
                 print (STDERR "Unexpected error when executing statement ($sql1): " . $sth1->errstr . "\n");
-                 exit(1);
+                $DBH->rollback();
+                exit(1);
               }
             foreach my $program(@{$programs})
               {
@@ -756,7 +837,7 @@ for (my $retry = 0; $retry < 7; $retry++)
                 my $details = $JSON->utf8->encode($program);
                 if ((!defined($duration)) || (!defined($phash)) || (!defined($pID)) || (!defined($airDateTime)))
                   {
-                    print (STDERR "Unexpected parsing error in program (data malformed) in schedule for $sID on " . $meta->{'startDate'} . ", skipping\n") if (!$quiet);
+                    print (STDERR "Unexpected parsing error in program (data malformed) in schedule for $sID on " . $sched->{'date'} . ", skipping\n") if (!$quiet);
                     next;
                   }
                 my $starttime = DateTime::Format::ISO8601->parse_datetime($airDateTime);
@@ -771,6 +852,7 @@ for (my $retry = 0; $retry < 7; $retry++)
                 if ($sth2->err)
                   {
                     print (STDERR "Unexpected error when executing statement ($sql2): " . $sth2->errstr . "\n");
+                    $DBH->rollback();
                     exit(1);
                   }
               }
@@ -781,11 +863,16 @@ for (my $retry = 0; $retry < 7; $retry++)
             if ($sth3->err)
               {
                 print (STDERR "Unexpected error when executing statement ($sql3): " . $sth3->errstr . "\n");
-                 exit(1);
+                $DBH->rollback();
+                exit(1);
               }
           }
 
         $DBH->commit();
+
+        undef $sth1;
+        undef $sth2;
+        undef $sth3;
       }
 
     # We are done unless one (or more) entities indicate that the server queued the request
@@ -844,18 +931,26 @@ for (my $retry = 0; $retry < 7; $retry++)
     $param++;
 
     $sth->execute();
-
     if ($sth->err)
       {
         print (STDERR "Unexpected error when executing statement ($sql): " . $sth->errstr . "\n");
+        $DBH->rollback();
         exit(1);
       }
 
     $sth->bind_col( 1, undef, SQL_VARCHAR );
 
     my $programsList = $sth->fetchall_arrayref([0]);
+    if ($sth->err())
+      {
+        print (STDERR "Unexpected error when executing fetch after execute of statement ($sql): " . $sth->errstr . "\n");
+        $DBH->rollback();
+        exit(1);
+      }
 
-    $sth->finish();
+    $DBH->commit();
+
+    undef $sth;
 
     if (scalar(@{$programsList}) == 0)
       {
@@ -869,15 +964,6 @@ for (my $retry = 0; $retry < 7; $retry++)
     print (STDERR "   downloading " . scalar(@{$programsList}) . " new, updated, or missing programs" . (($retry == 0) ? "" : " (retry $retry)") . "\n") if (!$quiet);
 
     sleep(min(30, (10 * $retry)));
-
-    $sql1 = "replace into programs (program, hash, details, program_supplemental, downloaded) values (?, ?, ?, ?, ?)";
-
-    $sth1 = $DBH->prepare_cached($sql1);
-    if (!defined($sth1))
-      {
-        print (STDERR "Unexpected error when preparing statement ($sql1): " . $DBH->errstr . "\n");
-        exit(1);
-      }
 
     my $programsIter;
     $programsIter = natatime $SD_PROGRAM_CHUNK, @{$programsList};
@@ -914,6 +1000,15 @@ for (my $retry = 0; $retry < 7; $retry++)
             next;
           }
 
+        $sql1 = "replace into programs (program, hash, details, program_supplemental, downloaded) values (?, ?, ?, ?, ?)";
+
+        $sth1 = $DBH->prepare_cached($sql1);
+        if (!defined($sth1))
+          {
+            print (STDERR "Unexpected error when preparing statement ($sql1): " . $DBH->errstr . "\n");
+            exit(1);
+          }
+
         foreach my $program(@{$r})
           {
             my $pID = $program->{'programID'};
@@ -944,10 +1039,13 @@ for (my $retry = 0; $retry < 7; $retry++)
             if ($sth1->err)
               {
                 print (STDERR "Unexpected error when executing statement ($sql1): " . $sth1->errstr . "\n");
+                $DBH->rollback();
                 exit(1);
               }
           }
         $DBH->commit();
+
+        undef $sth1;
       }
 
     # We are done unless one (or more) entities indicate that the server queued the request
@@ -999,18 +1097,26 @@ for (my $retry = 0; $retry < 7; $retry++)
     $param++;
 
     $sth->execute();
-
     if ($sth->err)
       {
         print (STDERR "Unexpected error when executing statement ($sql): " . $sth->errstr . "\n");
+        $DBH->rollback();
         exit(1);
       }
 
     $sth->bind_col(1, undef, SQL_VARCHAR );
 
     my $programsList = $sth->fetchall_arrayref([0]);
+    if ($sth->err())
+      {
+        print (STDERR "Unexpected error when executing fetch after execute of statement ($sql): " . $sth->errstr . "\n");
+        $DBH->rollback();
+        exit(1);
+      }
 
-    $sth->finish();
+    $DBH->commit();
+
+    undef $sth;
 
     if (scalar(@{$programsList}) == 0)
       {
@@ -1024,15 +1130,6 @@ for (my $retry = 0; $retry < 7; $retry++)
     print (STDERR "   downloading " . scalar(@{$programsList}) . " new, updated, or missing programs for supplemental data" . (($retry == 0) ? "" : " (retry $retry)") . "\n") if (!$quiet);
 
     sleep(min(30, (10 * $retry)));
-
-    $sql1 = "replace into programs (program, hash, details, program_supplemental, downloaded) values (?, ?, ?, ?, ?)";
-
-    $sth1 = $DBH->prepare_cached($sql1);
-    if (!defined($sth1))
-      {
-        print (STDERR "Unexpected error when preparing statement ($sql1): " . $DBH->errstr . "\n");
-        exit(1);
-      }
 
     my $programsIter;
     $programsIter = natatime $SD_PROGRAM_CHUNK, @{$programsList};
@@ -1071,6 +1168,15 @@ for (my $retry = 0; $retry < 7; $retry++)
             exit(1);
           }
 
+        $sql1 = "replace into programs (program, hash, details, program_supplemental, downloaded) values (?, ?, ?, ?, ?)";
+
+        $sth1 = $DBH->prepare_cached($sql1);
+        if (!defined($sth1))
+          {
+            print (STDERR "Unexpected error when preparing statement ($sql1): " . $DBH->errstr . "\n");
+            exit(1);
+          }
+
         foreach my $program(@{$r})
           {
             my $pID = $program->{'programID'};
@@ -1101,10 +1207,13 @@ for (my $retry = 0; $retry < 7; $retry++)
             if ($sth1->err)
               {
                 print (STDERR "Unexpected error when executing statement ($sql1): " . $sth1->errstr . "\n");
+                $DBH->rollback();
                 exit(1);
               }
           }
         $DBH->commit();
+
+        undef $sth1;
       }
 
     # We are done unless one (or more) entities indicate that the server queued the request
@@ -1271,6 +1380,7 @@ $w->startTag('tv',
              'source-info-url'       => $SD_SITEURL );
 
   my $channelsWritten = channelWriter($conf->{'lineup'}, $w);
+
   print (STDERR "   $channelsWritten channels processed\n") if (!$quiet);
 
   #
@@ -1311,11 +1421,11 @@ $w->startTag('tv',
   $param++;
 
   $sth->execute();
-
   if ($sth->err())
     {
       print (STDERR "Unexpected error when executing statement ($sql): " . $sth->errstr . "\n");
-      exit(1)
+      $DBH->rollback();
+      exit(1);
     }
 
   $sth->bind_col( 1, undef, SQL_VARCHAR );
@@ -1730,15 +1840,6 @@ $w->startTag('tv',
             $w->dataElement('episode-num', $prodid, 'system' => 'dd_progid' );
           }
 
-        #if (defined($programDetails->{'resourceID'}))
-        #  {
-        #    $w->dataElement('episode-num', "resourceid/$programDetails->{'resourceID'}", 'system' => 'schedulesdirect.org');
-        #  }
-        #elsif (defined($supplementalDetails->{'resourceID'}))
-        #  {
-        #    $w->dataElement('episode-num', "resourceid/$supplementalDetails->{'resourceID'}", 'system' => 'schedulesdirect.org');
-        #  }
-
         # Season/Episode numbering is "special" as SHows and
         # EPisodes use slightly different interpretations of
         # the exact same terms.
@@ -1839,6 +1940,7 @@ $w->startTag('tv',
           {
             $w->dataElement('episode-num', " $season . $episode . $part ", 'system' => 'xmltv_ns');
           }
+
         if (defined($TVDBepisodeID))
           {
             if ((defined($conf->{'3rdparty-metadata'}->[0])) &&
@@ -1853,6 +1955,82 @@ $w->startTag('tv',
                 ($conf->{'3rdparty-metadata'}->[0] eq 'enabled'))
               {
                 $w->dataElement('episode-num', "series/" . $TVDBseriesID, 'system' => 'thetvdb.com');
+              }
+          }
+
+        #
+        # Potentionally need to know if this is a new showing
+        # in the extra metadata section, and again for the
+        # previously shown determination
+        #
+        my $newShowing = 0;
+        $newShowing = $scheduleDetails->{'new'} if (defined($scheduleDetails->{'new'}));
+
+        if ((defined($conf->{'3rdparty-metadata'}->[0])) &&
+                ($conf->{'3rdparty-metadata'}->[0] eq 'enabled'))
+          {
+            $w->dataElement('episode-num', "programID/$pID", 'system' => 'schedulesdirect.org' );
+            if (defined($programDetails->{'resourceID'}))
+              {
+                $w->dataElement('episode-num', "resourceID/$programDetails->{'resourceID'}", 'system' => 'schedulesdirect.org');
+              }
+            elsif (defined($supplementalDetails->{'resourceID'}))
+              {
+                $w->dataElement('episode-num', "resourceID/$supplementalDetails->{'resourceID'}", 'system' => 'schedulesdirect.org');
+              }
+            if ($newShowing)
+              {
+                $w->dataElement('episode-num', "newEpisode/true", 'system' => 'schedulesdirect.org');
+              }
+            if (defined($programDetails->{'originalAirDate'}))
+              {
+                my $originalAirDate = $programDetails->{'originalAirDate'};
+                my $d = substr($originalAirDate, 0, 4) . substr($originalAirDate, 5, 2) . substr($originalAirDate, 8, 2) . ' +0000';
+                $w->dataElement('episode-num', "originalAirDate/$d", 'system' => 'schedulesdirect.org');
+               }
+            if (defined($programDetails->{'eventDetails'}) && (ref($programDetails->{'eventDetails'}) eq 'HASH'))
+              {
+                if (defined($programDetails->{'eventDetails'}->{'venue100'}))
+                  {
+                    $w->dataElement('episode-num', "eventVenue/$programDetails->{'eventDetails'}->{'venue100'}", 'system' => 'schedulesdirect.org');
+                  }
+                if (defined($programDetails->{'eventDetails'}->{'gameDate'}))
+                  {
+                    my $gameDate = $programDetails->{'eventDetails'}->{'gameDate'};
+                    my $d = substr($gameDate, 0, 4) . substr($gameDate, 5, 2) . substr($gameDate, 8, 2) . ' +0000';
+                    $w->dataElement('episode-num', "eventDate/$d", 'system' => 'schedulesdirect.org');
+                  }
+                if (defined($programDetails->{'eventDetails'}->{'teams'}) && (ref($programDetails->{'eventDetails'}->{'teams'}) eq 'ARRAY'))
+                  {
+                    foreach my $t(@{$programDetails->{'eventDetails'}->{'teams'}})
+                      {
+                        if (ref($t) eq 'HASH')
+                          {
+                            if (defined($t->{'name'}))
+                              {
+                                if ((defined($t->{'isHome'})) && ($t->{'isHome'}))
+                                  {
+                                    $w->dataElement('episode-num', "eventHomeTeam/$t->{'name'}", 'system' => 'schedulesdirect.org');
+                                  }
+                                else
+                                  {
+                                    $w->dataElement('episode-num', "eventTeam/$t->{'name'}", 'system' => 'schedulesdirect.org');
+                                  }
+                              }
+                          }
+                      }
+                  }
+                if (defined($programDetails->{'eventDetails'}->{'season'}) && (ref($programDetails->{'eventDetails'}->{'season'}) eq 'HASH'))
+                  {
+                    if (defined($programDetails->{'eventDetails'}->{'season'}->{'season'}))
+                      {
+                        $w->dataElement('episode-num', "eventSeason/$programDetails->{'eventDetails'}->{'season'}->{'season'}", 'system' => 'schedulesdirect.org');
+                      }
+                    if (defined($programDetails->{'eventDetails'}->{'season'}->{'type'}))
+                      {
+                        $w->dataElement('episode-num', "eventSeasonType/$programDetails->{'eventDetails'}->{'season'}->{'type'}", 'system' => 'schedulesdirect.org');
+                      }
+                  }
               }
           }
 
@@ -1909,8 +2087,6 @@ $w->startTag('tv',
         # originalAirDate since generic data is not relevant for this showing.
         # Date transformation occurs because XMLTV uses their standardized
         # dates, while Schedules Direct uses YYYY-MM-DD
-        my $newShowing = 0;
-        $newShowing = $scheduleDetails->{'new'} if (defined($scheduleDetails->{'new'}));
         if (!$newShowing)
           {
             if (defined($programDetails->{'originalAirDate'}))
@@ -2118,10 +2294,14 @@ $w->startTag('tv',
       $programsWritten++;
     }
 
-  $w->endTag('tv');
-$w->end();
+  $DBH->commit();
 
-print (STDERR "   $programsWritten program schedules processed\n") if (!$quiet);
+  undef $sth;
+
+  print (STDERR "   $programsWritten program schedules processed\n") if (!$quiet);
+
+$w->endTag('tv');
+$w->end();
 
 #
 # Our work here is done
@@ -2197,7 +2377,7 @@ sub configureGrabber
         SD_login();                             # Login
         SD_downloadLineups();                   # Update our SD lineups in the DB
 
-        my $sql = "select lineup, name, transport, location, details from lineups";
+        my $sql = "select lineup, name, transport, location, details from lineups order by lineup";
         my $sth = $DBH->prepare_cached($sql);
         if (!defined($sth))
           {
@@ -2206,11 +2386,11 @@ sub configureGrabber
           }
 
         $sth->execute();
-
         if ($sth->err())
           {
             print (STDERR "Unexpected error when executing statement ($sql): " . $sth->errstr . "\n");
-            exit(1)
+            $DBH->rollback();
+            exit(1);
           }
 
         $sth->bind_col( 1, undef, SQL_VARCHAR );
@@ -2220,8 +2400,16 @@ sub configureGrabber
         $sth->bind_col( 5, undef, SQL_VARCHAR );
 
         my $lu = $sth->fetchall_arrayref();
+        if ($sth->err())
+          {
+            print (STDERR "Unexpected error when executing fetch after execute of statement ($sql): " . $sth->errstr . "\n");
+            $DBH->rollback();
+            exit(1);
+          }
 
-        $sth->finish();
+        $DBH->commit();
+
+        undef $sth;
 
         if (scalar(@{$lu}) == 0)
           {
@@ -2247,12 +2435,12 @@ sub configureGrabber
         for my $l (@{$lu})
           {
             my $id = $l->[0];
-            my $desc = "$l->[1] $l->[2] $l->[3]";
+            my $lineupDesc = lineupDesc($l->[1], $l->[2], $l->[3]);
             $writer->write_option
               (
                 {
                   value => $id,
-                  text => [ [ "$id - $desc", 'en' ] ]
+                  text => [ [ "$id - $lineupDesc", 'en' ] ]
                 }
               );
           }
@@ -2323,6 +2511,59 @@ sub configureGrabber
           );
         $writer->end_selectone();
 
+        $writer->end('station-logo-order');
+      }
+    elsif ($stage eq 'station-logo-order')
+      {
+        $writer->start_selectone
+          (
+            {
+              id => 'station-logo-order',
+              title => [ [ 'Station logo ordering', 'en' ], ],
+              description =>
+                [ [
+                  'Specify the order of station logos',
+                  'en'
+                ] ],
+            }
+          );
+        $writer->write_option
+          (
+            {
+              value => '',
+              text => [ [ 'None specified (order as received)', 'en' ] ]
+            }
+          );
+        $writer->write_option
+          (
+            {
+              value => 'Gracenote/dark',
+              text => [ [ 'Gracenote/dark ordered first (Gracenote logo for dark backgrounds)', 'en' ] ]
+            }
+          );
+        $writer->write_option
+          (
+            {
+              value => 'Gracenote/light',
+              text => [ [ 'Gracenote/light ordered first (Gracenote logo for light backgrounds)', 'en' ] ]
+            }
+          );
+        $writer->write_option
+          (
+            {
+              value => 'Gracenote/gray',
+              text => [ [ 'Gracenote/gray ordered first (Gracenote logo with grayscale for light backgrounds)', 'en' ] ]
+            }
+          );
+        $writer->write_option
+          (
+            {
+              value => 'Gracenote/white',
+              text => [ [ 'Gracenote/white ordered first (Gracenote logo with all white for dark backgrounds)', 'en' ] ]
+            }
+          );
+        $writer->end_selectone();
+
         $writer->end('select-channels');
       }
     else
@@ -2345,7 +2586,7 @@ sub configureGrabber
 #
 sub listChannels
   {
-    my ($conf, $opt, undef) = @_;
+    ($conf, $opt, undef) = @_;
 
     configValidate($conf, $opt);
 
@@ -2431,6 +2672,8 @@ sub listChannels
     else
       {
         lineupValidate($conf->{'lineup'});
+        my $token = DB_settingsGet('token');
+        $SD->Token($token) if (defined($token));
       }
 
     my $w = XML::Writer->new( 'ENCODING' => 'UTF-8',
@@ -2480,7 +2723,7 @@ sub channelWriter
     #
     # Select our lineup channels/stations
     #
-    $sql = 'select distinct channels.station, channels.channum, channels.details, stations.details from channels as channels left join stations as stations on stations.station = channels.station where channels.lineup in ( ' . join(', ', ('?') x scalar(@{$lineups})) . ' ) and channels.selected = 1';
+    $sql = 'select distinct channels.station, channels.channum, channels.details, stations.details from channels as channels left join stations as stations on stations.station = channels.station where channels.lineup in ( ' . join(', ', ('?') x scalar(@{$lineups})) . ' ) and channels.selected = 1 order by channels.station';
 
     $sth = $DBH->prepare_cached($sql);
     if (!defined($sth))
@@ -2497,11 +2740,11 @@ sub channelWriter
       }
 
     $sth->execute();
-
     if ($sth->err())
       {
         print (STDERR "Unexpected error when executing statement ($sql): " . $sth->errstr . "\n");
-        exit(1)
+        $DBH->rollback();
+        exit(1);
       }
 
     $sth->bind_col( 1, undef, SQL_VARCHAR );
@@ -2509,8 +2752,20 @@ sub channelWriter
     $sth->bind_col( 3, undef, SQL_VARCHAR );
     $sth->bind_col( 4, undef, SQL_VARCHAR );
 
+    my $channels = $sth->fetchall_arrayref();
+    if ($sth->err())
+      {
+        print (STDERR "Unexpected error when executing fetch after execute of statement ($sql): " . $sth->errstr . "\n");
+        $DBH->rollback();
+        exit(1);
+      }
+
+    $DBH->commit();
+
+    undef $sth;
+
     # Process each channel in our lineup
-    while (my $r = $sth->fetchrow_arrayref())
+    foreach my $r(@{$channels})
       {
         my $sID = $r->[0];
         my $channum = $r->[1];
@@ -2534,20 +2789,29 @@ sub channelWriter
           $writer->dataElement('display-name', $callsign) if ($callsign ne '');
           $writer->dataElement('display-name', $channum) if ($channum ne '');
 
-          # Should probably return all stationLogo's, but some applications are
-          # known to take the last and not the first, so return only the first
-          if ((defined($s->{'stationLogo'}->[0]->{'URL'})) &&
+          # We return all stationLogo's unless asked to not return any,
+          # or to return only the first.
+          if ((defined($s->{'stationLogo'})) &&
+              (ref($s->{'stationLogo'}) eq 'ARRAY') &&
               (!exists($GRABBER_FIXUPS->{'NO_STATION_LOGOS'})))
             {
-              if (defined($s->{'stationLogo'}->[0]->{'width'}) && defined($s->{'stationLogo'}->[0]->{'height'}))
+              for my $sl (sort { logoPriority($b) <=> logoPriority($a) } @{$s->{'stationLogo'}})
                 {
-                  $writer->emptyTag('icon', 'src' => $s->{'stationLogo'}->[0]->{'URL'},
-                                    'width' => $s->{'stationLogo'}->[0]->{'width'},
-                                    'height' => $s->{'stationLogo'}->[0]->{'height'});
-                }
-              else
-                {
-                  $writer->emptyTag('icon', 'src' => $s->{'stationLogo'}->[0]->{'URL'});
+                  next if (ref($sl) ne 'HASH');
+                  if(defined($sl->{'URL'}))
+                    {
+                      if (defined($sl->{'width'}) && defined($sl->{'height'}))
+                        {
+                          $writer->emptyTag('icon', 'src' => $sl->{'URL'},
+                                            'width' => $sl->{'width'},
+                                            'height' => $sl->{'height'});
+                        }
+                      else
+                        {
+                          $writer->emptyTag('icon', 'src' => $sl->{'URL'});
+                        }
+                      last if (exists($GRABBER_FIXUPS->{'NO_MULTIPLE_STATION_LOGOS'}));
+                    }
                 }
             }
 
@@ -2555,6 +2819,7 @@ sub channelWriter
 
         $channelsWritten++;
       }
+
     return ($channelsWritten);
   }
 
@@ -2570,8 +2835,8 @@ sub channelWriter
 #
 sub listLineups
   {
-    my ($opt, undef) = @_;
-    my $conf = LoadConfig($opt->{'config-file'});
+    ($opt, undef) = @_;
+    $conf = LoadConfig($opt->{'config-file'});
 
     my $sql;
     my $sth;
@@ -2629,8 +2894,13 @@ sub listLineups
         print (STDERR "Downloading lineups from Schedules Direct\n") if (!$quiet);
         SD_downloadLineups();
       }
+    else
+      {
+        my $token = DB_settingsGet('token');
+        $SD->Token($token) if (defined($token));
+      }
 
-    $sql = 'select lineup, name, transport, location, details from lineups';
+    $sql = 'select lineup, name, transport, location, details from lineups order by lineup';
     $sth = $DBH->prepare_cached($sql);
     if (!defined($sth))
       {
@@ -2639,11 +2909,11 @@ sub listLineups
       }
 
     $sth->execute();
-
     if ($sth->err())
       {
         print (STDERR "Unexpected error when executing statement ($sql): " . $sth->errstr . "\n");
-        exit(1)
+        $DBH->rollback();
+        exit(1);
       }
 
     $sth->bind_col( 1, undef, SQL_VARCHAR );
@@ -2653,8 +2923,16 @@ sub listLineups
     $sth->bind_col( 5, undef, SQL_VARCHAR );
 
     my $lu = $sth->fetchall_arrayref();
+    if ($sth->err())
+      {
+        print (STDERR "Unexpected error when executing fetch after execute of statement ($sql): " . $sth->errstr . "\n");
+        $DBH->rollback();
+        exit(1);
+      }
 
-    $sth->finish();
+    $DBH->commit();
+
+    undef $sth;
 
     my $w = XML::Writer->new( 'ENCODING' => 'UTF-8', 'DATA_MODE' => 1, 'DATA_INDENT' => 1, OUTPUT => 'self' );
     $w->xmlDecl('UTF-8');
@@ -2669,7 +2947,7 @@ sub listLineups
       for my $l (@{$lu})
         {
           my $id = $l->[0];
-          my $lineupDesc = "$l->[1] $l->[2] $l->[3]";
+          my $lineupDesc = lineupDesc($l->[1], $l->[2], $l->[3]);
           $w->startTag('xmltv-lineup', 'id' => $id );
             my $type = mapTransport($l->[2]);
             $w->dataElement('type', $type);
@@ -2696,7 +2974,7 @@ sub listLineups
 #
 sub getLineup
   {
-    my ($conf, $opt, undef) = @_;
+    ($conf, $opt, undef) = @_;
 
     my $sql;
     my $sth;
@@ -2786,13 +3064,15 @@ sub getLineup
     else
       {
         lineupValidate($conf->{'lineup'});
+        my $token = DB_settingsGet('token');
+        $SD->Token($token) if (defined($token));
       }
 
     #
     # Collect our lineup(s) information.
     #
 
-    $sql = 'select lineup, name, transport, location, details from lineups where lineup in ( ' . join(', ', ('?') x scalar(@{$conf->{'lineup'}})) . ' )';
+    $sql = 'select lineup, name, transport, location, details from lineups where lineup in ( ' . join(', ', ('?') x scalar(@{$conf->{'lineup'}})) . ' ) order by lineup';
 
     $sth = $DBH->prepare_cached($sql);
     if (!defined($sth))
@@ -2809,11 +3089,11 @@ sub getLineup
       }
 
     $sth->execute();
-
     if ($sth->err())
       {
         print (STDERR "Unexpected error when executing statement ($sql): " . $sth->errstr . "\n");
-        exit(1)
+        $DBH->rollback();
+        exit(1);
       }
 
     $sth->bind_col( 1, undef, SQL_VARCHAR );
@@ -2823,8 +3103,16 @@ sub getLineup
     $sth->bind_col( 5, undef, SQL_VARCHAR );
 
     my $lu = $sth->fetchall_arrayref();
+    if ($sth->err())
+      {
+        print (STDERR "Unexpected error when executing fetch after execute of statement ($sql): " . $sth->errstr . "\n");
+        $DBH->rollback();
+        exit(1);
+      }
 
-    $sth->finish();
+    $DBH->commit();
+
+    undef $sth;
 
     my $w = XML::Writer->new( 'ENCODING' => 'UTF-8', 'DATA_MODE' => 1, 'DATA_INDENT' => 1, OUTPUT => 'self' );
     $w->xmlDecl('UTF-8');
@@ -2840,7 +3128,7 @@ sub getLineup
       for my $l (@{$lu})
         {
           my $id = $l->[0];
-          my $lineupDesc = "$l->[1] $l->[2] $l->[3]";
+          my $lineupDesc = lineupDesc($l->[1], $l->[2], $l->[3]);
           $w->startTag('xmltv-lineup', 'id' => $id );
             my $type = mapTransport($l->[2]);
             $w->dataElement('type', $type);
@@ -2850,7 +3138,7 @@ sub getLineup
             # Process each channel/station in the lineup
             #
 
-            $sql = 'select distinct channels.station, channels.channum, channels.details, stations.details, lineups.transport from channels as channels left join stations as stations on stations.station = channels.station left join lineups as lineups on lineups.lineup = channels.lineup where channels.lineup = ? and channels.selected = 1';
+            $sql = 'select distinct channels.station, channels.channum, channels.details, stations.details, lineups.transport from channels as channels left join stations as stations on stations.station = channels.station left join lineups as lineups on lineups.lineup = channels.lineup where channels.lineup = ? and channels.selected = 1 order by channels.station';
 
             $sth = $DBH->prepare_cached($sql);
             if (!defined($sth))
@@ -2862,11 +3150,11 @@ sub getLineup
             $sth->bind_param( 1, $id, SQL_VARCHAR );
 
             $sth->execute();
-
             if ($sth->err())
               {
                 print (STDERR "Unexpected error when executing statement ($sql): " . $sth->errstr . "\n");
-                exit(1)
+                $DBH->rollback();
+                exit(1);
               }
 
             $sth->bind_col( 1, undef, SQL_VARCHAR );
@@ -2875,7 +3163,19 @@ sub getLineup
             $sth->bind_col( 4, undef, SQL_VARCHAR );
             $sth->bind_col( 5, undef, SQL_VARCHAR );
 
-            while (my $r = $sth->fetchrow_arrayref())
+            my $channels = $sth->fetchall_arrayref();
+            if ($sth->err())
+              {
+                print (STDERR "Unexpected error when executing fetch after execute of statement ($sql): " . $sth->errstr . "\n");
+                $DBH->rollback();
+                exit(1);
+              }
+
+            $DBH->commit();
+
+            undef $sth;
+
+            foreach my $r(@{$channels})
               {
                 my $sID = $r->[0];
                 my $channum = $r->[1];
@@ -2899,22 +3199,31 @@ sub getLineup
                     $w->dataElement('name', $name) if (defined($name) && ($name ne ''));
                     $w->dataElement('short-name', $shortname) if (defined($shortname) && ($shortname ne ''));
 
-                    # get-lineup proposal is not precise, but it appears we
-                    # should only return one logo, so return only the first
-                    if ((defined($s->{'stationLogo'}->[0]->{'URL'})) &&
+
+                    # We return all stationLogo's unless asked to not return any,
+                    # or to return only the first.
+                    if ((defined($s->{'stationLogo'})) &&
+                        (ref($s->{'stationLogo'}) eq 'ARRAY') &&
                         (!exists($GRABBER_FIXUPS->{'NO_STATION_LOGOS'})))
                       {
-                        if (defined($s->{'stationLogo'}->[0]->{'width'}) && defined($s->{'stationLogo'}->[0]->{'height'}))
+                        for my $sl (sort { logoPriority($b) <=> logoPriority($a) } @{$s->{'stationLogo'}})
                           {
-                            $w->emptyTag('logo', 'url' => $s->{'stationLogo'}->[0]->{'URL'},
-                                                 'height' => $s->{'stationLogo'}->[0]->{'height'},
-                                                 'width' => $s->{'stationLogo'}->[0]->{'width'});
+                            next if (ref($sl) ne 'HASH');
+                            if(defined($sl->{'URL'}))
+                              {
+                                if (defined($sl->{'width'}) && defined($sl->{'height'}))
+                                  {
+                                    $w->emptyTag('logo', 'url' => $sl->{'URL'},
+                                                         'width' => $sl->{'width'},
+                                                         'height' => $sl->{'height'});
+                                  }
+                                else
+                                  {
+                                    $w->emptyTag('logo', 'url' => $sl->{'URL'});
+                                  }
+                                last if (exists($GRABBER_FIXUPS->{'NO_MULTIPLE_STATION_LOGOS'}));
+                              }
                           }
-                        else
-                          {
-                            $w->emptyTag('logo', 'url' => $s->{'stationLogo'}->[0]->{'URL'});
-                          }
-
                       }
 
                   $w->endTag('station');
@@ -3033,6 +3342,10 @@ sub getLineup
                 $w->endTag('lineup-entry');
               }
 
+          $DBH->commit();
+
+          undef $sth;
+
           $w->endTag('xmltv-lineup');
         }
 
@@ -3075,20 +3388,39 @@ sub loadOldConfig
 sub SD_login
   {
     my $username = DB_settingsGet('username');
-    my $passwordhash = $passwordHash || DB_settingsGet('passwordhash');
+    my $passwordhash = DB_settingsGet('passwordhash');
+    my $pswdhash = $passwordHash || $passwordhash;
+    my $token = DB_settingsGet('token') if (!defined($passwordHash));
 
-    if ((!defined($username)) || (!defined($passwordhash)))
+    if (!defined($username))
       {
-        print (STDERR "Your database is not configured to access the Schedules Direct service\n");
-        print (STDERR "(the username or the password hash is not available in the settings table)\n");
-        print (STDERR "Please re-run $SCRIPT_NAME --manage-lineups and then $SCRIPT_NAME --configure\n");
+        print (STDERR "Your database is not configured to access the Schedules Direct\n");
+        print (STDERR "service (the username is not available in the settings table).\n");
+        print (STDERR "Please re-run $SCRIPT_NAME --manage-lineups to\n");
+        print (STDERR "initialize the database\n");
         exit(1);
       }
 
-    if (!defined($SD->obtainToken($username, undef, $passwordhash)))
+    if (!defined($pswdhash))
+      {
+        print (STDERR "Your database is not configured to access the Schedules Direct\n");
+        print (STDERR "service automatically without manually entering the passwordhash.\n");
+        print (STDERR "Either invoke the grabber specifying the --passwordhash option,\n");
+        print (STDERR "or re-run $SCRIPT_NAME --manage-lineups to initialize\n");
+        print (STDERR "and update the database to store the hash in the database.\n");
+        exit(1);
+      }
+
+    if (!defined($token = $SD->obtainToken($username, undef, $pswdhash, $token)))
       {
         print (STDERR "Unable to authenticate to Schedules Direct: " . $SD->ErrorString() . "\n");
         exit(1);
+      }
+
+    if ((defined($token)) && (defined($passwordhash)) && (!defined($passwordHash)))
+      {
+        DB_settingsSet('token', $token);
+        $DBH->commit();
       }
 
     if (!defined($SD->obtainStatus()))
@@ -3147,25 +3479,15 @@ sub SD_isLineupFetchRequired
 
     my $sql;
     my $sth;
-    my $accountStatus;
+    my $accountLineups;
     my $accountLineupModifiedDateTime;
     my $fetchRequired = 0;
 
-    $accountStatus = $SD->obtainStatus;
+    $accountLineups = $SD->obtainLineups();
 
-    if (!defined($accountStatus))
+    if (!defined($accountLineups))
       {
-        print (STDERR "Unable to obtain Schedules Direct account status: " . $SD->ErrorString . "\n");
-        exit(1);
-      }
-
-    $sql = 'select 1 from lineups l1 where (l1.lineup = ? and l1.modified <= ?) ' .
-             'union select 1 where not exists (select 1 from lineups l2 where l2.lineup = ?)';
-
-    $sth = $DBH->prepare_cached($sql);
-    if (!defined($sth))
-      {
-        print (STDERR "Unexpected error when preparing statement ($sql): " . $DBH->errstr . "\n");
+        print (STDERR "Unable to obtain Schedules Direct account lineups: " . $SD->ErrorString() . "\n");
         exit(1);
       }
 
@@ -3173,40 +3495,54 @@ sub SD_isLineupFetchRequired
     for my $lineup(@{$lineups})
       {
         undef $accountLineupModifiedDateTime;
-        if (defined($accountStatus->{'lineups'}))
+
+        for my $l (@{$accountLineups})
           {
-            for my $l (@{$accountStatus->{'lineups'}})
+            next if (ref($l) ne 'HASH');
+            if (defined($l->{'lineupID'}) && ($l->{'lineupID'} eq $lineup))
               {
-                if (defined($l->{'lineup'}) && ($l->{'lineup'} eq $lineup))
-                  {
-                    $accountLineupModifiedDateTime = DateTime::Format::ISO8601->parse_datetime($l->{'modified'});
-                    last;
-                  }
-                if (defined($l->{'ID'}) && ($l->{'ID'} eq $lineup))
-                  {
-                    $accountLineupModifiedDateTime = DateTime::Format::ISO8601->parse_datetime($l->{'modified'});
-                    last;
-                  }
+                $accountLineupModifiedDateTime = DateTime::Format::ISO8601->parse_datetime($l->{'modified'}) if (defined($l->{'modified'}));
+                last;
               }
           }
 
         $accountLineupModifiedDateTime = $nowDateTime->clone() if (!defined($accountLineupModifiedDateTime));
+
+        $sql = 'select 1 from lineups l1 where (l1.lineup = ? and l1.modified <= ?) ' .
+                 'union select 1 where not exists (select 1 from lineups l2 where l2.lineup = ?)';
+
+        $sth = $DBH->prepare_cached($sql);
+        if (!defined($sth))
+          {
+            print (STDERR "Unexpected error when preparing statement ($sql): " . $DBH->errstr . "\n");
+            exit(1);
+          }
 
         $sth->bind_param( 1, $lineup, SQL_VARCHAR );
         $sth->bind_param( 2, DateTime::Format::SQLite->format_datetime($accountLineupModifiedDateTime), SQL_DATETIME );
         $sth->bind_param( 3, $lineup, SQL_VARCHAR );
 
         $sth->execute();
-
         if ($sth->err())
           {
             print (STDERR "Unexpected error when executing statement ($sql): " . $sth->errstr . "\n");
-            exit(1)
+            $DBH->rollback();
+            exit(1);
           }
 
         $fetchRequired |= ($sth->fetchrow_array() || 0);
+        if ($sth->err())
+          {
+            print (STDERR "Unexpected error when executing fetch after execute of statement ($sql): " . $sth->errstr . "\n");
+            $DBH->rollback();
+            exit(1);
+          }
 
         $sth->finish();
+
+        $DBH->commit();
+
+        undef $sth;
 
       }
 
@@ -3229,32 +3565,26 @@ sub SD_cleanLineups
     my $sql;
     my $sth;
     my $param;
-    my $status;
+    my $lineups;
     my @accountLineups = ();
 
     #
     # Delete any lineups not in our account
     #
-    $status = $SD->obtainStatus();
+    $lineups = $SD->obtainLineups();
 
-    if (!defined($status))
+    if (!defined($lineups))
       {
-        print (STDERR "Unable to obtain Schedules Direct account status: " . $SD->ErrorString() . "\n");
+        print (STDERR "Unable to obtain Schedules Direct account lineups: " . $SD->ErrorString() . "\n");
         exit(1);
       }
 
-    if (defined($status->{'lineups'}))
+    for my $lu(@{$lineups})
       {
-        foreach my $alu(@{$status->{'lineups'}})
+        next if (ref($lu) ne 'HASH');
+        if (defined($lu->{'lineupID'}))
           {
-            if (defined($alu->{'lineup'}))
-              {
-                push(@accountLineups, $alu->{'lineup'});
-              }
-            elsif (defined($alu->{'ID'}))
-              {
-                push(@accountLineups, $alu->{'ID'});
-              }
+            push(@accountLineups, $lu->{'lineupID'});
           }
       }
 
@@ -3275,10 +3605,10 @@ sub SD_cleanLineups
       }
 
     $sth->execute();
-
     if ($sth->err)
       {
         print (STDERR "Unexpected error when executing statement ($sql): " . $sth->errstr . "\n");
+        $DBH->rollback();
         exit(1);
       }
 
@@ -3312,20 +3642,10 @@ sub SD_downloadLineups
     #
     # Obtain our lineups
     #
-    $lu = $SD->obtainLineups();
-    if (!defined($lu))
-      {
-        print (STDERR "Fatal error obtaining lineups: " . $SD->ErrorString() . "\n");
-        print (STDERR "Please re-run $SCRIPT_NAME --manage-lineups\n");
-        print (STDERR "and/or $SCRIPT_NAME --configure\n");
-        exit(1);
-      }
-    $lineups = $lu->{'lineups'};
+    $lineups = $SD->obtainLineups();
     if (!defined($lineups))
       {
-        print (STDERR "Fatal error obtaining lineups\n");
-        print (STDERR "Please re-run $SCRIPT_NAME --manage-lineups\n");
-        print (STDERR "and/or $SCRIPT_NAME --configure\n");
+        print (STDERR "Unable to obtain Schedules Direct account lineups: " . $SD->ErrorString() . "\n");
         exit(1);
       }
 
@@ -3352,8 +3672,8 @@ sub SD_downloadLineups
 
     for my $l (@{$lineups})
       {
-        my $id = $l->{'lineup'};
-        next if (!defined($id));
+        next if ((ref($l) ne 'HASH') || (!defined($l->{'lineupID'})));
+        my $id = $l->{'lineupID'};
         my $name = $l->{'name'} || '';
         my $transport = $l->{'transport'} || '';
         my $location = $l->{'location'} || '';
@@ -3367,6 +3687,7 @@ sub SD_downloadLineups
         if ($sth->err)
           {
             print (STDERR "Unexpected error when executing statement ($sql): " . $sth->errstr . "\n");
+            $DBH->rollback();
             exit(1);
           }
         $sth1->bind_param( 1, $name, SQL_VARCHAR );
@@ -3378,6 +3699,7 @@ sub SD_downloadLineups
         if ($sth1->err)
           {
             print (STDERR "Unexpected error when executing statement ($sql1): " . $sth1->errstr . "\n");
+            $DBH->rollback();
             exit(1);
           }
       }
@@ -3436,16 +3758,24 @@ sub SD_downloadLineupMaps
       }
     $sth->bind_param( 1, $lineup, SQL_VARCHAR );
     $sth->execute();
-    $sth->bind_col( 1, \$lineupChannelsSelected, SQL_INTEGER );
-    $sth->bind_col( 2, \$lineupTransport, SQL_VARCHAR );
-    $sth->fetch();
     if ($sth->err)
       {
         print (STDERR "Unexpected database error when executing statement ($sql): " . $sth->errstr . "\n");
         $DBH->rollback();
         exit(1);
       }
+    $sth->bind_col( 1, \$lineupChannelsSelected, SQL_INTEGER );
+    $sth->bind_col( 2, \$lineupTransport, SQL_VARCHAR );
+    $sth->fetchrow_arrayref();
+    if ($sth->err())
+      {
+        print (STDERR "Unexpected error when executing fetch after execute of statement ($sql): " . $sth->errstr . "\n");
+        $DBH->rollback();
+        exit(1);
+      }
     $sth->finish();
+    $DBH->commit();
+    undef $sth;
 
     $sql = "create temp table if not exists channels_backup as select * from channels where 1<>1";
     $sth = $DBH->prepare_cached($sql);
@@ -3559,6 +3889,7 @@ sub SD_downloadLineupMaps
         if ($sth->err)
           {
             print (STDERR "Unexpected error when executing statement ($sql): " . $sth->errstr . "\n");
+            $DBH->rollback();
             exit(1);
           }
       }
@@ -3609,10 +3940,10 @@ sub SD_downloadLineupMaps
         $sth->bind_param( 2, $details, SQL_VARCHAR );
 
         $sth->execute();
-
         if ($sth->err)
           {
             print (STDERR "Unexpected error when executing statement ($sql): " . $sth->errstr . "\n");
+            $DBH->rollback();
             exit(1);
           }
       }
@@ -3631,6 +3962,7 @@ sub SD_downloadLineupMaps
     if ($sth->err)
       {
         print (STDERR "Unexpected error when executing statement ($sql): " . $sth->errstr . "\n");
+        $DBH->rollback();
         exit(1);
       }
 
@@ -3658,26 +3990,29 @@ sub lineupValidate
 
     my $fatal = 0;
 
-    my $sql = 'select lineup, name, transport, location, details from lineups where lineup = ?';
-
-    my $sth = $DBH->prepare_cached($sql);
-    if (!defined($sth))
-      {
-        print (STDERR "Unexpected error when preparing statement ($sql): " . $DBH->errstr . "\n");
-        exit(1);
-      }
+    my $sql;
+    my $sth;
 
     foreach my $lineup (@{$lineups})
       {
+        $sql = 'select lineup, name, transport, location, details from lineups where lineup = ?';
+
+        $sth = $DBH->prepare_cached($sql);
+        if (!defined($sth))
+          {
+            print (STDERR "Unexpected error when preparing statement ($sql): " . $DBH->errstr . "\n");
+            exit(1);
+          }
+
         $sth->bind_param( 1, $lineup, SQL_VARCHAR );
 
         $sth->execute();
-
         if ($sth->err())
           {
             print (STDERR "Unexpected error when executing statement ($sql): " . $sth->errstr . "\n");
-            exit(1)
-           }
+            $DBH->rollback();
+            exit(1);
+          }
 
         $sth->bind_col( 1, undef, SQL_VARCHAR );
         $sth->bind_col( 2, undef, SQL_VARCHAR );
@@ -3686,8 +4021,18 @@ sub lineupValidate
         $sth->bind_col( 5, undef, SQL_VARCHAR );
 
         my $llu = $sth->fetchrow_arrayref();
+        if ($sth->err())
+          {
+            print (STDERR "Unexpected error when executing fetch after execute of statement ($sql): " . $sth->errstr . "\n");
+            $DBH->rollback();
+            exit(1);
+          }
 
         $sth->finish();
+
+        $DBH->commit();
+
+        undef $sth;
 
         if (!defined($llu))
           {
@@ -3820,6 +4165,9 @@ sub DB_open
   {
     my ($dbname, undef) = @_;
 
+    my $version;
+    my $rc;
+
     #
     # Quick exit if we already have the database open
     #
@@ -3845,12 +4193,13 @@ sub DB_open
         if ($@)
           {
             print (STDERR "Unable to create parent directory for $dbname: $@");
-            exit(1)
+            exit(1);
           }
       }
 
     $DBH = DBI->connect("DBI:SQLite:dbname=$dbname", "", "",
-                        { RaiseError => 0, PrintError => 0, AutoCommit => 0 });
+                        { RaiseError => 0, PrintError => 0, AutoCommit => 0,
+                          sqlite_use_immediate_transaction => 0 });
 
     if (!defined($DBH))
       {
@@ -3859,33 +4208,24 @@ sub DB_open
       }
 
     #
-    # SQLite specific optimizations (if it works, it works)
+    # Set extended timeout
     #
-    $DBH->{'AutoCommit'} = 1;
-    $DBH->do("PRAGMA page_size=4096");
-    $DBH->do("PRAGMA auto_vacuum=2");
-    $DBH->do("PRAGMA journal_mode=WAL");
-    $DBH->{'AutoCommit'} = 0;
+    $DBH->sqlite_busy_timeout(30000);
 
     #
-    # Create settings tables if needed
+    # Validate DB version support by first checking
+    # if the database seems to be initialized.
     #
-    my $rc = $DBH->do("create table if not exists settings (" .
-                        "tag varchar(256) not null primary key, " .
-                        "value varchar(256))");
+    $rc = $DBH->do("select value from settings where tag = 'version'");
     if ((!defined($rc)) || ($rc < 0))
       {
-        print (STDERR "Unable to create settings table in database $dbname: " . $DBH->errstr . "\n");
-        $DBH->rollback();
-        exit(1);
+        $version = 0;
       }
-    $DBH->commit();
-
-    #
-    # Validate DB version support
-    #
-    my $version = DB_settingsGet('version');
-    $version = 0 if (!defined($version));
+    else
+      {
+        $version = DB_settingsGet('version');
+        $version = 0 if (!defined($version));
+      }
     if ($version =~ /^\d+$/)
       {
         $version = 0 + $version;
@@ -3896,142 +4236,161 @@ sub DB_open
         exit(1);
       }
 
-    if (0 == $version)  ## Initial database creation
-      {
-        print (STDERR "Initializing database $dbname\n") if (!$quiet);
-        my $rc;
-        $rc = $DBH->do("create table lineups ( " .
-                         "lineup varchar(128) not null primary key, " .
-                         "name varchar(128) not null, " .
-                         "location varchar(128) not null, " .
-                         "transport varchar(64) not null, " .
-                         "downloaded datetime not null default '1970-01-01 00:00:00', " .
-                         "modified datetime not null default '1970-01-01 00:00:00', " .
-                         "new_channels_selected integer not null default 1, " .
-                         "details blob not null )");
-        if ((!defined($rc)) || ($rc < 0))
-          {
-            print (STDERR "Unable to create lineups table in database $dbname: " . $DBH->errstr . "\n");
-            $DBH->rollback();
-            exit(1);
-          }
-        $rc = $DBH->do("create table programs ( " .
-                         "program varchar(128) not null primary key, " .
-                         "hash varchar(64) not null, " .
-                         "details blob not null )");
-        if ((!defined($rc)) || ($rc < 0))
-          {
-            print (STDERR "Unable to create programs table in database $dbname: " . $DBH->errstr . "\n");
-            $DBH->rollback();
-            exit(1);
-          }
-        $rc = $DBH->do("create table stations ( " .
-                         "station varchar(128) not null primary key, " .
-                         "details blob not null )");
-        if ((!defined($rc)) || ($rc < 0))
-          {
-            print (STDERR "Unable to create stations table in database $dbname: " . $DBH->errstr . "\n");
-            $DBH->rollback();
-            exit(1);
-          }
-        $rc = $DBH->do("create table stations_schedules_hash ( " .
-                         "station varchar(128) not null, " .
-                         "day date not null, " .
-                         "hash varchar(64) not null, " .
-                         "details blob not null, " .
-                         "primary key(station, day) )");
-        if ((!defined($rc)) || ($rc < 0))
-          {
-            print (STDERR "Unable to create stations_schedules_hash table in database $dbname: " . $DBH->errstr . "\n");
-            $DBH->rollback();
-            exit(1);
-          }
-        $rc = $DBH->do("create index stations_schedules_hash_index_hash on stations_schedules_hash (hash)");
-        if ((!defined($rc)) || ($rc < 0))
-          {
-            print (STDERR "Unable to create stations schedules hash index in database $dbname: " . $DBH->errstr . "\n");
-            $DBH->rollback();
-            exit(1);
-          }
-        $rc = $DBH->do("create table channels ( " .
-                         "lineup varchar(128) not null, " .
-                         "station varchar(128) not null, " .
-                         "channum varchar(128) not null default '', " .
-                         "selected integer not null default 1, " .
-                         "details blob not null )");
-        if ((!defined($rc)) || ($rc < 0))
-          {
-            print (STDERR "Unable to create channels table in database $dbname: " . $DBH->errstr . "\n");
-            $DBH->rollback();
-            exit(1);
-          }
-        $rc = $DBH->do("create index channels_index_lineup_station on channels (lineup, station)");
-        if ((!defined($rc)) || ($rc < 0))
-          {
-            print (STDERR "Unable to create channel index in database $dbname: " . $DBH->errstr . "\n");
-            $DBH->rollback();
-            exit(1);
-          }
-        $rc = $DBH->do("create table schedules_hash ( " .
-                         "station varchar(128) not null, " .
-                         "day date not null, " .
-                         "hash varchar(64) not null, " .
-                         "primary key (station, day) )");
-        if ((!defined($rc)) || ($rc < 0))
-          {
-            print (STDERR "Unable to create schedules_hash table in database $dbname: " . $DBH->errstr . "\n");
-            $DBH->rollback();
-            exit(1);
-          }
-        $rc = $DBH->do("create index schedules_hash_index_hash on schedules_hash (hash)");
-        if ((!defined($rc)) || ($rc < 0))
-          {
-            print (STDERR "Unable to create schedules hash index in database $dbname: " . $DBH->errstr . "\n");
-            $DBH->rollback();
-            exit(1);
-          }
-        $rc = $DBH->do("create table schedules ( " .
-                         "station varchar(128) not null, " .
-                         "day date not null, " .
-                         "starttime datetime not null, " .
-                         "duration integer not null, " .
-                         "program varchar(128) not null, " .
-                         "program_hash varchar(64) not null, " .
-                         "details blob not null, " .
-                         "primary key (station, day, starttime, duration) )");
-        if ((!defined($rc)) || ($rc < 0))
-          {
-            print (STDERR "Unable to create schedules table in database $dbname: " . $DBH->errstr . "\n");
-            $DBH->rollback();
-            exit(1);
-          }
-        $rc = $DBH->do("create index schedules_index_station_starttime on schedules (station, starttime)");
-        if ((!defined($rc)) || ($rc < 0))
-          {
-            print (STDERR "Unable to create schedules index in database $dbname: " . $DBH->errstr . "\n");
-            $DBH->rollback();
-            exit(1);
-          }
-        $rc = $DBH->do("create index schedules_index_program on schedules (program)");
-        if ((!defined($rc)) || ($rc < 0))
-          {
-            print (STDERR "Unable to create schedules program index in database $dbname: " . $DBH->errstr . "\n");
-            $DBH->rollback();
-            exit(1);
-          }
-
-        $version = 1;
-        DB_settingsSet('version', 1);
-        $DBH->commit();
-      }
-
     if ($version > $SCRIPT_DB_VERSION)
       {
-        print (STDERR "Database version $version is not supported (newer than grabber version $SCRIPT_DB_VERSION)\n");
+        print (STDERR "Database version $version is not supported (newer than grabber supported version $SCRIPT_DB_VERSION)\n");
         exit(1);
       }
     elsif ($version < $SCRIPT_DB_VERSION)
       {
+        if (0 == $version)  ## Initial database creation
+          {
+            $version = 1;
+            print (STDERR "Initializing database $dbname\n") if (!$quiet);
+
+            #
+            # SQLite specific optimizations that need to
+            # be applied at initial database creation.
+            #
+            $DBH->{'AutoCommit'} = 1;
+            $DBH->do('PRAGMA page_size=4096');
+            $DBH->do('PRAGMA journal_mode=WAL');
+            $DBH->do('PRAGMA auto_vacuum=2');
+            $DBH->do('vacuum');
+            $DBH->{'AutoCommit'} = 0;
+
+            $rc = $DBH->do("create table if not exists settings (" .
+                             "tag varchar(256) not null primary key, " .
+                             "value varchar(256))");
+            if ((!defined($rc)) || ($rc < 0))
+              {
+                print (STDERR "Unable to create settings table in database $dbname: " . $DBH->errstr . "\n");
+               $DBH->rollback();
+               exit(1);
+              }
+            $rc = $DBH->do("create table lineups ( " .
+                             "lineup varchar(128) not null primary key, " .
+                             "name varchar(128) not null, " .
+                             "location varchar(128) not null, " .
+                             "transport varchar(64) not null, " .
+                             "downloaded datetime not null default '1970-01-01 00:00:00', " .
+                             "modified datetime not null default '1970-01-01 00:00:00', " .
+                             "new_channels_selected integer not null default 1, " .
+                             "details blob not null )");
+            if ((!defined($rc)) || ($rc < 0))
+              {
+                print (STDERR "Unable to create lineups table in database $dbname: " . $DBH->errstr . "\n");
+                $DBH->rollback();
+                exit(1);
+              }
+            $rc = $DBH->do("create table programs ( " .
+                             "program varchar(128) not null primary key, " .
+                             "hash varchar(64) not null, " .
+                             "details blob not null )");
+            if ((!defined($rc)) || ($rc < 0))
+              {
+                print (STDERR "Unable to create programs table in database $dbname: " . $DBH->errstr . "\n");
+                $DBH->rollback();
+                exit(1);
+              }
+            $rc = $DBH->do("create table stations ( " .
+                             "station varchar(128) not null primary key, " .
+                             "details blob not null )");
+            if ((!defined($rc)) || ($rc < 0))
+              {
+                print (STDERR "Unable to create stations table in database $dbname: " . $DBH->errstr . "\n");
+                $DBH->rollback();
+                exit(1);
+              }
+            $rc = $DBH->do("create table stations_schedules_hash ( " .
+                             "station varchar(128) not null, " .
+                             "day date not null, " .
+                             "hash varchar(64) not null, " .
+                             "details blob not null, " .
+                             "primary key(station, day) )");
+            if ((!defined($rc)) || ($rc < 0))
+              {
+                print (STDERR "Unable to create stations_schedules_hash table in database $dbname: " . $DBH->errstr . "\n");
+                $DBH->rollback();
+                exit(1);
+              }
+            $rc = $DBH->do("create index stations_schedules_hash_index_hash on stations_schedules_hash (hash)");
+            if ((!defined($rc)) || ($rc < 0))
+              {
+                print (STDERR "Unable to create stations schedules hash index in database $dbname: " . $DBH->errstr . "\n");
+                $DBH->rollback();
+                exit(1);
+              }
+            $rc = $DBH->do("create table channels ( " .
+                             "lineup varchar(128) not null, " .
+                             "station varchar(128) not null, " .
+                             "channum varchar(128) not null default '', " .
+                             "selected integer not null default 1, " .
+                             "details blob not null )");
+            if ((!defined($rc)) || ($rc < 0))
+              {
+                print (STDERR "Unable to create channels table in database $dbname: " . $DBH->errstr . "\n");
+                $DBH->rollback();
+                exit(1);
+              }
+            $rc = $DBH->do("create index channels_index_lineup_station on channels (lineup, station)");
+            if ((!defined($rc)) || ($rc < 0))
+              {
+                print (STDERR "Unable to create channel index in database $dbname: " . $DBH->errstr . "\n");
+                $DBH->rollback();
+                exit(1);
+              }
+            $rc = $DBH->do("create table schedules_hash ( " .
+                             "station varchar(128) not null, " .
+                             "day date not null, " .
+                             "hash varchar(64) not null, " .
+                             "primary key (station, day) )");
+            if ((!defined($rc)) || ($rc < 0))
+              {
+                print (STDERR "Unable to create schedules_hash table in database $dbname: " . $DBH->errstr . "\n");
+                $DBH->rollback();
+                exit(1);
+              }
+            $rc = $DBH->do("create index schedules_hash_index_hash on schedules_hash (hash)");
+            if ((!defined($rc)) || ($rc < 0))
+              {
+                print (STDERR "Unable to create schedules hash index in database $dbname: " . $DBH->errstr . "\n");
+                $DBH->rollback();
+                exit(1);
+              }
+            $rc = $DBH->do("create table schedules ( " .
+                             "station varchar(128) not null, " .
+                             "day date not null, " .
+                             "starttime datetime not null, " .
+                             "duration integer not null, " .
+                             "program varchar(128) not null, " .
+                             "program_hash varchar(64) not null, " .
+                             "details blob not null, " .
+                             "primary key (station, day, starttime, duration) )");
+            if ((!defined($rc)) || ($rc < 0))
+              {
+                print (STDERR "Unable to create schedules table in database $dbname: " . $DBH->errstr . "\n");
+                $DBH->rollback();
+                exit(1);
+              }
+            $rc = $DBH->do("create index schedules_index_station_starttime on schedules (station, starttime)");
+            if ((!defined($rc)) || ($rc < 0))
+              {
+                print (STDERR "Unable to create schedules index in database $dbname: " . $DBH->errstr . "\n");
+                $DBH->rollback();
+                exit(1);
+              }
+            $rc = $DBH->do("create index schedules_index_program on schedules (program)");
+            if ((!defined($rc)) || ($rc < 0))
+              {
+                print (STDERR "Unable to create schedules program index in database $dbname: " . $DBH->errstr . "\n");
+                $DBH->rollback();
+                exit(1);
+              }
+            DB_settingsSet('version', $version);
+            $DBH->commit();
+          }
+
         if (1 == $version)
           {
             $version = 2;
@@ -4100,7 +4459,6 @@ sub DB_open
             $DBH->commit();
           }
 
-        ##
         ##  if (2 == $version   ## Example upgrade (version 2 to 3)
         ##    {
         ##      $version = 3;
@@ -4110,6 +4468,7 @@ sub DB_open
         ##      $DBH->commit();
         ##    }
       }
+    $DBH->commit();
     return;
   }
 
@@ -4129,9 +4488,12 @@ sub DB_settingsGet
 
     my $value;
 
-    my $sql = "select value from settings where tag = ?";
+    my $sql;
+    my $sth;
 
-    my $sth = $DBH->prepare_cached($sql);
+    $sql = "select value from settings where tag = ?";
+
+    $sth = $DBH->prepare_cached($sql);
     if (!defined($sth))
       {
         print (STDERR "Unexpected error when preparing statement ($sql): " . $DBH->errstr . "\n");
@@ -4144,20 +4506,25 @@ sub DB_settingsGet
     if ($sth->err)
       {
         print (STDERR "Unexpected error when executing statement ($sql): " . $sth->errstr . "\n");
+        $DBH->rollback();
         exit(1);
       }
 
     $sth->bind_col( 1, \$value, SQL_VARCHAR );
 
-    $sth->fetch();
-
+    $sth->fetchrow_arrayref();
     if ($sth->err)
       {
-        print (STDERR "Unexpected error when fetching row ($sql): " . $sth->errstr . "\n");
-        exit(1)
+        print (STDERR "Unexpected error when executing fetch after execute of statement ($sql): " . $sth->errstr . "\n");
+        $DBH->rollback();
+        exit(1);
       }
 
     $sth->finish();
+
+    $DBH->commit();
+
+    undef $sth;
 
     return ($value);
   }
@@ -4177,9 +4544,12 @@ sub DB_settingsSet
   {
     my ($tag, $value, undef) = @_;
 
-    my $sql = "replace into settings (tag, value) values (?, ?)";
+    my $sql;
+    my $sth;
 
-    my $sth = $DBH->prepare_cached($sql);
+    $sql = "replace into settings (tag, value) values (?, ?)";
+
+    $sth = $DBH->prepare_cached($sql);
     if (!defined($sth))
       {
         print (STDERR "Unexpected error when preparing statement ($sql): " . $DBH->errstr . "\n");
@@ -4198,7 +4568,56 @@ sub DB_settingsSet
         exit(1);
       }
 
+    $DBH->commit();
+
+    undef $sth;
+
+    return;
+  }
+
+#
+# DB_settingsDelete
+#
+# Convenience routine to delete a setting from the database
+#
+#   Input:
+#              tag         - the tag
+#   Output:
+#              <none>
+#
+sub DB_settingsDelete
+  {
+    my ($tag, undef) = @_;
+
+    my $value;
+
+    my $sql;
+    my $sth;
+
+    $sql = "delete from settings where tag = ?";
+
+    $sth = $DBH->prepare_cached($sql);
+    if (!defined($sth))
+      {
+        print (STDERR "Unexpected error when preparing statement ($sql): " . $DBH->errstr . "\n");
+        exit(1);
+      }
+
+    $sth->bind_param( 1, $tag, SQL_VARCHAR );
+
+    $sth->execute();
+    if ($sth->err)
+      {
+        print (STDERR "Unexpected error when executing statement ($sql): " . $sth->errstr . "\n");
+        $DBH->rollback();
+        exit(1);
+      }
+
     $sth->finish();
+
+    $DBH->commit();
+
+    undef $sth;
 
     return;
   }
@@ -4433,14 +4852,15 @@ sub DB_prune
 
     $DBH->commit();
 
+    undef $sth;
+
     #
     # Because the database may not have the needed configuration
     # for incremental vacuum, we issue the command, but do not
     # check the results of the execution (it works, or not)
     #
     $DBH->{'AutoCommit'} = 1;
-    $sql = "PRAGMA incremental_vacuum";
-    $DBH->do($sql);
+    $DBH->do('PRAGMA incremental_vacuum');
     $DBH->{'AutoCommit'} = 0;
 
     #
@@ -4460,17 +4880,13 @@ sub DB_prune
 
     #
     # In many (real world) runs, substantive data has been
-    # added/deleted/updated, so update any statistics for
-    # future optimizer choices
+    # added/deleted/updated, so inform sqlite to consider
+    # updating the database statistics for future query
+    # planner activity.
     #
-    $sql = "analyze";
-    $rc = $DBH->do($sql);
-    if ((!defined($rc)) || ($rc < 0))
-      {
-        print (STDERR "Unable to analyze data in database: " . $DBH->errstr . "\n");
-      }
-
-    $DBH->commit();
+    $DBH->{'AutoCommit'} = 1;
+    $DBH->do('PRAGMA optimize');
+    $DBH->{'AutoCommit'} = 0;
 
     return;
   }
@@ -4493,6 +4909,7 @@ sub DB_clean
     my $sql;
     my $rc;
 
+#
 #   We do not delete the lineups, channels, or stations in order to try to
 #   preserve any channel (de)selection that may have occurred.  By setting
 #   the downloaded and modified dates to long ago, we will refresh those.
@@ -4518,6 +4935,8 @@ sub DB_clean
 #       print (STDERR "Unable to delete stations in database: " . $DBH->errstr . "\n");
 #       exit(1);
 #     }
+#
+
     $sql = "update lineups set downloaded = '1970-01-01 00:00:00', modified = '1970-01-01 00:00:00'";
     $rc = $DBH->do($sql);
     if ((!defined($rc)) || ($rc < 0))
@@ -4553,6 +4972,7 @@ sub DB_clean
         print (STDERR "Unable to delete programs in database: " . $DBH->errstr . "\n");
         exit(1);
       }
+
     $DBH->commit();
 
     return;
@@ -4577,12 +4997,16 @@ sub manageLineups
   {
     my $username;
     my $passwordhash;
+    my $pswdhash;
+    my $token;
 
     if ((defined($conf->{'database'}->[0])) && (-f $conf->{'database'}->[0]))
       {
         DB_open($conf->{'database'}->[0]);
         $username = DB_settingsGet('username');
-        $passwordhash = $passwordHash || DB_settingsGet('passwordhash');
+        $passwordhash = DB_settingsGet('passwordhash');
+        $pswdhash = $passwordHash || $passwordhash;
+        $token = DB_settingsGet('token') if (!defined($passwordHash));
       }
 
     # Try obtained username/password, but allow re-entry
@@ -4592,23 +5016,31 @@ sub manageLineups
         if (!defined($username))
           {
             $username = ask("Enter your username at Schedules Direct:");
-            $passwordhash = undef;
+            $pswdhash = undef;
             $auth_prompted = 1;
           }
 
-        if (!defined($passwordhash))
+        if (!defined($pswdhash))
           {
             my $password = ask_password("Enter your password for $username at Schedules Direct:");
-            $passwordhash = sha1_hex($password);
+            $pswdhash = sha1_hex($password);
             $auth_prompted = 1;
           }
 
-        last if (defined($SD->obtainToken($username, undef, $passwordhash)));
+        last if (defined($token = $SD->obtainToken($username, undef, $pswdhash, $token)));
 
         print (STDERR "Unable to authenticate to Schedules Direct: " . $SD->ErrorString() . "\n");
         $username = undef;
         $passwordhash = undef;
+        $pswdhash = undef;
+        $token = undef;
         $auth_prompted = 1;
+      }
+
+    if ((defined($DBH)) && (!$auth_prompted) && (defined($token)) && (defined($passwordhash)) && (!defined($passwordHash)))
+      {
+        DB_settingsSet('token', $token);
+        $DBH->commit();
       }
 
     if (!defined($SD->obtainStatus()))
@@ -4629,17 +5061,10 @@ sub manageLineups
 
     while ($choice ne 'Exit')
       {
-        my $lu = $SD->obtainLineups();
-        if (!defined($lu))
-          {
-            print (STDERR "Fatal error obtaining lineups: " . $SD->ErrorString() . "\n");
-            print (STDERR "Please re-run $SCRIPT_NAME --manage-lineups and/or $SCRIPT_NAME --configure\n");
-            exit(1);
-          }
-        my $lineups = $lu->{'lineups'};
+        my $lineups = $SD->obtainLineups();
         if (!defined($lineups))
           {
-            print (STDERR "Fatal error obtaining lineups\n");
+            print (STDERR "Fatal error obtaining lineups: " . $SD->ErrorString() . "\n");
             print (STDERR "Please re-run $SCRIPT_NAME --manage-lineups and/or $SCRIPT_NAME --configure\n");
             exit(1);
           }
@@ -4650,19 +5075,17 @@ sub manageLineups
         $prompt .= "======================================================================\n";
         for my $l (@{$lineups})
           {
-            my $desc = '';
+            next if ((ref($l) ne 'HASH') || (!defined($l->{'lineupID'})));
+            my $lineupDesc = '';
             if (defined($l->{'isDeleted'}) && $l->{'isDeleted'})
               {
-                $desc = "DELETED LINEUP";
+                $lineupDesc = "DELETED LINEUP";
               }
             else
               {
-                my $name = $l->{'name'} || 'None';
-                my $transport = $l->{'transport'} || 'None';
-                my $location = $l->{'location'} || 'None';
-                $desc = "$name ($transport $location)";
+                $lineupDesc = lineupDesc($l->{'name'}, $l->{'transport'}, $l->{'location'});
               }
-            $prompt .= sprintf("%-20s %s\n", $l->{'lineup'}, $desc);
+            $prompt .= sprintf("%-20s %s\n", $l->{'lineupID'}, $lineupDesc);
           }
 
         $prompt .= "Specify a Schedules Direct account lineup management action";
@@ -4671,6 +5094,7 @@ sub manageLineups
                      [ 'Add',                   'Add an additional lineup to your account' ],
                      [ 'Delete',                'Delete an existing lineup from your account' ],
                      [ 'Display Password Hash', 'Display your password hash'],
+                     [ 'Delete Password Hash',  'Delete any password hash stored in the database'],
                      [ 'Initialize Database'  , 'Initialize/update the local database'],
                      [ 'Channel Selection',     'Manage database lineup channel selection'],
                    );
@@ -4711,6 +5135,11 @@ sub manageLineups
 
             # Obtain the list of countries (by region)
             my $available = $SD->obtainAvailable('COUNTRIES');
+            if ((!defined($available)) || (ref($available) ne 'HASH') || (scalar($available) == 0))
+              {
+                $prompt .= "Regions are not available\n";
+                next;
+              }
 
             @choices = ();
             foreach my $reg (sort(keys(%{$available})))
@@ -4813,12 +5242,12 @@ sub manageLineups
                     if (defined($postal_code))
                       {
                         $postal_code =~ s/^\s+|\s+$//g;
-                        # Check regex
-                        if ("$postal_code" !~ m/$postal_code_regex/)
-                          {
-                            $pprompt .= "The specified postal code is not valid\n";
-                            $postal_code = '';
-                          }
+                        # Check regex (removed due bad regex's in /available)
+                        #if ("$postal_code" !~ m/$postal_code_regex/)
+                        #  {
+                        #    $pprompt .= "The specified postal code is not valid\n";
+                        #    $postal_code = '';
+                        #  }
                       }
                   }
                 next if (!defined($postal_code));
@@ -4828,42 +5257,33 @@ sub manageLineups
                 $postal_code = $postal_code_example;
               }
 
-            my $headends = $SD->obtainHeadends($country_code, $postal_code);
-            if (!defined($headends))
+            my $availablelineups = $SD->obtainLineupsAvailable($country_code, $postal_code);
+            if (!defined($availablelineups))
               {
-                print (STDERR "Fatal error obtaining headends: " . $SD->ErrorString() . "\n");
-                print (STDERR "Please re-run $SCRIPT_NAME --manage-lineups and/or $SCRIPT_NAME --configure\n");
+                print (STDERR "Fatal error obtaining available lineups: " . $SD->ErrorString() . "\n");
                 exit(1);
               }
 
-            if ((ref($headends) ne 'ARRAY') || (scalar(@{$headends})) == 0)
+            if ((ref($availablelineups) ne 'ARRAY') || (scalar(@{$availablelineups})) == 0)
               {
                 $prompt .= "Unable to add lineup, Schedules Direct has no lineups in $country_code/$postal_code\n";
               }
             else
               {
-                my $location;
-                my $transport;
                 my @choices = ();
                 my $aprompt = '';
-                for (my $i = 0; $i < scalar(@{$headends}); $i++)
+                for my $l (@{$availablelineups})
                   {
-                    $transport = @{$headends}[$i]->{'transport'} || 'None';
-                    $location = @{$headends}[$i]->{'location'} || 'None';
-                    foreach my $lu (@{$headends}[$i]->{'lineups'})
+                    next if ((ref($l) ne 'HASH') || (!defined($l->{'lineupID'})) || ($l->{'lineupID'} eq ''));
+                    my $lineup = $l->{'lineupID'};
+                    my $lineupDesc = lineupDesc($l->{'name'}, $l->{'transport'}, $l->{'location'});
+                    if (scalar(@choices) < 10)
                       {
-                        for my $l (@{$lu})
-                          {
-                            my $lineup = $l->{'lineup'};
-                            if (scalar(@choices) < 10)
-                              {
-                                push (@choices, [ "$lineup", sprintf (" %-20s %s", $lineup, "$l->{'name'} ($transport $location)") ]);
-                              }
-                            else
-                              {
-                                push (@choices, [ "$lineup", sprintf ("%-20s %s", $lineup, "$l->{'name'} ($transport $location)") ]);
-                              }
-                          }
+                        push (@choices, [ $lineup, sprintf (" %-20s %s", $lineup, $lineupDesc) ]);
+                      }
+                    else
+                      {
+                        push (@choices, [ $lineup, sprintf ("%-20s %s", $lineup, $lineupDesc) ]);
                       }
                   }
 
@@ -4895,19 +5315,16 @@ sub manageLineups
             my @choices = ();
             for my $l (@{$lineups})
               {
-                my $desc = '';
+                my $lineupDesc = '';
                 if (defined($l->{'isDeleted'}) && $l->{'isDeleted'})
                   {
-                    $desc = "DELETED LINEUP";
+                    $lineupDesc = "DELETED LINEUP";
                   }
                 else
                   {
-                    my $name = $l->{'name'} || 'None';
-                    my $transport = $l->{'transport'} || 'None';
-                    my $location = $l->{'location'} || 'None';
-                    $desc = "$name ($transport $location)";
+                    $lineupDesc = lineupDesc($l->{'name'}, $l->{'transport'}, $l->{'location'});
                   }
-                push (@choices, [ $l->{'lineup'}, sprintf("%-20s %s", $l->{'lineup'}, $desc) ]);;
+                push (@choices, [ $l->{'lineupID'}, sprintf("%-20s %s", $l->{'lineupID'}, $lineupDesc) ]);;
               }
 
             my $lineup_to_delete = askChoice("\nLineup to delete (ctrl-D to skip)", undef, @choices);
@@ -4924,7 +5341,13 @@ sub manageLineups
           }
         elsif ($choice eq 'Display Password Hash')
           {
-            $prompt .= "Your password hash is: $passwordhash\n";
+            $prompt .= "Your password hash is: $pswdhash\n";
+          }
+        elsif ($choice eq 'Delete Password Hash')
+          {
+            DB_settingsDelete('passwordhash');
+            DB_settingsDelete('token');
+            $prompt .= "Password hash deleted from the database\n";
           }
         elsif ($choice eq 'Initialize Database')
           {
@@ -4960,13 +5383,14 @@ sub manageLineups
 
             if ($storehash)
               {
-                DB_settingsSet('passwordhash', $passwordhash);
-                $prompt .= "Schedules Direct username/passwordhash stored in database";
+                DB_settingsSet('passwordhash', $pswdhash);
+                $prompt .= "Schedules Direct username/passwordhash stored in database\n";
               }
             else
               {
-                DB_settingsSet('passwordhash', undef);
-                $prompt .= "Schedules Direct Username stored in database";
+                DB_settingsDelete('passwordhash');
+                DB_settingsDelete('token');
+                $prompt .= "Schedules Direct username stored in database\n";
               }
             $DBH->commit();
           }
@@ -4991,11 +5415,8 @@ sub manageLineups
             @choices = ();
             for my $l (@{$lineups})
               {
-                my $name = $l->{'name'} || 'None';
-                my $transport = $l->{'transport'} || 'None';
-                my $location = $l->{'location'} || 'None';
-                my $desc = "$name ($transport $location)";
-                push (@choices, [ $l->{'lineup'}, sprintf("%-20s %s", $l->{'lineup'}, $desc) ]);;
+                my $lineupDesc = lineupDesc($l->{'name'}, $l->{'transport'}, $l->{'location'});
+                push (@choices, [ $l->{'lineupID'}, sprintf("%-20s %s", $l->{'lineupID'}, $lineupDesc) ]);;
               }
 
             $lineup = askChoice("\nLineup to manage channels (ctrl-D to skip)", undef, @choices);
@@ -5126,13 +5547,7 @@ sub manageLineups
                     #
                     # two by two, hands of blue
                     #
-                    my $rowid = 0;
-                    my $selected = 1;
-                    my $station = '';
-                    my $channum = '';
-                    my $cdetails = '';
-                    my $sdetails = '';
-                    my $sql = "select channels.rowid, channels.station, channels.channum, channels.selected, channels.details, stations.details from channels as channels left join stations as stations on stations.station = channels.station where channels.lineup = ?";
+                    my $sql = "select channels.rowid, channels.station, channels.channum, channels.selected, channels.details, stations.details from channels as channels left join stations as stations on stations.station = channels.station where channels.lineup = ? order by channels.station";
                     my $sth = $DBH->prepare_cached($sql);
                     if (!defined($sth))
                       {
@@ -5146,7 +5561,6 @@ sub manageLineups
                         print (STDERR "Unexpected error when preparing statement ($sqlupd): " . $DBH->errstr . "\n");
                         exit(1);
                       }
-
                     $sth->bind_param( 1, $lineup, SQL_VARCHAR );
                     $sth->execute();
                     if ($sth->err)
@@ -5155,17 +5569,33 @@ sub manageLineups
                         $DBH->rollback();
                         exit(1);
                       }
-                    $sth->bind_col( 1, \$rowid, SQL_INTEGER );
-                    $sth->bind_col( 2, \$station, SQL_VARCHAR );
-                    $sth->bind_col( 3, \$channum, SQL_VARCHAR );
-                    $sth->bind_col( 4, \$selected, SQL_INTEGER );
-                    $sth->bind_col( 5, \$cdetails, SQL_VARCHAR );
-                    $sth->bind_col( 6, \$sdetails, SQL_VARCHAR );
-                    while($sth->fetch())
+                    $sth->bind_col( 1, undef, SQL_INTEGER );
+                    $sth->bind_col( 2, undef, SQL_VARCHAR );
+                    $sth->bind_col( 3, undef, SQL_VARCHAR );
+                    $sth->bind_col( 4, undef, SQL_INTEGER );
+                    $sth->bind_col( 5, undef, SQL_VARCHAR );
+                    $sth->bind_col( 6, undef, SQL_VARCHAR );
+                    my $channelsSelect = $sth->fetchall_arrayref();
+                    if ($sth->err())
                       {
-                        my $c = $JSON->decode($cdetails);
+                        print (STDERR "Unexpected error when executing fetch after execute of statement ($sql): " . $sth->errstr . "\n");
+                        $DBH->rollback();
+                        exit(1);
+                      }
+                    $DBH->commit();
+                    undef $sth;
+                    foreach my $channelSelect(@{$channelsSelect})
+                      {
+                        my $rowid = $channelSelect->[0];
+                        my $station = $channelSelect->[1];
+                        my $channum = $channelSelect->[2];
+                        my $selected = $channelSelect->[3];
+                        my $cdetails = $channelSelect->[4];
+                        my $sdetails = $channelSelect->[5];
+                        my $c = {};
+                        $c = $JSON->decode($cdetails) if (defined($cdetails) && ($cdetails ne ''));
                         my $s = {};
-                        $s = $JSON->decode($sdetails) if (defined($sdetails));
+                        $s = $JSON->decode($sdetails) if (defined($sdetails) && ($sdetails ne ''));
                         my $name;
                         $name = $s->{'name'} if (defined($s->{'name'}));
                         my $callsign;
@@ -5518,6 +5948,88 @@ sub mapUSATSCChannelToFrequency
   }
 
 #
+# logoPriority
+#
+# Return the station logo priority based on
+# the configuration station-logo-order.
+#
+#   Input:
+#              stationLogo - the station logo hash
+#   Output:
+#              priority    - the logo priority
+#
+sub logoPriority
+  {
+    my ($stationLogo, undef) = @_;
+    my $source;
+    my $category;
+
+    state $logoPrio = logoPriorityInit($conf);
+
+    return 0 if (ref($stationLogo) ne 'HASH');
+
+    $source = $stationLogo->{'source'} || '';
+    $source =~ s/^\s+|\s+$//g;
+    $category = $stationLogo->{'category'} || '';
+    $category =~ s/^\s+|\s+$//g;
+    return $logoPrio->{"$source/$category"} || 0;
+
+    #
+    # Internal one-time priority mapping initialization
+    #
+    sub logoPriorityInit
+      {
+        my $priority = {};
+        my $pnum = 9999;
+        if (defined($conf->{'station-logo-order'}->[0]))
+          {
+            foreach my $o(split(',', $conf->{'station-logo-order'}->[0]))
+              {
+                $o =~ s/^\s+|\s+$//g;
+                next if ($o eq '');
+                $priority->{$o} = $pnum--;
+              }
+          }
+        return $priority;
+      }
+  }
+
+#
+# lineupDesc
+#
+# return a consistent description for a lineup
+#
+#   Input:
+#              name        - the lineup name/short descr
+#              transport   - the lineup transport
+#              location    - the lineup location
+#   Output:
+#              lineupDesc  - standard description
+#
+sub lineupDesc
+  {
+    my ($name, $transport, $location, undef) = @_;
+
+    my $lineupDesc = '';
+
+    $name = '' if (!defined($name));
+    $transport = '' if (!defined($transport));
+    $location = '' if (!defined($location));
+    $name =~ s/^\s+|\s+$//g;
+    $transport =~ s/^\s+|\s+$//g;
+    $location =~ s/^\s+|\s+$//g;
+    $name = '[UPSTREAM BUG: Open ticket with Schedules Direct regarding missing name for this lineup]' if ($name eq '');
+    $lineupDesc = $name;
+    $lineupDesc = $lineupDesc . ' (' if (($transport ne '') || ($location ne ''));
+    $lineupDesc = $lineupDesc . $transport if ($transport ne '');
+    $lineupDesc = $lineupDesc . ' ' if (($transport ne '') && ($location ne ''));
+    $lineupDesc = $lineupDesc . $location if ($location ne '');
+    $lineupDesc = $lineupDesc . ')' if (($transport ne '') || ($location ne ''));
+
+    return($lineupDesc);
+  }
+
+#
 # A little info
 #
 =pod
@@ -5634,6 +6146,10 @@ such as your password hash, so treat the output appropriately.
 
 B<--passwordhash HASH> Provide the password hash on the command line.
 This is necessary if the hash is not stored in the database.
+
+B<--scale-download N> Scale the download chunks from the default
+sizes. A value of .5 would reduce the sizes of the chunks requested
+by half.  The resulting number is bound between 1 and the max value.
 
 B<--list-channels> Write output giving <channel> elements for every
 channel available in the current configuration.
@@ -5838,6 +6354,7 @@ package SchedulesDirect v20141201.0.0;
 # Username                     - set/return username to use
 # Password                     - set/return passwordhash to use
 # PasswordHash                 - set/return passwordhash to use
+# Token                        - set/return SD Token to use
 # obtainToken                  - obtain and return SD token
 # obtainStatus                 - obtain and return SD status
 # isOnline                     - return true if SD systems online
@@ -5847,7 +6364,7 @@ package SchedulesDirect v20141201.0.0;
 # deleteLineup                 - delete lineup from account
 # obtainLineups                - return lineups in account
 # obtainLineupMaps             - return maps for lineup
-# obtainHeadends               - return headends in country/postal
+# obtainLineupsAvailable       - return lineups available in country/postal
 # obtainStationsSchedules      - return stations schedules
 # obtainStationsSchedulesHash  - return stations schedules hash
 # obtainPrograms               - return program data for programs
@@ -5894,7 +6411,18 @@ sub new
     $self->{'RaiseError'} = 0 unless $self->{'RaiseError'};    # Not (yet) implemented
     $self->{'PrintError'} = 0 unless $self->{'PrintError'};    # Not (yet) implemented
     $self->{'_Token'} = undef;
-    $self->{'_TokenAcquired'} = 0;     # Refresh token every 12 hours
+    $self->{'_TokenAcquired'} = 0;     # Refresh token every 20 hours
+    $self->{'_TokenValidated'} = 0;
+    if (defined($self->{'Token'}))
+      {
+        my ($token, $acquired) = split(' ', $self->{'Token'}, 2);
+        if (defined($token) && ($token =~ /^[0-9A-Fa-f]+$/) && defined($acquired) && ($acquired =~ /^-?\d+\.?\d*$/))
+          {
+            $self->{'_Token'} = $token;
+            $self->{'_TokenAcquired'} = $acquired;
+          }
+      }
+    delete $self->{'Token'};
     $self->{'_Error'} = 0;
     $self->{'_ErrorString'} = '';
     $self->{'_Status'} = undef;
@@ -5904,6 +6432,7 @@ sub new
     $self->{'_LWP'} = LWP::UserAgent::Determined->new(agent => $self->{'UserAgent'},
                         conn_cache => LWP::ConnCache->new(total_capacity => $self->{'ConnCache'}));
     $self->{'_LWP'}->timing('1,2,5,10,20,20,20,20,20,20');
+    $self->{'_LWP'}->requests_redirectable(['GET', 'HEAD', 'POST', 'PUT', 'DELETE']);
     $self->{'_LWP'}->default_header('Accept-Encoding' => scalar HTTP::Message::decodable(),
                                     'Accept' => 'application/json',
                                     'Content_Type' => 'application/json',
@@ -5911,6 +6440,7 @@ sub new
                                     'Cache-Control' => 'no-cache');
 
     bless($self, $class);
+
     return $self;
   }
 
@@ -6197,6 +6727,46 @@ sub PasswordHash
   }
 
 #
+# set/return the (extended) SDToken
+#
+sub Token
+  {
+    my $self = shift;
+        print (STDERR "DEBUG: Entering " . (caller(0))[3] . " with args: \n" . Data::Dumper->new(\@_)->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
+
+    my $return;
+
+    if (@_)
+      {
+        $self->_resetSession;
+        my $t = shift;
+        if (defined($t))
+          {
+            my ($token, $acquired) = split(' ', $t, 2);
+            if (defined($token) && ($token =~ /^[0-9A-Fa-f]+$/) && defined($acquired) && ($acquired =~ /^-?\d+\.?\d*$/)) 
+              {
+                $self->{'_Token'} = $token;
+                $self->{'_TokenAcquired'} = $acquired;
+                $self->{'_TokenValidated'} = 0;
+              }
+          }
+      }
+
+    if (defined($self->{'_Token'}))
+      {
+        $return = "$self->{'_Token'} $self->{'_TokenAcquired'}";
+      }
+    else
+      {
+        $return = undef;
+      }
+
+    print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
+
+    return $return;
+  }
+
+#
 # Resolve a possible relative uri to absolute URL
 #
 sub uriResolve
@@ -6253,7 +6823,6 @@ sub deleteMessage
             $return = 0;
             print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
            return $return;
-
           }
         $return = 0;
         $self->_setErrorString("Schedules Direct web services is not online");
@@ -6380,6 +6949,9 @@ sub addLineup
         return $return;
       }
 
+    # After add (success or failure) make sure we get a new Status
+    $self->{'_Status'} = undef;
+
     my $request = HTTP::Request->new(PUT => "$self->{'RESTUrl'}/lineups/$lineup");
 
     $request->header(Token => "$self->{'_Token'}");
@@ -6409,7 +6981,6 @@ sub addLineup
                 $self->_CroakOrCarp;
                 print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
                 return $return;
-
               }
             $return = 0;
             $self->_setErrorString("HTTP response content was not parseable: $responseContent");
@@ -6518,7 +7089,6 @@ sub deleteLineup
             $return = 0;
             print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
            return $return;
-
           }
         $return = 0;
         $self->_setErrorString("Schedules Direct web services is not online");
@@ -6526,6 +7096,9 @@ sub deleteLineup
         print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
         return $return;
       }
+
+    # After delete (success or failure) make sure we get a new Status
+    $self->{'_Status'} = undef;
 
     my $request = HTTP::Request->new(DELETE => "$self->{'RESTUrl'}/lineups/$lineup");
 
@@ -6657,13 +7230,7 @@ sub obtainLineups
             my $r = eval { $self->{'_JSON'}->decode($responseContent) };
             if (defined($r) && defined($r->{'code'}) && ($r->{'code'} == 4102))
               {
-                $return = {};
-                $return->{'datetime'} = $r->{'datetime'} || '1970-01-01T00:00:00Z';
-                $return->{'serverID'} = $r->{'serverID'} || 'internal';
-                $return->{'response'} = $r->{'response'} || 'NO_LINEUPS';
-                $return->{'message'} = $r->{'message'} || 'No lineups have been added to this account';
-                $return->{'code'} = 4102;
-                $return->{'lineups'} = [];
+                $return = [];
                 print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
                 return $return;
               }
@@ -6718,7 +7285,56 @@ sub obtainLineups
         return $return;
       }
 
-    $return = $r;
+    if (ref($r) ne 'HASH')
+      {
+        $return = undef;
+        $self->_setErrorString("HTTP response content was not a hash: $responseContent");
+        $self->_CroakOrCarp;
+        print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
+        return $return;
+      }
+
+    if (!defined($r->{'lineups'}))
+      {
+        $return = undef;
+        $self->_setErrorString("HTTP response content was not a hash containing a lineup entity: $responseContent");
+        $self->_CroakOrCarp;
+        print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
+        return $return;
+      }
+
+    if (ref($r->{'lineups'}) ne 'ARRAY')
+      {
+        $return = undef;
+        $self->_setErrorString("HTTP response content was not a hash containing the lineup array: $responseContent");
+        $self->_CroakOrCarp;
+        print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
+        return $return;
+      }
+
+    $return = $r->{'lineups'};
+
+    for my $e(@{$return})
+      {
+        next if (!defined($e->{'lineup'}));
+        $e->{'lineupID'} = delete $e->{'lineup'};
+      }
+
+    if ((ref($self->{'_Status'}) eq 'HASH') && (defined($self->{'_Status'}->{'lineups'})) && (ref($self->{'_Status'}->{'lineups'}) eq 'ARRAY'))
+      {
+        for my $e(@{$return})
+          {
+            next if (!defined($e->{'lineupID'}));
+            for my $se(@{$self->{'_Status'}->{'lineups'}})
+              {
+                if ((ref($se) eq 'HASH') && (defined($se->{'lineup'})) && ($se->{'lineup'} eq $e->{'lineupID'}) && (defined($se->{'modified'})))
+                  {
+                    $e->{'modified'} = $se->{'modified'};
+                    last;
+                  }
+              }
+          }
+      }
 
     print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
     return $return;
@@ -6824,9 +7440,9 @@ sub obtainLineupMaps
   }
 
 #
-# Return list of headends in country/postal code
+# Return list of lineups available in country/postal code
 #
-sub obtainHeadends
+sub obtainLineupsAvailable
   {
     my $self = shift;
 
@@ -6838,18 +7454,18 @@ sub obtainHeadends
 
     $self->_resetError;
 
-    if (!defined($country))
+    if (!defined($country) || ($country eq ''))
       {
         $return = undef;
-        $self->_setErrorString("Country code not provided for headend list");
+        $self->_setErrorString("Country code not provided for lineup list");
         $self->_CroakOrCarp;
         print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
         return $return;
       }
-    if (!defined($postalcode))
+    if (!defined($postalcode) || ($postalcode eq ''))
       {
         $return = undef;
-        $self->_setErrorString("Postal code code not provided for headend list");
+        $self->_setErrorString("Postal code code not provided for lineup list");
         $self->_CroakOrCarp;
         print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
         return $return;
@@ -6903,12 +7519,12 @@ sub obtainHeadends
                 if ($code == 2102)
                   {
                     $return = [];
-                    $self->_setErrorString("No headends in specified country/postalcode");
+                    $self->_setErrorString("No lineups in specified country/postalcode");
                     print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
                     return $return;
                   }
                 $return = undef;
-                $self->_setErrorString("Error obtaining headends ($code): $msg");
+                $self->_setErrorString("Error obtaining lineups ($code): $msg");
                 $self->_CroakOrCarp;
                 print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
                 return $return;
@@ -6959,7 +7575,34 @@ sub obtainHeadends
         return $return;
       }
 
-    $return = $r;
+    if (ref($r) ne 'ARRAY')
+      {
+        $return = undef;
+        $self->_setErrorString("HTTP response content was not an array ($responseContent)");
+        $self->_CroakOrCarp;
+        print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
+        return $return;
+      }
+
+    $return = [];
+
+    for my $e(@{$r})
+      {
+        next if ((ref($e) ne 'HASH') || (!defined($e->{'lineups'})));
+        my $lineups = $e->{'lineups'};
+        next if (ref($lineups) ne 'ARRAY');
+        for my $lu(@{$lineups})
+          {
+             my $el = {};
+             next if ((ref($lu) ne 'HASH') || (!defined($lu->{'lineup'})));
+             $el->{'lineupID'} = $lu->{'lineup'};
+             $el->{'transport'} = $e->{'transport'} if (defined($e->{'transport'}));
+             $el->{'location'} = $e->{'location'} if (defined($e->{'location'}));
+             $el->{'name'} = $lu->{'name'} if (defined($lu->{'name'}));
+             $el->{'uri'} = $lu->{'uri'} if (defined($lu->{'uri'}));
+             push(@{$return}, $el);
+          }
+      }
 
     print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
     return $return;
@@ -7156,6 +7799,40 @@ sub obtainStationsSchedules
         return $return;
       }
 
+    if (ref($r) ne 'ARRAY')
+      {
+        $return = undef;
+        $self->_setErrorString("HTTP response content was malformed (not an array)");
+        $self->_CroakOrCarp;
+        print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
+        return $return;
+      }
+
+    foreach my $e(@{$r})
+      {
+        if (ref($e) ne 'HASH')
+          {
+            $return = undef;
+            $self->_setErrorString("HTTP response content was malformed (not an array of hashes)");
+            $self->_CroakOrCarp;
+            print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
+            return $return;
+          }
+        my $hash = $e->{'metadata'}->{'md5'};
+        my $startDate = $e->{'metadata'}->{'startDate'};
+        my $modified = $e->{'metadata'}->{'modified'};
+        $e->{'MD5'} = $hash if (defined($hash));
+        $e->{'date'} = $startDate if (defined($startDate));
+        $e->{'modified'} = $modified if (defined($modified));
+        if ((defined($hash)) && (defined($startDate)) && (defined($modified)))
+          {
+            $e->{'code'} = 0 if (!defined($e->{'code'}));
+            $e->{'message'} = 'OK' if (!defined($e->{'message'}));
+            $e->{'response'} = 'OK' if (!defined($e->{'response'}));
+          }
+        delete $e->{'metadata'};
+      }
+
     $return = $r;
 
     print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
@@ -7247,7 +7924,35 @@ sub obtainStationsSchedulesHash
         return $return;
       }
 
-    $return = $r;
+    if (ref($r) ne 'HASH')
+      {
+        $return = undef;
+        $self->_setErrorString("HTTP response content was not a hash: $responseContent");
+        $self->_CroakOrCarp;
+        print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
+        return $return;
+      }
+
+    $return = [];
+
+    for my $station(keys %{$r})
+      {
+        if (ref($r->{$station}) eq 'HASH')
+          {
+            for my $date(keys %{$r->{$station}})
+              {
+                my $e = {};
+                $e->{'stationID'} = $station;
+                $e->{'date'} = $date;
+                $e->{'code'} = $r->{$station}->{$date}->{'code'} if (defined($r->{$station}->{$date}->{'code'}));
+                $e->{'MD5'} = $r->{$station}->{$date}->{'md5'} if (defined($r->{$station}->{$date}->{'md5'}));
+                $e->{'message'} = $r->{$station}->{$date}->{'message'} if (defined($r->{$station}->{$date}->{'message'}));
+                $e->{'lastModified'} = $r->{$station}->{$date}->{'lastModified'} if (defined($r->{$station}->{$date}->{'lastModified'}));
+                $e->{'response'} = "OK" if ($r->{$station}->{$date}->{'code'} eq 0);
+                push(@{$return}, $e);
+              }
+          }
+      }
 
     print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
     return $return;
@@ -7591,7 +8296,7 @@ sub obtainToken
 
     my $return;
 
-    my ($username, $password, $passwordHash, undef) = @_;
+    my ($username, $password, $passwordHash, $existingtoken, undef) = @_;
 
     $self->_resetError;
 
@@ -7600,6 +8305,53 @@ sub obtainToken
     $self->Username($username) if defined($username);
     $self->Password($password) if defined($password);
     $self->PasswordHash($passwordHash) if defined($passwordHash);
+    $self->Token($existingtoken) if defined($existingtoken);
+
+    # Reuse existing token if available, acquired < 20 hours ago, and validated or we can validate
+    if (defined($self->{'_Token'}) && ($self->{'_TokenAcquired'} > ($now - 72000)))
+      {
+        if ($self->{'_TokenValidated'})
+          {
+            print (STDERR "DEBUG:   (re)using current token\n") if ($self->{'Debug'});
+            $return = $self->Token;
+            print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
+            return $return;
+          }
+        else
+          {
+            # Try a status request with the token
+
+            my $request = HTTP::Request->new(GET => "$self->{'RESTUrl'}/status");
+
+            $request->header('Token' => "$self->{'_Token'}");
+
+            print (STDERR "DEBUG:   HTTP request:\n" . Data::Dumper->new([$request])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
+
+            my $response = $self->{'_LWP'}->request($request);
+
+            print (STDERR "DEBUG:   HTTP response:\n" . Data::Dumper->new([$response])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
+
+            my $responseCode = $response->code();
+            my $responseContent = $response->decoded_content();
+
+            print (STDERR "DEBUG:   HTTP decoded response content:\n" . Data::Dumper->new([$responseContent])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
+
+            if (($responseCode == 200) && (defined($responseContent)) && ($responseContent ne ''))
+              {
+                my $r = eval { $self->{'_JSON'}->decode($responseContent) };
+                if ((defined($r)) && (ref($r) eq 'HASH') && (defined($r->{'code'})) && ($r->{'code'} == 0))
+                  {
+                    $self->{'_TokenValidated'} = 1;
+                    print (STDERR "DEBUG:   (re)using validated token\n") if ($self->{'Debug'});
+                    $return = $self->Token;
+                    print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
+                    return $return;
+                  }
+              }
+          }
+      }
+
+    $self->{'_Token'} = undef;
 
     if (!defined($self->{'Username'}))
       {
@@ -7614,15 +8366,6 @@ sub obtainToken
         $return = undef;
         $self->_setErrorString("Password not provided for obtaining Schedules Direct token");
         $self->_CroakOrCarp;
-        print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
-        return $return;
-      }
-
-    # Reuse existing token if in current session and last token update < 12 hours ago
-    if (defined($self->{'_Token'}) && ($self->{'_TokenAcquired'} > ($now - 43200)))
-      {
-        print (STDERR "DEBUG:   (re)using current token\n") if ($self->{'Debug'});
-        $return = $self->{'_Token'};
         print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
         return $return;
       }
@@ -7777,8 +8520,9 @@ sub obtainToken
 
     $self->{'_Token'} = $token;
     $self->{'_TokenAcquired'} = $now;
+    $self->{'_TokenValidated'} = 1;
 
-    $return = $self->{'_Token'};
+    $return = $self->Token;
 
     print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
 
