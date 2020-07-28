@@ -454,12 +454,12 @@ my @opt_components
        prereqs => { 'XML::LibXML' => 0, },
      },
 
-     { name => 'tv_grab_pt_meo',
-       blurb => 'Grabber for Portugal (MEO)',
-       exes => [ 'grab/pt_meo/tv_grab_pt_meo' ],
-       prereqs => { 'DateTime'    => 0,
-                    'XML::LibXML' => 0, },
-     },
+     # { name => 'tv_grab_pt_meo',
+     #   blurb => 'Grabber for Portugal (MEO)',
+     #   exes => [ 'grab/pt_meo/tv_grab_pt_meo' ],
+     #   prereqs => { 'DateTime'    => 0,
+     #                'XML::LibXML' => 0, },
+     # },
 
      { name => 'tv_grab_pt_vodafone',
        blurb => 'Grabber for Portugal (Vodafone)',
