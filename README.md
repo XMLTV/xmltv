@@ -10,11 +10,17 @@
 - [XMLTV 0.6.1](#xmltv-061)
   * [Description](#description)
   * [Changes](#changes)
-  * [Installation](#installation)
+  * [Installation (Package)](#installation-package)
+    + [Linux](#linux)
+    + [Windows](#windows)
+    + [MacOS](#macos)
+  * [Installation (Source)](#installation-source)
+    + [Getting Source Code](#getting-source-code)
+    + [Building](#building)
     + [Required distributions/modules](#required-distributionsmodules)
     + [Recommended distributions/modules](#recommended-distributionsmodules)
     + [JSON libraries](#json-libraries)
-    + [CPAN Shell](#cpan-shell)
+    + [CPAN](#cpan)
     + [Proxy servers](#proxy-servers)
   * [Known issues](#known-issues)
   * [License](#license)
@@ -39,11 +45,53 @@ Please see our [QuickStart](doc/QuickStart) documentation for details on what ea
 
 To see what has changed in the current XMLTV release please check the [Changes](Changes) file.
 
-## Installation
+## Installation (Package)
 
-Note: Windows users are strongly advised to use the pre-built EXE as installing all the prerequisites is non-trivial. For those who want to give it a go, instructions are in [doc/exe_build.html](doc/exe_build.html). Those instructions can be used for both building xmltv.exe as well as a local install.
+### Linux
 
-Basic installation instructions (Linux/Unix):
+XMLTV is packaged for most major Linux distributions and FreeBSD. It is recommended that users install XMLTV using their preferred package manager.
+
+#### Debian/Ubuntu
+
+```bash
+% sudo apt install xmltv
+```
+
+#### Fedora/CentOS (via RPM Fusion)
+
+```bash
+% dnf install xmltv
+```
+
+### Windows
+
+Windows users are strongly advised to use the [pre-built binary](http://alpha-exe.xmltv.org/) as installing all prerequisites is non-trivial.
+
+For those who want to give it a go, please read the [EXE build instructions](doc/exe_build.html). The instructions can be used for both building xmltv.exe as well as a local install.
+
+### MacOS
+
+XMLTV is packaged for MacOS in the [Fink Project](http://pdb.finkproject.org/pdb/package.php/xmltv)
+
+## Installation (Source)
+
+### Getting Source Code
+
+#### Tarball/Zipfile
+
+The source code for the current release can be downloaded as a tarball (or zipfile) from [GitHub](https://github.com/XMLTV/xmltv/releases/latest) and extracted to a preferred location.
+
+#### Git
+
+The source code for all previous, current and future releases is available in our GitHub repository:
+
+```bash
+% git clone https://github.com/XMLTV/xmltv.git
+```
+
+### Building
+
+To build from source please ensure all required modules are available (see below). Change to the directory containing the XMLTV source:
 
 ```bash
 % perl Makefile.PL
@@ -52,11 +100,10 @@ Basic installation instructions (Linux/Unix):
 % make install
 ```
 
-To install in a custom directory, replace the first line with
-something like
+To install to a custom directory, update the first line to provide a suitable `PREFIX` location:
 
 ```
-% perl Makefile.PL PREFIX=/wherever/
+% perl Makefile.PL PREFIX=/opt/xmltv/
 ```
 
 The system requirements are Perl 5.8.3 or later, and a few Perl modules. You will be asked about some optional components; if you choose not to install them then there are fewer dependencies.
@@ -124,9 +171,11 @@ XML::DOM                      (tv_grab_is)
 XML::LibXSLT                  (tv_grab_is)
 ```
 
+When building XMLTV, any missing modules that are required for the selected grabbers/utilities will be reported.
+
 ### Recommended distributions/modules
 
-The following modules are recommended (e.g. faster JSON processing, better character handling) but the software will works without them installed:
+The following modules are recommended but XMLTV works without them installed:
 
 ```
 File::chdir                      (testing grabbers)
@@ -151,25 +200,25 @@ Cpanel::JSON::XS
 JSON will use JSON::XS if available, falling back to JSON::PP (a core module since 5.14.0) if JSON::XS is not available. Cpanel::JSON::XS can be used as an explicit alternative by setting the PERL_JSON_BACKEND environment variable
 (please refer to the JSON module's documentation for details).
 
-### CPAN Shell
+### CPAN
 
-All required modules can can be installed from CPAN using the CPAN shell program:
+All required modules can be quickly installed from CPAN using the `cpanm` utility. For example:
 
 ```bash
-% 'perl -MCPAN -e shell'
+% cpanm XML::Twig
 ```
 
-then `install XML::Twig` and so on.
-
-You may find it easier to search for packaged versions of modules from your OS provider - software sources which distribute a packaged version of XMLTV will often provide the modules it needs too.
+Please note that you may find it easier to search for packaged versions of required modules, as sources which distribute a packaged version of XMLTV also provide packaged versions of required modules.
 
 ### Proxy servers
 
-Proxy server support is provide by the LWP modules.
-You can define a proxy server via the HTTP_PROXY enviornment variable.
-    `http_proxy=http://somehost.somedomain:port`
+Proxy server support is provide by the LWP modules. You can define a proxy server via the HTTP_PROXY environment variable.
 
-For more information, see the this [article](http://search.cpan.org/~gaas/libwww-perl-5.803/lib/LWP/UserAgent.pm#$ua->env_proxy)
+```bash
+% HTTP_PROXY=http://somehost.somedomain:port
+```
+
+For more information, see this [article](http://search.cpan.org/~gaas/libwww-perl-5.803/lib/LWP/UserAgent.pm#$ua->env_proxy)
 
 ## Known issues
 
