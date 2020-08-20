@@ -5,8 +5,8 @@
   * [Description](#description)
   * [Changes](#changes)
   * [Installation](#installation)
-    + [Required distribtions/modules](#required-distribtionsmodules)
-    + [Recommended distribtions/modules](#recommended-distribtionsmodules)
+    + [Required distributions/modules](#required-distributionsmodules)
+    + [Recommended distributions/modules](#recommended-distributionsmodules)
     + [JSON libraries](#json-libraries)
     + [CPAN Shell](#cpan-shell)
     + [Proxy servers](#proxy-servers)
@@ -51,7 +51,7 @@ The system requirements are Perl 5.8.3 or later, and a few Perl modules. You wil
 Please note that in addition to the specific modules listed below, the
 `tv_grab_zz_sdjson_sqlite` grabber requires Perl 5.16 to be installed.
 
-### Required distribtions/modules
+### Required distributions/modules
 
 Required distributions/modules for XMLTV's core libraries are:
 
@@ -111,7 +111,7 @@ XML::DOM                      (tv_grab_is)
 XML::LibXSLT                  (tv_grab_is)
 ```
 
-### Recommended distribtions/modules
+### Recommended distributions/modules
 
 The following modules are recommended (e.g. faster JSON processing, better character handling) but the software will works without them installed:
 
