@@ -349,13 +349,14 @@ my @opt_components
      },
 
      { name => 'tv_grab_fr',
-       blurb => 'Grabber for France',
+       blurb => 'Grabber for France (TeleStar)',
        exes => [ 'grab/fr/tv_grab_fr' ],
        prereqs => { 'DateTime'           => 0,
                     'DateTime::Duration' => 0,
                     'DateTime::TimeZone' => 0,
                     'HTML::Entities'     => 1.27,
-                    'HTML::TreeBuilder'  => 0, },
+                    'HTML::TreeBuilder'  => 0,
+                    'HTTP::Cache::Transparent' => 1.0, },
      },
 
      { name => 'tv_grab_huro',
