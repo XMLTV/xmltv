@@ -17,7 +17,8 @@
     + [CPAN Shell](#cpan-shell)
     + [Proxy servers](#proxy-servers)
   * [Known issues](#known-issues)
-  * [Author and copying](#author-and-copying)
+  * [License](#license)
+  * [Authors](#authors)
   * [Resources](#resources)
 
 ## Project Status
@@ -26,15 +27,17 @@
 
 ## Description
 
-Gather television listings, process them and organize your viewing.
-XMLTV is a file format for storing TV listings, defined in xmltv.dtd.
-Then there are several tools to produce and process these listings.
+The XMLTV project provides a suite of software to gather television listings, process listings data, and help organize your TV viewing.
 
-Please see [QuickStart](doc/QuickStart) for documentation on what each program does, and xmltv.dtd for documentation on the file format.
+XMLTV listings use a mature XML file format for storing TV listings, which is defined and documented in the [XMLTV DTD](xmltv.dtd).
+
+In addition to the many "grabbers" that provide listings for large parts of the world, there are also several tools to process and filter these listings.
+
+Please see our [QuickStart](doc/QuickStart) documentation for details on what each program does.
 
 ## Changes
 
-For a list of major changes on the current release (0.6.1) please consult our [Changes](Changes) file.
+To see what has changed in the current XMLTV release please check the [Changes](Changes) file.
 
 ## Installation
 
@@ -170,15 +173,27 @@ For more information, see the this [article](http://search.cpan.org/~gaas/libwww
 
 ## Known issues
 
-If a full HTTP URL to the XMLTV.dtd is provided in the DOCTYPE declaration of an XMLTV document, be aware that it is possible for the link to instead redirect to a page for accepting cookies. Such cookie-acceptance pages are more common in Europe, and can result in applications being unable to parse the file.
+If a full HTTP URL to the XMLTV.dtd is provided in the DOCTYPE declaration of an XMLTV document, please be aware that it is possible for the link to instead redirect to a page for accepting cookies. Such cookie-acceptance pages are more common in Europe, and can result in applications being unable to parse the file.
 
-## Author and copying
+## License
 
-This is free software distributed under the GPL, see COPYING. There are many who have contributed code: they are credited in individual source files and in the [authors](authors.txt) mapping file.
+XMLTV is free software, distributed under the GNU General Public License, version 2. Please see [COPYING](COPYING) for more details.
+
+## Authors
+
+There have been many contributors to XMLTV. Where possible they are credited in individual source files and in the [authors](authors.txt) mapping file.
 
 ## Resources
 
+### GitHub
+
+Our [GitHub project](https://github.com/XMLTV/xmltv) contains all source code, issues and Pull Requests.
+
+### Project Wiki
+
 We have a project [web page and wiki](http://www.xmltv.org)
+
+### Mailing Lists
 
 We run the following mailing lists:
 
@@ -188,8 +203,9 @@ We run the following mailing lists:
 
 - [xmltv-announce](https://sourceforge.net/projects/xmltv/lists/xmltv-announce): announcements of new XMLTV releases
 
-Please subscribe to any/all lists at https://sourceforge.net/p/xmltv/mailman/
+### IRC
 
 Finally, we run an IRC channel #xmltv on Freenode. Please join us!
 
--- Nick Morrott, knowledgejunkie@gmail.com, 2019-02-21
+
+-- Nick Morrott, knowledgejunkie@gmail.com, 2020-08-20
