@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://github.com/XMLTV/xmltv">
+    <img src="https://raw.github.com/XMLTV/xmltv/master/xmltv_logo.png?raw=true" style="margin: 0 auto;">
+  </a>
+</p>
+
 # XMLTV 0.6.1
 
 ## Table of Contents
