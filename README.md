@@ -4,10 +4,10 @@
   </a>
 </p>
 
-# XMLTV 0.6.1
+# XMLTV 0.6.2
 
 ## Table of Contents
-- [XMLTV 0.6.1](#xmltv-061)
+- [XMLTV 0.6.2](#xmltv-062)
   * [Description](#description)
   * [Changes](#changes)
   * [Installation (Package)](#installation-package)
