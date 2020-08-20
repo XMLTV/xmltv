@@ -172,11 +172,11 @@ We have a project [web page and wiki](http://www.xmltv.org)
 
 We run the following mailing lists:
 
-    - xmltv-announce: Subscribe — XMLTV Release Announcements (low traffic)
+- [xmltv-users](https://sourceforge.net/projects/xmltv/lists/xmltv-users): for users to ask questions and report problems with XMLTV software
 
-    - `xmltv-users`: — XMLTV users list, mostly for problem reporting and general XMLTV questions
+- [xmltv-devel](https://sourceforge.net/projects/xmltv/lists/xmltv-devel): for development discussion and support
 
-    - `xmltv-devel`: Subscribe — XMLTV development discussion group
+- [xmltv-announce](https://sourceforge.net/projects/xmltv/lists/xmltv-announce): announcements of new XMLTV releases
 
 Please subscribe to any/all lists at https://sourceforge.net/p/xmltv/mailman/
 
