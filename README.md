@@ -20,6 +20,10 @@
   * [Author and copying](#author-and-copying)
   * [Resources](#resources)
 
+## Project Status
+
+[![Build Status](https://api.travis-ci.org/XMLTV/xmltv.svg?branch=master)](https://travis-ci.org/github/XMLTV/xmltv)
+
 ## Description
 
 Gather television listings, process them and organize your viewing.
