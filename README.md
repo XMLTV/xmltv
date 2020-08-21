@@ -136,7 +136,6 @@ CGI                           (tv_pick_cgi, core module until 5.20.3, part of CG
 CGI::Carp                     (tv_pick_cgi, core module until 5.20.3, part of CGI)
 Compress::Zlib                (for some of the grabbers, core module since 5.9.3, part of IO::Compress)
 Data::Dump                    (for tv_grab_it_dvb)
-Date::Calc                    (tv_grab_il)
 Date::Format                  (for some of the grabbers, part of TimeDate)
 Date::Language                (tv_grab_ar, part of TimeDate)
 DateTime                      (for several of the grabbers)
@@ -257,4 +256,4 @@ We run the following mailing lists:
 Finally, we run an IRC channel #xmltv on Freenode. Please join us!
 
 
--- Nick Morrott, knowledgejunkie@gmail.com, 2020-08-20
+-- Nick Morrott, knowledgejunkie@gmail.com, 2020-08-21
