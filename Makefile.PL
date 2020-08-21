@@ -379,11 +379,11 @@ my @opt_components
                     'Time::Seconds' => 0, },
      },
 
-     { name => 'tv_grab_il',
-       blurb => 'Grabber for Israel',
-       exes => [ 'grab/il/tv_grab_il' ],
-       prereqs => { 'DateTime' => 0, },
-     },
+     # { name => 'tv_grab_il',
+     #   blurb => 'Grabber for Israel',
+     #   exes => [ 'grab/il/tv_grab_il' ],
+     #   prereqs => { 'DateTime' => 0, },
+     # },
 
      { name => 'tv_grab_is',
        blurb => 'Grabber for Iceland',
