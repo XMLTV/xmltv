@@ -4,10 +4,10 @@
   </a>
 </p>
 
-# XMLTV 0.6.2
+# XMLTV 0.6.3
 
 ## Table of Contents
-- [XMLTV 0.6.2](#xmltv-062)
+- [XMLTV 0.6.2](#xmltv-063)
   * [Description](#description)
   * [Changes](#changes)
   * [Installation (Package)](#installation-package)
@@ -256,4 +256,4 @@ We run the following mailing lists:
 Finally, we run an IRC channel #xmltv on Freenode. Please join us!
 
 
--- Nick Morrott, knowledgejunkie@gmail.com, 2020-08-21
+-- Nick Morrott, knowledgejunkie@gmail.com, 2020-08-22
