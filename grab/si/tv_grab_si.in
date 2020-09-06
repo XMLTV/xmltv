@@ -85,9 +85,6 @@ use Encode;
 use DateTime;
 use LWP::Simple;
 use XMLTV;
-use XMLTV::Version "$XMLTV::VERSION";
-use XMLTV::Capabilities qw/baseline manualconfig cache/;
-use XMLTV::Description 'Slovenia (tv-spored.siol.net)';
 use XMLTV::Supplement qw/GetSupplement/;
 use Getopt::Long;
 use HTML::TreeBuilder;
@@ -101,17 +98,9 @@ use XMLTV::Config_file;
 use XMLTV::Mode;
 use XMLTV::Get_nice;
 use XMLTV::Memoize;
-use XMLTV::Usage<<END
-$0: get Slovenian television listings from tv-spored.siol.net in XMLTV format
-To configure: $0 --configure [--config-file FILE] [--gui OPTION]
-To grab data: $0 [--config-file FILE] [--output FILE] [--quiet]
-                 [--days N] [--offset N]
-Channel List: $0 --list-channels
-To show capabilities: $0 --capabilities
-To show version: $0 --version
-
-END
-  ;
+use XMLTV::Options qw/ParseOptions/;
+use XMLTV::Configure::Writer;
+use Scalar::Util qw(looks_like_number);
 
 # Use Log::TraceMessages if installed.
 BEGIN {
@@ -126,12 +115,6 @@ BEGIN {
     }
 }
 
-
-
-## our own prototypes first ...
-sub get_channels();
-sub get_page($);
-
 ## attributes of xmltv root element
 my $head = {
     'source-data-url'      => 'https://tv-spored.siol.net/kanali',
@@ -140,216 +123,119 @@ my $head = {
     'generator-info-url'   => 'http://xmltv.org/',
 };
 
-
-
 ## the timezone tv-spored.siol.net lives in is, CET/CEST
 my constant $TZ = "+0100";
 my constant $lang = "sl";
-
-
-
-## Parse argv now.  First do undocumented --cache option.
-XMLTV::Memoize::check_argv('XMLTV::Get_nice::get_nice_aux');
-
-
-
-my $opt_configure;
-my $opt_config_file;
-my $opt_gui;
-my $opt_output;
-my $opt_days = 4;
-my $opt_offset = 0;
-my $opt_quiet = 0;
-my $opt_slow = 0;
-my $opt_list_channels;
-my $opt_help;
-
-GetOptions(
-    'configure'      => \$opt_configure,
-    'config-file=s'  => \$opt_config_file,
-    'gui:s'          => \$opt_gui,
-    'output=s'       => \$opt_output,
-    'days=i'         => \$opt_days,
-    'offset=i'       => \$opt_offset,
-    'quiet'          => \$opt_quiet,
-    'slow'           => \$opt_slow,
-    'list-channels'  => \$opt_list_channels,
-    'help'           => \$opt_help,
-) or usage(0);
-
-usage(1) if $opt_help;
-
-XMLTV::Ask::init($opt_gui);
-
-## make sure offset+days arguments are within range
-die "neither offset nor days may be negative"
-  if($opt_offset < 0 || $opt_days < 0);
-
-
-## calculate global start/stop times ...
-my $grab_start = DateTime->now(time_zone => 'Europe/Ljubljana')->add( days => $opt_offset );
-my $grab_stop = DateTime->now(time_zone => 'Europe/Ljubljana')->add ( days => $opt_offset + $opt_days );
-
-my $mode = XMLTV::Mode::mode('grab', # default value
-    $opt_configure => 'configure',
-    $opt_list_channels => 'list-channels',
-);
-
-
-
-## initialize config file support
-my $config_file = XMLTV::Config_file::filename($opt_config_file, 'tv_grab_si', $opt_quiet);
-my @config_lines;
-
-if($mode eq 'configure') {
-    XMLTV::Config_file::check_no_overwrite($config_file);
-}
-elsif($mode eq 'grab' || $mode eq 'list-channels') {
-    @config_lines = XMLTV::Config_file::read_lines($config_file);
-}
-else { die("never heard of XMLTV mode $mode, sorry :-(") }
-
 
 ## initialize user agent
 my $ua = LWP::UserAgent->new(keep_alive => 300);
 $ua->agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:78.2) Gecko/20100101 Firefox/78.2 xmltv/$XMLTV::VERSION");
 $ua->env_proxy;
 
+my( $opt, $conf ) = ParseOptions( { 
+    grabber_name => "tv_grab_si",
+    capabilities => [qw/baseline manualconfig/],
+    stage_sub => \&config_stage,
+    listchannels_sub => \&list_channels,
+    version => "$XMLTV::VERSION",
+    description => "Slovenia (tv-spored.siol.net)",
+} );
 
-## hey, we can't live without channel data, so let's get those now!
-my $bar = new XMLTV::ProgressBar( 'getting list of channels', 1 )
-    if not $opt_quiet;
-
-my ($channels_ref, $channels_logo_ref) = get_channels();
-my %channels_logo = %$channels_logo_ref;
-my %channels = %$channels_ref;
-
-$bar->update() if not $opt_quiet;
-$bar->finish() if not $opt_quiet;
-
-
-my @requests;
-
-## read our configuration file now
-my $line = 1;
-foreach(@config_lines) {
-    $line ++;
-    next unless defined;
-
-    if (/^channel:?\s+(\S+)/) {
-        warn("\nConfigured channel $1 not available anymore. \nPlease reconfigure tv_grab_si.\n"),
-          next unless(defined($channels{$1}));
-        push @requests, $1;
-    } else {
-        warn "$config_file:$line: bad line\n";
-    }
+if (not defined( $conf->{'channel'} )) {
+    print STDERR "No channels selected in configfile " .
+                 $opt->{'config-file'} . "\n" .
+                 "Please run the grabber with --configure.\n";
+    exit 1;
 }
 
-## if we're requested to do so, write out a new config file ...
-if ($mode eq 'configure') {
-    open(CONFIG, ">$config_file") or die("cannot write to $config_file, due to: $!");
+sub config_stage
+{
+    my( $stage, $conf ) = @_;
 
-    ## now let's annoy the user, sorry, I meant ask ..
-    my @chs = sort keys %channels;
-    my @names = map { $channels{$_} } @chs;
-    my @qs = map { "add channel $_?" } @names;
-    my @want = ask_many_boolean(1, @qs);
+    # Sample stage_sub that only needs a single stage.
 
-    foreach (@chs) {
-        my $w = shift @want;
-        my $chname = shift @names;
+    die "Unknown stage $stage" if $stage ne "start";
 
-        warn("cannot read input, stopping to ask questions ..."), last if not defined $w;
+    my $result;
+    my $writer = new XMLTV::Configure::Writer( OUTPUT => \$result,
+                                                              encoding => 'utf-8' );
+    $writer->start( { grabber => 'tv_grab_si' } );
+    $writer->end( 'select-channels' );
 
-        print CONFIG '#' if not $w; #- comment line out if user answer 'no'
-
-        # shall we store the display name in the config file?
-        # leave it in, since it probably makes it a lot easier for the
-        # user to choose which channel to comment/uncommet - when manually
-        # viing the config file -- are there people who do that?
-        print CONFIG "channel $_ #$chname\n";
-    }
-
-    close CONFIG or warn "unable to nicely close the config file: $!";
-    say("Finished configuration.");
-
-    exit();
+    return $result;
 }
 
-
-
-## well, we don't have to write a config file, so, probably it's some xml stuff :)
-## if not, let's go dying ...
-die unless($mode eq 'grab' or $mode eq 'list-channels');
-
-my %writer_args;
-if (defined $opt_output) {
-    my $handle = new IO::File(">$opt_output");
-    die "cannot write to output file, $opt_output: $!" unless (defined $handle);
-    $writer_args{'OUTPUT'} = $handle;
-}
-
-$writer_args{'encoding'} = 'utf-8';
-
-
-if( defined( $opt_days )) {
-    $writer_args{offset} = $opt_offset;
-    $writer_args{days} = $opt_days;
-    $writer_args{cutoff} = "000000";
-}
-
-## create our writer object
-my $writer = new XMLTV::Writer(%writer_args);
-$writer->start($head);
-
-
-
-if ($mode eq 'list-channels') {
+sub list_channels
+{
+    my ( $conf, $opt ) = @_;
+    my $res;
+    my $writer = new XMLTV::Writer( OUTPUT => \$res, encoding => 'utf-8' );
+    $writer->start($head);
+    my ($channels_ref, $channels_logo_ref) = get_channels();
+    my %channels_logo = %$channels_logo_ref;
+    my %channels = %$channels_ref;
     foreach (keys %channels) {
         my %channel = ('id'           => $_,
                        'display-name' => [[$channels{$_}, $lang]],
                        'icon' => [{'src' => $channels_logo{$_}}]);
         $writer->write_channel(\%channel);
     }
-
     $writer->end();
-    exit();
+    return $res;
 }
 
+my $opt_offset = $opt->{offset};
+my $opt_days = $opt->{days};
+my @requests = $conf->{channel};
 
+## our own prototypes first ...
+sub get_channels();
 
-## there's only one thing, why we might exist: write out tvdata!
-die unless ($mode eq 'grab');
-die "No channels specified, run me with --configure flag\n" unless(scalar(@requests));
+my ($channels_ref, $channels_logo_ref) = get_channels();
+my %channels_logo = %$channels_logo_ref;
+my %channels = %$channels_ref;
 
+my %writer_args;
+$writer_args{'encoding'} = 'utf-8';
+$writer_args{offset} = $opt_offset;
+$writer_args{days} = $opt_days;
+$writer_args{cutoff} = "000000";
 
+## create our writer object
+my $writer = new XMLTV::Writer(%writer_args);
+$writer->start($head);
 
 ## write out <channel> tags
-foreach(@requests) {
-    my $id = $_;
+foreach my $id (@{$conf->{channel}}) {
     my %channel = ('id'           => $id,
-                   'display-name' => [[$channels{$_}, $lang]],
-                   'icon' => [{'src' => $channels_logo{$_}}]);
+                   'display-name' => [[$channels{$id}, $lang]],
+                   'icon' => [{'src' => $channels_logo{$id}}]);
     $writer->write_channel(\%channel);
 }
 
+## calculate global start/stop times ...
+my $grab_start = DateTime->now(time_zone => 'Europe/Ljubljana')->add( days => $opt_offset );
+my $grab_stop = DateTime->now(time_zone => 'Europe/Ljubljana')->add ( days => $opt_offset + $opt_days );
+
+my $bar = new XMLTV::ProgressBar({
+    name => "Grabing EPG",
+    count => scalar @{$conf->{channel}},
+}) unless ($opt->{quiet} || $opt->{debug});
+
 ## write out <programme> tags
-foreach(@requests) {
-    my $id = $_;
+foreach my $id (@{$conf->{channel}}) {
     grab_channel_data($id);
+    $bar->update() if defined $bar;
 }
+
+$bar->finish() && undef $bar if defined $bar;
 
 ## hey, looks like we've finished ...
 $writer->end();
 
-
 sub parse_show {
     my ($link, $id, $parse_date, $start_time, $end_time) = @_;
-    #my $link = @_[0];
-    #my $id = @_[1];
-    #my $parse_date = @_[2];
-    #my $start_time = @_[3];
-    #my $end_time = @_[4];
+    #warn "$link, $id, $parse_date, $start_time, $end_time";
     my $url = $head->{q(source-info-url)};
     my $tv_show = HTML::TreeBuilder->new();
     # put date in right format for website
@@ -393,17 +279,21 @@ sub parse_show {
     #$title_tag->objectify_text();
     my $title = $title_tag->look_down('_tag' => 'span');
     $show{'title'} = [[$title->as_text(), $lang]];
-
     my $sub_title = $title_tag->look_down('_tag' => 'span', 'class' => 'original-title');
     $show{'sub-title'} = [[$sub_title->as_text(), $lang]] if($sub_title);
 
     # Beschreibung
     my $desc = "";
     foreach my $description ($tv_show->look_down('_tag' => 'p', 'class' => 'content')) {
-        $desc = "$desc ".$description->as_text() if ($description);
+        if ($description) {
+            $desc = "$desc".$description->as_text();
+            my $icon = $description->look_down('itemprop' => 'image');
+            if ($icon) {
+                $show{icon} = [{'src' => $icon->attr_get_i('content')}];
+            }
+        }
     }
-    $show{desc} = [[ $desc, $lang ]] if ($desc);
-    $show{icon} = [{'src' => $tv_show->look_down('itemprop' => 'image')->attr_get_i('content')}];
+    $show{desc} = [[ $desc, $lang ]] if !($desc eq "");
 
     # Produktionsjahr
     #foreach my $year ($tv_show->look_down('class' => 'tv-detail-year tv-detail-short')) {
@@ -437,14 +327,33 @@ sub parse_show {
         push @{$show{credits}{director}}, $dir->look_down('itemprop' => 'name')->as_text();
     }
 
-    # Episode
+    # S/E
+    # Here is a lot of checks to prevent warnings
     if($meta->look_down('itemprop' => 'partOfSeason')) {
-        my $season = int($meta->look_down('itemprop' => 'seasonNumber')->as_text()) - 1;
-        my $episode = int($meta->look_down('itemprop' => 'episodeNumber')->as_text()) - 1;
+        my $season_el = $meta->look_down('itemprop' => 'seasonNumber');
+        my $episode_el = $meta->look_down('itemprop' => 'episodeNumber');
+        my $season = "";
+        my $episode = "";
+        if($season_el) {
+            my $season = int($season_el->as_text()) - 1;
+        }
+        if($episode_el) {
+            my $episode = int($episode_el->as_text()) - 1;
+        }
         $show{'episode-num'} = [[ "$season.$episode." , 'xmltv_ns' ]];
     }
 
-    $show{'star-rating'} = [substr($meta->as_trimmed_text(), -45, 3)."/10"];
+    # Stars
+    my $star = $meta->as_trimmed_text();
+    if(length($star) > 44) {
+        $star = substr($star, -45, 3);
+        if ($star) {
+            $star =~ s/,/./g;
+            if (looks_like_number($star)) {
+                $show{'star-rating'} = [$star."/10"];
+            }
+        }
+    }
 
     $writer->write_programme(\%show);
 }
@@ -507,24 +416,4 @@ sub get_channels() {
     $tb->delete;
 
     return (\%channels, \%channels_logo);
-}
-
-
-
-## get_page($url) :: try to download $url via http://, look for closing </body> tag or die
-sub get_page($) {
-    my $url = shift;
-    my $retry = 0;
-
-    local $SIG{__DIE__} = sub { die "\n$url: $_[0]" };
-
-    while($retry < 2) {
-        my $got = eval { get_nice($url . ($retry ? "&retry=$retry" : "")); };
-        $retry ++;
-
-        next if($@); # unable to download, doesn't look too good for us.
-        return $got;
-    }
-
-    die "cannot grab webpage $url (tried $retry times). giving up. sorry";
 }
