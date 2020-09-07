@@ -7,7 +7,8 @@
 # XMLTV 0.6.3
 
 ## Table of Contents
-- [XMLTV 0.6.2](#xmltv-063)
+
+- [XMLTV](#xmltv)
   * [Description](#description)
   * [Changes](#changes)
   * [Installation (Package)](#installation-package)
