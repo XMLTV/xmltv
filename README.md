@@ -166,6 +166,7 @@ Time::Seconds                 (tv_grab_huro, core module since 5.9.5)
 Tk                            (tv_check)
 Tk::TableMatrix               (tv_check)
 URI                           (for some of the grabbers, part of URI)
+URI::Encode                   (tv_grab_pt_vodafone)
 URI::Escape                   (for some of the grabbers, part of URI)
 XML::DOM                      (tv_grab_is)
 XML::LibXSLT                  (tv_grab_is)
@@ -185,6 +186,7 @@ Log::TraceMessages               (useful for debugging, not needed for normal us
 PerlIO::gzip                     (can make tv_imdb a bit faster)
 Term::ProgressBar                (displays pretty progress bars)
 Unicode::String                  (improved character handling in tv_to_latex)
+URI::Escape::XS                  (faster URI handling)
 ```
 
 ### JSON libraries
