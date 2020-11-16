@@ -135,13 +135,16 @@ sub grab {
 	    if (my($hour, $minute) =
 		$start->as_text() =~ /^(\d{2})[:.](\d{2})$/) {
 	      $title = $title->as_text();
-	      $desc  = $desc->as_text();
 
-	      debug(3, "List entry ${id} ($hour:$minute) $title");
-	      debug(4, $desc) if $desc;
+	      if (length($title)) {
+		$desc  = $desc->as_text();
 
-	      my $object = appendProgramme($opaque, $hour, $minute, $title);
-	      $object->description($desc);
+		debug(3, "List entry ${id} ($hour:$minute) $title");
+		debug(4, $desc) if $desc;
+
+		my $object = appendProgramme($opaque, $hour, $minute, $title);
+		$object->description($desc);
+	      }
 	    }
 	  }
 	}
