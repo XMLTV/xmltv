@@ -118,31 +118,34 @@ sub grab {
 	  if (my($new, $start_h, $start_m, $end_h, $end_m) =
 	      $time->as_text() =~ /^(.+)\s(\d{2})[:.](\d{2})\s-\s(\d{2})[:.](\d{2})/) {
 	    $title = $title->as_text();
-	    $desc  = $desc->as_text();
 
-	    # Detect day change
-	    if ($new ne $current) {
-	      $current = $new;
-	      shift(@offsets);
+	    if (length($title)) {
+	      $desc = $desc->as_text();
+
+	      # Detect day change
+	      if ($new ne $current) {
+		$current = $new;
+		shift(@offsets);
+	      }
+	      my $start = timeToEpoch($offsets[0], $start_h, $start_m);
+	      my $end   = timeToEpoch($offsets[0], $end_h,   $end_m);
+
+	      # Detect end time on next day
+	      if ($end < $start) {
+		# Are there enough day offsets left to handle a day change?
+		# No -> more programmes than we asked for, exit loop
+		last if @offsets < 2;
+		$end = timeToEpoch($offsets[1], $end_h, $end_m);
+	      }
+
+	      debug(3, "List entry ${id} ($start -> $end) $title");
+	      debug(4, $desc) if $desc;
+
+	      # Create program object
+	      my $object = fi::programme->new($id, "fi", $title, $start, $end);
+	      $object->description($desc);
+	      push(@objects, $object);
 	    }
-	    my $start = timeToEpoch($offsets[0], $start_h, $start_m);
-	    my $end   = timeToEpoch($offsets[0], $end_h,   $end_m);
-
-	    # Detect end time on next day
-	    if ($end < $start) {
-	      # Are there enough day offsets left to handle a day change?
-	      # No -> more programmes than we asked for, exit loop
-	      last if @offsets < 2;
-	      $end = timeToEpoch($offsets[1], $end_h, $end_m);
-	    }
-
-	    debug(3, "List entry ${id} ($start -> $end) $title");
-	    debug(4, $desc) if $desc;
-
-	    # Create program object
-	    my $object = fi::programme->new($id, "fi", $title, $start, $end);
-	    $object->description($desc);
-	    push(@objects, $object);
 	  }
 	}
       }
