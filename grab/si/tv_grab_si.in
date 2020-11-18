@@ -1,0 +1,442 @@
+#!/usr/bin/perl
+
+=pod
+
+=head1 NAME
+
+tv_grab_si - Grab TV listings for Slovenia (from siol.net webpage).
+
+=head1 SYNOPSIS
+
+tv_grab_si --help
+
+tv_grab_si [--config-file FILE] --configure
+
+tv_grab_si [--config-file FILE] [--output FILE] [--quiet]
+           [--days N] [--offset N]
+
+tv_grab_si --list-channels
+
+tv_grab_si --capabilities
+
+tv_grab_si --version
+
+=head1 DESCRIPTION
+
+Output TV listings for several channels available in Slovenia.
+The data comes from tv-spored.siol.net. The grabber relies on
+parsing HTML so it might stop working at any time.
+
+First run B<tv_grab_si --configure> to choose, which channels
+you want to download. Then running B<tv_grab_si> with no
+arguments will output listings in XML format to standard output.
+
+B<--configure> Ask for each available channel whether to download
+and write the configuration file.
+
+B<--config-file FILE> Set the name of the configuration file, the
+default is B<~/.xmltv/tv_grab_si.conf>.  This is the file
+written by B<--configure> and read when grabbing.
+
+B<--output FILE> Write to FILE rather than standard output.
+
+B<--days N> Grab N days.  The default is fourteen.
+
+B<--offset N> Start N days in the future.  The default is to start
+from now on (= zero).
+
+B<--quiet> Suppress the progress messages normally written to standard
+error.
+
+B<--list-channels> Write output giving <channel> elements for every
+channel available (ignoring the config file), but no programmes.
+
+B<--capabilities> Show which capabilities the grabber supports. For more
+information, see L<http://wiki.xmltv.org/index.php/XmltvCapabilities>
+
+B<--version> Show the version of the grabber.
+
+B<--help> print a help message and exit.
+
+
+=head1 SEE ALSO
+
+L<xmltv(5)>.
+
+=head1 AUTHORS
+
+Sagudev. Inspired by tv_grab_ch_search by Daniel Bittel.
+
+=head1 BUGS
+
+If you happen to find a bug, you're requested to send a mail to one of the
+XMLTV mailing lists, see webpages at http://sourceforge.net/projects/xmltv/.
+
+=cut
+
+use warnings;
+use strict;
+use Encode;
+use DateTime;
+use LWP::Simple;
+use XMLTV;
+use XMLTV::Supplement qw/GetSupplement/;
+use Getopt::Long;
+use HTML::TreeBuilder;
+use HTML::Entities;
+use URI::Escape;
+use URI::URL;
+use XMLTV::Ask;
+use XMLTV::ProgressBar;
+use XMLTV::DST;
+use XMLTV::Config_file;
+use XMLTV::Mode;
+use XMLTV::Get_nice;
+use XMLTV::Memoize;
+use XMLTV::Options qw/ParseOptions/;
+use XMLTV::Configure::Writer;
+use Scalar::Util qw(looks_like_number);
+
+# Use Log::TraceMessages if installed.
+BEGIN {
+    eval { require Log::TraceMessages };
+    if ($@) {
+        *t = sub {};
+        *d = sub { '' };
+    }
+    else {
+        *t = \&Log::TraceMessages::t;
+        *d = \&Log::TraceMessages::d;
+    }
+}
+
+## attributes of xmltv root element
+my $head = {
+    'source-data-url'      => 'https://tv-spored.siol.net/kanali',
+    'source-info-url'      => 'https://tv-spored.siol.net',
+    'generator-info-name'  => 'XMLTV',
+    'generator-info-url'   => 'http://xmltv.org/',
+};
+
+## the timezone tv-spored.siol.net lives in is, CET/CEST
+my constant $TZ = "+0100";
+my constant $lang = "sl";
+
+## initialize user agent
+my $ua = LWP::UserAgent->new(keep_alive => 300);
+$ua->agent("xmltv/$XMLTV::VERSION");
+$ua->env_proxy;
+
+my( $opt, $conf ) = ParseOptions( { 
+    grabber_name => "tv_grab_si",
+    capabilities => [qw/baseline manualconfig apiconfig/],
+    stage_sub => \&config_stage,
+    listchannels_sub => \&list_channels,
+    version => "$XMLTV::VERSION",
+    description => "Slovenia (tv-spored.siol.net)",
+} );
+
+if (not defined( $conf->{'channel'} )) {
+    print STDERR "No channels selected in configfile " .
+                 $opt->{'config-file'} . "\n" .
+                 "Please run the grabber with --configure.\n";
+    exit 1;
+}
+
+sub config_stage
+{
+    my( $stage, $conf ) = @_;
+
+    # Sample stage_sub that only needs a single stage.
+
+    die "Unknown stage $stage" if $stage ne "start";
+
+    my $result;
+    my $writer = new XMLTV::Configure::Writer( OUTPUT => \$result,
+                                                              encoding => 'utf-8' );
+    $writer->start( { grabber => 'tv_grab_si' } );
+    $writer->end( 'select-channels' );
+
+    return $result;
+}
+
+sub list_channels
+{
+    my ( $conf, $opt ) = @_;
+    my $res;
+    my $writer = new XMLTV::Writer( OUTPUT => \$res, encoding => 'utf-8' );
+    $writer->start($head);
+    my ($channels_ref, $channels_logo_ref) = get_channels();
+    my %channels_logo = %$channels_logo_ref;
+    my %channels = %$channels_ref;
+    foreach (keys %channels) {
+        my %channel = ('id'           => $_,
+                       'display-name' => [[$channels{$_}, $lang]],
+                       'icon' => [{'src' => $channels_logo{$_}}]);
+        $writer->write_channel(\%channel);
+    }
+    $writer->end();
+    return $res;
+}
+
+my $opt_offset = $opt->{offset};
+my $opt_days = $opt->{days};
+my @requests = $conf->{channel};
+
+# 4 is max
+if ($opt_days > 4) {
+    $opt_days = 4
+}
+
+## our own prototypes first ...
+sub get_channels();
+
+my ($channels_ref, $channels_logo_ref) = get_channels();
+my %channels_logo = %$channels_logo_ref;
+my %channels = %$channels_ref;
+
+my %writer_args;
+$writer_args{'encoding'} = 'utf-8';
+$writer_args{offset} = $opt_offset;
+$writer_args{days} = $opt_days;
+$writer_args{cutoff} = "000000";
+
+## create our writer object
+my $writer = new XMLTV::Writer(%writer_args);
+$writer->start($head);
+
+## write out <channel> tags
+foreach my $id (@{$conf->{channel}}) {
+    my %channel = ('id'           => $id,
+                   'display-name' => [[$channels{$id}, $lang]],
+                   'icon' => [{'src' => $channels_logo{$id}}]);
+    $writer->write_channel(\%channel);
+}
+
+## calculate global start/stop times ...
+my $grab_start = DateTime->now(time_zone => 'Europe/Ljubljana')->add( days => $opt_offset );
+my $grab_stop = DateTime->now(time_zone => 'Europe/Ljubljana')->add ( days => $opt_offset + $opt_days );
+
+my $bar = new XMLTV::ProgressBar({
+    name => "Grabing EPG",
+    count => scalar @{$conf->{channel}},
+}) unless ($opt->{quiet} || $opt->{debug});
+
+## write out <programme> tags
+foreach my $id (@{$conf->{channel}}) {
+    grab_channel_data($id);
+    $bar->update() if defined $bar;
+}
+
+$bar->finish() && undef $bar if defined $bar;
+
+## hey, looks like we've finished ...
+$writer->end();
+
+sub parse_show {
+    my ($link, $id, $parse_date, $start_time, $end_time) = @_;
+    #warn "$link, $id, $parse_date, $start_time, $end_time";
+    my $url = $head->{q(source-info-url)};
+    my $tv_show = HTML::TreeBuilder->new();
+    # put date in right format for website
+    my $req = HTTP::Request->new(GET => "$url"."$link");
+    $req->header('Accept' => 'text/html');
+    $tv_show->ignore_unknown(0); # otherwise, html5 tags like section are stripped out
+    $tv_show->parse(($ua->request($req))->content)
+        or die "cannot parse content of $url"."$link";
+    $tv_show->eof;
+
+    my %show;
+    $show{channel} = $id;
+
+    $show{start} = DateTime->new (
+        year => $parse_date->year()
+        ,month => $parse_date->month()
+        ,day   => $parse_date->day()
+        ,hour  => substr($start_time, 0, 2)
+        ,minute => substr($start_time, -2)
+        ,second => 0 # no data
+        ,time_zone => 'Europe/Ljubljana'
+    )->strftime( "%Y%m%d%H%M%S %z" );
+
+    if(int(substr($start_time, 0, 2)) > int(substr($end_time, 0, 2))) { # new day
+        $parse_date = $parse_date->add ( days => 1 );
+    }
+    
+    $show{stop} = DateTime->new (
+        year => $parse_date->year()
+        ,month => $parse_date->month(),
+        ,day   => $parse_date->day(),
+        ,hour  => substr($end_time, 0, 2)
+        ,minute => substr($end_time, -2)
+        ,second => 0 # no data
+        ,time_zone => 'Europe/Ljubljana'
+    )->strftime( "%Y%m%d%H%M%S %z" );
+
+    #$tv_show = $tv_show->look_down('itemtype' => 'http://schema.org/Episode');
+    my $title_tag = $tv_show->look_down('_tag' => 'h2', 'class' => 'inline-heading');
+    
+    # sometimes there is an error on site, in list there is programme 
+    # but if you click on it it gives back to homepage, so skip this errors
+    if($title_tag) {
+        my $title = $title_tag->look_down('_tag' => 'span');
+        $show{'title'} = [[$title->as_text(), $lang]];
+        my $sub_title = $title_tag->look_down('_tag' => 'span', 'class' => 'original-title');
+        $show{'sub-title'} = [[$sub_title->as_text(), $lang]] if($sub_title);
+    } else {
+        return;
+    }
+    
+
+    # Beschreibung
+    my $desc = "";
+    foreach my $description ($tv_show->look_down('_tag' => 'p', 'class' => 'content')) {
+        if ($description) {
+            $desc = "$desc".$description->as_text();
+            my $icon = $description->look_down('itemprop' => 'image');
+            if ($icon) {
+                $show{icon} = [{'src' => $icon->attr_get_i('content')}];
+            }
+        }
+    }
+    $show{desc} = [[ $desc, $lang ]] if !($desc eq "");
+
+    # Produktionsjahr
+    #foreach my $year ($tv_show->look_down('class' => 'tv-detail-year tv-detail-short')) {
+    #    $show{date} = $year->right()->as_text();
+    #}
+
+    my $meta = $tv_show->look_down('_tag' => 'p', 'class' => 'event-meta');
+
+    # category
+    push @{$show{category}}, [substr($meta->as_text(), 0, index($meta->as_text(), '/')), $lang ];
+    my $genre = $meta->look_down('itemprop' => 'genre');
+    if($genre) {
+        push @{$show{category}}, [$genre->as_text(), $lang ];
+    };
+
+    # Produktionsland
+    #foreach my $country ($tv_show->look_down('class' => 'tv-detail-country tv-detail-short')) {
+    #    my @countries = split(m/\s*[\/,]\s*/, $country->right()->as_text());
+    #    foreach (@countries) {
+    #        push @{$show{country}}, [$_, $lang ];
+    #    }
+    #}
+
+    # Cast
+    foreach my $cast ($tv_show->look_down('itemprop' => 'actor')) {
+        push @{$show{credits}{actor}}, $cast->look_down('itemprop' => 'name')->as_text();
+    }
+
+    # Director
+    foreach my $dir ($tv_show->look_down('itemprop' => 'director')) {
+        push @{$show{credits}{director}}, $dir->look_down('itemprop' => 'name')->as_text();
+    }
+
+    # S/E
+    # Here is a lot of checks to prevent warnings
+    if($tv_show->look_down('itemprop' => 'partOfSeason')) {
+        my $season_el = $tv_show->look_down('itemprop' => 'seasonNumber');
+        my $episode_el = $tv_show->look_down('itemprop' => 'episodeNumber');
+        my $season = "";
+        my $episode = "";
+        if($season_el) {
+            $season = int($season_el->as_text()) - 1;
+        }
+        if($episode_el) {
+            $episode = int($episode_el->as_text()) - 1;
+        }
+        $show{'episode-num'} = [[ "$season.$episode." , 'xmltv_ns' ]];
+    }
+
+    # Stars
+    my $star = $meta->as_trimmed_text();
+    if(length($star) > 44) {
+        $star = substr($star, -45, 3);
+        if ($star) {
+            $star =~ s/,/./g;
+            if (looks_like_number($star)) {
+                $show{'star-rating'} = [$star."/10"];
+            }
+        }
+    }
+
+    $writer->write_programme(\%show);
+}
+
+# Can't call method "extract_links" on an undefined value
+sub parse_show_list {
+    my ($tb, $parse_date, $id) = @_;
+    my $table = $tb->look_down('class' => 'table-list-rows');
+    if ($table) {
+        for (@{  $tb->look_down('class' => 'table-list-rows')->extract_links('a')  }) {
+            # some things are parsed here
+            my $element=@$_[1]->look_down('class' => 'col-9');
+            my $start_time = $element->attr_get_i('data-start_time');
+            my $end_time = $element->attr_get_i('data-end_time');
+            parse_show(@$_[0], $id, $parse_date->clone(), $start_time, $end_time);
+        };
+        return 1;
+    } else {
+        return 0;
+    }
+}
+
+sub grab_channel_data {
+    my ($id) = @_;
+    my $grabDate = $grab_start->clone();
+    my $url = $head->{q(source-info-url)};
+    $grabDate->add(days => -1);
+    my $retry = 1;
+    while ( $grabDate->add(days => 1) < $grab_stop ) {
+        do {
+            my $tb = HTML::TreeBuilder->new();
+            # put date in right format for website
+            my $loop_date = $grabDate->year() . substr("0".$grabDate->month(),-2) . substr("0".$grabDate->day(),-2);
+            my $req = HTTP::Request->new(GET => "$url/kanal/$id/datum/$loop_date");
+            warn "Getting for channel $id date: $loop_date" unless ($opt->{quiet} || $opt->{debug});
+            $req->header('Accept' => 'text/html');
+            $tb->ignore_unknown(0); # otherwise, html5 tags like section are stripped out
+            $tb->parse(($ua->request($req))->content)
+                or die "cannot parse content of $url/$id/$loop_date";
+            $tb->eof;
+
+            if (parse_show_list($tb, $grabDate, $id)) {
+                $retry = 0
+            } else {
+                $retry = $retry + 1;
+                warn "Retrying $retry" unless ($opt->{quiet} || $opt->{debug});
+            }
+            $tb->delete();
+            
+            if ($retry == 10) {
+                warn "Too much retries, skipping $id/$loop_date" unless ($opt->{quiet} || $opt->{debug});
+                $retry = 0
+            }
+        } while ($retry > 0)
+    }
+}
+
+## get channel listing
+sub get_channels() {
+    my %channels;
+    my %channels_logo;
+    my $url=$head->{q(source-data-url)};
+
+    my $tb=new HTML::TreeBuilder();
+    $tb->parse($ua->get($url)->content)
+        or die "cannot parse content of $url";
+    $tb->eof;
+
+    ## getting the channels directly selectable
+    foreach($tb->look_down('_tag' => 'a', class => 'row')) {
+        my $channel_name = ($_->look_down('_tag' => 'div', class => 'col-11'))->as_text;
+        my $channel_logo = ($_->look_down('_tag' => 'img'))->attr_get_i('src');
+        my $id = substr($_->attr_get_i('href'), 7);
+        $channels{uri_escape($id)} = $channel_name;
+        $channels_logo{uri_escape($id)} = "http:" . $channel_logo;
+    }
+    $tb->delete;
+
+    return (\%channels, \%channels_logo);
+}
