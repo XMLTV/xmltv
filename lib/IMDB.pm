@@ -2007,7 +2007,7 @@ sub readKeywords($$$$)
 	    }
 	    last;
 	}
-	elsif ( $lineCount > 100000 ) {
+	elsif ( $lineCount > 150000 ) {		# line 101935 as at 2020-12-23
 	    $self->error("$file: stopping at line $lineCount, didn't see \"THE KEYWORDS LIST\" line");
 	    closeMaybeGunzip($file, $fh);
 	    return(-1);
