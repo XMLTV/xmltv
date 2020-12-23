@@ -1439,7 +1439,7 @@ sub checkFiles () {
 	if ( not $filenameExists and not $filenameGzExists ) {
 	    # Just report one of the filenames, keep the message simple.
 	    warn "$filenameGz does not exist\n";
-            if ( $self->{optionalStages}{$file} ) {
+            if ( $self->{optionalStages}{$file} && lc($self->{stageToRun}) eq 'all' ) {
                 warn "$file will not be added to database\n";
             } else {
                 $missingListFiles{$file}=$filenameGz;
