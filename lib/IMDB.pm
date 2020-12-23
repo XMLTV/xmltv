@@ -2788,8 +2788,8 @@ sub invokeStage($$)
 
 	if ( 1 ) {
 	    # fill in default for movies we didn't have a director for
-	    for my $key (keys %movies) {
-		if ( !length($movies{$key})) {
+	    while (my ($key, $val) = each (%movies)) {
+		if (!length($val)) {
 		    $movies{$key}="<>";
 		}
 	    }
@@ -2880,8 +2880,8 @@ sub invokeStage($$)
 	}
 	if ( 1 ) {
 	    # fill in placeholder if no actors were found
-	    for my $key (keys %movies) {
-		if ( !($movies{$key}=~m/$tab/o) ) {
+	    while (my ($key, $val) = each (%movies)) {
+		if ( !($val=~m/$tab/o) ) {
 		    $movies{$key}.=$tab."<>";
 		}
 	    }
@@ -2928,8 +2928,7 @@ sub invokeStage($$)
 
 	if ( 1 ) {
 	    # fill in placeholder if no genres were found
-	    for my $key (keys %movies) {
-		my $val=$movies{$key};
+	    while (my ($key, $val) = each (%movies)) {
 		my $t=index($val, $tab);
 		if ( $t == -1 ) {
 		    die "corrupt entry '$key' '$val'";
@@ -2982,9 +2981,7 @@ sub invokeStage($$)
 
 	if ( 1 ) {
 	    # fill in placeholder if no genres were found
-	    for my $key (keys %movies) {
-		my $val=$movies{$key};
-
+	    while (my ($key, $val) = each (%movies)) {
 		my $t=index($val, $tab);
 		if ( $t == -1  ) {
 		    die "corrupt entry '$key' '$val'";
@@ -3040,8 +3037,7 @@ sub invokeStage($$)
 
 	if ( 1 ) {
 	    # fill in default for movies we didn't have any keywords for
-	    for my $key (keys %movies) {
-		my $val=$movies{$key};
+	    while (my ($key, $val) = each (%movies)) {
 		#keyword is 6th entry
 		my $t = 0;
 		for my $i (0..4) {
@@ -3097,8 +3093,7 @@ sub invokeStage($$)
 	}
 	if ( 1 ) {
 	    # fill in default for movies we didn't have any plot for
-	    for my $key (keys %movies) {
-		my $val=$movies{$key};
+	    while (my ($key, $val) = each (%movies)) {
 		#plot is 7th entry
 		my $t = 0;
 		for my $i (0..5) {
