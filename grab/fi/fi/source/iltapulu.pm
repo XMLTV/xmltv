@@ -32,33 +32,38 @@ sub channels {
   my %channels;
 
   # Fetch & parse HTML
-  my $root = fetchTree("https://www.iltapulu.fi/?&all=1");
+  my $root = fetchTree("https://www.iltapulu.fi/kaikki-kanavat",
+                       undef, undef, 1);
   if ($root) {
     #
-    # Channel list can be found in table rows
+    # Channel list can be found in sections
     #
-    #  <table class="channel-row">
-    #   <tbody>
-    #    <tr>
-    #     <td class="channel-name">...</td>
-    #     <td class="channel-name">...</td>
+    #  <div id="content">
+    #   <div id="programtable" class="programtable-running">
+    #    <section id="channel-1" ...>
+    #     <a href="/kanava/yle-tv1">
+    #      <h2 class="channel-logo">
+    #       <img src="/static/img/kanava/yle_tv1.png" alt="YLE TV1 tv-ohjelmat 26.12.2020">
+    #      </h2>
+    #     </a>
     #     ...
-    #    </tr>
-    #   </tbody>
-    #   ...
-    #  </table>
-    #  ...
+    #    </section>
+    #    ...
+    #   </div>
+    #  </div>
     #
-    if (my @tables = $root->look_down("class" => "channel-row")) {
-      foreach my $table (@tables) {
-	if (my @cells = $table->look_down("class" => "channel-name")) {
-	  foreach my $cell (@cells) {
-	    if (my $image = $cell->find("img")) {
+    if (my $table = $root->look_down("id" => "programtable")) {
+      if (my @sections = $table->look_down("_tag" => "section",
+					   "id" => qr/^channel-\d+$/)) {
+	foreach my $section (@sections) {
+	  if (my $header = $section->look_down("class" => "channel-logo")) {
+	    if (my $image = $header->find("img")) {
 	      my $name = $image->attr("alt");
-	      $name =~ s/\s+tv-ohjelmat$//;
+	      $name =~ s/\s+tv-ohjelmat.*$//;
 
 	      if (defined($name) && length($name)) {
-		my $channel_id = (scalar(keys %channels) + 1) . ".iltapulu.fi";
+		my($channel_id) = $section->attr("id") =~ /(\d+)$/;
+		$channel_id .= ".iltapulu.fi";
 		debug(3, "channel '$name' ($channel_id)");
 		$channels{$channel_id} = "fi $name";
 	      }
