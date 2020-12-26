@@ -23,7 +23,7 @@ fi::common->import();
 # Description
 sub description { 'telkku.com' }
 
-my %categories = (
+our %categories = (
   SPORTS => "urheilu",
   MOVIE  => "elokuvat",
 );
@@ -52,7 +52,7 @@ sub _getJSON($) {
 }
 
 # cache for group name to API ID mapping
-my %group2id;
+our %group2id;
 
 # Grab channel list
 sub channels {
