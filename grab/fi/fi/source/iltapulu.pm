@@ -23,6 +23,20 @@ use Carp;
 
 # Import from internal modules
 fi::common->import();
+fi::programmeStartOnly->import();
+
+# Category mapping
+our %categories = (
+  e  => "elokuvat",
+  f   => "fakta",
+  kf  => "kotimainen fiktio",
+  l   => "lapsi",
+  nan => undef, # ??? e.g. "Astral TV"
+  u   => "uutiset",
+  ur  => "urheilu",
+  us  => "ulkomaiset sarjat",
+  vm  => "viihde", # "ja musiiki"???
+);
 
 # Description
 sub description { 'iltapulu.fi' }
@@ -32,33 +46,38 @@ sub channels {
   my %channels;
 
   # Fetch & parse HTML
-  my $root = fetchTree("https://www.iltapulu.fi/?&all=1");
+  my $root = fetchTree("https://www.iltapulu.fi/kaikki-kanavat",
+                       undef, undef, 1);
   if ($root) {
     #
-    # Channel list can be found in table rows
+    # Channel list can be found in sections
     #
-    #  <table class="channel-row">
-    #   <tbody>
-    #    <tr>
-    #     <td class="channel-name">...</td>
-    #     <td class="channel-name">...</td>
+    #  <div id="content">
+    #   <div id="programtable" class="programtable-running">
+    #    <section id="channel-1" ...>
+    #     <a href="/kanava/yle-tv1">
+    #      <h2 class="channel-logo">
+    #       <img src="/static/img/kanava/yle_tv1.png" alt="YLE TV1 tv-ohjelmat 26.12.2020">
+    #      </h2>
+    #     </a>
     #     ...
-    #    </tr>
-    #   </tbody>
-    #   ...
-    #  </table>
-    #  ...
+    #    </section>
+    #    ...
+    #   </div>
+    #  </div>
     #
-    if (my @tables = $root->look_down("class" => "channel-row")) {
-      foreach my $table (@tables) {
-	if (my @cells = $table->look_down("class" => "channel-name")) {
-	  foreach my $cell (@cells) {
-	    if (my $image = $cell->find("img")) {
+    if (my $table = $root->look_down("id" => "programtable")) {
+      if (my @sections = $table->look_down("_tag" => "section",
+					   "id" => qr/^channel-\d+$/)) {
+	foreach my $section (@sections) {
+	  if (my $header = $section->look_down("class" => "channel-logo")) {
+	    if (my $image = $header->find("img")) {
 	      my $name = $image->attr("alt");
-	      $name =~ s/\s+tv-ohjelmat$//;
+	      $name =~ s/\s+tv-ohjelmat.*$//;
 
 	      if (defined($name) && length($name)) {
-		my $channel_id = (scalar(keys %channels) + 1) . ".iltapulu.fi";
+		my($channel_id) = $section->attr("id") =~ /(\d+)$/;
+		$channel_id .= ".iltapulu.fi";
 		debug(3, "channel '$name' ($channel_id)");
 		$channels{$channel_id} = "fi $name";
 	      }
@@ -84,98 +103,65 @@ sub grab {
   return unless my($channel) = ($id =~ /^([-\w]+)\.iltapulu\.fi$/);
 
   # Fetch & parse HTML
-  my $root = fetchTree("https://www.iltapulu.fi/?all=1&date=" . $today->ymdd());
+  my $root = fetchTree("https://www.iltapulu.fi/" . $today->ymdd(),
+		       undef, undef, 1);
   if ($root) {
-    my $count = 0;
-    my @objects;
+    my $opaque = startProgrammeList($id, "fi");
 
     #
-    # Programme data is contained inside a div class="<full-row>"
+    # Programme data is contained inside a li class="g-<category>"
     #
-    #  <table class="channel-row">
-    #   <tbody>
-    #    <tr>
-    #     <td class="channel-name">...</td>
-    #     <td class="channel-name">...</td>
-    #     ...
-    #    </tr>
-    #    <tr class="full-row...">
-    #     <td>
-    #      <div class="schedule">
-    #       <div class="full-row" data-starttime="1424643300" data-endtime="1424656800">
-    #        <table>
-    #         <tr>
-    #          <td class="time">00.15</td>
-    #          <td class="title[ movie]">
-    #           <a class="program-open..." ... title="... description ...">
-    #            Uutisikkuna
-    #           </a>
-    #          </td>
-    #         </tr>
-    #        </table>
-    #       </div>
-    #      </div>
+    #  <div id="content">
+    #   <div id="programtable" class="programtable-running">
+    #    <section id="channel-1" ...>
+    #     <a href="/kanava/yle-tv1">
+    #      <h2 class="channel-logo">
+    #       <img src="/static/img/kanava/yle_tv1.png" alt="YLE TV1 tv-ohjelmat 26.12.2020">
+    #      </h2>
+    #     </a>
+    #     <ul>
+    #      <li class="running g-e">
+    #       <time datetime="2020-12-26T15:20:00+02:00">15.20</time>
+    #       <b class="pl">
+    #        <a href="/joulumaa" class="op" ... title="... description ...">
+    #         Joulumaa
+    #        </a>
+    #        ...
+    #       </b>
+    #       ...
+    #      </li>
     #      ...
-    #     </td>
-    #     ...
-    #    </tr>
-    #    ...
-    #   </tbody>
-    #  </table>
-    #  ...
+    #     </ul>
+    #     <ul>
     #
-    if (my @tables = $root->look_down("class" => "channel-row")) {
+    if (my $table = $root->look_down("id" => "programtable")) {
+      if (my $section = $table->look_down("_tag" => "section",
+					  "id" => qr/^channel-${channel}/)) {
+	if (my @entries = $section->look_down("_tag" => "li")) {
+	  foreach my $entry (@entries) {
+	    my $start = $entry->look_down("_tag" => "time");
+	    my $link  = $entry->look_down("class" => "op");
 
-     TABLES:
-      foreach my $table (@tables) {
-	if (my @cells = $table->look_down("class" => "channel-name")) {
+	    if ($start && $link) {
+	      if (my($hour, $minute) =
+		  $start->as_text() =~ /^(\d{2})[:.](\d{2})$/) {
+	        my $title = $link->as_text();
 
-	  # Channel in this table?
-	  my $index = $channel - $count - 1;
-	  $count   += @cells;
-	  if ($channel <= $count) {
+	        if (length($title)) {
+		  my $desc      = $link->attr("title");
+		  my($category) = ($entry->attr("class") =~ /g-(\w+)$/);
+		  $category = $categories{$category} if $category;
 
-	    # Extract from each row the div's from the same index
-	    my @divs;
-	    if (my @rows = $table->look_down("_tag"  => "tr",
-					     "class" => qr/full-row/)) {
-	      foreach my $row (@rows) {
-		my $children = $row->content_array_ref;
-		if ($children) {
-		  my $td = $children->[$index];
-		  push(@divs, $td->look_down("class" => qr/full-row/))
-		    if defined($td);
-		}
-	      }
-	    }
-
-	    for my $div (@divs) {
-	      my $start = $div->attr("data-starttime");
-	      my $end   = $div->attr("data-endtime");
-	      my $link  = $div->look_down("class" => qr/program-open/);
-
-	      if ($start && $end && $link) {
-		my $title = $link->as_text();
-
-		if (length($title)) {
-		  my $desc     = $link->attr("title");
-		  my $category = ($link->parent()->attr("class") =~ /movie/) ? "elokuvat" : undef;
-
-		  debug(3, "List entry ${id} ($start -> $end) $title");
+		  debug(3, "List entry ${id} ($hour:$minute) $title");
 		  debug(4, $desc)     if $desc;
 		  debug(4, $category) if defined $category;
 
-		  # Create program object
-		  my $object = fi::programme->new($id, "fi", $title, $start, $end);
-		  $object->category($category);
+		  my $object = appendProgramme($opaque, $hour, $minute, $title);
 		  $object->description($desc);
-		  push(@objects, $object);
+		  $object->category($category);
 		}
 	      }
 	    }
-
-	    # skip the rest of the data
-	    last TABLES;
 	  }
 	}
       }
@@ -184,10 +170,11 @@ sub grab {
     # Done with the HTML tree
     $root->delete();
 
-    # Fix overlapping programmes
-    fi::programme->fixOverlaps(\@objects);
-
-    return(\@objects);
+    # Convert list to program objects
+    #
+    # First entry always starts on $yesteday
+    # Last entry always ends on $tomorrow.
+    return(convertProgrammeList($opaque, $yesterday, $today, $tomorrow));
   }
 
   return;

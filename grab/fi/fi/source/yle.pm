@@ -22,7 +22,7 @@ fi::common->import();
 # Description
 sub description { 'yle.fi' }
 
-my %languages = (
+our %languages = (
     "fi" => [ "areena", "opas"  ],
     "sv" => [ "arenan", "guide" ],
 );

@@ -20,7 +20,7 @@ fi::common->import();
 fi::programmeStartOnly->import();
 
 # Cleanup filter regexes
-my $cleanup_match = qr!\s*(?:(?:\d+\.\s+)?(?:Kausi|Jakso|Osa)\.?(?:\s+(:?\d+/)?\d+\.\s+)?){1,2}!i;
+our $cleanup_match = qr!\s*(?:(?:\d+\.\s+)?(?:Kausi|Jakso|Osa)\.?(?:\s+(:?\d+/)?\d+\.\s+)?){1,2}!i;
 
 # Description
 sub description { 'foxtv.fi' }
