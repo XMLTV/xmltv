@@ -1653,6 +1653,7 @@ sub readMoviesOrGenres($$$$)
 		$lineCount++;
 		my $line=$_;
 		#print "read line $lineCount:$line\n";
+		last if ( $self->{sample} != 0 && $self->{sample} < $lineCount );	# undocumented option (used in debugging)
 
 		# end is line consisting of only '-'
 		last if ( $line=~m/^\-\-\-\-\-\-\-+/o );
@@ -1794,6 +1795,7 @@ sub readCastOrDirectors($$$)
 		my $line=$_;
 		$line=~s/\n$//o;
 		#$self->status("read line $lineCount:$line");
+		last if ( $self->{sample} != 0 && $self->{sample} < $lineCount );	# undocumented option (used in debugging)
 
 		# end is line consisting of only '-'
 		last if ( $line=~m/^\-\-\-\-\-\-\-+/o );
@@ -1948,6 +1950,7 @@ sub readRatings($$$$)
 		$lineCount++;
 		my $line=$_;
 		#print "read line $lineCount:$line";
+		last if ( $self->{sample} != 0 && $self->{sample} < $lineCount );	# undocumented option (used in debugging)
 
 		$line=~s/\n$//o;
 
@@ -2027,6 +2030,7 @@ sub readKeywords($$$$)
 	my $count=0;
 	while(<$fh>) {
 		$lineCount++;
+		last if ( $self->{sample} != 0 && $self->{sample} < $lineCount );	# undocumented option (used in debugging)
 		my $line=$_;
 		chomp($line);
 		next if ($line =~ m/^\s*$/);
@@ -2112,6 +2116,7 @@ sub readPlots($$$$)
 	my $count=0;
 	while(<$fh>) {
 		$lineCount++;
+		last if ( $self->{sample} != 0 && $self->{sample} < $lineCount );	# undocumented option (used in debugging)
 		my $line=$_;
 		chomp($line);
 		next if ($line =~ m/^\s*$/);
