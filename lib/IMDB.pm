@@ -3138,7 +3138,7 @@ sub invokeStage($$)
 			my $next_update=0;
 
 			my $count=0;
-			for my $key (keys %movies) {
+			while (my ($key, $val) = each (%movies)) {
 				my $dbkey=$key;
 
 				# drop episode information - ex: {Twelve Angry Men (1954)}
