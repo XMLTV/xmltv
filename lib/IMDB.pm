@@ -1672,10 +1672,10 @@ sub readMoviesOrGenres($$$$)
 				$mkey=~s/\s*\{\{SUSPENDED\}\}//o;
 
 				# ignore {Twelve Angry Men (1954)}
-				$mkey=~s/\s*\{[^\}]+\}//go;
+				#$mkey=~s/\s*\{[^\}]+\}//go;
 
 				# skip enties that have {} in them since they're tv episodes
-				#next if ( $mkey=~s/\s*\{[^\}]+\}$//o );
+				next if ( $mkey=~m/\s*\{[^\}]+\}$/ );
 
 				my $genre=substr($line, $tab);
 
@@ -1691,7 +1691,8 @@ sub readMoviesOrGenres($$$$)
 				}
 			}
 			else {
-				push(@{$self->{movies}}, $mkey);
+				push(@{$self->{movies}}, $mkey) unless ( $mkey=~m/\s*\{[^\}]+\}$/ ); # skip tv episodes
+				
 				# returned count is number of titles found
 				$count++;
 			}
@@ -1856,7 +1857,8 @@ sub readCastOrDirectors($$$)
 
 		# [honir] this is wrong - this puts cast from all the episodes as though they are in the entire series!
 		# ##ignore {Twelve Angry Men (1954)}
-		$line=~s/\s*\{[^\}]+\}//o;
+		#$line=~s/\s*\{[^\}]+\}//o;
+		next if ( $line=~m/\s*\{[^\}]+\}/ ); # skip tv episodes
 
 		if ( $whatAreWeParsing < 3 ) {
 			if ( $line=~s/\s*\(aka ([^\)]+)\).*$//o ) {
@@ -1959,6 +1961,8 @@ sub readRatings($$$$)
 		# end is line consisting of only '-'
 		last if ( $line=~m/^\-\-\-\-\-\-\-+/o );
 
+		next if ( $line=~m/\s*\{[^\}]+\}$/ ); # skip tv episodes
+
 		# e.g. New  Distribution  Votes  Rank  Title
 		#			0000000133  225568   8.9  12 Angry Men (1957)
 		if ( $line=~s/^\s+([\.|\*|\d]+)\s+(\d+)\s+(\d+)\.(\d+)\s+//o ) {
@@ -2036,6 +2040,8 @@ sub readKeywords($$$$)
 		next if ($line =~ m/^\s*$/);
 		my ($title, $keyword) = ($line =~ m/^(.*)\s+(\S+)\s*$/);
 		if ( defined($title) and defined($keyword) ) {
+
+			next if ( $title=~m/\s*\{[^\}]+\}$/ ); # skip tv episodes
 
 			my ($episode) = $title =~ m/^.*\s+(\{.*\})$/;
 
@@ -2122,6 +2128,8 @@ sub readPlots($$$$)
 		next if ($line =~ m/^\s*$/);
 		my ($title, $episode) = ($line =~ m/^MV:\s(.*?)\s?(\{.*\})?$/);
 		if ( defined($title) ) {
+
+			next if ( $title=~m/\s*\{[^\}]+\}$/ ); # skip tv episodes
 
 			# ignore anything which is an episode (e.g. "{Doctor Who (#10.22)}" )
 			if ( !defined $episode || $episode eq '' )
