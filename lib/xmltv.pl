@@ -16,6 +16,13 @@
 
 use File::Basename;
 use Carp;
+use XMLTV;
+use Date::Manip;
+use DateTime;
+use Params::Validate;
+use Date::Language;
+use Class::MethodMaker;
+use Class::MethodMaker::Engine;
 
 $Carp::MaxEvalLen=40; # limit confess output
 
@@ -68,7 +75,7 @@ print STDERR "Timezone is $ENV{TZ}\n" unless $opt_quiet;
 $cmd = shift || "";
 
 # --version (and abbreviations thereof)
-my $VERSION = '0.6.3';
+my $VERSION = '0.6.1';
 if (index('--version', $cmd) == 0 and length $cmd >= 3) {
     print "xmltv $VERSION\n";
     exit;
@@ -83,9 +90,8 @@ if ($cmd eq 'tv_grab_na_dd',
 {
     unless (grep(/^--share/i,@ARGV))  # don't add our --share if one supplied
     {
-        my $dir = dirname(PerlApp::exe()); # get full program path
+        my $dir = dirname($0); # get full program path
         $dir =~ s!\\!/!g;      # use / not \
-#       die "EXE path contains spaces.  This is known to cause problems.\nPlease move xmltv.exe to a different directory\n" if $dir =~ / /;
         $dir .= "/share/xmltv";
     	unless (-d $dir )
     	    {
@@ -109,8 +115,11 @@ if ($cmd eq 'exec')
 {
    my $exe=shift;
    $0=$exe;
-   do $exe;
+   print "doing $exe\n";
+   print STDERR "STDERR doing $exe\n";
+   do "./$exe";
    print STDERR $@ if length($@);
+   print "STDOUT $@"  if length($@);
    exit 1 if length($@);
    exit 0;
 }
@@ -118,7 +127,10 @@ if ($cmd eq 'exec')
 #
 # scan through attached files and execute program if found
 #
-$files=PerlApp::get_bound_file("exe_files.txt");
+
+#main thread!
+
+$files=PAR::read_file("exe_files.txt");
 foreach my $exe (split(/ /,$files))
 {
     next unless length($exe)>3; #ignore trash
@@ -128,11 +140,17 @@ foreach my $exe (split(/ /,$files))
 
     next unless $cmd eq $_;
 
+	$exe="script/$cmd";
+	
 #
 # execute our command
 #
-    $0 = $_;        # set $0 to our script
+#   $0 = $_;        # set $0 to our script
+#	print STDERR "STDERR about to execute $exe\n";
+#	print STDOUT "STDOUT about to execute $exe\n";
     do $exe;
+#	print STDERR "STDERR got <$!> <$?> <$^E> <$@>\n";
+#	print STDOUT "STDOUT got <$!> <$?> <$^E> <$@>\n";
     print STDERR $@ if length($@);
     exit 1 if length($@);
     exit 0;

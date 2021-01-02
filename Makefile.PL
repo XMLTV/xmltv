@@ -915,14 +915,11 @@ END
     #
     $inherited .= q{
 
-xmltv.exe :: $(EXE_FILES) lib/exe_wrap.pl lib/exe_opt.pl
+xmltv.exe :: $(EXE_FILES) lib/xmltv.pl lib/exe_opt.pl
 	echo $(EXE_FILES)                             >exe_files.txt
 	perl lib/exe_opt.pl $(VERSION)                >exe_opt.txt
-	echo -lib  $(INST_ARCHLIB) --lib $(INST_LIB) >>exe_opt.txt
-	echo -add  "$(EXE_FILES)"                    >>exe_opt.txt
-	echo -bind exe_files.txt                     >>exe_opt.txt
-	echo -exe  xmltv.exe                         >>exe_opt.txt
-	perlapp @exe_opt.txt lib/exe_wrap.pl
+	echo -a exe_files.txt                        >>exe_opt.txt
+	pp_autolink -o xmltv.exe --cachedeps=pp.cache --reusable @exe_opt.txt lib/xmltv.pl $(EXE_FILES)
 	$(RM_F) exe_files.txt
 	$(RM_F) exe_opt.txt
 
