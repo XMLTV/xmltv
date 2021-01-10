@@ -397,7 +397,7 @@ sub getMovieMatches($$$)
 		my $title=$arr[1];
 		if ( $title=~s/\s+\((\d\d\d\d|\?\?\?\?)\)$//o ) {
 		}
-		elsif ( $title=~s/\s+\((\d\d\d\d|\?\?\?\?)\/[IVX]+\)$//o ) {
+		elsif ( $title=~s/\s+\((\d\d\d\d|\?\?\?\?)\/[IVXL]+\)$//o ) {
 		}
 		else {
 			die "unable to decode year from title key \"$title\", report to xmltv-devel\@lists.sf.net";
@@ -426,7 +426,7 @@ sub getMovieMatches($$$)
 
 		if ( $title=~s/\s+\((\d\d\d\d|\?\?\?\?)\)$//o ) {
 		}
-		elsif ( $title=~s/\s+\((\d\d\d\d|\?\?\?\?)\/[IVX]+\)$//o ) {
+		elsif ( $title=~s/\s+\((\d\d\d\d|\?\?\?\?)\/[IVXL]+\)$//o ) {
 		}
 		else {
 			die "unable to decode year from title key \"$title\", report to xmltv-devel\@lists.sf.net";
@@ -496,7 +496,7 @@ sub getMovieIdDetails($$)
 		if ( $directors ne "<>" ) {
 			for my $name (split('\|', $directors)) {
 				# remove (I) etc from imdb.com names (kept in place for reference)
-				$name=~s/\s\([IVX]+\)$//o;
+				$name=~s/\s\([IVXL]+\)$//o;
 				# switch name around to be surname last
 				$name=~s/^([^,]+),\s*(.*)$/$2 $1/o;
 				push(@{$results->{directors}}, $name);
@@ -509,7 +509,7 @@ sub getMovieIdDetails($$)
 				if ( $name=~s/\[([^\]]+)\]$//o ) {
 					$HostNarrator=$1;
 				}
-				$name=~s/\s\([IVX]+\)$//o;
+				$name=~s/\s\([IVXL]+\)$//o;
 
 				# switch name around to be surname last
 				$name=~s/^([^,]+),\s*(.*)$/$2 $1/o;
@@ -3197,11 +3197,11 @@ sub invokeStage($$)
 				}
 
 				if ( $title=~s/\s+\((\d\d\d\d)\)$//o ||
-					 $title=~s/\s+\((\d\d\d\d)\/[IVX]+\)$//o ) {
+					 $title=~s/\s+\((\d\d\d\d)\/[IVXL]+\)$//o ) {
 					$year=$1;
 				}
 				elsif ( $title=~s/\s+\((\?\?\?\?)\)$//o ||
-					$title=~s/\s+\((\?\?\?\?)\/[IVX]+\)$//o ) {
+					$title=~s/\s+\((\?\?\?\?)\/[IVXL]+\)$//o ) {
 					$year="0000";
 				}
 				else {
@@ -3300,8 +3300,8 @@ sub invokeStage($$)
 						my ($billing, $name)=split(':', $c);
 						# remove Host/Narrators from end
 						# BUG - should remove (I)'s from actors/actresses names when details are generated
-						$name=~s/\s\([IVX]+\)\[/\[/o;
-						$name=~s/\s\([IVX]+\)$//o;
+						$name=~s/\s\([IVXL]+\)\[/\[/o;
+						$name=~s/\s\([IVXL]+\)$//o;
 
 						if ( $name ne $last ) {
 							$details.="$name|";
