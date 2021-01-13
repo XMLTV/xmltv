@@ -30,6 +30,8 @@ use strict;
 
 package XMLTV::IMDB;
 
+use Search::Dict;
+
 use open ':encoding(iso-8859-1)';   # try to enforce file encoding (does this work in Perl <5.8.1? )
 
 #
@@ -49,6 +51,8 @@ use open ':encoding(iso-8859-1)';   # try to enforce file encoding (does this wo
 #		bug: movies with (aka...) in title not handled properly
 #		bug: incorrect data generated for a tv series (only the last episode found is stored)
 #		bug: genres and cast are rolled-up from all episodes to the series record (misleading)
+#		bug: multiple matches can sometimes extract the first one it comes across as a 'hit' 
+#			  (potentially wrong - it should not augment incoming prog when multiple matches)
 #
 #
 our $VERSION = '0.11';	  # version number of database
@@ -129,10 +133,10 @@ sub loadDBInfo($)
 
 	open(INFO, "< $file") || return("imdbDir index file \"$file\":$!\n");
 	while(<INFO>) {
-	chop();
-	if ( s/^([^:]+)://o ) {
-		$info->{$1}=$_;
-	}
+		chomp();
+		if ( s/^([^:]+)://o ) {
+			$info->{$1}=$_;
+		}
 	}
 	close(INFO);
 	return($info);
@@ -196,7 +200,7 @@ sub basicVerificationOfIndexes($)
 {
 	my $self=shift;
 
-	# check that the imdbdir is invalid and up and running
+	# check that the imdbdir is valid and up and running
 	my $title="Army of Darkness";
 	my $year=1992;
 
@@ -286,6 +290,7 @@ sub basicVerificationOfIndexes($)
 	}
 
 	$self->closeMovieIndex();
+	# all okay
 	return(undef);
 
 }
@@ -325,8 +330,6 @@ sub debug($$)
 	}
 }
 
-use Search::Dict;
-
 sub openMovieIndex($)
 {
 	my $self=shift;
@@ -354,9 +357,9 @@ sub closeMovieIndex($)
 	return(1);
 }
 
-# moviedbIndex file has the format:
-# title:lineno
-# where key is a url encoded title followed by the year of production and a colon
+# moviedbIndex is a TSV file with the format:
+#   searchtitle title year progtype lineno
+#
 sub getMovieMatches($$$)
 {
 	my $self=shift;
@@ -387,66 +390,66 @@ sub getMovieMatches($$$)
 	Search::Dict::look(*{$FD}, $match, 0, 0);
 	my $results;
 	while (<$FD>) {
-	last if ( !m/^$match/ );
+		last if ( !m/^$match/ );
 
-	chop();
-	my @arr=split('\t', $_);
-	if ( scalar(@arr) != 5 ) {
-		warn "$self->{moviedbIndex} corrupt (correct key:$_)";
-		next;
-	}
-
-	if ( $arr[0] eq $match ) {
-		# return title and id
-		#$arr[1]=~s/(.*),\s*(The|A|Une|Las|Les|Los|L\'|Le|La|El|Das|De|Het|Een)$/$2 $1/og;
-
-		#$arr[0]=~s/%(?:([0-9a-fA-F]{2})|u([0-9a-fA-F]{4}))/defined($1)? chr hex($1) : utf8_chr(hex($2))/oge;
-		#$self->debug("exact:$arr[1] ($arr[2]) qualifier=$arr[3] id=$arr[4]");
-		my $title=$arr[1];
-		if ( $title=~s/\s+\((\d\d\d\d|\?\?\?\?)\)$//o ) {
+		chomp();
+		my @arr=split('\t', $_);
+		if ( scalar(@arr) != 5 ) {
+			warn "$self->{moviedbIndex} corrupt (correct key:$_)";
+			next;
 		}
-		elsif ( $title=~s/\s+\((\d\d\d\d|\?\?\?\?)\/[IVXL]+\)$//o ) {
+
+		if ( $arr[0] eq $match ) {
+			# return title and id
+			#$arr[1]=~s/(.*),\s*(The|A|Une|Las|Les|Los|L\'|Le|La|El|Das|De|Het|Een)$/$2 $1/og;
+
+			#$arr[0]=~s/%(?:([0-9a-fA-F]{2})|u([0-9a-fA-F]{4}))/defined($1)? chr hex($1) : utf8_chr(hex($2))/oge;
+			#$self->debug("exact:$arr[1] ($arr[2]) qualifier=$arr[3] id=$arr[4]");
+			my $title=$arr[1];
+			if ( $title=~s/\s+\((\d\d\d\d|\?\?\?\?)\)$//o ) {
+			}
+			elsif ( $title=~s/\s+\((\d\d\d\d|\?\?\?\?)\/[IVXL]+\)$//o ) {
+			}
+			else {
+				die "unable to decode year from title key \"$title\", report to xmltv-devel\@lists.sf.net";
+			}
+			$title=~s/(.*),\s*(The|A|Une|Las|Les|Los|L\'|Le|La|El|Das|De|Het|Een)$/$2 $1/og;
+			$self->debug("exact:$title ($arr[2]) qualifier=$arr[3] id=$arr[4]");
+			push(@{$results->{exactMatch}}, {'key'=> $arr[1],
+							 'title'=>$title,
+							 'year'=>$arr[2],
+							 'qualifier'=>$arr[3],
+							 'id'=>$arr[4]});
 		}
 		else {
-			die "unable to decode year from title key \"$title\", report to xmltv-devel\@lists.sf.net";
-		}
-		$title=~s/(.*),\s*(The|A|Une|Las|Les|Los|L\'|Le|La|El|Das|De|Het|Een)$/$2 $1/og;
-		$self->debug("exact:$title ($arr[2]) qualifier=$arr[3] id=$arr[4]");
-		push(@{$results->{exactMatch}}, {'key'=> $arr[1],
-						 'title'=>$title,
-						 'year'=>$arr[2],
-						 'qualifier'=>$arr[3],
-						 'id'=>$arr[4]});
-	}
-	else {
-		# decode
-		#s/%(?:([0-9a-fA-F]{2})|u([0-9a-fA-F]{4}))/defined($1)? chr hex($1) : utf8_chr(hex($2))/oge;
-		# return title
-		#$arr[1]=~s/(.*),\s*(The|A|Une|Las|Les|Los|L\'|Le|La|El|Das|De|Het|Een)$/$2 $1/og;
-		#$arr[0]=~s/%(?:([0-9a-fA-F]{2})|u([0-9a-fA-F]{4}))/defined($1)? chr hex($1) : utf8_chr(hex($2))/oge;
-		#$self->debug("close:$arr[1] ($arr[2]) qualifier=$arr[3] id=$arr[4]");
-		my $title=$arr[1];
+			# decode
+			#s/%(?:([0-9a-fA-F]{2})|u([0-9a-fA-F]{4}))/defined($1)? chr hex($1) : utf8_chr(hex($2))/oge;
+			# return title
+			#$arr[1]=~s/(.*),\s*(The|A|Une|Las|Les|Los|L\'|Le|La|El|Das|De|Het|Een)$/$2 $1/og;
+			#$arr[0]=~s/%(?:([0-9a-fA-F]{2})|u([0-9a-fA-F]{4}))/defined($1)? chr hex($1) : utf8_chr(hex($2))/oge;
+			#$self->debug("close:$arr[1] ($arr[2]) qualifier=$arr[3] id=$arr[4]");
+			my $title=$arr[1];
 
-		if ( $title=~m/^\"/o && $title=~m/\"\s*\(/o ) { #"
-			$title=~s/^\"//o; #"
-			$title=~s/\"(\s*\()/$1/o; #"
-		}
+			if ( $title=~m/^\"/o && $title=~m/\"\s*\(/o ) { #"
+				$title=~s/^\"//o; #"
+				$title=~s/\"(\s*\()/$1/o; #"
+			}
 
-		if ( $title=~s/\s+\((\d\d\d\d|\?\?\?\?)\)$//o ) {
+			if ( $title=~s/\s+\((\d\d\d\d|\?\?\?\?)\)$//o ) {
+			}
+			elsif ( $title=~s/\s+\((\d\d\d\d|\?\?\?\?)\/[IVXL]+\)$//o ) {
+			}
+			else {
+				die "unable to decode year from title key \"$title\", report to xmltv-devel\@lists.sf.net";
+			}
+			$title=~s/(.*),\s*(The|A|Une|Las|Les|Los|L\'|Le|La|El|Das|De|Het|Een)$/$2 $1/og;
+			$self->debug("close:$title ($arr[2]) qualifier=$arr[3] id=$arr[4]");
+			push(@{$results->{closeMatch}}, {'key'=> $arr[1],
+							 'title'=>$title,
+							 'year'=>$arr[2],
+							 'qualifier'=>$arr[3],
+							 'id'=>$arr[4]});
 		}
-		elsif ( $title=~s/\s+\((\d\d\d\d|\?\?\?\?)\/[IVXL]+\)$//o ) {
-		}
-		else {
-			die "unable to decode year from title key \"$title\", report to xmltv-devel\@lists.sf.net";
-		}
-		$title=~s/(.*),\s*(The|A|Une|Las|Les|Los|L\'|Le|La|El|Das|De|Het|Een)$/$2 $1/og;
-		$self->debug("close:$title ($arr[2]) qualifier=$arr[3] id=$arr[4]");
-		push(@{$results->{closeMatch}}, {'key'=> $arr[1],
-						 'title'=>$title,
-						 'year'=>$arr[2],
-						 'qualifier'=>$arr[3],
-						 'id'=>$arr[4]});
-	}
 	}
 	#print "MovieMatches on ($match) = ".Dumper($results)."\n";
 	return($results);
@@ -459,14 +462,14 @@ sub getMovieExactMatch($$$)
 	my $year=shift;
 	my $res=$self->getMovieMatches($title, $year);
 
-	return(undef) if ( !defined($res) );
+	return(undef, 0) if ( !defined($res) );
 	if ( !defined($res->{exactMatch}) ) {
-		return(undef);
+		return(undef, 0);
 	}
 	if ( scalar(@{$res->{exactMatch}}) != 1 ) {
-		return(undef);
+		return(undef, scalar(@{$res->{exactMatch}}));
 	}
-	return($res->{exactMatch}[0]);
+	return($res->{exactMatch}[0], 1);
 }
 
 sub getMovieCloseMatches($$)
@@ -485,6 +488,9 @@ sub getMovieCloseMatches($$)
 	return(@arr);
 }
 
+# moviedbData file is a TSV file with the format:
+#   lineno:directors actors genres ratingDist ratingVotes ratingRank keywords plot
+#
 sub getMovieIdDetails($$)
 {
 	my $self=shift;
@@ -497,57 +503,57 @@ sub getMovieIdDetails($$)
 	my $FD=$self->{DBASE_FD};
 	Search::Dict::look(*{$FD}, "$id:", 0, 0);
 	while (<$FD>) {
-	last if ( !m/^$id:/ );
-	chop();
-	if ( s/^$id:// ) {
-		my ($directors, $actors, $genres, $ratingDist, $ratingVotes, $ratingRank, $keywords, $plot)=split('\t', $_);
-		if ( $directors ne "<>" ) {
-			for my $name (split('\|', $directors)) {
-				# remove (I) etc from imdb.com names (kept in place for reference)
-				$name=~s/\s\([IVXL]+\)$//o;
-				# switch name around to be surname last
-				$name=~s/^([^,]+),\s*(.*)$/$2 $1/o;
-				push(@{$results->{directors}}, $name);
-			}
-		}
-		if ( $actors ne "<>" ) {
-			for my $name (split('\|', $actors)) {
-				# remove (I) etc from imdb.com names (kept in place for reference)
-				my $HostNarrator;
-				if ( $name=~s/\[([^\]]+)\]$//o ) {
-					$HostNarrator=$1;
+		last if ( !m/^$id:/ );
+		chomp();
+		if ( s/^$id:// ) {
+			my ($directors, $actors, $genres, $ratingDist, $ratingVotes, $ratingRank, $keywords, $plot)=split('\t', $_);
+			if ( $directors ne "<>" ) {
+				for my $name (split('\|', $directors)) {
+					# remove (I) etc from imdb.com names (kept in place for reference)
+					$name=~s/\s\([IVXL]+\)$//o;
+					# switch name around to be surname last
+					$name=~s/^([^,]+),\s*(.*)$/$2 $1/o;
+					push(@{$results->{directors}}, $name);
 				}
-				$name=~s/\s\([IVXL]+\)$//o;
+			}
+			if ( $actors ne "<>" ) {
+				for my $name (split('\|', $actors)) {
+					# remove (I) etc from imdb.com names (kept in place for reference)
+					my $HostNarrator;
+					if ( $name=~s/\s?\[([^\]]+)\]$//o ) {
+						$HostNarrator=$1;
+					}
+					$name=~s/\s\([IVXL]+\)$//o;
 
-				# switch name around to be surname last
-				$name=~s/^([^,]+),\s*(.*)$/$2 $1/o;
-				if ( $HostNarrator ) {
-					if ( $HostNarrator=~s/,*Host//o ) {
-						push(@{$results->{presenter}}, $name);
+					# switch name around to be surname last
+					$name=~s/^([^,]+),\s*(.*)$/$2 $1/o;
+					if ( $HostNarrator ) {
+						if ( $HostNarrator=~s/,*Host//o ) {
+							push(@{$results->{presenter}}, $name);
+						}
+						if ( $HostNarrator=~s/,*Narrator//o ) {
+							push(@{$results->{commentator}}, $name);
+						}
 					}
-					if ( $HostNarrator=~s/,*Narrator//o ) {
-						push(@{$results->{commentator}}, $name);
+					else {
+						push(@{$results->{actors}}, $name);
 					}
-				}
-				else {
-					push(@{$results->{actors}}, $name);
 				}
 			}
+			if ( $genres ne "<>" ) {
+				push(@{$results->{genres}}, split('\|', $genres));
+			}
+			if ( $keywords ne "<>" ) {
+				push(@{$results->{keywords}}, split(',', $keywords));
+			}
+			$results->{ratingDist}=$ratingDist 		if ( $ratingDist ne "<>" );
+			$results->{ratingVotes}=$ratingVotes 	if ( $ratingVotes ne "<>" );
+			$results->{ratingRank}=$ratingRank 		if ( $ratingRank ne "<>" );
+			$results->{plot}=$plot 					if ( $plot ne "<>" );
 		}
-		if ( $genres ne "<>" ) {
-			push(@{$results->{genres}}, split('\|', $genres));
+		else {
+			warn "lookup of movie (id=$id) resulted in garbage ($_)";
 		}
-		if ( $keywords ne "<>" ) {
-			push(@{$results->{keywords}}, split(',', $keywords));
-		}
-		$results->{ratingDist}=$ratingDist 		if ( $ratingDist ne "<>" );
-		$results->{ratingVotes}=$ratingVotes 	if ( $ratingVotes ne "<>" );
-		$results->{ratingRank}=$ratingRank 		if ( $ratingRank ne "<>" );
-		$results->{plot}=$plot 					if ( $plot ne "<>" );
-	}
-	else {
-		warn "lookup of movie (id=$id) resulted in garbage ($_)";
-	}
 	}
 	if ( !defined($results) ) {
 		# some movies we don't have any details for
@@ -661,7 +667,12 @@ sub findMovieInfo($$$$)
 	if ( $exact == 1 ) {
 		# try an exact match first :)
 		for my $mytitle ( @titles ) {
-			my $info=$self->getMovieExactMatch($mytitle, $year);
+			my ($info,$matchcount) = $self->getMovieExactMatch($mytitle, $year);
+			if ($matchcount > 1) {
+				# if multiple records exactly match title+year then we don't know which one is correct
+				$self->status("multiple hits on movie \"$mytitle ($year)\"");
+				return(undef, $matchcount);
+			}
 			if ( defined($info) ) {
 				if ( $info->{qualifier} eq "movie" ) {
 					$self->status("perfect hit on movie \"$info->{key}\"");
@@ -834,15 +845,15 @@ sub findTVSeriesInfo($$)
 	my ($self, $title)=@_;
 
 	if ( $self->{cacheLookups} ) {
-	my $id=$self->{cachedLookups}->{tv_series}->{$title};
+		my $id=$self->{cachedLookups}->{tv_series}->{$title};
 
-	if ( defined($id) ) {
-		#print STDERR "REF= (".ref($id).")\n";
-		if ( $id ne '' ) {
-			return($id);
+		if ( defined($id) ) {
+			#print STDERR "REF= (".ref($id).")\n";
+			if ( $id ne '' ) {
+				return($id);
+			}
+			return(undef);
 		}
-		return(undef);
-	}
 	}
 
 	my @titles=@{alternativeTitles($title)};
@@ -1254,11 +1265,15 @@ sub augmentProgram($$$)
 		# - exact matches on movies
 		# - exact matches on tv series
 		# - close matches on movies
-		my $id=$self->findMovieInfo($title, $prog->{date}, 1); # exact match
+		my ($id, $matchcount) = $self->findMovieInfo($title, $prog->{date}, 1); # exact match
+		if (defined $matchcount && $matchcount > 1) {
+			$self->status("failed to find a sole match for movie \"$title ($prog->{date})\"");
+			return(undef);
+		}
 		if ( !defined($id) ) {
 			$id=$self->findTVSeriesInfo($title);
 			if ( !defined($id) ) {
-				$id=$self->findMovieInfo($title, $prog->{date}, 0); # close match
+				($id, $matchcount) = $self->findMovieInfo($title, $prog->{date}, 0); # close match
 			}
 		}
 		if ( defined($id) ) {
@@ -1283,7 +1298,7 @@ sub augmentProgram($$$)
 			# this has hard to support 'close' results, unless we know
 			# for certain we're looking for a movie (ie duration etc)
 			# this is a bad idea.
-			my $id=$self->findMovieInfo($title, undef, 2); # any title match
+			my ($id, $matchcount) = $self->findMovieInfo($title, undef, 2); # any title match
 			if ( defined($id) ) {
 				$self->{stats}->{$id->{matchLevel}."Matches"}++;
 				$self->{stats}->{$id->{matchLevel}}->{$id->{qualifier}}++;
