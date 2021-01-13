@@ -55,6 +55,7 @@ use open ':encoding(iso-8859-1)';   # try to enforce file encoding (does this wo
 #			  (potentially wrong - it should not augment incoming prog when multiple matches)
 #		dbbuild: --filesort to sort interim data on disc rather than in memory
 #		dbbuild: --nosystemsort to use File::Sort rather than operating system shell's 'sort' command
+#		dbbuild: --movies-only to exclude tv-series (etc.) from database build
 #
 #
 our $VERSION = '0.11';	  # version number of database
@@ -1941,6 +1942,8 @@ sub readMovies($$$$$)
 			# we don't keep episode information   TODO: enhancement: change tv_imdb to do episodes?
 			if ($isepisode == 1) { next; }
 			
+			next if ($self->{moviesonly} && ($progtype != 1 && $progtype != 2) );	# user requested movies_only
+			
 			
 			# store the movies data
 			if ($self->{usefilesort}) {
@@ -2179,6 +2182,7 @@ sub readCastOrDirectors($$$$$)
 				##  often where the year on the actor record is 1 year out
 				##  people will get worried if we report over 1000 errors and there's nothing we can sensibly do about them
 				##$self->error("$file:$lineCount: cannot find $title in titles list");
+				###   if we reinstate this test then we'd need to allow for 'moviesonly' option (i.e. a lot of titles will have been deliberately excluded)
 				next;
 			}
 
