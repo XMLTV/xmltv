@@ -53,6 +53,8 @@ use open ':encoding(iso-8859-1)';   # try to enforce file encoding (does this wo
 #		bug: genres and cast are rolled-up from all episodes to the series record (misleading)
 #		bug: multiple matches can sometimes extract the first one it comes across as a 'hit' 
 #			  (potentially wrong - it should not augment incoming prog when multiple matches)
+#		dbbuild: --filesort to sort interim data on disc rather than in memory
+#		dbbuild: --nosystemsort to use File::Sort rather than operating system shell's 'sort' command
 #
 #
 our $VERSION = '0.11';	  # version number of database
@@ -317,7 +319,7 @@ sub error($$)
 sub status($$)
 {
 	if ( $_[0]->{verbose} ) {
-	print STDERR "tv_imdb: $_[1]\n";
+		print STDERR "tv_imdb: $_[1]\n";
 	}
 }
 
@@ -326,7 +328,7 @@ sub debug($$)
 	my $self=shift;
 	my $mess=shift;
 	if ( $self->{verbose} > 1 ) {
-	print STDERR "tv_imdb: $mess\n";
+		print STDERR "tv_imdb: $mess\n";
 	}
 }
 
@@ -1357,6 +1359,12 @@ use LWP;
 use XMLTV::Gunzip;
 use IO::File;
 
+# is system sort available?
+use constant HAS_SYSTEMSORT => ($^O=~'linux|cygwin|MSWin32');
+
+# is File::Sort available?
+use constant HAS_FILESORT => defined eval { require File::Sort };
+
 use open ':encoding(iso-8859-1)';   # try to enforce file encoding (does this work in Perl <5.8.1? )
 
 # Use Term::ProgressBar if installed.
@@ -1417,6 +1425,13 @@ sub new
 	}
 
 	bless($self, $type);
+	
+	if ( $self->{filesort} && !( HAS_FILESORT || HAS_SYSTEMSORT ) ) {
+		$self->error("filesort requested but not available");
+		return(undef);		
+	}
+	$self->{usefilesort}  = ( (HAS_FILESORT || HAS_SYSTEMSORT) && $self->{filesort} );		# --filesort => 1  --nofilesort => 0
+	$self->{usesystemsort} = ( HAS_SYSTEMSORT && $self->{filesort} && $self->{systemsort});	# use linux sort in preference to File::Sort as it is sooo much faster on big files
 
 	if ( $self->{stageToRun} ne $self->{stageLast} ) {
 		# unless this is the last stage, check we have the necessary files
@@ -1564,6 +1579,56 @@ END
 	}
 
 	return 0;
+}
+
+sub sortfile ($$$) {
+	my ($self, $stage, $file)=@_;
+	
+	# file already written : sort it using (1) system sort command, or (2) File::Sort package
+	
+	my $f=$file;
+	my $st = time;
+	my $res;
+	
+	if ($self->{usesystemsort}) {			# use shell sort if we can (much faster on big files)
+		$self->status("using system sort on stage $stage");
+		
+		# which OS are we on?
+		if ($^O=~'linux|cygwin') {		# TODO: untested on cygwin
+			if ($stage == 1) {
+				$res = system( "sort", "-t", "\t", qw(-k 1 -o), "$f.sorted", "$f" );
+			} else {
+				$res = system( "sort", qw(-t : -k 1n -o), "$f.sorted", "$f" );
+			}
+			if ($? == -1) { $self->error("failed to execute: $! \n"); } 
+			 elsif ( $? & 127 || $? & 128 ) { $self->error("system call died with signal %d \n"); }
+			 else  { $res = $? >> 8; }
+			$res = 1 if $res == 0;		# successful call returns 0 in $?
+		
+		} elsif ($^O=~'MSWin32') {		# TODO: untested on Windows
+			$res = system( "sort", "/O ", "$f.sorted", "$f");
+			$res = 1 if $res == 0;	# successful call returns 0 in $?
+		}
+		
+	} else {
+		$self->status("using filesort on stage $stage (this might take up to 1 hour)");
+		if ($stage == 1) {
+			$res = File::Sort::sort_file({ t =>"\t", k=>'1', y=>200000, I=>"$f", o=>"$f.sorted" });
+		} else {
+			$res = File::Sort::sort_file({ t =>':', k=>'1n', y=>200000, I=>"$f", o=>"$f.sorted" });
+		}
+	}
+	
+	$self->status("sorting took ".(int(((time - $st)/60)*10)/10)." minutes") if (time - $st > 60);
+	
+	if (!$res) {
+		die "Filesort failed on $f";
+	} else {
+		unlink($f);
+		rename "$f.sorted", $f  or die "Cannot rename file: $!";
+	}
+	
+	return($res);
 }
 
 sub redirect($$)
@@ -1876,22 +1941,31 @@ sub readMovies($$$$$)
 			# we don't keep episode information   TODO: enhancement: change tv_imdb to do episodes?
 			if ($isepisode == 1) { next; }
 			
-			# store the title in a hash of $key=>{$title}
-			if ( defined($self->{movieshash}{$hashkey}) ) {	# check for duplicates
-				#
-				# there's a lot (c. 9,000!) instances of duplicate titles in the movies.list file
-				#   so only report where titles are different
-				if ( defined $self->{movieshash}{$hashkey}{$title} && $self->{movieshash}{$hashkey}{$title} ne $year."\t".$qualifier ) {	# {."\t".$progtype}			
-					$self->error("duplicate moviedb key computed $hashkey - this programme will be ignored $mtitle");
-					#$self->error("        ".$self->{movieshash}{$hashkey}{$title});
-					next;
-				}
-			}
 			
-			# the output IDX and DAT files must be sorted by dbkey (because of the way the searching is done)
-			# so we need to store all the incoming 4 million records and then sort them    TODO: do the sorting on disc in external call
-			#
-			$self->{movieshash}{$hashkey}{$title} = $year."\t".$qualifier;			# we don't currently use the progtype flag so don't print it  {."\t".$progtype}
+			# store the movies data
+			if ($self->{usefilesort}) {
+				# if sorting on disc then write the extracted movies data to an interim file
+				print {$self->{fhdata}} $hashkey."\t".$title."\t".$year."\t".$qualifier."\n";
+				
+			} else {
+				# store the title in a hash of $key=>{$title}
+				if ( defined($self->{movieshash}{$hashkey}) ) {	# check for duplicates
+					#
+					# there's a lot (c. 9,000!) instances of duplicate titles in the movies.list file
+					#   so only report where titles are different
+					if ( defined $self->{movieshash}{$hashkey}{$title} && $self->{movieshash}{$hashkey}{$title} ne $year."\t".$qualifier ) {	# {."\t".$progtype}			
+						$self->error("duplicate moviedb key computed $hashkey - this programme will be ignored $mtitle");
+						#$self->error("        ".$self->{movieshash}{$hashkey}{$title});
+						next;
+					}
+				}
+				
+				# the output IDX and DAT files must be sorted by dbkey (because of the way the searching is done)
+				# so we need to store all the incoming 4 million records and then sort them
+				#
+				$self->{movieshash}{$hashkey}{$title} = $year."\t".$qualifier;			# we don't currently use the progtype flag so don't print it  {."\t".$progtype}
+				
+			}
 			
 			# return number of titles kept
 			$countout++;
@@ -2118,11 +2192,18 @@ sub readCastOrDirectors($$$$$)
 			$mperson .= $cur_name;
 			$mperson .= " [$hostnarrator]" if ( defined($hostnarrator) );	# this is wrong: incoming data are "lastname, firstname" so this creates "Huwyler, Fabio [Host]"
 			
-			my $h = "stage${stage}hash";
-			if (defined( $self->{$h}{$idxid} )) {
-				$self->{$h}{$idxid} .= "|".$mperson;
+			if ($self->{usefilesort}) {
+				# write the extracted imdb data to a temporary file, preceeded by the IDX id for each record
+				my $k = sprintf("%07d", $idxid);
+				print {$self->{fhdata}} $k.':'.$mperson."\n";
+				
 			} else {
-				$self->{$h}{$idxid}  = $mperson;
+				my $h = "stage${stage}hash";
+				if (defined( $self->{$h}{$idxid} )) {
+					$self->{$h}{$idxid} .= "|".$mperson;
+				} else {
+					$self->{$h}{$idxid}  = $mperson;
+				}
 			}
 
 			
@@ -2266,11 +2347,18 @@ sub readGenres($$$$$)
 			# the output ".data" files must be sorted by id so they can be merged in stage final
 			# so we need to store all the incoming records and then sort them
 			#
-			my $h = "stage${stage}hash";
-			if (defined( $self->{$h}{$idxid} )) {
-				$self->{$h}{$idxid} .= "|".$mgenres;
+			if ($self->{usefilesort}) {
+				# write the extracted imdb data to a temporary file, preceeded by the IDX id for each record
+				my $k = sprintf("%07d", $idxid);
+				print {$self->{fhdata}} $k.':'.$mgenres."\n";
+				
 			} else {
-				$self->{$h}{$idxid}  = $mgenres;
+				my $h = "stage${stage}hash";
+				if (defined( $self->{$h}{$idxid} )) {
+					$self->{$h}{$idxid} .= "|".$mgenres;
+				} else {
+					$self->{$h}{$idxid}  = $mgenres;
+				}
 			}
 
 			
@@ -2411,12 +2499,19 @@ sub readRatings($$$$$)
 			# the output ".data" files must be sorted by id so they can be merged in stage final
 			# so we need to store all the incoming records and then sort them
 			#
-			my $h = "stage${stage}hash";
-			if (defined( $self->{$h}{$idxid} )) {
-				# we shouldn't get duplicates
-				$self->error("$file: duplicate film found at line $lineCount - this rating will be ignored $mtitle");
+			if ($self->{usefilesort}) {
+				# write the extracted imdb data to a temporary file, preceeded by the IDX id for each record
+				my $k = sprintf("%07d", $idxid);
+				print {$self->{fhdata}} $k.':'."$mdistrib;$mvotes;$mrank"."\n";
+				
 			} else {
-				$self->{$h}{$idxid}  = "$mdistrib;$mvotes;$mrank";
+				my $h = "stage${stage}hash";
+				if (defined( $self->{$h}{$idxid} )) {
+					# we shouldn't get duplicates
+					$self->error("$file: duplicate film found at line $lineCount - this rating will be ignored $mtitle");
+				} else {
+					$self->{$h}{$idxid}  = "$mdistrib;$mvotes;$mrank";
+				}
 			}
 
 			
@@ -2559,11 +2654,18 @@ sub readKeywords($$$$$)
 			# the output ".data" files must be sorted by id so they can be merged in stage final
 			# so we need to store all the incoming records and then sort them
 			#
-			my $h = "stage${stage}hash";
-			if (defined( $self->{$h}{$idxid} )) {
-				$self->{$h}{$idxid} .= "|".$mkeywords;
+			if ($self->{usefilesort}) {
+				# write the extracted imdb data to a temporary file, preceeded by the IDX id for each record
+				my $k = sprintf("%07d", $idxid);
+				print {$self->{fhdata}} $k.':'.$mkeywords."\n";
+				
 			} else {
-				$self->{$h}{$idxid}  = $mkeywords;
+				my $h = "stage${stage}hash";
+				if (defined( $self->{$h}{$idxid} )) {
+					$self->{$h}{$idxid} .= "|".$mkeywords;
+				} else {
+					$self->{$h}{$idxid}  = $mkeywords;
+				}
 			}
 
 			
@@ -2736,12 +2838,19 @@ sub readPlots($$$$$)
 			# the output ".data" files must be sorted by id so they can be merged in stage final
 			# so we need to store all the incoming records and then sort them
 			#
-			my $h = "stage${stage}hash";
-			if (defined( $self->{$h}{$idxid} )) {
-				# we shouldn't get duplicates
-				$self->error("$file: duplicate film found at line $lineCount - this plot will be ignored $mtitle");
+			if ($self->{usefilesort}) {
+				# write the extracted imdb data to a temporary file, preceeded by the IDX id for each record
+				my $k = sprintf("%07d", $idxid);
+				print {$self->{fhdata}} $k.':'.$mplot."\n";
+				
 			} else {
-				$self->{$h}{$idxid}  = $mplot;
+				my $h = "stage${stage}hash";
+				if (defined( $self->{$h}{$idxid} )) {
+					# we shouldn't get duplicates
+					$self->error("$file: duplicate film found at line $lineCount - this plot will be ignored $mtitle");
+				} else {
+					$self->{$h}{$idxid}  = $mplot;
+				}
 			}
 
 			
@@ -3023,7 +3132,24 @@ sub readfilesbyidxid($$$$)
 		if ($fdat->{$stage}{k} < $idxid) {
 			#print STDERR "fetching from $stage   ".$fdat->{$stage}{k}."    < $idxid   \n";
 			
-			my ($fstage, $fidxid, $fdata) = $self->readdatafile( $fhs->{$stage}, $stage, $idxid );
+			my ($fstage, $fidxid, $fdata) = $self->readdatafile( $fhs->{$stage}, $stage, $idxid, -1);
+			
+			if ($self->{usefilesort}) {
+				# if we are using filesort then there will be multiple records with the same idxid
+				#  we need to fetch all of these and combine them
+				my $_fidxid = $fidxid;
+				while ( $_fidxid == $fidxid && $_fidxid != 9999999 ) {
+					# read next record 
+					(my $_fstage, $_fidxid, my $_fdata) = $self->readdatafile( $fhs->{$stage}, $stage, $idxid, $_fidxid );
+					if ($_fidxid == $fidxid) {
+						$fdata .= '|' . $_fdata;
+					}
+				}
+
+				# need to dedupe our merged data
+				($fstage, $fidxid, $fdata) = $self->tidydatafile( $fstage, $fidxid, $fdata );
+			
+			}
 			
 			# store the file record
 			$fdat->{$stage} = { k=>$fidxid, v=>$fdata };
@@ -3058,18 +3184,25 @@ sub readfilesbyidxid($$$$)
 	return;
 }
 	
-sub readdatafile($$$$)
+sub readdatafile($$$$$)
 {
-	my ($self, $fh, $stage, $idxid)=@_;
+	my ($self, $fh, $stage, $idxid, $lidxid)=@_;
 
 	# read a line from a file
+
+	my $line;
 		
-	if ( eof($fh) ) {
-		return ($stage, 9999999, '');		
+	# if we have a parked record then use that one
+	if ( defined $self->{datafile}{$stage} ) {
+		$line = $self->{datafile}{$stage};
+		undef $self->{datafile}{$stage};
+			
+	} else {
+		if ( eof($fh) ) {
+			return ($stage, 9999999, '');		
+		}
+		defined( $line = readline $fh ) or die "readline failed on file for stage $stage : $!";
 	}
-	
-	defined( my $line = readline $fh ) or die "readline failed on file for stage $stage : $!";
-	
 	
 	# extract the idxid from the start of each line
 	#  0000002:army%20of%20darkness%20%281992%29	Army of Darkness (1992)	1992	movie	0000002
@@ -3078,50 +3211,70 @@ sub readdatafile($$$$)
 	if ($midxid) {
 
 		# there should not be any records in datafile n which are not in datafile 1
-		if ($midxid < $idxid) {
+		if ( $midxid < $idxid ) {
 			$self->error("unexpected record in stage $stage data file at $midxid (expected $idxid)");
-
 		}
 		else {
 			# processing on the data for each interim file
-		
-			# movies #1 : strip the (TV) (V) markers from the movie title
-			# directors #2 : (i) dedupe (ii) sort into name order (not correct but there's no sequencing in the imdb data)
-			# actors/actresses #3,#4 : (i) dedeupe (ii) sort into billing order (iii) strip billing id   Note: need to merge actors and actresses
-			# genres #5 : (i) dedupe
-			# ratings #6 : (i) split elements and separate by tabs
-			# keywords #7 : (i) dedupe, (ii) replace separator with comma
-			# plots #8 : 
-			#
-			if ($stage == 1) {
-				$self->stripprogtype(\$mdata);
-				
-			} elsif ($stage == 2) {
-				$self->dedupe(\$mdata, '|');
-				$self->stripbilling(\$mdata, '|');
-				$self->sortnames(\$mdata, '|');		# sorts by "lastname, firstname"
-				
-			} elsif ($stage == 3 || $stage == 4) {
-				$self->dedupe(\$mdata, '|');
-				# defer sorting and strip billing deferred until after we have joined actors + actresses
-				## $self->sortnames(\$mdata, '|');		# sorts by "billing:name"
-				## $self->stripbilling(\$mdata, '|'); 
-				
-			} elsif ($stage == 5) {
-				$self->dedupe(\$mdata, '|');
-				
-			} elsif ($stage == 6) {
-				$mdata =~ s/;/\t/g;
-				
-			} elsif ($stage == 7) {
-				$self->dedupe(\$mdata, '|');
-				$mdata =~ s/\|/,/g;
-				
-			} elsif ($stage == 8) {
-				# noop
-			}
-		
+			($stage, $midxid, $mdata) = $self->tidydatafile( $stage, $midxid, $mdata );
 		}
+		
+		# if the incoming idxid has changed then park the record
+		if ( $lidxid != -1 && $midxid != $lidxid ) {
+			$self->{datafile}{$stage} = $line;
+		}
+
+	}
+	
+	return ($stage, $midxid, $mdata);
+}
+
+sub tidydatafile($$$$)
+{
+	my ($self, $stage, $midxid, $mdata)=@_;
+
+	# tidy/reformat the data from a stagex.data file
+	
+	if ($midxid) {
+
+		# processing on the data for each interim file
+
+		# movies #1 : strip the (TV) (V) markers from the movie title
+		# directors #2 : (i) dedupe (ii) sort into name order (not correct but there's no sequencing in the imdb data)
+		# actors/actresses #3,#4 : (i) dedeupe (ii) sort into billing order (iii) strip billing id   Note: need to merge actors and actresses
+		# genres #5 : (i) dedupe
+		# ratings #6 : (i) split elements and separate by tabs
+		# keywords #7 : (i) dedupe, (ii) replace separator with comma
+		# plots #8 : 
+		#
+		if ($stage == 1) {
+			$self->stripprogtype(\$mdata);
+			
+		} elsif ($stage == 2) {
+			$self->dedupe(\$mdata, '|');
+			$self->stripbilling(\$mdata, '|');
+			$self->sortnames(\$mdata, '|');		# sorts by "lastname, firstname"
+			
+		} elsif ($stage == 3 || $stage == 4) {
+			$self->dedupe(\$mdata, '|');
+			# defer sorting and strip billing deferred until after we have joined actors + actresses
+			## $self->sortnames(\$mdata, '|');		# sorts by "billing:name"
+			## $self->stripbilling(\$mdata, '|'); 
+			
+		} elsif ($stage == 5) {
+			$self->dedupe(\$mdata, '|');
+			
+		} elsif ($stage == 6) {
+			$mdata =~ s/;/\t/g;		# replace ";" separator with tabs
+			
+		} elsif ($stage == 7) {
+			$self->dedupe(\$mdata, '|');
+			$mdata =~ s/\|/,/g;
+			
+		} elsif ($stage == 8) {
+			# noop
+		}
+		
 	}
 	
 	return ($stage, $midxid, $mdata);
@@ -3139,7 +3292,17 @@ sub invokeStage($$)
 		$self->status("parsing Movies list for stage $stage ...");
 		my $countEstimate=$self->dbinfoCalcEstimate("movies", 45);
 
+		# if we are using --filesort then write output file direct (and not use a hash)
+		if ($self->{usefilesort}) {
+			open($self->{fhdata}, ">", "$self->{imdbDir}/stage$stage.data.tmp") || die "$self->{imdbDir}/stage$stage.data.tmp:$!";
+		}
+			
 		my ($num, $numout) = $self->readMovies("Movies", $countEstimate, "$self->{imdbListFiles}->{movies}",  $stage);
+		
+		if ($self->{usefilesort}) {
+			close($self->{fhdata});
+		}
+
 		if ( $num < 0 ) {
 			if ( $num == -2 ) {
 				$self->error("you need to download $self->{imdbListFiles}->{movies} from the ftp site, or use the --download option");
@@ -3148,7 +3311,7 @@ sub invokeStage($$)
 		}
 		elsif ( abs($num - $countEstimate) > $countEstimate*.10 ) {
 			my $better=$self->dbinfoCalcBytesPerEntry("movies", $num);
-			$self->status("ARG estimate of $countEstimate for movies needs updating, found $num ($better bytes/entry)");
+			##not accurate: $self->status("ARG estimate of $countEstimate for movies needs updating, found $num ($better bytes/entry)");
 		}
 		$self->dbinfoAdd("db_stat_movie_count", "$numout");
 		
@@ -3159,38 +3322,94 @@ sub invokeStage($$)
 		#-----------------------------------------------------------
 		# sort the title keys and write the stage1.data file
 		#
-		$self->beginProgressBar("writing stage $stage data", $num);
-		
-		open(OUT, "> $self->{imdbDir}/stage$stage.data") || die "$self->{imdbDir}/stage$stage.data:$!";
-		print OUT '0000000:version '.$VERSION."\n";
-		
-		my $count=0;
-		foreach my $k (sort keys( %{$self->{movieshash}} )) {
+		# if we are using --filesort then write output file direct (and not use a hash)
+		if ($self->{usefilesort}) {
+
+			$self->beginProgressBar("writing stage $stage data", $self->dbinfoGet("db_stat_movie_count", 0) );
 			
-			while ( my ($k2, $v2) = each %{$self->{movieshash}{$k}} ) {	# movieshash is a hash of hashes
-				
+			# movies are in an interim file (stage1.data.tmp). 
+			#	We need to 	(1) sort the file, 
+			#				(2) translate to stage1.data (adding the idxid)
+			#				(3) store in %titleshash
+			my $res;
+			
+			# (1) sort the file in situ
+			$res = $self->sortfile($stage, "$self->{imdbDir}/stage$stage.data.tmp");
+			# if (!$res) { do something? }
+			
+			# (2) & (3) read the sorted file and create out stage1.data while building titleshash hash
+			undef $self->{titleshash};
+			
+			open(IN, "< $self->{imdbDir}/stage$stage.data.tmp") || die "$self->{imdbDir}/stage$stage.data.tmp:$!";
+			open(OUT, "> $self->{imdbDir}/stage$stage.data") || die "$self->{imdbDir}/stage$stage.data:$!";
+			print OUT '0000000:version '.$VERSION."\n";
+			
+			my $count=0; 
+			while(<IN>) {
+				my $line=$_;
+
 				$count++;
 				my $idxid=sprintf("%07d", $count);
-					
+
+				my ($k, $k2, $v2) = $line =~ m/^(.*?)\t(.*?)\t(.*?)$/;
+
 				# the following equates to
 				#	print OUT $idxid.":".$dbkey."\t".$title."\t".$year."\t".$qualifier."\t".$lineno."\n";
 				print OUT $idxid.':'.$k."\t".$k2."\t".$v2."\t".$idxid."\n";
 				
 				#  and create a shared hash of $title=>$lineno (i.e. IDX 'id')
-				$self->{titleshash}{$k2} = $count;	# store the int version of the id for this title
-													#  (note multiple titles may have the same hashkey)
-			}
-			
-			delete( $self->{movieshash}{$k} );
-			
-			$self->updateProgressBar('', $count);
-		}
-			
-		$self->endProgressBar();	
+				$self->{titleshash}{$k2} = $count;	# store the idx id for this title
 		
-		$self->{maxid} = $count;		# remember the largest values of title id (for loop stop)
 				
-		close(OUT);
+				$self->updateProgressBar('', $count);
+			}
+			$self->endProgressBar();	
+			
+			$self->{maxid} = $count;		# remember the largest values of title id (for loop stop)
+			
+			close(OUT);
+			close(IN);
+			
+			unlink "$self->{imdbDir}/stage$stage.data.tmp";
+			
+			
+		} else {
+			
+			# movies data are in a hash (%movieshash) to we need to write that to disc (stage1.data)
+			
+			$self->beginProgressBar("writing stage $stage data", $num);
+			
+			open(OUT, "> $self->{imdbDir}/stage$stage.data") || die "$self->{imdbDir}/stage$stage.data:$!";
+			print OUT '0000000:version '.$VERSION."\n";
+			
+			my $count=0;
+			foreach my $k (sort keys( %{$self->{movieshash}} )) {
+				
+				while ( my ($k2, $v2) = each %{$self->{movieshash}{$k}} ) {	# movieshash is a hash of hashes
+					
+					$count++;
+					my $idxid=sprintf("%07d", $count);
+						
+					# the following equates to
+					#	print OUT $idxid.":".$dbkey."\t".$title."\t".$year."\t".$qualifier."\t".$lineno."\n";
+					print OUT $idxid.':'.$k."\t".$k2."\t".$v2."\t".$idxid."\n";
+					
+					#  and create a shared hash of $title=>$lineno (i.e. IDX 'id')
+					$self->{titleshash}{$k2} = $count;	# store the int version of the id for this title
+														#  (note multiple titles may have the same hashkey)
+				}
+				
+				delete( $self->{movieshash}{$k} );
+				
+				$self->updateProgressBar('', $count);
+			}
+				
+			$self->endProgressBar();	
+			
+			$self->{maxid} = $count;		# remember the largest values of title id (for loop stop)
+					
+			close(OUT);
+		}
 		
 		#use Data::Dumper;print STDERR Dumper( $self->{titleshash} );die;
 		
@@ -3227,7 +3446,7 @@ sub invokeStage($$)
 		}
 		
 		# approx average record length for each incoming data file (used to guesstimate number of records in file)
-		my %countestimates = ( 1=>'45', 2=> '80', 3=> '60', 4=> '60', 5=> '35', 6=> '115', 7=> '20', 8=> '50' );
+		my %countestimates = ( 1=>'45', 2=> '40', 3=> '55', 4=> '55', 5=> '35', 6=> '65', 7=> '20', 8=> '50' );
 		my $countEstimate = $self->dbinfoCalcEstimate($stagename, $countestimates{$stage});
 
 		my %stagefunctions = ( 	1=>\&readMovies,  			2=>\&readCastOrDirectors,
@@ -3236,7 +3455,18 @@ sub invokeStage($$)
 								7=>\&readKeywords,			8=>\&readPlots
 							 );
 
+	
+		# if we are using --filesort then write output file direct (and not use a hash)
+		if ($self->{usefilesort}) {
+			open($self->{fhdata}, ">", "$self->{imdbDir}/stage$stage.data") || die "$self->{imdbDir}/stage$stage.data:$!";
+			print {$self->{fhdata}} '0000000:version '.$VERSION."\n";
+		}
+	
 		my $num=$stagefunctions{$stage}->($self, $stagenametext, $countEstimate, "$self->{imdbListFiles}->{$stagename}",  $stage);
+	
+		if ($self->{usefilesort}) {
+			close($self->{fhdata});
+		}
 
 		if ( $num < 0 ) {
 			if ( $num == -2 ) {
@@ -3255,39 +3485,50 @@ sub invokeStage($$)
 		#-----------------------------------------------------------
 		# print the title keys in IDX id order : write the stagex.data file
 		#
-		#use Data::Dumper;my $_h="stage${stage}hash";print STDERR Dumper( $self->{$_h} );
-		
-		$self->beginProgressBar("writing stage $stage data", $num);
-		
-		open(OUT, "> $self->{imdbDir}/stage$stage.data") || die "$self->{imdbDir}/stage$stage.data:$!";
-		print OUT '0000000:version '.$VERSION."\n";
-		
-		# don't sort the hash keys - that will just cost memory. Just pull them out in numerical order.
-		my $h = "stage${stage}hash";
-		#	
-		# read the stage data hash in idxid order
-		for (my $i = 0; $i <= $self->{maxid}; $i++){
-		
-			# write the extracted imdb data to a temporary file, preceeded by the IDX id for each record
-			my $k = sprintf("%07d", $i);
+		if ($self->{usefilesort}) {
+			
+			# file already written : just needs sorting (in situ)
+			my $f="$self->{imdbDir}/stage$stage.data";
+			my $res = $self->sortfile($stage, $f);
+			# todo: check the reply?
+			
+		} else {
+			#use Data::Dumper;my $_h="stage${stage}hash";print STDERR Dumper( $self->{$_h} );
+			
+			# write the stage.data file from the memory hash 
+			
+			$self->beginProgressBar("writing stage $stage data", $num);
+			
+			open(OUT, "> $self->{imdbDir}/stage$stage.data") || die "$self->{imdbDir}/stage$stage.data:$!";
+			print OUT '0000000:version '.$VERSION."\n";
+			
+			# don't sort the hash keys - that will just cost memory. Just pull them out in numerical order.
+			my $h = "stage${stage}hash";
+			#	
+			# read the stage data hash in idxid order
+			for (my $i = 0; $i <= $self->{maxid}; $i++){
+			
+				# write the extracted imdb data to a temporary file, preceeded by the IDX id for each record
+				my $k = sprintf("%07d", $i);
 
-			if ( $self->{$h}{$i} ) {
-				my $v = $self->{$h}{$i};
-				delete ( $self->{$h}{$i} );
-				#
-				print OUT $k.':'.$v."\n";
+				if ( $self->{$h}{$i} ) {
+					my $v = $self->{$h}{$i};
+					delete ( $self->{$h}{$i} );
+					#
+					print OUT $k.':'.$v."\n";
+				}
+					
+				$self->updateProgressBar('', $i);
 			}
 				
-			$self->updateProgressBar('', $i);
-		}
+			$self->endProgressBar();	
+					
+			close(OUT);
 			
-		$self->endProgressBar();	
-				
-		close(OUT);
-		
-		#use Data::Dumper;print STDERR "leftovers: $stage ".Dumper( $self->{$h} )."\n";
-		
-		delete ( $self->{$h} );
+			#use Data::Dumper;print STDERR "leftovers: $stage ".Dumper( $self->{$h} )."\n";
+			
+			delete ( $self->{$h} );
+		}
 		
 		#use Data::Dumper;print STDERR Dumper( $self->{titleshash} );
 	}
@@ -3356,7 +3597,7 @@ sub invokeStage($$)
 			last if ( eof($fh{1}) );	# I suppose we ought to check if there any recs remaining in the other files (todo)
 	
 			# read a movie record
-			my ($fstage, $fidxid, $fdata) = $self->readdatafile($fh{1}, 1, -1);
+			my ($fstage, $fidxid, $fdata) = $self->readdatafile($fh{1}, 1, -1, -1);
 
 			$fdat{$fstage} = { k=>$fidxid, v=>$fdata };
 			
@@ -3375,7 +3616,7 @@ sub invokeStage($$)
 					next if ( $fdat{$i}{k} == $fidxid  &&  $fdat{$i}{v} eq ':::' );
 					# only output either actors or actresses but not both (otherwise we'll get an extra marker in the output
 					next if ($i == 3) &&  ( $fdat{3}{k} != $fidxid );
-					next if ($i == 4) &&  ( $fdat{4}{k} != $fidxid ) && ( $fdat{3}{k} == $fidxid );		# dont output marker if we've just done it for actors
+					next if ($i == 4) &&  ( $fdat{4}{k} != $fidxid ) && ( $fdat{3}{k} == $fidxid );		# don't output marker if we've just done it for actors
 					# drop through if actresses (#4) and no actors (#3) for this film
 					
 					
@@ -3383,6 +3624,7 @@ sub invokeStage($$)
 						$mdata .= $fdat{$i}{v};
 					}
 					else {
+						# don't data for this stage ($i) so just print the 'empty' marker
 						$mdata .= '<>';
 						if ($i == 6) { $mdata .= "\t".'<>'."\t".'<>'; }  # fudge to add extra spacers in ratings data
 					}
