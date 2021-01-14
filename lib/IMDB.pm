@@ -1028,14 +1028,14 @@ sub applyFound($$$)
 		my $url=$idInfo->{key};
 
 		$url=~s/([^a-zA-Z0-9_.-])/uc sprintf("%%%02x",ord($1))/oeg;
-		$url="http://us.imdb.com/M/title-exact?".$url;
+		$url="https://www.imdb.com/find?q=".$url."&s=tt&exact=true";
 
 		if ( defined($prog->{url}) ) {
 			my @rep;
 			push(@rep, $url);
 			for (@{$prog->{url}}) {
 				# skip urls for imdb.com that we're probably safe to replace
-				if ( !m;^http://us.imdb.com/M/title-exact;o ) {
+				if ( !m;^http://us.imdb.com/M/title-exact;o && !m;^https://www.imdb.com/find;o ) {
 					push(@rep, $_);
 				}
 			}
