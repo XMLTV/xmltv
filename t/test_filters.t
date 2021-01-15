@@ -86,6 +86,7 @@ if ($full) {
        [ [ 'tv_grep', '--category', 'g', '--or', '--title', 'h'    ], 1 ],
        [ [ 'tv_grep', '-i', '--category', 'i', '--title', 'j'      ], 1 ],
        [ [ 'tv_grep', '-i', '--category', 'i', '--title', 'h'      ], 1 ],
+       [ [ 'tv_grep', '--channel-id-exp', 'sat'                    ], 1 ],
       );
 }
 
