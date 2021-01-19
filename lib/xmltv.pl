@@ -3,13 +3,23 @@
 # This is a quick XMLTV shell routing to use with the windows exe
 #
 # A single EXE is needed to allow sharing of modules and dlls of all the
-# programs.  If PerlAPP was run on each one, the total size would be more than
-# 12MB, even leaving out PERL56.DLL!
+# programs.
 #
-# Perlapp allows you to attach pathed files, but you need the same path
-# to access them.  The Makefile creates a text file of these files which is
-# used to build a translation table, allowing users to just type the app name
-# and not the development path.
+# Now users PAR::Packer to build the exe.  It takes a very long time on first run, which can
+# appear to be a problem. 
+#
+# There currently isn't a way for PAR::Packer to warn users about a first time run.
+# I've modified the boot.c file in Par::Packer to do that.  It's not great as it also
+# displays when building, but it's good enough.  Here's what the change is (for documenation purposes)
+# I'm trying to work  with the PAR::Packer folks for a better fix.
+#
+# boot.c:188
+#    rc = my_mkdir(stmpdir, 0700);
+#// 2021-01-18 rmeden hack to print a message on first run
+#	if ( rc == 0 ) fprintf(stderr,"Note: This will take a while on first run\n");
+#// rmeden
+#    if ( rc == -1 && errno != EEXIST) {
+#
 #
 # Robert Eden rmeden@yahoo.com
 #
@@ -75,9 +85,8 @@ print STDERR "Timezone is $ENV{TZ}\n" unless $opt_quiet;
 $cmd = shift || "";
 
 # --version (and abbreviations thereof)
-my $VERSION = '0.6.1';
 if (index('--version', $cmd) == 0 and length $cmd >= 3) {
-    print "xmltv $VERSION\n";
+    print "xmltv $XMLTV::VERSION\n";
     exit;
 }
 
