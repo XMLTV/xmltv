@@ -4,7 +4,7 @@
   </a>
 </p>
 
-# XMLTV 0.6.3
+# XMLTV 1.0.0
 
 ## Table of Contents
 
@@ -259,4 +259,4 @@ We run the following mailing lists:
 Finally, we run an IRC channel #xmltv on Freenode. Please join us!
 
 
--- Nick Morrott, knowledgejunkie@gmail.com, 2020-08-22
+-- Nick Morrott, knowledgejunkie@gmail.com, 2021-02-07
