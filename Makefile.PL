@@ -532,6 +532,7 @@ my @opt_components
                     'File::HomeDir' => 0,
                     'File::Which' => 0,
                     'List::MoreUtils' => 0,
+					'LWP::Protocol::https' => 0,
                     'LWP::UserAgent::Determined' => 0, },
      },
 
