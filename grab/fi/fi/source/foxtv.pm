@@ -92,6 +92,9 @@ sub grab {
 
             # Cleanup some of the most common inconsistencies....
             $episode_name =~ s/^$cleanup_match// if defined $episode_name;
+            # If cleanup leaves only numbers to episode name cleanup them
+            # Example if episode name is Jakso 8, cleanup removes Jakso but don't space and number
+            $episode_name =~ s/^(\s+\d{1,2})$// if defined $episode_name;
             if ($desc) {
               ($desc = $desc->as_text()) =~ s/^$cleanup_match//;
 
