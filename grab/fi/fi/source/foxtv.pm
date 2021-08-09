@@ -96,7 +96,7 @@ sub grab {
               ($desc = $desc->as_text()) =~ s/^$cleanup_match//;
 
               # Title can be first in description too
-              $desc =~ s/^$title(?:\.\s+)?//;
+              $desc =~ s/^$title\.\s+?//;
 
               # Episode title can be first in description too
               $desc =~ s/^$episode_name(?:\.\s+)?// if defined $episode_name;
