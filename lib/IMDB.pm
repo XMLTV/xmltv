@@ -372,8 +372,9 @@ sub getMovieMatches($$$)
 	# Articles are put at the end of a title ( in all languages )
 	#$match=~s/^(The|A|Une|Las|Les|Los|L\'|Le|La|El|Das|De|Het|Een)\s+(.*)$/$2, $1/og;
 
+	# append year to title
 	my $match="$title";
-	if ( defined($year) ) {
+	if ( defined($year) && $title!~m/\s+\((19|20)\d\d\)/o ) {
 		$match.=" ($year)";
 	}
 
