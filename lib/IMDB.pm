@@ -1027,7 +1027,11 @@ sub applyFound($$$)
 
 		# add url to programme on www.imdb.com
 		my $url=$idInfo->{key};
-
+		
+		#	{key} will include " marks if a tv series - remove these from search url [#148]
+		$url = $1.$2  if ( $url=~m/^"(.*?)"(.*)$/ );
+		
+		# encode the title
 		$url=~s/([^a-zA-Z0-9_.-])/uc sprintf("%%%02x",ord($1))/oeg;
 		$url="https://www.imdb.com/find?q=".$url."&s=tt&exact=true";
 
