@@ -674,7 +674,7 @@ sub findMovieInfo($$$$)
 			my ($info,$matchcount) = $self->getMovieExactMatch($mytitle, $year);
 			if ($matchcount > 1) {
 				# if multiple records exactly match title+year then we don't know which one is correct
-				$self->status("multiple hits on movie \"$mytitle ($year)\"");
+				$self->status("multiple hits on movie \"$mytitle".($mytitle=~m/\s+\((19|20)\d\d\)/?'':" ($year)")."\"");
 				return(undef, $matchcount);
 			}
 			if ( defined($info) ) {
@@ -706,7 +706,7 @@ sub findMovieInfo($$$$)
 					$self->error("submit bug report to xmltv-devel\@lists.sf.net");
 				}
 			}
-			$self->debug("no exact title/year hit on \"$mytitle ($year)\"");
+			$self->debug("no exact title/year hit on \"$mytitle".($mytitle=~m/\s+\((19|20)\d\d\)/?'':" ($year)")."\"");
 		}
 		return(undef);
 	}
@@ -1275,7 +1275,7 @@ sub augmentProgram($$$)
 		# - close matches on movies
 		my ($id, $matchcount) = $self->findMovieInfo($title, $prog->{date}, 1); # exact match
 		if (defined $matchcount && $matchcount > 1) {
-			$self->status("failed to find a sole match for movie \"$title ($prog->{date})\"");
+			$self->status("failed to find a sole match for movie \"$title".($title=~m/\s+\((19|20)\d\d\)/?'':" ($prog->{date})")."\"");
 			return(undef);
 		}
 		if ( !defined($id) ) {
@@ -1289,7 +1289,7 @@ sub augmentProgram($$$)
 			$self->{stats}->{$id->{matchLevel}}->{$id->{qualifier}}++;
 			return($self->applyFound($prog, $id));
 		}
-		$self->status("failed to find a match for movie \"$title ($prog->{date})\"");
+		$self->status("failed to find a match for movie \"$title".($title=~m/\s+\((19|20)\d\d\)/?'':" ($prog->{date})")."\"");
 		return(undef);
 		# fall through and try again as a tv series
 	}
