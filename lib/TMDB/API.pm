@@ -73,14 +73,11 @@ sub send_api {
 
     $self->check_parameters( $params_spec, $params );
     my $url = $self->url( $command, $params );
-    
- #   print STDERR $url."\n";		#XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-    
     my $request = HTTP::Request->new( GET => $url );
     $request->header( 'Accept' => 'application/json' );
     my $json_response = $self->{ua}->request($request);
     if ( $json_response->is_success ) {
-        return [ decode_json $json_response->content(),
+        return [ decode_json( $json_response->content() ),
 						  { 'code' => $json_response->code(),
 							'msg'  => $json_response->status_line,
 							'url'  => $url
