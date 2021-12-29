@@ -2,6 +2,7 @@
 #
 # Run tv_tmdb on various input files and check the output is as expected.
 #
+# -- Geoff Westcott <honir999@gmail.com>, 2021-12-21
 # -- Nick Morrott <knowledgejunkie@gmail.com>, 2019-02-28
 
 use warnings;
@@ -22,8 +23,6 @@ my $cmds_dir = 'blib/script'; # directory tv_tmdb lives in
 die "no directory $cmds_dir" if not -d $cmds_dir;
 my $verbose = 0;
 
-my $new;
-
 GetOptions('tests-dir=s' => \$tests_dir, 'cmds-dir=s' => \$cmds_dir,
 	   'verbose' => \$verbose)
   or usage(0);
@@ -33,13 +32,16 @@ my $tmpDir = tempdir(CLEANUP => 1);
 #my $tmpDir = "/tmp/jv1"; mkdir($tmpDir);
 
 
-
-$tmpDir = 't/tmp';
-$tmpDir .= 'new' if $new;
-
-my $local = '';
-$local = 'perl -I /home/dobbin/xmltv/local ' if $new;
-
+my $apikey = '';
+# does apikey file exist?
+my $f = "$cmds_dir/apikey";
+if (-f -r "$f") { 
+	open(my $fh, $f) or die "Could not open file '$f' $!";
+	$apikey = <$fh>;
+	chomp($apikey) if $apikey;
+	close($fh);
+}
+if ( not $apikey ) { print STDERR "no api key found - $cmds_dir/apikey - run aborted \n"; exit(0); }
 
 
 my @inputs = <$tests_dir/*.xml>;
@@ -68,7 +70,7 @@ INPUT: foreach my $input (@inputs) {
     my $output="$tmpDir/".File::Basename::basename($input)."-output.xml";
 
     # Build command line for test
-    my $cmd="$local $cmds_dir/tv_tmdb --apikey xxxx --quiet --config-file $tests_dir/configs/$input_basename.conf --output '$output' '$input' 2>&1";
+    my $cmd="$cmds_dir/tv_tmdb --apikey $apikey --quiet --config-file $tests_dir/configs/$input_basename.conf --output '$output' '$input' 2>&1";
       
     #print STDERR "\nRUN:$cmd\n";
     my $r = system($cmd);
