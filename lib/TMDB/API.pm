@@ -78,16 +78,16 @@ sub send_api {
     my $json_response = $self->{ua}->request($request);
     if ( $json_response->is_success ) {
         return [ decode_json( $json_response->content() ),
-						  { 'code' => $json_response->code(),
-							'msg'  => $json_response->status_line,
-							'url'  => $url
-						  } ];
+                        { 'code' => $json_response->code(),
+                          'msg'  => $json_response->status_line,
+                          'url'  => $url
+                        } ];
     }
     elsif ( $json_response->is_error && $self->{soft} ) {
-		return [ {},  { 'code' => $json_response->code(),
-						'msg'  => $json_response->status_line,
-						'url'  => $url
-			    } ];
+        return [ {},  { 'code' => $json_response->code(),
+                        'msg'  => $json_response->status_line,
+                        'url'  => $url
+                      } ];
     }
     else {
         croak
