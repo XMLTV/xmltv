@@ -21,7 +21,8 @@
 #  - casts()  - now called 'credits'
 #  - images() - add 'include_image_language' 
 #  - latest() - endpoint is now 'movie/latest'
-#  - release_dates() - added endpoint 
+#  - releases()- now called release_dates()
+#  - trailers()- now called videos()
 #  - info()   - add 'append_to_response' param
 
 package XMLTV::TMDB::API::Movie;
@@ -73,10 +74,10 @@ sub keywords {
         { ID => 1 }, \%params );
 }
 
-sub releases {
+sub release_dates {
     my $self = shift;
     my (%params) = @_;
-    $self->{api}->send_api( [ 'movie', $params{ID}, 'releases' ],
+    $self->{api}->send_api( [ 'movie', $params{ID}, 'release_dates' ],
         { ID => 1 }, \%params );
 }
 
@@ -87,18 +88,11 @@ sub translations {
         { ID => 1 }, \%params );
 }
 
-sub trailers {
+sub videos {
     my $self = shift;
     my (%params) = @_;
-    $self->{api}->send_api( [ 'movie', $params{ID}, 'trailers' ],
+    $self->{api}->send_api( [ 'movie', $params{ID}, 'videos' ],
         { ID => 1, language => 1 }, \%params );
-}
-
-sub release_dates {
-	my $self = shift;
-	my (%params) = @_;
-	$self->{api}->send_api( [ 'movie', $params{ID}, 'release_dates' ],
-		{ ID => 1 }, \%params );
 }
 
 sub latest {
