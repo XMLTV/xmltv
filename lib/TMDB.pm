@@ -1361,7 +1361,7 @@ sub applyFound($$$)
 				}
 				
 				# merge and dedupe	
-				# note will ignore empty 'role' attribute
+				# note: will ignore empty 'role' attribute
 				@list = uniquemulti( (splice(@list,0,$self->{numActors})), map{ ref($_) eq 'ARRAY' && scalar($_) > 1 ? $_ : [ $_, '' ] } @{ $prog->{credits}->{actor} } ); 	# 'map' because uniquemulti needs an array
 				
 			} else {
