@@ -162,6 +162,7 @@ sub get_matcher( $$ ) {
 	   or $handler eq 'subtitles'
 	   or $handler eq 'rating'      # TODO
 	   or $handler eq 'star-rating' # TODO
+	   or $handler eq 'review'      # TODO
 	  ) {
 	# Cannot query on this except for presence.  But empty string
 	# argument for future expansion.
