@@ -190,6 +190,7 @@ our @Programme_Handlers =
    [ 'subtitles',        'subtitles',          '*' ],
    [ 'rating',           'rating',             '*' ],
    [ 'star-rating',      'star-rating',        '*' ],
+   [ 'review',           'review',             '*' ],
   );
 
 # And a hash mapping names like 'with-lang' to pairs of subs.  The
@@ -1201,6 +1202,9 @@ Turns a list of credits (for director, actor, writer, etc.) into a
 hash mapping 'role' to a list of names.  The names in each role are
 kept in the same order.
 
+An optional 'guest' attribute for actor with values 'yes' and 'no' is
+converted to Boolean.
+
 =cut
 
 $Handlers{credits}->[0] = sub( $ ) {
@@ -1210,18 +1214,22 @@ $Handlers{credits}->[0] = sub( $ ) {
     my %known_role; ++$known_role{$_} foreach @roles;
     my %r;
     foreach (get_subelements($node)) {
-	my $role = get_name($_);
-	unless ($known_role{$role}++) {
-		warn "unknown thing in credits: $role";
-		next;
-	}
-	my %attrs = %{get_attrs($_)};
-	my $character = $attrs{role} if exists $attrs{role};
-	if (defined $character) {
-		push @{$r{$role}}, [ get_text($_), $character ] ;
-	} else {
-		push @{$r{$role}}, get_text($_);
-	}
+        my $role = get_name($_);
+        unless ($known_role{$role}++) {
+                warn "unknown thing in credits: $role";
+                next;
+        }
+        my %attrs = %{get_attrs($_)};
+        my $character = $attrs{role} if exists $attrs{role};
+        my $guest = $attrs{guest} if exists $attrs{guest};
+        if ($role eq 'actor' && (defined $character || defined $guest)) {
+            # attributes are (1) role, (2) guest
+            my @v = ( get_text($_), (defined $character ? $character : '') );
+            push @v, decode_boolean($guest) if defined $guest;        # only add guest if present
+            push @{$r{$role}}, [ @v ];
+        } else {
+            push @{$r{$role}}, get_text($_);
+        }
     }
     return \%r;
 };
@@ -1237,19 +1245,23 @@ $Handlers{'credits'}->[1] = sub( $$$ ) {
     $w->startTag($e) if $w;
     foreach ( qw[director actor writer adapter producer composer
                  editor presenter commentator guest] ) {
-	next unless defined $h{$_};
-	my @people = @{delete $h{$_}};
-	foreach my $person (@people) {
-	    	die if not defined $person;
-		if (ref($person) eq 'ARRAY') {
-			if ( defined @{$person}[1] && @{$person}[1] ne '' ) {
-				$w->dataElement($_, @{$person}[0], 'role' => @{$person}[1] ) if $w;
-			} else {
-				$w->dataElement($_, @{$person}[0]) if $w;
-			}
-		} else {
-			$w->dataElement($_, $person) if $w;
-		}
+        next unless defined $h{$_};
+        my $role = $_;
+        my @people = @{delete $h{$_}};
+        foreach my $person (@people) {
+                    die if not defined $person;
+            if (ref($person) eq 'ARRAY') {
+                if ( $role eq 'actor' ) {
+                    # attributes are (1) role, (2) guest
+                    my %attrs = ( 1=>'role', 2=>'guest' );
+                    my @attrs = map{ $attrs{$_}, ( $_ eq 2 ? encode_boolean(@{$person}[$_]) : @{$person}[$_] ) } grep { defined @{$person}[$_] && @{$person}[$_] ne '' } keys %attrs;
+                    $w->dataElement($_, @{$person}[0], @attrs) if $w;
+                } else {
+                    $w->dataElement($_, @{$person}[0]) if $w;
+                }
+            } else {
+                $w->dataElement($_, $person) if $w;
+            }
         }
     }
     warn_unknown_keys($e, \%h);
@@ -1509,7 +1521,8 @@ $Handlers{'previously-shown'}->[0] = sub( $ ) {
 };
 $Handlers{'previously-shown'}->[1] = sub( $$$ ) {
     my ($w, $e, $v) = @_;
-    $w->emptyTag($e, %$v) if $w;
+    my @v = map{ $_, $v->{$_} } grep {defined $v->{$_}} qw( start channel );
+    $w->emptyTag($e, @v) if $w;
 };
 
 =pod
@@ -1700,6 +1713,64 @@ $Handlers{'star-rating'}->[1] = sub ( $$$ ) {
 
 =pod
 
+=item I<review>
+
+In XML this is text with a number of optional attributes. In Perl
+represented by an array containing [0] #PCDATA [1] hash of attributes.
+
+=cut
+
+$Handlers{'review'}->[0] = sub( $ ) {
+    my $node = shift; die if not defined $node;
+    my %attrs = %{get_attrs($node)};
+    my $r = {};
+    foreach (qw(type source reviewer lang)) {
+        my $v = delete $attrs{$_};
+        $r->{$_} = $v if defined $v;
+    }
+    foreach (keys %attrs) {
+        warn "unknown attribute $_ in review";
+    }
+    my $value = get_text($node, 1);
+    if (not length $value) {
+        warn 'empty string for review value';
+        return undef;
+    }
+    if (keys %$r) {
+        return [ $value, $r ];
+    } else {
+        return [ $value ];
+    }
+};
+$Handlers{'review'}->[1] = sub( $$$ ) {
+    my ($w, $e, $v) = @_;
+    t 'review';
+    my $content=@{$v}[0];
+    my $attrs=@{$v}[1];
+
+    if (!defined $attrs->{type} || $attrs->{type} eq '') {
+        croak "type attribute empty in review";
+        return undef;
+    }
+    if ($attrs->{type} ne 'text' && $attrs->{type} ne 'url') {
+        croak "type attribute invalid in review";
+        return undef;
+    }
+    if (not length $content) {
+        warn 'empty string for review value';
+        return undef;
+    }
+
+    my @v = map{ $_, $attrs->{$_} } grep {defined $attrs->{$_}} qw( type source reviewer lang );
+    if (scalar @v) {
+        $w->dataElement($e, $content, @v) if $w;
+    } else {
+        $w->dataElement($e, $content) if $w;
+    }
+};
+
+=pod
+
 =item I<icon>
 
 An icon in XMLTV files is like the <img> element in HTML.  It is
@@ -1717,11 +1788,12 @@ sub write_icon( $$$ ) {
       if defined $v->{height} and $v->{height} !~ /^\d+$/;
 
     foreach (keys %$v) {
-	warn "unrecognized key in icon: $_\n"
-	  if $_ ne 'src' and $_ ne 'width' and $_ ne 'height';
+        warn "unrecognized key in icon: $_\n"
+          if $_ ne 'src' and $_ ne 'width' and $_ ne 'height';
     }
-
-    $w->emptyTag($e, %$v);
+    
+    my @v = map{ $_, $v->{$_} } grep {defined $v->{$_}} qw( src width height );
+    $w->emptyTag($e, @v);
 }
 sub read_icon( $ ) {
     my $node = shift; die if not defined $node;
