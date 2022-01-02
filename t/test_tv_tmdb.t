@@ -32,9 +32,26 @@ my $tmpDir = tempdir(CLEANUP => 1);
 #my $tmpDir = "/tmp/jv1"; mkdir($tmpDir);
 
 
+# check we have internet access
+my $wwwok = 0;
+use constant URL => 'http://www.google.com/';
+use LWP;
+my $ua = LWP::UserAgent->new;
+{
+    my $to = $ua->timeout(3);
+    my $res = $ua->head(URL);
+    $wwwok = 1 if $res->is_success;
+    #print sprintf "%s is not responding (%s)\n", URL, $res->status_line unless $res->is_success;
+    $ua->timeout($to);
+}
+if (!$wwwok) {
+	warn "no internet access - tests will not be run \n"; 
+	print "1..1\n"; print "ok\n"; exit(0); }
+
+
 my $apikey = '';
 # does apikey file exist?
-my $f = "$cmds_dir/apikey";
+my $f = "$tests_dir/../test_tv_tmdb_apikey";
 if (-f -r "$f") { 
 	open(my $fh, $f) or die "Could not open file '$f' $!";
 	$apikey = <$fh>;
@@ -42,7 +59,7 @@ if (-f -r "$f") {
 	close($fh);
 }
 if ( not $apikey ) { 
-	warn "no api key found - $cmds_dir/apikey - tests will not be run \n"; 
+	warn "no api key found - $f - tests will not be run \n"; 
 	print "1..1\n"; print "ok\n"; exit(0); }
 
 
