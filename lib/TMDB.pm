@@ -102,6 +102,7 @@ sub new
 	$self->{replaceStarRatings}=0	if ( !defined($self->{replaceStarRatings}));
 	$self->{replaceRatings}=0		if ( !defined($self->{replaceRatings}));
 	$self->{replacePlot}=0			if ( !defined($self->{replacePlot}));
+	$self->{replaceReviews}=0		if ( !defined($self->{replaceReviews}));
 
 	$self->{updateDates}=1			if ( !defined($self->{updateDates}));
 	$self->{updateTitles}=1			if ( !defined($self->{updateTitles}));
@@ -117,10 +118,12 @@ sub new
 	$self->{updateStarRatings}=1	if ( !defined($self->{updateStarRatings}));
 	$self->{updateRatings}=1		if ( !defined($self->{updateRatings}));			# add programme's classification (MPAA/BBFC etc)
 	$self->{updatePlot}=0			if ( !defined($self->{updatePlot}));			# default is to NOT add plot
+	$self->{updateReviews}=1		if ( !defined($self->{updateReviews}));			# default is to add reviews
 	$self->{updateRuntime}=1		if ( !defined($self->{updateRuntime}));			# add programme's runtime
 	$self->{updateImage}=1			if ( !defined($self->{updateImage}));			# add programme's poster image
 
 	$self->{numActors}=3			if ( !defined($self->{numActors}));		 		# default is to add top 3 actors
+	$self->{numReviews}=1			if ( !defined($self->{numReviews}));			# default is to add top 1 review
 	$self->{addActorRoles}=1		if ( !defined($self->{addActorRoles}));			# add roles to cast in output
 	$self->{removeYearFromTitles}=1	if ( !defined($self->{removeYearFromTitles}));	# strip trailing "(2021)" from title
 	$self->{getYearFromTitles}=1	if ( !defined($self->{getYearFromTitles}));		# if no 'date' incoming then see if title ends with a "(year)"
@@ -611,8 +614,8 @@ sub getMovieOrTvIdDetails($$$)
 	# v0.1 method-> $tmdb_info = $self->checkHttpError( $self->{tmdb_client}->$type->info( ID => $id ) );
 	
 	# note different path for release_dates vs content_ratings
-	$tmdb_info = $self->checkHttpError( $self->{tmdb_client}->$type->info( ID => $id, append_to_response => 'keywords,credits,release_dates' ) ) if ( $type eq 'movie' );
-	$tmdb_info = $self->checkHttpError( $self->{tmdb_client}->$type->info( ID => $id, append_to_response => 'keywords,credits,content_ratings' ) ) if ( $type eq 'tv' );
+	$tmdb_info = $self->checkHttpError( $self->{tmdb_client}->$type->info( ID => $id, append_to_response => 'keywords,credits,release_dates,reviews' ) ) if ( $type eq 'movie' );
+	$tmdb_info = $self->checkHttpError( $self->{tmdb_client}->$type->info( ID => $id, append_to_response => 'keywords,credits,content_ratings,reviews' ) ) if ( $type eq 'tv' );
 	
 	
 	
@@ -773,6 +776,23 @@ sub getMovieOrTvIdDetails($$$)
 		}
 		
 	}
+	
+	
+	# get the reviews
+	# v0.1 method->  my $tmdb_keywords = $self->checkHttpError( $self->{tmdb_client}->$type->reviews( ID => $id ) ); 
+	#
+	my $tmdb_reviews = $tmdb_info->{reviews};
+	#
+	if ( defined $tmdb_reviews->{results} ) { 
+		foreach my $review (@{ $tmdb_reviews->{results} }) {
+			push(@{$results->{reviews}},  {'author'		=>$review->{author},
+										   'content'	=>$review->{content},
+										   'date'		=>$review->{created_at},
+										   'url'		=>$review->{url}
+										  } );
+		}
+	}
+	
 
 	
 	# new stuff not in IMDB.pm
@@ -1552,7 +1572,27 @@ sub applyFound($$$)
 		}
 		
 		
+		# ---- update reviews
+		if ( $self->{updateReviews} ) {
+			if ( $self->{replaceReviews} ) {
+				if ( defined($prog->{review}) ) {
+					$self->debug("replacing (all) 'reviews'");
+					delete($prog->{review});
+				}
+			}
+			if ( defined($details->{reviews}) ) {
+				my $i=0;
+				for (@{$details->{reviews}}) {
+					last if ++$i > $self->{numReviews};
+					push @{$prog->{review}}, [ $_->{content}, { reviewer=>$_->{author}, source=>'TMDB', type=>'text' } ];
+					push @{$prog->{review}}, [ $_->{url},     { reviewer=>$_->{author}, source=>'TMDB', type=>'url' } ]  if $_->{url} ne '';
+				}
+			}
+		}
+
+		
 	}
+
 
 	return($prog);
 }
