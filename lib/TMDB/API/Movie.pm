@@ -24,6 +24,7 @@
 #  - releases()- now called release_dates()
 #  - trailers()- now called videos()
 #  - info()   - add 'append_to_response' param
+#  - reviews()- new endpoint 
 
 package XMLTV::TMDB::API::Movie;
 
@@ -92,6 +93,13 @@ sub videos {
     my $self = shift;
     my (%params) = @_;
     $self->{api}->send_api( [ 'movie', $params{ID}, 'videos' ],
+        { ID => 1, language => 1 }, \%params );
+}
+
+sub reviews {
+    my $self = shift;
+    my (%params) = @_;
+    $self->{api}->send_api( [ 'movie', $params{ID}, 'reviews' ],
         { ID => 1, language => 1 }, \%params );
 }
 

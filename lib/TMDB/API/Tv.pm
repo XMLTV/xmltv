@@ -82,6 +82,13 @@ sub content_ratings {
 		{ ID => 1 }, \%params );
 }
 
+sub reviews {
+    my $self = shift;
+    my (%params) = @_;
+    $self->{api}->send_api( [ 'tv', $params{ID}, 'reviews' ],
+        { ID => 1, language => 1 }, \%params );
+}
+
 sub latest {
 	my $self = shift;
 	my (%params) = @_;
