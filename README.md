@@ -120,8 +120,13 @@ Required distributions/modules for XMLTV's core libraries are:
 Date::Manip 5.42a
 File::Slurp
 JSON (see note below)
+HTTP::Request
+HTTP::Response
 LWP 5.65
+LWP::UserAgent
+LWP::Protocol::https
 Term::ReadKey
+URI
 XML::LibXML
 XML::Parser 2.34
 XML::TreePP

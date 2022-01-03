@@ -107,6 +107,7 @@ my @exes
        filter/tv_cat
        filter/tv_split
        filter/tv_imdb
+       filter/tv_tmdb
        filter/tv_remove_some_overlapping
        filter/tv_count
        filter/tv_merge
@@ -135,6 +136,12 @@ my %pm
      'lib/Summarize.pm'           => '$(INST_LIBDIR)/XMLTV/Summarize.pm',
      'lib/Supplement.pm'          => '$(INST_LIBDIR)/XMLTV/Supplement.pm',
      'lib/IMDB.pm'                => '$(INST_LIBDIR)/XMLTV/IMDB.pm',
+     'lib/TMDB.pm'                => '$(INST_LIBDIR)/XMLTV/TMDB.pm',
+     'lib/TMDB/API.pm'            => '$(INST_LIBDIR)/XMLTV/TMDB/API.pm',
+     'lib/TMDB/API/Config.pm'     => '$(INST_LIBDIR)/XMLTV/TMDB/API/Config.pm',
+     'lib/TMDB/API/Movie.pm'      => '$(INST_LIBDIR)/XMLTV/TMDB/API/Movie.pm',
+     'lib/TMDB/API/Person.pm'     => '$(INST_LIBDIR)/XMLTV/TMDB/API/Person.pm',
+     'lib/TMDB/API/Tv.pm'         => '$(INST_LIBDIR)/XMLTV/TMDB/API/Tv.pm',
      'lib/Gunzip.pm'              => '$(INST_LIBDIR)/XMLTV/Gunzip.pm',
      'lib/Capabilities.pm'        => '$(INST_LIBDIR)/XMLTV/Capabilities.pm',
      'lib/Description.pm'         => '$(INST_LIBDIR)/XMLTV/Description.pm',
@@ -162,6 +169,11 @@ my %prereqs
      'File::Slurp'   => 0,
      'JSON'          => 0,
      'LWP'           => 5.65,
+     'LWP::UserAgent'=> 0,
+     'LWP::Protocol::https' => 0,
+     'HTTP::Request' => 0,
+     'HTTP::Response'=> 0,
+     'URI'           => 0,
      'Memoize'       => 0,
      'Storable'      => 2.04,
      'Term::ReadKey' => 0,
@@ -532,7 +544,7 @@ my @opt_components
                     'File::HomeDir' => 0,
                     'File::Which' => 0,
                     'List::MoreUtils' => 0,
-					'LWP::Protocol::https' => 0,
+                    'LWP::Protocol::https' => 0,
                     'LWP::UserAgent::Determined' => 0, },
      },
 
