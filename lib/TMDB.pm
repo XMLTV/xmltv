@@ -17,6 +17,9 @@ package XMLTV::TMDB;
 our $VERSION = '0.2';
 
 
+use LWP::Protocol::https;
+use HTTP::Response;
+
 use Data::Dumper qw(Dumper);
 
 #---------------------------------------------------------------
