@@ -121,6 +121,7 @@ sub new
 	$self->{updateReviews}=1		if ( !defined($self->{updateReviews}));			# default is to add reviews
 	$self->{updateRuntime}=1		if ( !defined($self->{updateRuntime}));			# add programme's runtime
 	$self->{updateImage}=1			if ( !defined($self->{updateImage}));			# add programme's poster image
+	$self->{updateContentId}=1		if ( !defined($self->{updateContentId}));		# add programme's id
 
 	$self->{numActors}=3			if ( !defined($self->{numActors}));		 		# default is to add top 3 actors
 	$self->{numReviews}=1			if ( !defined($self->{numReviews}));			# default is to add top 1 review
@@ -799,6 +800,7 @@ sub getMovieOrTvIdDetails($$$)
 	# new stuff not in IMDB.pm
 	#
 	$results->{runtime} 			= $tmdb_info->{runtime} 						if defined $tmdb_info->{runtime} && $tmdb_info->{runtime} > 0;
+	$results->{tmdb_id} 			= $tmdb_info->{id} 								if defined $tmdb_info->{id};
 	$results->{imdb_id} 			= $tmdb_info->{imdb_id} 						if defined $tmdb_info->{imdb_id};
 	$results->{posterurl} 			= $poster_base.$tmdb_info->{poster_path} 		if defined $tmdb_info->{poster_path};
 	$results->{backdropurl} 		= $backdrop_base.$tmdb_info->{backdrop_path} 	if defined $tmdb_info->{backdrop_path};
@@ -1560,6 +1562,20 @@ sub applyFound($$$)
 			}
 		}
 		
+
+		# ---- update reference id
+		if ( $self->{updateContentId} ) {
+			# remove existing values
+			@{$prog->{'episode-num'}} = grep ( @$_[1] !~ /tmdb_id|imdb_id/, @{$prog->{'episode-num'}} );
+			# add new values
+			if ( defined($details->{tmdb_id}) ) {
+				push(@{$prog->{'episode-num'}}, [ $details->{tmdb_id}, 'tmdb_id' ] );
+			}
+			if ( defined($details->{imdb_id}) && ( $details->{imdb_id} =~ m/^tt\d*$/ ) ) {
+				push(@{$prog->{'episode-num'}}, [ $details->{imdb_id}, 'imdb_id' ] );
+			}
+		}
+
 
 		# ---- update image
 		if ( $self->{updateImage} ) {
