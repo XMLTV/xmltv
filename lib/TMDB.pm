@@ -128,6 +128,7 @@ sub new
 	$self->{removeYearFromTitles}=1	if ( !defined($self->{removeYearFromTitles}));	# strip trailing "(2021)" from title
 	$self->{getYearFromTitles}=1	if ( !defined($self->{getYearFromTitles}));		# if no 'date' incoming then see if title ends with a "(year)"
 	$self->{moviesonly}=0			if ( !defined($self->{moviesonly}));			# default to augment both movies and tv
+	$self->{minVotes}=50			if ( !defined($self->{minVotes}));				# default to needing 50 votes before 'star-rating' value is accepted
 
 
 	# default is not to cache lookups
@@ -1484,6 +1485,11 @@ sub applyFound($$$)
 
 		# ---- update star ratings
 		if ( $self->{updateStarRatings} && defined($details->{ratingRank}) ) {
+
+			# ignore the TMDB rating if there are too few votes (to avoid skewed data).
+			# what's 'too few'...good question!
+			if ( $details->{ratingVotes} >= $self->{minVotes} ) {
+
 			if ( $self->{replaceStarRatings} ) {
 				if ( defined($prog->{'star-rating'}) ) {
 					$self->debug("replacing 'star-rating'");
@@ -1494,6 +1500,8 @@ sub applyFound($$$)
 			else {
 				# add TMDB User Rating in front of all other star-ratings
 				unshift( @{$prog->{'star-rating'}}, [ $details->{ratingRank} . "/10", 'TMDB User Rating' ] );
+				}
+
 			}
 		}
 
