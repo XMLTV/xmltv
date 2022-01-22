@@ -1386,6 +1386,8 @@ sub applyFound($$$)
 				# merge and dedupe	
 				# note: will ignore empty 'role' attribute
 				@list = uniquemulti( (splice(@list,0,$self->{numActors})), map{ ref($_) eq 'ARRAY' && scalar($_) > 1 ? $_ : [ $_, '' ] } @{ $prog->{credits}->{actor} } ); 	# 'map' because uniquemulti needs an array
+
+				@list = map{ ( scalar(@$_) == 2 && @$_[1] eq '' ) ? @$_[0] : $_ } @list;   # remove blank 'character' values
 				
 			} else {
 				# simple merge and dedupe	
