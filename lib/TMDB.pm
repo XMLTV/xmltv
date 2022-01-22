@@ -607,6 +607,9 @@ sub getMovieOrTvIdDetails($$$)
 	# set base url for movie poster images
 	my $poster_base = $self->{tmdb_conf}->{images}->{base_url} . $self->{tmdb_conf}->{images}->{poster_sizes}[4];		# arbitrarily pick the fifth one (expecting w500 = 500x750 )
 	my $backdrop_base = $self->{tmdb_conf}->{images}->{base_url} . $self->{tmdb_conf}->{images}->{backdrop_sizes}[1];	# arbitrarily pick the second one (expecting w780 = 780x439 )
+	# smaller versions:
+	my $poster_base_s 	= $self->{tmdb_conf}->{images}->{base_url} . $self->{tmdb_conf}->{images}->{poster_sizes}[0];	# arbitrarily pick the first one (expecting w92 = 92x138 )
+	my $backdrop_base_s = $self->{tmdb_conf}->{images}->{base_url} . $self->{tmdb_conf}->{images}->{backdrop_sizes}[0];	# arbitrarily pick the first one (expecting w300 = 300x169 )
 	
 	
 	# get the movie details from TMDB
@@ -804,6 +807,8 @@ sub getMovieOrTvIdDetails($$$)
 	$results->{imdb_id} 			= $tmdb_info->{imdb_id} 						if defined $tmdb_info->{imdb_id};
 	$results->{posterurl} 			= $poster_base.$tmdb_info->{poster_path} 		if defined $tmdb_info->{poster_path};
 	$results->{backdropurl} 		= $backdrop_base.$tmdb_info->{backdrop_path} 	if defined $tmdb_info->{backdrop_path};
+	$results->{posterurl_sm} 		= $poster_base_s.$tmdb_info->{poster_path} 		if defined $tmdb_info->{poster_path};
+	$results->{backdropurl_sm} 		= $backdrop_base_s.$tmdb_info->{backdrop_path} 	if defined $tmdb_info->{backdrop_path};
 	
 		
 	if ( !defined($results) ) {
@@ -1594,16 +1599,31 @@ sub applyFound($$$)
 		if ( $self->{updateImage} ) {
 			if ( defined($details->{posterurl}) ) {
 				if ( $details->{posterurl} =~ m|/w500/| ) {
-					push @{$prog->{icon}}, { src => $details->{posterurl}, width => 500, height => 750 };
+					push @{$prog->{image}}, [ $details->{posterurl}, { type => 'poster', orient => 'P', size => 3, system => 'TMDB' } ];
 				} else {
-					push @{$prog->{icon}}, { src => $details->{posterurl} };
+					push @{$prog->{image}}, [ $details->{posterurl} ];
 				}
 			}
 			if ( defined($details->{backdropurl}) ) {
 				if ( $details->{backdropurl} =~ m|/w780/| ) {
-					push @{$prog->{icon}}, { src => $details->{backdropurl}, width => 780, height => 439 };
+					push @{$prog->{image}}, [ $details->{backdropurl}, { type => 'backdrop', orient => 'L', size => 3, system => 'TMDB' } ];
 				} else {
-					push @{$prog->{icon}}, { src => $details->{backdropurl} };
+					push @{$prog->{image}}, [ $details->{backdropurl} ];
+				}
+			}
+			# smaller versions
+			if ( defined($details->{posterurl_sm}) ) {
+				if ( $details->{posterurl_sm} =~ m|/w92/| ) {
+					push @{$prog->{image}}, [ $details->{posterurl_sm}, { type => 'poster', orient => 'P', size => 1, system => 'TMDB' } ];
+				} else {
+					push @{$prog->{image}}, [ $details->{posterurl_sm} ];
+				}
+			}
+			if ( defined($details->{backdropurl_sm}) ) {
+				if ( $details->{backdropurl_sm} =~ m|/w300/| ) {
+					push @{$prog->{image}}, [ $details->{backdropurl_sm}, { type => 'backdrop', orient => 'L', size => 2, system => 'TMDB' } ];
+				} else {
+					push @{$prog->{image}}, [ $details->{backdropurl_sm} ];
 				}
 			}
 		}
