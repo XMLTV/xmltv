@@ -74,7 +74,7 @@ sub unique (@)			# de-dupe two (or more) arrays   TODO: make this case insensiti
 sub uniquemulti (@)		# de-dupe two (or more) array of arrays on first value   TODO: make this case insensitive
 {
     my %h;
-    map { $h{$_->[0]}{$_->[0]}++ == 0 ? $_ : () } @_;
+    map { $h{$_->[0]}++ == 0 ? $_ : () } @_;
 }
 
 #---------------------------------------------------------------------
