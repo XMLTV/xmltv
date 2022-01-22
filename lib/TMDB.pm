@@ -1306,6 +1306,10 @@ sub applyFound($$$)
 			# encode the title
 			$url=~s/([^a-zA-Z0-9_.-])/uc sprintf("%%%02x",ord($1))/oeg;
 			$url="https://www.imdb.com/find?q=".$url."&s=tt&exact=true";
+
+			# possible altve url using 'search' instead of 'find', but there's no option for 'exact' hits only
+			# https://www.imdb.com/search/title/?title=titanic&release_date=1995-01-01,1999-12-31&view=simple
+			# c.f. https://www.imdb.com/search/title/
 		}
 		
 		$self->debug("adding 'url' $url");
