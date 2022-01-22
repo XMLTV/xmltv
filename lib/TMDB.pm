@@ -1281,6 +1281,15 @@ sub applyFound($$$)
 			}
 		}
 
+		# add url pointing to programme on www.themoviedb.org
+		my $url2;
+		if ( defined($details->{tmdb_id}) )
+		{
+			$url2="https://www.themoviedb.org/".  ( $idInfo->{qualifier} =~ /movie/ ? 'movie' : 'tv' ) . "/" . $details->{tmdb_id};
+		}
+
+		$self->debug("adding 'url' $url2") if $url2;
+
 		# add url pointing to programme on www.imdb.com
 		my $url;
 		#
@@ -1303,7 +1312,8 @@ sub applyFound($$$)
 
 		if ( defined($prog->{url}) ) {
 			my @rep;
-			push(@rep, $url);
+			push(@rep, $url2) if $url2;
+			push(@rep, $url) if $url;
 			for (@{$prog->{url}}) {
 				# skip urls for imdb.com that we're probably safe to replace
 				if ( !m;^http://us.imdb.com/M/title-exact;o && !m;^https://www.imdb.com/find;o ) {
@@ -1313,9 +1323,9 @@ sub applyFound($$$)
 			$prog->{url}=\@rep;
 		}
 		else {
-			push(@{$prog->{url}}, $url);
+			push(@{$prog->{url}}, $url2) if $url2;
+			push(@{$prog->{url}}, $url) if $url;
 		}
-			
 	}
 
 
