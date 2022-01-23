@@ -11,10 +11,13 @@ package XMLTV::TMDB;
 #
 # CHANGE LOG
 # 0.1 = development version (no public release)
-# 0.2 = 
-#		change API calls to use 'append_to_response' to reduce number of calls
+# 0.2 = change API calls to use 'append_to_response' to reduce number of calls
+# 0.3 = added content-ids to output xml
+# 0.4 = added <image> and <url> elements to cast & crew
+#       added <image> to programme (in place of <url>)
+#       min version of XMLTV.pm is > 1.0.0
 #
-our $VERSION = '0.2';
+our $VERSION = '0.4';
 
 
 use LWP::Protocol::https;
@@ -23,6 +26,7 @@ use HTTP::Response;
 use Data::Dumper qw(Dumper);
 
 #---------------------------------------------------------------
+use XMLTV 1.0.1;        # min version of xmltv.pm required
 use XMLTV::TMDB::API;
 # version 0.04 of WWW::TMDB::API is broken for movie searching (TMDB changed the API with a breaking change)
 # a custom version was created for use here
@@ -86,6 +90,8 @@ sub new
 	my ($type) = shift;
 	my $self={ @_ };			# remaining args become attributes
 
+	$self->{wwwUrl} = 'https://www.themoviedb.org/';
+
 	for ('apikey', 'verbose') {
 	die "invalid usage - no $_" if ( !defined($self->{$_}));
 	}
@@ -122,6 +128,8 @@ sub new
 	$self->{updateRuntime}=1		if ( !defined($self->{updateRuntime}));			# add programme's runtime
 	$self->{updateActorRole}=1		if ( !defined($self->{updateActorRole}));		# add roles to cast in output
 	$self->{updateImage}=1			if ( !defined($self->{updateImage}));			# add programme's poster image
+	$self->{updateCastImage}=1		if ( !defined($self->{updateCastImage}));		# add image url to actors and directors (needs updateActors/updateDirectors)
+	$self->{updateCastUrl}=1		if ( !defined($self->{updateCastUrl}));			# add url to actors and directors webpage (needs updateActors/updateDirectors)
 	$self->{updateContentId}=1		if ( !defined($self->{updateContentId}));		# add programme's id
 
 	$self->{numActors}=3			if ( !defined($self->{numActors}));		 		# default is to add top 3 actors
@@ -1290,7 +1298,7 @@ sub applyFound($$$)
 		my $url2;
 		if ( defined($details->{tmdb_id}) )
 		{
-			$url2="https://www.themoviedb.org/".  ( $idInfo->{qualifier} =~ /movie/ ? 'movie' : 'tv' ) . "/" . $details->{tmdb_id};
+			$url2= $self->{wwwUrl} .  ( $idInfo->{qualifier} =~ /movie/ ? 'movie' : 'tv' ) . "/" . $details->{tmdb_id};
 		}
 
 		$self->debug("adding 'url' $url2") if $url2;
@@ -1372,7 +1380,33 @@ sub applyFound($$$)
 
 				# add top 3 billing directors from TMDB data
 				# preserve all existing directors from the prog + de-dupe the list
-				my @list = unique( (splice(@{$details->{directors}},0,3)), @{ $prog->{credits}->{director} } );
+				my @list;
+				if ( $self->{updateCastImage} || $self->{updateCastUrl} ) {
+
+					# add director image
+					foreach (@{ $details->{directorsplus} }) {
+
+						my $subels = {};
+
+						# add actor image
+						# TODO : remove existing image(s) / avoid duplicates
+						$subels->{image} = [[ $_->{imageurl}, {'system'=>'TMDB','type'=>'person'} ]] if $self->{updateCastImage} && $_->{imageurl} ne '';
+
+						# add actor url
+						$subels->{url} = [[ $self->{wwwUrl} . 'person/' . $_->{id}, 'TMDB' ]] if $self->{updateCastUrl};
+
+						push(@list, [ $_->{name}, $subels ] );
+					}
+
+					# merge and dedupe the lists from incoming xml + tmdb. Give TMDB entries priority.
+					@list = uniquemulti( splice(@list,0,3), map{ ref($_) eq 'ARRAY' && scalar($_) > 1 ? $_ : [ $_ ] } @{ $prog->{credits}->{director} } ); 	# 'map' because uniquemulti needs an array
+
+					@list = map{ ( ref($_) eq 'ARRAY' && scalar(@$_) == 1 ) ? shift @$_ : $_ } @list;       # flatten any single-index arrays 
+
+				} else {
+					# simple merge and dedupe
+					@list = unique( splice(@{$details->{directors}},0,3), @{ $prog->{credits}->{director} } );
+				}
 				#
 				$prog->{credits}->{director}=\@list;
 			}
@@ -1395,22 +1429,36 @@ sub applyFound($$$)
 			# preserve all existing actors from the prog + de-dupe the list
 			#
 			my @list;
-			if ( $self->{updateActorRole} ) {
+			if ( $self->{updateActorRole} || $self->{updateCastImage} || $self->{updateCastUrl} ) {
+
+				foreach (@{ $details->{actorsplus} }) {
 				
 				# add character attribute to actor name				
-				foreach my $actorplus (@{ $details->{actorsplus} }) {
-					push(@list, [ $actorplus->{name}, $actorplus->{character} ] ); 
+					my $character = ( $self->{updateActorRole} ? $_->{character} : '' );
+
+					my $subels = {};
+
+					# add actor image
+					# TODO : remove existing image(s) / avoid duplicates
+					$subels->{image} = [[ $_->{imageurl}, {'system'=>'TMDB','type'=>'person'} ]] if $self->{updateCastImage} && $_->{imageurl} ne '';
+
+					# add actor url
+					$subels->{url} = [[ $self->{wwwUrl} . 'person/' . $_->{id}, 'TMDB' ]] if $self->{updateCastUrl};
+
+					push(@list, [ $_->{name}, $character, '', $subels ] );
 				}
 				
-				# merge and dedupe	
-				# note: will ignore empty 'role' attribute
-				@list = uniquemulti( (splice(@list,0,$self->{numActors})), map{ ref($_) eq 'ARRAY' && scalar($_) > 1 ? $_ : [ $_, '' ] } @{ $prog->{credits}->{actor} } ); 	# 'map' because uniquemulti needs an array
+				# merge and dedupe the lists from incoming xml + tmdb. Give TMDB entries priority.
+				#  note: will ignore 'role' attribute - i.e. de-dupe on 'name' only
+				@list = uniquemulti( splice(@list,0,$self->{numActors}), map{ ref($_) eq 'ARRAY' && scalar($_) > 1 ? $_ : [ $_ ] } @{ $prog->{credits}->{actor} } ); 	# 'map' because uniquemulti needs an array
 
+				@list = map{ ( scalar(@$_) == 3 && @$_[2] eq '' ) ? [ @$_[0], @$_[1] ]  : $_ } @list;   # remove blank 'image' values
 				@list = map{ ( scalar(@$_) == 2 && @$_[1] eq '' ) ? @$_[0] : $_ } @list;   # remove blank 'character' values
+				@list = map{ ( ref($_) eq 'ARRAY' && scalar(@$_) == 1 ) ? shift @$_ : $_ } @list;       # flatten any single-index arrays (as per the xmltv data struct)
 				
 			} else {
 				# simple merge and dedupe	
-				@list = unique( (splice(@{$details->{actors}},0,$self->{numActors})), @{ $prog->{credits}->{actor} } );
+				@list = unique( splice(@{$details->{actors}},0,$self->{numActors}), @{ $prog->{credits}->{actor} } );
 			}
 			#
 			$prog->{credits}->{actor}=\@list;
