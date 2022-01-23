@@ -11,7 +11,7 @@ our @EXPORT_OK = qw(read_data parse parsefile parsefiles write_data
 # the xmltv package as a whole.  This number should be checked by the
 # mkdist tool.
 #
-our $VERSION = '1.0.0';
+our $VERSION = '1.0.1';
 
 # Work around changing behaviour of XML::Twig.  On some systems (like
 # mine) it always returns UTF-8 data unless KeepEncoding is specified.
@@ -712,6 +712,47 @@ sub get_text( $;$ ) {
     else { die }
 }
 
+# Private.
+#
+# get_pcdata()
+#
+# Given a node containing mixed data, return the first occurring node
+# with character text (with whitespace either side stripped).
+#
+# Parameter: whether newlines are allowed (defaults to false)
+#
+sub get_pcdata( $;$ ) {
+    my $node = shift;
+    my $allow_nl = shift; $allow_nl = 0 if not defined $allow_nl;
+    my @children = get_subelements($node);
+    if (@children == 0) {
+        return '';
+    }
+    foreach (@children) {
+        if ( $_->tag eq '#PCDATA' ) {
+            my $v = $_->pcdata();
+            t 'got pcdata: ' . d $v;
+            if (not defined $v) {
+                my $name = get_name($node);
+                warn "node $name expected to contain text has other stuff\n";
+            }
+            else {
+                # Just hope that the encoding we got uses \n...
+                if (not $allow_nl and $v =~ tr/\n//d) {
+                    my $name = get_name($node);
+                    #warn "removing newlines from content of node $name\n";
+                }
+                tidy(\$v);
+            }
+            t 'returning: ' . d $v;
+            return $v;
+        }
+    }
+    my $name = get_name($node);
+    warn "node $name expected to contain text but none found\n";
+    return undef;
+}
+
 # Private.  Clean up parsed text.  Takes ref to scalar.
 sub tidy( $ ) {
     our $v; local *v = shift; die if not defined $v;
@@ -1217,24 +1258,76 @@ $Handlers{credits}->[0] = sub( $ ) {
     foreach (get_subelements($node)) {
         my $role = get_name($_);
         unless ($known_role{$role}++) {
-                warn "unknown thing in credits: $role";
-                next;
+            warn "unknown thing in credits: $role";
+            next;
         }
+        my $text=get_pcdata($_);
+
+        # get any image and url sub-elements
+        my ( @image, @url );
+        foreach (get_subelements($_)) {
+            t 'got element '.$_->tag;
+            if ( $_->tag eq 'image' || $_->tag eq 'url') {
+
+                # would prefer to use call_handlers_read() but that doesn't work on individual hashes (only the entire programme) 
+                #
+                # Lookup the handler
+                my $found_pos; my $name = $_->tag; my $handlers = \@Programme_Handlers;
+                for (my $i = 0; $i < @$handlers; $i++) {
+                    if ($handlers->[$i]->[0] eq $name) {
+                        t 'found handler';
+                        $found_pos = $i;
+                        last;
+                    }
+                }
+                # Call the handler.
+                t 'calling handler';
+                my ($handler_name, $h_name, $multiplicity) = @{$handlers->[$found_pos]};
+                die if $handler_name ne $name;
+                my $h = $Handlers{$h_name}; die "no handler $h_name" if not $h;
+                my $result = $h->[0]->($_); # call reader sub
+                t 'result: ' . d $result;
+                warn("skipping bad $name\n"), next if not defined $result;
+
+                push @image, $result if defined $result and $_->tag eq 'image';
+                push @url,   $result if defined $result and $_->tag eq 'url';;
+            }
+        }
+
+        # get attributes on role element (only actor has these at present)
+        my @attr;
         my %attrs = %{get_attrs($_)};
         my $character = $attrs{role} if exists $attrs{role};
         my $guest = $attrs{guest} if exists $attrs{guest};
         if ($role eq 'actor' && (defined $character || defined $guest)) {
             # attributes are (1) role, (2) guest
-            my @v = ( get_text($_), (defined $character ? $character : '') );
-            push @v, decode_boolean($guest) if defined $guest;        # only add guest if present
-            push @{$r{$role}}, [ @v ];
-        } else {
-            push @{$r{$role}}, get_text($_);
+            push @attr, (defined $character ? $character : '');
+            push @attr, decode_boolean($guest) if defined $guest;        # only add guest if present
         }
+
+        # join the #pcdata, attributes, and sub-elements
+        if (scalar @image || scalar @url || scalar @attr) {
+            if (scalar @image || scalar @url) {
+                my $h={};
+                $h->{image} = \@image if (scalar @image);
+                $h->{url}   = \@url   if (scalar @url);
+                if ($role eq 'actor') {
+                    $#attr=1;   # ensure @attr is exactly 2 items
+                    push @{$r{$role}}, [ $text, @attr, $h ];
+                } else {
+                    push @{$r{$role}}, [ $text, $h ];    # only 'actor' has attributes
+                }
+            } else {
+                push @{$r{$role}}, [ $text, @attr ];
+            }
+        } else {
+            push @{$r{$role}}, $text;
+        }
+
     }
     return \%r;
 };
-
+#
 $Handlers{'credits'}->[1] = sub( $$$ ) {
     my ($w, $e, $v) = @_; die if not defined $v;
     my %h = %$v;
@@ -1250,16 +1343,56 @@ $Handlers{'credits'}->[1] = sub( $$$ ) {
         my $role = $_;
         my @people = @{delete $h{$_}};
         foreach my $person (@people) {
-                    die if not defined $person;
-            if (ref($person) eq 'ARRAY') {
+            die if not defined $person;
+            if (ref($person) eq 'ARRAY') {   # do we have more than just a person's name?
+
+                my @attrs; my $h;
+
                 if ( $role eq 'actor' ) {
-                    # attributes are (1) role, (2) guest
+                    # attributes to 'actor' are (1) role, (2) guest
                     my %attrs = ( 1=>'role', 2=>'guest' );
-                    my @attrs = map{ $attrs{$_}, ( $_ eq 2 ? encode_boolean(@{$person}[$_]) : @{$person}[$_] ) } grep { defined @{$person}[$_] && @{$person}[$_] ne '' } keys %attrs;
-                    $w->dataElement($_, @{$person}[0], @attrs) if $w;
+                    @attrs = map{ $attrs{$_}, ( $_ eq 2 ? encode_boolean(@{$person}[$_]) : @{$person}[$_] ) } grep { defined @{$person}[$_] && @{$person}[$_] ne '' } keys %attrs;
+                    $h = @{$person}[3] if defined @{$person}[3];  # is there an 'image' or 'url' list?
+
                 } else {
-                    $w->dataElement($_, @{$person}[0]) if $w;
+                    # other roles do not have any attributes
+                    $h = @{$person}[1] if defined @{$person}[1];
                 }
+
+                $w->startTag($role, @attrs) if $w;  # open the container
+
+                $w->characters(@{$person}[0]) if $w;  # write the #pcdata
+
+                if ( defined $h && scalar keys %$h ) {   # add the 'image' and 'url' elements
+
+                    # writer is opened with DATA_MODE => 1 but that prevents mixed content, so tempo turn it off
+                    my $w_mode = $w->getDataMode() if ($w);
+                    $w->setDataMode(0) if ($w);
+                    my $j=2; $j = $w->getDataIndent() if ($w); $j *= 4;  # now we'll have to indent manually :-(  Guess we're at level 4.
+                    my $i=0;
+
+                    foreach my $k ( qw[ image url ] ) {
+                        next unless defined $h->{$k};
+                        my $v = $h->{$k};
+                        my $h = $Handlers{$k}; die "no handler $k" if not $h;
+
+                        # write each sub-element
+                        foreach (@{$v}) {
+                            $w->characters("\n".(' ' x $j)) if ($w);
+                            my $ret = $h->[1]->($w, $k, $_) if ($w);   # call writer sub
+                            $i++;
+                        }
+                    }
+
+                    $j = $j/4*3;
+                    $w->characters("\n".(' ' x $j)) if ($w and $i);    # data_mode doesn't reset cleanly
+
+                    # reset the data_mode
+                    $w->setDataMode($w_mode) if ($w);
+                }
+
+                $w->endTag($role) if $w;
+
             } else {
                 $w->dataElement($_, $person) if $w;
             }
