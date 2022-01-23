@@ -120,12 +120,12 @@ sub new
 	$self->{updatePlot}=0			if ( !defined($self->{updatePlot}));			# default is to NOT add plot
 	$self->{updateReviews}=1		if ( !defined($self->{updateReviews}));			# default is to add reviews
 	$self->{updateRuntime}=1		if ( !defined($self->{updateRuntime}));			# add programme's runtime
+	$self->{updateActorRole}=1		if ( !defined($self->{updateActorRole}));		# add roles to cast in output
 	$self->{updateImage}=1			if ( !defined($self->{updateImage}));			# add programme's poster image
 	$self->{updateContentId}=1		if ( !defined($self->{updateContentId}));		# add programme's id
 
 	$self->{numActors}=3			if ( !defined($self->{numActors}));		 		# default is to add top 3 actors
 	$self->{numReviews}=1			if ( !defined($self->{numReviews}));			# default is to add top 1 review
-	$self->{addActorRoles}=1		if ( !defined($self->{addActorRoles}));			# add roles to cast in output
 	$self->{removeYearFromTitles}=1	if ( !defined($self->{removeYearFromTitles}));	# strip trailing "(2021)" from title
 	$self->{getYearFromTitles}=1	if ( !defined($self->{getYearFromTitles}));		# if no 'date' incoming then see if title ends with a "(year)"
 	$self->{moviesonly}=0			if ( !defined($self->{moviesonly}));			# default to augment both movies and tv
@@ -1395,7 +1395,7 @@ sub applyFound($$$)
 			# preserve all existing actors from the prog + de-dupe the list
 			#
 			my @list;
-			if ( $self->{addActorRoles} ) {
+			if ( $self->{updateActorRole} ) {
 				
 				# add character attribute to actor name				
 				foreach my $actorplus (@{ $details->{actorsplus} }) {
