@@ -93,7 +93,7 @@ sub new
 	$self->{wwwUrl} = 'https://www.themoviedb.org/';
 
 	for ('apikey', 'verbose') {
-	die "invalid usage - no $_" if ( !defined($self->{$_}));
+		die "invalid usage - no $_" if ( !defined($self->{$_}));
 	}
 	$self->{replaceDates}=0			if ( !defined($self->{replaceDates}));
 	$self->{replaceTitles}=0		if ( !defined($self->{replaceTitles}));
@@ -613,10 +613,10 @@ sub getMovieOrTvIdDetails($$$)
 	my $profile_base = $self->{tmdb_conf}->{images}->{base_url} . $self->{tmdb_conf}->{images}->{profile_sizes}[1];		# arbitrarily pick the second one (expecting w185 = 185x278 )	
 	#
 	# set base url for movie poster images
-	my $poster_base = $self->{tmdb_conf}->{images}->{base_url} . $self->{tmdb_conf}->{images}->{poster_sizes}[4];		# arbitrarily pick the fifth one (expecting w500 = 500x750 )
-	my $backdrop_base = $self->{tmdb_conf}->{images}->{base_url} . $self->{tmdb_conf}->{images}->{backdrop_sizes}[1];	# arbitrarily pick the second one (expecting w780 = 780x439 )
+	my $poster_base     = $self->{tmdb_conf}->{images}->{base_url} . $self->{tmdb_conf}->{images}->{poster_sizes}[4];	# arbitrarily pick the fifth one (expecting w500 = 500x750 )
+	my $backdrop_base   = $self->{tmdb_conf}->{images}->{base_url} . $self->{tmdb_conf}->{images}->{backdrop_sizes}[1];	# arbitrarily pick the second one (expecting w780 = 780x439 )
 	# smaller versions:
-	my $poster_base_s 	= $self->{tmdb_conf}->{images}->{base_url} . $self->{tmdb_conf}->{images}->{poster_sizes}[0];	# arbitrarily pick the first one (expecting w92 = 92x138 )
+	my $poster_base_s   = $self->{tmdb_conf}->{images}->{base_url} . $self->{tmdb_conf}->{images}->{poster_sizes}[0];	# arbitrarily pick the first one (expecting w92 = 92x138 )
 	my $backdrop_base_s = $self->{tmdb_conf}->{images}->{base_url} . $self->{tmdb_conf}->{images}->{backdrop_sizes}[0];	# arbitrarily pick the first one (expecting w300 = 300x169 )
 	
 	
@@ -1401,7 +1401,7 @@ sub applyFound($$$)
 					# merge and dedupe the lists from incoming xml + tmdb. Give TMDB entries priority.
 					@list = uniquemulti( splice(@list,0,3), map{ ref($_) eq 'ARRAY' && scalar($_) > 1 ? $_ : [ $_ ] } @{ $prog->{credits}->{director} } ); 	# 'map' because uniquemulti needs an array
 
-					@list = map{ ( ref($_) eq 'ARRAY' && scalar(@$_) == 1 ) ? shift @$_ : $_ } @list;       # flatten any single-index arrays 
+					@list = map{ ( ref($_) eq 'ARRAY' && scalar(@$_) == 1 ) ? shift @$_ : $_ } @list;       # flatten any single-index arrays
 
 				} else {
 					# simple merge and dedupe
@@ -1432,8 +1432,8 @@ sub applyFound($$$)
 			if ( $self->{updateActorRole} || $self->{updateCastImage} || $self->{updateCastUrl} ) {
 
 				foreach (@{ $details->{actorsplus} }) {
-				
-				# add character attribute to actor name				
+
+					# add character attribute to actor name
 					my $character = ( $self->{updateActorRole} ? $_->{character} : '' );
 
 					my $subels = {};
@@ -1453,11 +1453,11 @@ sub applyFound($$$)
 				@list = uniquemulti( splice(@list,0,$self->{numActors}), map{ ref($_) eq 'ARRAY' && scalar($_) > 1 ? $_ : [ $_ ] } @{ $prog->{credits}->{actor} } ); 	# 'map' because uniquemulti needs an array
 
 				@list = map{ ( scalar(@$_) == 3 && @$_[2] eq '' ) ? [ @$_[0], @$_[1] ]  : $_ } @list;   # remove blank 'image' values
-				@list = map{ ( scalar(@$_) == 2 && @$_[1] eq '' ) ? @$_[0] : $_ } @list;   # remove blank 'character' values
+				@list = map{ ( scalar(@$_) == 2 && @$_[1] eq '' ) ? @$_[0] : $_ } @list;                # remove blank 'character' values
 				@list = map{ ( ref($_) eq 'ARRAY' && scalar(@$_) == 1 ) ? shift @$_ : $_ } @list;       # flatten any single-index arrays (as per the xmltv data struct)
-				
+
 			} else {
-				# simple merge and dedupe	
+				# simple merge and dedupe
 				@list = unique( splice(@{$details->{actors}},0,$self->{numActors}), @{ $prog->{credits}->{actor} } );
 			}
 			#
@@ -1477,8 +1477,8 @@ sub applyFound($$$)
 				$prog->{credits}->{presenter}=$details->{presenter};
 			}
 		}
-		
-		
+
+
 		# ---- update commentators list
 		if ( $self->{updateCommentators} && defined($details->{commentator}) ) {
 			if ( $idInfo->{qualifier} eq "tv_series" ) {		# only do this for TV (not movies as 'commentator' might be a valid character)
@@ -1491,8 +1491,8 @@ sub applyFound($$$)
 				$prog->{credits}->{commentator}=$details->{commentator};
 			}
 		}
-		
-		
+
+
 		# ---- update guests list
 		if ( $self->{updateGuests} && defined($details->{guest}) ) {
 			if ( $idInfo->{qualifier} eq "tv_series" ) {		# only do this for TV (not movies as 'guest' might be a valid character)
@@ -1506,7 +1506,7 @@ sub applyFound($$$)
 			}
 		}
 
-		
+
 		# ---- update categories (genres) list
 		if ( $self->{updateCategoriesWithGenres} ) {		# deprecated?
 			if ( defined($details->{genres}) ) {
@@ -1530,7 +1530,7 @@ sub applyFound($$$)
 			}
 			$prog->{category}=\@categories;
 		}
-		
+
 
 		# ---- update ratings (film classifications)
 		if ( $self->{updateRatings} ) {
@@ -1558,16 +1558,16 @@ sub applyFound($$$)
 			# what's 'too few'...good question!
 			if ( $details->{ratingVotes} >= $self->{minVotes} ) {
 
-			if ( $self->{replaceStarRatings} ) {
-				if ( defined($prog->{'star-rating'}) ) {
-					$self->debug("replacing 'star-rating'");
-					delete($prog->{'star-rating'});
+				if ( $self->{replaceStarRatings} ) {
+					if ( defined($prog->{'star-rating'}) ) {
+						$self->debug("replacing 'star-rating'");
+						delete($prog->{'star-rating'});
+					}
+					unshift( @{$prog->{'star-rating'}}, [ $details->{ratingRank} . "/10", 'TMDB User Rating' ] );
 				}
-				unshift( @{$prog->{'star-rating'}}, [ $details->{ratingRank} . "/10", 'TMDB User Rating' ] );
-			}
-			else {
-				# add TMDB User Rating in front of all other star-ratings
-				unshift( @{$prog->{'star-rating'}}, [ $details->{ratingRank} . "/10", 'TMDB User Rating' ] );
+				else {
+					# add TMDB User Rating in front of all other star-ratings
+					unshift( @{$prog->{'star-rating'}}, [ $details->{ratingRank} . "/10", 'TMDB User Rating' ] );
 				}
 
 			}
@@ -1619,7 +1619,7 @@ sub applyFound($$$)
 				push @{$prog->{desc}}, [ $details->{plot}, 'en' ]  if !$found;
 			}
 		}
-		
+
 
 		# ---- update runtime
 		if ( $self->{updateRuntime} ) {
@@ -1627,7 +1627,7 @@ sub applyFound($$$)
 				$prog->{length} = $details->{runtime} * 60;			# XMLTV.pm only accepts seconds
 			}
 		}
-		
+
 
 		# ---- update reference id
 		if ( $self->{updateContentId} ) {
@@ -1675,8 +1675,8 @@ sub applyFound($$$)
 				}
 			}
 		}
-		
-		
+
+
 		# ---- update reviews
 		if ( $self->{updateReviews} ) {
 			if ( $self->{replaceReviews} ) {
@@ -1695,9 +1695,8 @@ sub applyFound($$$)
 			}
 		}
 
-		
-	}
 
+	}
 
 	return($prog);
 }
