@@ -163,6 +163,8 @@ sub get_matcher( $$ ) {
 	   or $handler eq 'rating'      # TODO
 	   or $handler eq 'star-rating' # TODO
 	   or $handler eq 'review'      # TODO
+	   or $handler eq 'url'         # TODO
+	   or $handler eq 'image'       # TODO
 	  ) {
 	# Cannot query on this except for presence.  But empty string
 	# argument for future expansion.
