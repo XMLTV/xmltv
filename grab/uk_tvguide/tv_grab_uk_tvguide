@@ -848,6 +848,62 @@ sub fetch_channels {
 
 	$bar->update() if defined $bar; $bar->finish() && undef $bar if defined $bar;
 
+
+	# workaround for broken (deliberately?) TVGuide website [2022-01-26]
+	#
+	#  (old method found 899, this method finds 387 )
+
+	if (scalar @channels == 0) {
+		warning "No channels found in TVGuide";
+		warning "Trying alternative method";
+
+		my $bar = new XMLTV::ProgressBar({
+			name => "Fetching channels",
+			count => 12
+		}) unless ($opt->{quiet} || $opt->{debug});
+
+		foreach (qw/ 7 3 12 5 25 8 22 19 10 29 18 23 /) {
+			my $url = 'https://www.tvguide.co.uk/mobile/?systemid='.$_;
+			#debug "Fetching: $url";
+			my $tree = XMLTV::Get_nice::get_nice_tree($url);
+
+			my @c = $tree->look_down('_tag' => 'div', 'class' => 'div-channel-progs');
+
+			foreach (@c) {
+				my ($ch, $id, $l, $t);
+				$ch = $_->look_down('_tag' => 'a')->attr('href');
+				($id) = $ch =~ m/\?ch=(\d+)$/;
+				my $_dl = $_->look_down('_tag' => 'div', 'class' => 'div-channel-logo');
+				if ($_dl) {		# don't chain the look_downs (for better robustness)
+					my $_il = $_dl->look_down('_tag' => 'img', 'class' => 'img-channel-logo');
+					if ($_il) {
+						$l = $_il->attr('src');
+						$t = $_il->attr('alt');
+						$t =~ s/ TV Listings$//;
+					}
+				}
+				$channels->{$id} = {id => "$id   # $t",
+									'display-name' => [[ encode('utf-8', $t), 'en' ]],
+									icon => [{ 'src'=>$l }],
+									url => [ $ch ],
+									}
+									if $id;
+			}
+
+			$bar->update() if defined $bar;
+		}
+
+		$bar->finish() && undef $bar if defined $bar;
+
+		warning "Found ".(scalar keys %$channels)." channels \n";
+
+
+	}
+	else
+	{
+	# original method ###
+
+
 	$bar = new XMLTV::ProgressBar({
 		name => "Parsing result",
 		count => scalar @channels
@@ -860,7 +916,7 @@ sub fetch_channels {
 			my ($url) = 'channellistings.asp?ch=' . $channel->attr('value');
 			my ($name) = $channel->as_text;
 
-			$channels->{"$id"} = {
+				$channels->{$id} = {
 					id => "$id   # $name",
 					'display-name' => [[ encode('utf-8', $name), 'en' ]],
 					url => [ $ROOT_URL.$url ]
@@ -873,11 +929,21 @@ sub fetch_channels {
 
 	$bar->finish() && undef $bar if defined $bar;
 
+
+	# original method ###
+	}
+
+
 	# Notifying the user :)
 	#$bar = new XMLTV::ProgressBar({
 	#	name => "Reformatting",
 	#	count => 1
 	#}) unless ($opt->{quiet} || $opt->{debug});
+
+	if (scalar keys %$channels == 0) {
+		warning "No channels found in TVGuide \n";
+		exit 1;
+	}
 
 	# Let XMLTV::Writer format the results as a valid xmltv file
 	my $writer = new XMLTV::Writer(OUTPUT => \$result, encoding => 'utf-8');
@@ -889,7 +955,7 @@ sub fetch_channels {
 	# so let's write them by name
 	foreach (sort { $channels->{$a}->{'display-name'}[0][0] cmp $channels->{$b}->{'display-name'}[0][0] } keys %$channels) {
 		$writer->write_channel($channels->{$_});
-    }
+	}
 	#
 	$writer->end();
 
