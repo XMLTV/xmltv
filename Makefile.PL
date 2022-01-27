@@ -321,13 +321,14 @@ my @opt_components
                     'HTTP::Request::Common' => 0, },
      },
 
-     { name => 'tv_grab_eu_xmltvse',
-       blurb => 'Grabber for Europe (xmltv.se / xmltvse)',
-       exes => [ 'grab/eu_xmltvse/tv_grab_eu_xmltvse' ],
-       prereqs => { 'Compress::Zlib' => 0,
-                    'HTTP::Cache::Transparent' => 0,
-                    'IO::Scalar'     => 0, },
-     },
+#2022-01-27 rmeden - broken due to upstream changes
+#     { name => 'tv_grab_eu_xmltvse',
+#       blurb => 'Grabber for Europe (xmltv.se / xmltvse)',
+#       exes => [ 'grab/eu_xmltvse/tv_grab_eu_xmltvse' ],
+#       prereqs => { 'Compress::Zlib' => 0,
+#                    'HTTP::Cache::Transparent' => 0,
+#                    'IO::Scalar'     => 0, },
+#     },
 
      { name  => 'tv_grab_fi',
        blurb => 'Grabber for Finland',
