@@ -5,7 +5,7 @@
 # A single EXE is needed to allow sharing of modules and dlls of all the
 # programs.
 #
-# Now users PAR::Packer to build the exe.  It takes a very long time on first run, which can
+# Now uses PAR::Packer to build the exe.  It takes a very long time on first run, which can
 # appear to be a problem. 
 #
 # There currently isn't a way for PAR::Packer to warn users about a first time run.
@@ -35,27 +35,6 @@ use Class::MethodMaker;
 use Class::MethodMaker::Engine;
 
 $Carp::MaxEvalLen=40; # limit confess output
-
-#
-# this check should not be done, at least not this way. it prevents some regular expressions!
-#
-## Check for error of running from 'Run' dialogue box with redirection,
-## which Run doesn't understand,
-##
-#if (grep /[<>|]/, @ARGV) {
-#    warn <<END
-#The command line:
-#
-#$0 @ARGV
-#
-#contains redirections, so should be run from a command prompt window.
-#In general, it's a good idea to always run xmltv from a command prompt
-#so that you can see any errors and warnings produced.
-#END
-#      ;
-#    sleep 10;
-#    exit 1;
-#}
 
 #
 # check for --quiet
@@ -154,12 +133,7 @@ foreach my $exe (split(/ /,$files))
 #
 # execute our command
 #
-#   $0 = $_;        # set $0 to our script
-#	print STDERR "STDERR about to execute $exe\n";
-#	print STDOUT "STDOUT about to execute $exe\n";
     do $exe;
-#	print STDERR "STDERR got <$!> <$?> <$^E> <$@>\n";
-#	print STDOUT "STDOUT got <$!> <$?> <$^E> <$@>\n";
     print STDERR $@ if length($@);
     exit 1 if length($@);
     exit 0;

@@ -19,13 +19,5 @@ print '
 -X JSON::PP58
 -X Test::Builder::IO::Scalar
 -X Win32::Console
+-a exe_files.txt
 ';
-
-# add executable scripts
-open(FILE,"exe_files.txt");
-foreach (split(/ /,<FILE>)) {
-  chomp;
-  next unless $_;
-}
-close FILE;
-
