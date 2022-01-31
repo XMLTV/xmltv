@@ -4,7 +4,7 @@
   </a>
 </p>
 
-# XMLTV 1.0.0
+# XMLTV 1.1.0
 
 ## Table of Contents
 
@@ -27,10 +27,6 @@
   * [License](#license)
   * [Authors](#authors)
   * [Resources](#resources)
-
-## Project Status
-
-[![Build Status](https://api.travis-ci.org/XMLTV/xmltv.svg?branch=master)](https://travis-ci.org/github/XMLTV/xmltv)
 
 ## Description
 
@@ -66,7 +62,7 @@ XMLTV is packaged for most major Linux distributions and FreeBSD. It is recommen
 
 ### Windows
 
-Windows users are strongly advised to use the [pre-built binary](http://alpha-exe.xmltv.org/) as installing all prerequisites is non-trivial.
+Windows users are strongly advised to use the [pre-built binary](http://alpha-exe.xmltv.org/) as installing all prerequisites is non-trivial. Please also check the Github release page for a pre-built release binary.
 
 For those who want to give it a go, please read the [EXE build instructions](doc/exe_build.html). The instructions can be used for both building xmltv.exe as well as a local install.
 
@@ -261,7 +257,7 @@ We run the following mailing lists:
 
 ### IRC
 
-Finally, we run an IRC channel #xmltv on Freenode. Please join us!
+Finally, we run an IRC channel #xmltv on Libera Chat. Please join us!
 
 
--- Nick Morrott, knowledgejunkie@gmail.com, 2021-02-07
+-- Nick Morrott, knowledgejunkie@gmail.com, 2022-01-31
