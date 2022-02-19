@@ -4,7 +4,7 @@
   </a>
 </p>
 
-# XMLTV 1.1.0
+# XMLTV 1.1.1
 
 ## Table of Contents
 
@@ -260,4 +260,4 @@ We run the following mailing lists:
 Finally, we run an IRC channel #xmltv on Libera Chat. Please join us!
 
 
--- Nick Morrott, knowledgejunkie@gmail.com, 2022-01-31
+-- Nick Morrott, knowledgejunkie@gmail.com, 2022-02-19
