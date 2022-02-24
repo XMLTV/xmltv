@@ -29,6 +29,8 @@ use Date::Parse;
 #v1.3: use DateTime::Format::DateParse;
 use Encode;
 use URI::Escape;
+use LWP::UserAgent;
+use HTTP::Cookies;
 use HTML::TreeBuilder;
 use HTTP::Cache::Transparent;
 
@@ -84,7 +86,7 @@ my ($opt, $conf) = ParseOptions({
 			listchannels_sub 	=> \&fetch_channels,
 			version 			=> $VERSION,
 			description 		=> $GRABBER_DESC,
-			extra_options		=> [qw/nodetailspage legacychannels usage/],
+			extra_options		=> [qw/nodetailspage legacychannels method:i usage/],
 });
  
 usage(1) if $opt->{usage};
@@ -826,36 +828,154 @@ sub loadmapconf {
 sub fetch_channels {
 	my ($conf, $opt) = @_;
 
-	# Fetch channels via a dummy call to BBC1 listings
-	#		http://www.tvguide.co.uk/channellisting.asp?ch=86&cTime=
-	my $channel_list = $ROOT_URL.'channellistings.asp?ch=74&cTime=';
-
-	my $result;
 	my $channels = {};
 
-	my $bar = new XMLTV::ProgressBar({
-		name => "Fetching channels",
-		count => 1
-	}) unless ($opt->{quiet} || $opt->{debug});
+	# Get the list of available channels
 
-	# Get the page containing the list of channels
-	my $tree = XMLTV::Get_nice::get_nice_tree($channel_list);
-	#		$tree->dump;
-	my $_channels = $tree->look_down('_tag' => 'select', 'name' => 'ch');
-	my @channels = $_channels->look_down('_tag' => 'option');
-	#		debug $_channels->as_HTML;
-	#		foreach  my $xchannel (@channels) { debug $xchannel->as_HTML; }
-
-	$bar->update() if defined $bar; $bar->finish() && undef $bar if defined $bar;
-
-
-	# workaround for broken (deliberately?) TVGuide website [2022-01-26]
+	# Preferred method (uses a html select list of channels)
 	#
-	#  (old method found 899, this method finds 387 )
+	if ((scalar keys %$channels == 0) && (!defined $opt->{method} || $opt->{method} == 0)) {
 
-	if (scalar @channels == 0) {
-		warning "No channels found in TVGuide";
-		warning "Trying alternative method";
+		my $bar = new XMLTV::ProgressBar({
+			name => "Fetching channels",
+			count => 1
+		}) unless ($opt->{quiet} || $opt->{debug});
+
+		# Fetch channels via a dummy call to BBC1 listings
+		#
+		my $channel_list = $ROOT_URL.'channellistings.asp?ch=74&cTime=';
+
+		my @channels;
+
+		my $tree = XMLTV::Get_nice::get_nice_tree($channel_list);
+		#	$tree->dump;
+		my $_channels = $tree->look_down('_tag' => 'select', 'name' => 'ch');
+		if (defined $_channels) {
+			@channels = $_channels->look_down('_tag' => 'option');
+			#		debug $_channels->as_HTML;
+			#		foreach  my $xchannel (@channels) { debug $xchannel->as_HTML; }
+		}
+
+		$bar->update() if defined $bar; $bar->finish() && undef $bar if defined $bar;
+
+		if (scalar @channels > 0) {
+
+			$bar = new XMLTV::ProgressBar({
+				name => "Parsing result",
+				count => scalar @channels
+			}) unless ($opt->{quiet} || $opt->{debug});
+
+			# Browse through the downloaded list of channels and map them to a hash XMLTV::Writer would understand
+			foreach my $channel (@channels) {
+				if ($channel->as_text) {
+					my ($id) = $channel->attr('value');
+					my ($url) = 'channellistings.asp?ch=' . $channel->attr('value');
+					my ($name) = $channel->as_text;
+
+						$channels->{$id} = {
+							id => $id . (!$opt->{'list-channels'}?"   # $name":(!$opt->{legacychannels}?'.tvguide.co.uk':'')),
+							'display-name' => [[ encode('utf-8', $name), 'en' ]],
+							url => [ $ROOT_URL.$url ]
+					};
+
+				}
+
+				$bar->update() if defined $bar;
+			}
+
+			$bar->finish() && undef $bar if defined $bar;
+
+		}
+
+		warning "No channels found in TVGuide" if (scalar keys %$channels == 0);
+
+	}
+
+
+	# workaround for broken TVGuide website [2022-01-26]
+	#
+
+	# alternative Method 1 (credit: mkbloke )
+	#
+	#
+	if ((scalar keys %$channels == 0) && (!defined $opt->{method} || $opt->{method} == 1)) {
+
+		# alternative method 1
+		# fetches channels from the website's "mychannels" page
+		#   (preferred method found 899, this method finds 939 )
+
+		warning "Trying alternative method 1";
+
+		my $bar = new XMLTV::ProgressBar({
+			name => "Fetching channels",
+			count => 1
+		}) unless ($opt->{quiet} || $opt->{debug});
+
+		my $tree = fetch_url('https://www.tvguide.co.uk/mychannels.asp?gw=1242', 'post', [
+			thisDay => '',
+			thisTime => '',
+			gridSpan => '',
+			emailaddress => '',
+			regionid => 1,
+			systemid => 7,
+			xn => 'Show me the channels'
+		]);
+
+		 # html content:
+		 # <table id="trX1772" cellpadding="5" cellspacing="2" class="trX" 
+		 #      onClick="addChannel(1772,'BBC One London HD')" 
+		 #        alt="Click to Add" title="Click to Add">
+		 #   <tr>
+		 #     <td style="background-image:url(https://cdn.tvguide.co.uk/channel_logos/60x35/1772.png)"></td>
+		 #     <td>BBC One London HD</td>
+		 #   </tr>
+		 # </table>
+		 # or
+		 # <tr id="tr74" class="trC">
+		 #   <td style="background-image:url(https://cdn.tvguide.co.uk/channel_logos/60x35/74.png)"></td>
+		 #   <td>BBC One London</td>
+		 #   <td onclick="deleteChannel(74,'BBC One London');">
+		 #       <input type="hidden" name="chnl" value="74">
+		 #   </td>
+		 # </tr>
+
+		my @c = $tree->look_down('_tag' => qr/table|tr/, 'class' => qr/^tr[XC]/);
+
+		foreach (@c) {
+			my ($ch, $id, $l, $t);
+
+			if ($_->id =~ /^trX?\d+/) {
+				($id) = $_->id =~ /^trX?(\d+)/;
+				($ch) = $ROOT_URL.'channellistings.asp?ch='.$id;
+				($l) = $_->as_HTML =~ /background-image:url\(([^)]+)\)/;
+				($t) = $_->as_text;
+			}
+
+			$channels->{$id} = {id => $id . (!$opt->{'list-channels'}?"   # $t":(!$opt->{legacychannels}?'.tvguide.co.uk':'')),
+								'display-name' => [[ encode('utf-8', $t), 'en' ]],
+								icon => [{ 'src'=>$l }],
+								url => [ $ch ],
+								}
+								if $id;
+		}
+
+		$bar->update() if defined $bar; $bar->finish() && undef $bar if defined $bar;
+
+		warning "Found ".(scalar keys %$channels)." channels \n";
+
+	}
+
+
+	# alternative Method 2
+	#
+	#
+	if ((scalar keys %$channels == 0) && (!defined $opt->{method} || $opt->{method} == 2)) {
+
+		# alternative method 2
+		# fetches channels from the website's mobile-friendly page
+		#   (preferred method found 899, this method finds 387 )
+
+		warning "Trying alternative method 2";
 
 		my $bar = new XMLTV::ProgressBar({
 			name => "Fetching channels",
@@ -866,6 +986,19 @@ sub fetch_channels {
 			my $url = 'https://www.tvguide.co.uk/mobile/?systemid='.$_;
 			#debug "Fetching: $url";
 			my $tree = XMLTV::Get_nice::get_nice_tree($url);
+
+			 # html content:
+			 # <div class="div-channel-progs">
+			 #   <div class="div-channel">
+			 #     <div class="div-channel-logo">
+			 #       <img style="content-visibility:auto" loading="lazy" decoding="async" class="img-channel-logo" width="50" src="https://cdn.tvguide.co.uk/channel_logos/60x35/74.png" alt="BBC One London TV Listings">
+			 #     </div>
+			 #     <div class="div-channel-numbers"><span>FV:1 | SK:101<br>VG:101 | FS:101<br>BT:1</span></div>
+			 #   </div>
+			 #   <a href="https://www.tvguide.co.uk/mobile/channellisting.asp?ch=74">	
+			 #     [...]
+			 #   </a>
+			 # </div>
 
 			my @c = $tree->look_down('_tag' => 'div', 'class' => 'div-channel-progs');
 
@@ -898,41 +1031,8 @@ sub fetch_channels {
 
 		warning "Found ".(scalar keys %$channels)." channels \n";
 
-
-	}
-	else
-	{
-	# original method ###
-
-
-	$bar = new XMLTV::ProgressBar({
-		name => "Parsing result",
-		count => scalar @channels
-	}) unless ($opt->{quiet} || $opt->{debug});
-
-	# Browse through the downloaded list of channels and map them to a hash XMLTV::Writer would understand
-	foreach my $channel (@channels) {
-		if ($channel->as_text) {
-			my ($id) = $channel->attr('value');
-			my ($url) = 'channellistings.asp?ch=' . $channel->attr('value');
-			my ($name) = $channel->as_text;
-
-				$channels->{$id} = {
-					id => $id . (!$opt->{'list-channels'}?"   # $name":(!$opt->{legacychannels}?'.tvguide.co.uk':'')),
-					'display-name' => [[ encode('utf-8', $name), 'en' ]],
-					url => [ $ROOT_URL.$url ]
-			};
-
-		}
-
-		$bar->update() if defined $bar;
 	}
 
-	$bar->finish() && undef $bar if defined $bar;
-
-
-	# original method ###
-	}
 
 
 	# Notifying the user :)
@@ -947,6 +1047,7 @@ sub fetch_channels {
 	}
 
 	# Let XMLTV::Writer format the results as a valid xmltv file
+	my $result;
 	my $writer = new XMLTV::Writer(OUTPUT => \$result, encoding => 'utf-8');
 	$writer->start({'generator-info-name' => $generator_info_name});
 	#
@@ -1003,20 +1104,40 @@ sub config_check {
 	}
 }
 
-sub fetch_url {
+sub fetch_url ($;$$) {
 	# fetch a url with up to 5 retries
-	my ($url) = @_;
+	my ($url, $method, $varhash) = @_;
 	$XMLTV::Get_nice::FailOnError = 0;
 	my $content;
 	my $maxretry = 5;
 	my $retry = 0;
-	while ( (not defined($content = XMLTV::Get_nice::get_nice($url))) || (length($content) == 0) ) {
-		my $r = $XMLTV::Get_nice::Response;
-		print STDERR "HTTP error: ".$r->status_line."\n";
-		$retry++;
-		return undef if $retry > $maxretry;
-		print STDERR "Retrying URL: $url (attempt $retry of $maxretry) \n";
+	if (defined $method && lc($method) eq 'post') {
+
+		my $ua = initialise_ua();
+
+		while ( (not defined($content)) || (length($content) == 0) ) {
+			my $r = $ua->post($url, $varhash);
+			$content = $r->content;
+			if ( $r->is_error || (length($content) == 0) ) {
+				print STDERR "HTTP error: ".$r->status_line."\n";
+				$retry++;
+				return undef if $retry > $maxretry;
+				print STDERR "Retrying URL: $url (attempt $retry of $maxretry) \n";
+			}
+		}
+
+	} else {
+
+		while ( (not defined($content = XMLTV::Get_nice::get_nice($url))) || (length($content) == 0) ) {
+			my $r = $XMLTV::Get_nice::Response;
+			print STDERR "HTTP error: ".$r->status_line."\n";
+			$retry++;
+			return undef if $retry > $maxretry;
+			print STDERR "Retrying URL: $url (attempt $retry of $maxretry) \n";
+		}
+
 	}
+
 	$content = decode('UTF-8', $content);
 	my $t = HTML::TreeBuilder->new();
 	$t->parse($content) or die "cannot parse content of $url\n";
@@ -1056,7 +1177,6 @@ sub warning ( $ ) {
 	$warnings++;
 }
 
-if (0) {		# not used
 sub initialise_ua {
 	my $cookies = HTTP::Cookies->new;
 	#my $ua = LWP::UserAgent->new(keep_alive => 1);
@@ -1071,7 +1191,6 @@ sub initialise_ua {
 	$ua->env_proxy;
 
 	return $ua;
-}
 }
 
 # #############################################################################
@@ -1090,13 +1209,13 @@ tv_grab_uk_tvguide --usage
 
 tv_grab_uk_tvguide --version
 
-tv_grab_uk_tvguide --configure [--config-file FILE] [--gui OPTION]
+tv_grab_uk_tvguide --configure [--config-file FILE] [--gui OPTION] [--method N]
 
 tv_grab_uk_tvguide [--config-file FILE] [--output FILE] [--days N]
                    [--offset N] [--nodetailspage]  [--legacychannels]
                    [--quiet] [--debug]
 
-tv_grab_uk_tvguide --list-channels [--output FILE] [--debug]
+tv_grab_uk_tvguide --list-channels [--output FILE] [--method N] [--debug]
 
 =head1 DESCRIPTION
 
@@ -1141,6 +1260,16 @@ in December 2020. Use --legacychannels to output channel ids in the previous for
  (i.e. number only).
 
 B<--output FILE> Write to FILE rather than standard output.
+
+B<--method N> This program has three methods for fetching the list of
+channels available. The preferred method can be overridden with an option of
+either --method 1 or --method 2 to use one of the two alternative methods.
+
+If no --method parameter is supplied then the various methods will be tried in 
+sequence until a channels list is obtained. A parameter of --method 0 will run 
+the preferred method only.
+
+Normally you should omit this parameter.
 
 B<--quiet> Suppress the progress messages normally written to the console.
 
