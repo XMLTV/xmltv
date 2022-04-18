@@ -68,7 +68,7 @@ For those who want to give it a go, please read the [EXE build instructions](doc
 
 ### MacOS
 
-XMLTV is packaged for MacOS in the [Fink Project](http://pdb.finkproject.org/pdb/package.php/xmltv)
+XMLTV is packaged for MacOS in the [MacPorts Project](https://ports.macports.org/port/xmltv/)
 
 ## Installation (Source)
 
