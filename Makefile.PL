@@ -473,9 +473,9 @@ my @opt_components
        exes => [ 'grab/pt_meo/tv_grab_pt_meo' ],
        prereqs => { 'DateTime'        => 0,
                     'Encode'          => 0,
-                    'JSON'            => 0, 
-                    'IO::File'        => 0, 
-                    'File::Path'      => 0, 
+                    'JSON'            => 0,
+                    'IO::File'        => 0,
+                    'File::Path'      => 0,
                     'File::Basename'  => 0, },
      },
 
