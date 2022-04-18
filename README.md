@@ -48,6 +48,8 @@ To see what has changed in the current XMLTV release please check the [Changes](
 
 XMLTV is packaged for most major Linux distributions and FreeBSD. It is recommended that users install XMLTV using their preferred package manager.
 
+[![Packaging status](https://repology.org/badge/vertical-allrepos/xmltv.svg?minversion=1.0.0&columns=3)](https://repology.org/project/xmltv/versions)
+
 #### Debian/Ubuntu
 
 ```bash
