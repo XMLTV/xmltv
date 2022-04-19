@@ -45,28 +45,28 @@ Utility class that helps grabbers write configuration descriptions.
   $writer->write_string( {
     id => 'username',
     title => [ [ 'Username', 'en' ],
-               [ 'Användarnamn', 'sv' ] ],
+               [ 'AnvÃ¤ndarnamn', 'sv' ] ],
     description => [ [ 'The username for logging in to DataDirect.', 'en' ],
-                     [ 'Användarnamn hos DataDirect', 'sv' ] ],
+                     [ 'AnvÃ¤ndarnamn hos DataDirect', 'sv' ] ],
     } );
   $writer->start_selectone( {
     id => 'lineup',
     title => [ [ 'Lineup', 'en' ],
                [ 'Programpaket', 'sv' ] ],
     description => [ [ 'The lineup of channels for your region.', 'en' ],
-                     [ 'Programpaket för din region', 'sv' ] ],
+                     [ 'Programpaket fÃ¶r din region', 'sv' ] ],
     } );
 
   $writer->write_option( {
     value=>'eastcoast',
     text=> => [ [ 'East Coast', 'en' ],
-                [ 'Östkusten', 'sv' ] ]
+                [ 'Ã–stkusten', 'sv' ] ]
   } );
 
   $writer->write_option( {
     value=>'westcoast',
     text=> => [ [ 'West Coast', 'en' ],
-                [ 'Västkusten', 'sv' ] ]
+                [ 'VÃ¤stkusten', 'sv' ] ]
   } );
 
   $writer->end_selectone();
@@ -142,9 +142,9 @@ element:
   $writer->write_string( {
     id => 'username',
     title => [ [ 'Username', 'en' ],
-               [ 'Användarnamn', 'sv' ] ],
+               [ 'AnvÃ¤ndarnamn', 'sv' ] ],
     description => [ [ 'The username for logging in to DataDirect.', 'en' ],
-                     [ 'Användarnamn hos DataDirect', 'sv' ] ],
+                     [ 'AnvÃ¤ndarnamn hos DataDirect', 'sv' ] ],
     default => "",
     } );
 
