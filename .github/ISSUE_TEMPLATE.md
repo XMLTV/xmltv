@@ -4,9 +4,19 @@ If you are reporting a new issue, please give your issue a descriptive title and
 
 XMLTV Version?
 --------------
+(Please specify release version or git commit ID)
 …
 
 XMLTV Component?
+----------------
+(Grabber name or utility)
+…
+
+Perl Version
+------------
+…
+
+Operating System
 ----------------
 …
 
@@ -30,13 +40,12 @@ What steps are needed to reproduce this issue?
 2. …
 3. …
 
+Please attach your config file below:
+-------------------------------------
+(Remember to remove any usernames/passwords)
+…
+
 Any other information?
 ----------------------
 (For example, is this a new or intermittent issue?)
 …
-
-What other software are you using?
-----------------------------------
-**Operating System:** …
-
-**Perl Version:** …
