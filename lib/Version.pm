@@ -38,12 +38,12 @@ sub import( $$ ) {
 
     eval {
 	require XMLTV;
-	print "XMLTV module version $XMLTV::VERSION\n";
+	print "XMLTV module version $XMLTV::VERSION".($XMLTV::BUILD ne '' ? "_$XMLTV::BUILD" : '')."\n";
     };
     print "could not load XMLTV module, xmltv is not properly installed\n"
       if $@;
     for ($_[1]) {
-	print "This program version $_\n";
+	print "This program version $_".($XMLTV::BUILD ne '' ? "_$XMLTV::BUILD" : '')."\n";
     }
 
     exit();

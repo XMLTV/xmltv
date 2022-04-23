@@ -417,13 +417,13 @@ sub ParseOptions
     {
 	eval {
 	    require XMLTV;
-	    print "XMLTV module version $XMLTV::VERSION\n";
+	    print "XMLTV module version $XMLTV::VERSION".($XMLTV::BUILD ne '' ? "_$XMLTV::BUILD" : '')."\n";
 	} or print
 	    "could not load XMLTV module, xmltv is not properly installed\n";
 
 	if( $p->{version} =~ m/^(?:\d+)(?:\.\d+){0,2}$/)
 	{
-	    print "This is $p->{grabber_name} version $p->{version}\n";
+	    print "This is $p->{grabber_name} version $p->{version}".($XMLTV::BUILD ne '' ? "_$XMLTV::BUILD" : '')."\n";
 	}
 	elsif( $p->{version} =~ m!\$Id: [^,]+,v (\S+) ([0-9/: -]+)! )
 	{
