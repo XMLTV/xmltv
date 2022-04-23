@@ -65,7 +65,7 @@ $cmd = shift || "";
 
 # --version (and abbreviations thereof)
 if (index('--version', $cmd) == 0 and length $cmd >= 3) {
-    print "xmltv $XMLTV::VERSION\n";
+    print "xmltv $XMLTV::VERSION".($XMLTV::BUILD ne '' ? "_$XMLTV::BUILD" : '')."\n";
     exit;
 }
 
