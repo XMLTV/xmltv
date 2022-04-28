@@ -421,7 +421,7 @@ sub ParseOptions
 	} or print
 	    "could not load XMLTV module, xmltv is not properly installed\n";
 
-	if( $p->{version} =~ m/^(?:\d+)(?:\.\d+){0,2}$/)
+	if( $p->{version} =~ m/^(?:\d+)(?:\.\d+){0,2}(?:_\d*)?$/)
 	{
 	    print "This is $p->{grabber_name} version $p->{version}\n";
 	}
