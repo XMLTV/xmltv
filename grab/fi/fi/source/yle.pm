@@ -27,9 +27,22 @@ our %languages = (
     "sv" => [ "arenan", "guide" ],
 );
 
+sub _set_ua_headers() {
+  my($headers, $clone) = cloneUserAgentHeaders();
+
+  # since a DDoS attack on yle.fi on 22-Oct-2022 this header is required
+  $clone->header('Accept-Language', 'en');
+
+  # Return old headers to restore them at the end
+  return $headers;
+}
+
 # Grab channel list
 sub channels {
   my %channels;
+
+  # set up user agent default headers
+  my $headers = _set_ua_headers();
 
   # yle.fi offers program guides in multiple languages
   foreach my $code (sort keys %languages) {
@@ -73,11 +86,13 @@ sub channels {
       $root->delete();
 
     } else {
+      restoreUserAgentHeaders($headers);
       return;
     }
   }
 
   debug(2, "Source yle.fi parsed " . scalar(keys %channels) . " channels");
+  restoreUserAgentHeaders($headers);
   return(\%channels);
 }
 
@@ -88,6 +103,9 @@ sub grab {
   # Get channel number from XMLTV id
   return unless my($channel, $code) = ($id =~ /^([^.]+)\.([^.]+)\.yle\.fi$/);
   $channel =~ s/-/ /g;
+
+  # set up user agent default headers
+  my $headers = _set_ua_headers();
 
   # Fetch & parse HTML (do not ignore HTML5 <time>)
   my $root = fetchTree("https://$languages{$code}[0].yle.fi/tv/$languages{$code}[1]?t=" . $today->ymdd(),
@@ -172,9 +190,11 @@ sub grab {
     # Fix overlapping programmes
     fi::programme->fixOverlaps(\@objects);
 
+    restoreUserAgentHeaders($headers);
     return(\@objects);
   }
 
+  restoreUserAgentHeaders($headers);
   return;
 }
 
