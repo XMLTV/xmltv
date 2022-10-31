@@ -13,6 +13,7 @@ use warnings;
 use base qw(Exporter);
 
 our @EXPORT      = qw(message debug fetchRaw fetchTree
+		      cloneUserAgentHeaders restoreUserAgentHeaders
 		      timeToEpoch fullTimeToEpoch);
 our @EXPORT_OK   = qw(setQuiet setDebug setTimeZone);
 our %EXPORT_TAGS = (
@@ -137,6 +138,23 @@ sub fetchTree($;$$$) {
   $tree->parse($content) or croak("fetchTree() parse failure for '$url'");
   $tree->eof;
   return($tree);
+}
+
+# get_nice() user agent default headers handling
+sub cloneUserAgentHeaders() {
+  # fetch current HTTP::Headers object
+  my $headers = $XMLTV::Get_nice::ua->default_headers();
+
+  # clone it and use the clone in the user agent
+  my $clone = $headers->clone();
+  $XMLTV::Get_nice::ua->default_headers($clone);
+
+  return($headers, $clone);
+}
+
+sub restoreUserAgentHeaders($) {
+  my($headers) = @_;
+  $XMLTV::Get_nice::ua->default_headers($headers);
 }
 
 #
