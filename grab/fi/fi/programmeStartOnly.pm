@@ -46,17 +46,26 @@ sub convertProgrammeList($$$$) {
   # No data found -> return empty list to indicate failure
   return([]) unless @{ $programmes };
 
-  # Check for day crossing between first and second entry
+  # Check for day crossings
   my @dates = ($today, $tomorrow);
-  if ((@{ $programmes } > 1) &&
-      ($programmes->[0]->start() > $programmes->[1]->start())) {
+  if (@{ $programmes } > 1) {
+    my @day_crossings;
+    my $last = @{ $programmes } - 1;
 
-    # Did caller specify yesterday?
-    if (defined $yesterday) {
-      unshift(@dates, $yesterday);
-    } else {
-      # No, assume the second entry is broken -> drop it
-      splice(@{ $programmes }, 1, 1);
+    for (my $index = 0; $index < $last; $index++) {
+      push(@day_crossings, $index)
+        if ($programmes->[$index]->start() > $programmes->[$index + 1]->start());
+    }
+
+    # more than one day crossing?
+    if (@day_crossings > 1) {
+      # Did caller specify yesterday?
+      if (defined $yesterday) {
+        unshift(@dates, $yesterday);
+      } else {
+        # No, assume the entry after first crossing is broken -> drop it
+        splice(@{ $programmes }, $day_crossings[0] + 1, 1);
+      }
     }
   }
 
