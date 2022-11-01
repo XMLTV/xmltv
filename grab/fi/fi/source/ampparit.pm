@@ -36,43 +36,46 @@ sub channels {
     #
     #   <div class="programming-container">
     #    ...
-    #	 <div class="channel col-xs-6 col-sm-4 col-md-3 col-lg-3">
-    #     <div class="channel-wrap">
-    #      <div class="channel-header">
-    #       <a class="channel-title__logo" href="/tv/yle-tv1">
-    # or    <a class="channel-title__name" href="/tv/yle-tv1">
-    #        <img src="..." alt="Yle TV1">
+    #    <div class="channel-wrap">
+    #     <div class="channel-header">
+    #      <div class="channel-title ...">
+    #       <a href="/tv/yle-tv1">
+    #        <img class="channel-title__logo" src="..." alt="Yle TV1" />
+    # or     <h3 class="channel-title__name">Eurosport</h3>
     #       </a>
-    #       ...
     #      </div>
     #     </div>
+    #     ...
     #     <div class="programs">...</div>
     #    </div>
-    #    ,,,
+    #    ...
     #   </div>
     #
     if (my $container = $root->look_down("class" => "programming-container")) {
-      if (my @links = $container->look_down("_tag"  => "a",
-					    "class" => qr/^channel-title__(?:logo|name)$/)) {
-	foreach my $link (@links) {
-	  my $id = $link->attr("href");
+      if (my @titles = $container->look_down("class" => qr/^channel-title/)) {
+	foreach my $title (@titles) {
+	  my $link = $title->find("a");
 
-	  # strip path
-	  $id = (split("/", $id))[-1];
+	  if ($link) {
+	    my $id = $link->attr("href");
 
-	  my $name;
-	  if (my $img = $link->find("img")) {
-	    $name = $img->attr("alt");
-	  } else {
-	    # no logo
-	    $name = $link->as_text();
-	  }
-	  $name =~ s/\s+$//;
+	    # strip path
+	    $id = (split("/", $id))[-1];
 
-	  if (defined($id)   && length($id) &&
-	      defined($name) && length($name)) {
-	    debug(3, "channel '$name' ($id)");
-	    $channels{"${id}.ampparit.com"} = "fi $name";
+	    my $name;
+	    if (my $img = $link->find("img")) {
+	      $name = $img->attr("alt");
+	    } else {
+	      # no logo
+	      $name = $link->as_text();
+	    }
+	    $name =~ s/\s+$//;
+
+	    if (defined($id)   && length($id) &&
+		defined($name) && length($name)) {
+	      debug(3, "channel '$name' ($id)");
+	      $channels{"${id}.ampparit.com"} = "fi $name";
+	    }
 	  }
 	}
       }
@@ -105,7 +108,7 @@ sub grab {
     #
     # Each programme can be found in a separate <div class="program"> node
     #
-    #   <div class="channel-container">
+    #   <div class="channel-wrap">
     #    ...
     #    <div class="programs">
     #     <div data-tip="..." data-for="..." class="program">
