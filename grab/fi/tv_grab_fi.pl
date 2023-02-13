@@ -4,7 +4,9 @@
 # Setup
 #
 ###############################################################################
-use 5.008; # we process Unicode texts
+# - we process Unicode texts
+# - calling POSIX::tzset() is no longer for Perl >= 5.8.9
+use 5.008009;
 use strict;
 use warnings;
 

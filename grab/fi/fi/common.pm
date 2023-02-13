@@ -23,7 +23,6 @@ our %EXPORT_TAGS = (
 # Perl core modules
 use Carp;
 use Encode qw(decode);
-use POSIX qw(tzset);
 use Time::Local qw(timelocal);
 
 # Other modules
@@ -177,8 +176,11 @@ sub restoreUserAgentHeaders($) {
 #
 # Test program:
 # ---------------------- CUT HERE ---------------------------------------------
+# use 5.008009;
+# use strict;
+# use warnings;
 # use Time::Local;
-# use POSIX qw(strftime tzset);
+# use POSIX qw(strftime);
 #
 # # DST test days for Europe 2010
 # my @testdays = (
@@ -197,7 +199,6 @@ sub restoreUserAgentHeaders($) {
 # print strftime("System time zone is: %Z\n", localtime(time()));
 # if (@ARGV) {
 #   $ENV{TZ} = "Europe/Helsinki";
-#   tzset();
 # }
 # print strftime("Script time zone is: %Z\n", localtime(time()));
 #
@@ -260,7 +261,6 @@ sub restoreUserAgentHeaders($) {
 # Setup fixed time zone for program start time interpretation
 sub setTimeZone() {
   $ENV{TZ} = "Europe/Helsinki";
-  tzset();
 }
 
 # Take a fi::day (day/month/year) and the program start time (hour/minute)
