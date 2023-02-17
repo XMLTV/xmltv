@@ -74,7 +74,7 @@ my $generator_info_url	= $GRABBER_URL;
 my $source_info_name	= $SOURCE_NAME;
 my $source_info_url		= $SOURCE_URL;
 #
-my $grabberid = '2023-01-25.1304';
+my $grabberid = '2023-02-17.1139';
 
 # ------------------------------------------------------------------------------------------------------------------------------------- #
 # Use XMLTV::Options::ParseOptions to parse the options and take care of the basic capabilities that a tv_grabber should have
@@ -86,7 +86,7 @@ our ($opt, $conf) = ParseOptions({
 			listchannels_sub	=> \&fetch_channels,
 			version				=> $VERSION,
 			description			=> $GRABBER_DESC,
-			extra_options		=> [qw/nodetailspage legacychannels method:i usage/],
+			extra_options		=> [qw/nodetailspage legacychannels method:i makeignorelist:s useignorelist:s usage test:i/],
 });
  
 usage(1) if $opt->{usage};
@@ -833,9 +833,11 @@ sub fetch_channels {
 
 	my $channels = {};
 
-	# Get the list of available channels
 
-	# Preferred method (uses a html select list of channels)
+	# Get the list of available channels
+	#-------------------------------------------------------------------------------------------
+
+	# preferred method (uses a html select list of channels)
 	#
 	if ((scalar keys %$channels == 0) && (!defined $opt->{method} || $opt->{method} == 0)) {
 
@@ -895,6 +897,8 @@ sub fetch_channels {
 	}
 
 
+	#-------------------------------------------------------------------------------------------
+
 	# workaround for broken TVGuide website [2022-01-26]
 	#
 
@@ -906,6 +910,7 @@ sub fetch_channels {
 		# alternative method 1
 		# fetches channels from the website's "mychannels" page
 		#   (preferred method found 899, this method finds 939 )
+		#   (as at 2023-01-25 it finds 1207 channels, but many are duplicates with no data)
 
 		warning "Trying alternative method 1";
 
@@ -920,29 +925,13 @@ sub fetch_channels {
 			gridSpan => '',
 			emailaddress => '',
 			regionid => 1,
-			systemid => 7,
+			systemid => 5,
 			xn => 'Show me the channels'
 		]);
 
-		 # html content:
-		 # <table id="trX1772" cellpadding="5" cellspacing="2" class="trX" 
-		 #      onClick="addChannel(1772,'BBC One London HD')" 
-		 #        alt="Click to Add" title="Click to Add">
-		 #   <tr>
-		 #     <td style="background-image:url(https://cdn.tvguide.co.uk/channel_logos/60x35/1772.png)"></td>
-		 #     <td>BBC One London HD</td>
-		 #   </tr>
-		 # </table>
-		 # or
-		 # <tr id="tr74" class="trC">
-		 #   <td style="background-image:url(https://cdn.tvguide.co.uk/channel_logos/60x35/74.png)"></td>
-		 #   <td>BBC One London</td>
-		 #   <td onclick="deleteChannel(74,'BBC One London');">
-		 #       <input type="hidden" name="chnl" value="74">
-		 #   </td>
-		 # </tr>
-
 		my @c = $tree->look_down('_tag' => qr/table|tr/, 'class' => qr/^tr[XC]/);
+
+		my $j = 0 if $opt->{test};	# --test is an undocumented (private) option
 
 		foreach (@c) {
 			my ($ch, $id, $l, $t);
@@ -960,14 +949,19 @@ sub fetch_channels {
 								url => [ $ch ],
 								}
 								if $id;
+
+			debug $id if $opt->{test};
+			last if $opt->{test} and (++$j >= $opt->{test});  # limit during testing
 		}
 
 		$bar->update() if defined $bar; $bar->finish() && undef $bar if defined $bar;
 
-		warning "Found ".(scalar keys %$channels)." channels \n";
+		warning "Found ".(scalar keys %$channels)." channels";
 
 	}
 
+
+	#-------------------------------------------------------------------------------------------
 
 	# alternative Method 2
 	#
@@ -989,19 +983,6 @@ sub fetch_channels {
 			my $url = 'https://www.tvguide.co.uk/mobile/?systemid='.$_;
 			#debug "Fetching: $url";
 			my $tree = XMLTV::Get_nice::get_nice_tree($url);
-
-			 # html content:
-			 # <div class="div-channel-progs">
-			 #   <div class="div-channel">
-			 #     <div class="div-channel-logo">
-			 #       <img style="content-visibility:auto" loading="lazy" decoding="async" class="img-channel-logo" width="50" src="https://cdn.tvguide.co.uk/channel_logos/60x35/74.png" alt="BBC One London TV Listings">
-			 #     </div>
-			 #     <div class="div-channel-numbers"><span>FV:1 | SK:101<br>VG:101 | FS:101<br>BT:1</span></div>
-			 #   </div>
-			 #   <a href="https://www.tvguide.co.uk/mobile/channellisting.asp?ch=74">	
-			 #     [...]
-			 #   </a>
-			 # </div>
 
 			my @c = $tree->look_down('_tag' => 'div', 'class' => 'div-channel-progs');
 
@@ -1038,6 +1019,28 @@ sub fetch_channels {
 
 
 
+	#-------------------------------------------------------------------------------------------
+
+	# does user want to process the list of channels to:
+	# 1) make a list of channels without programme schedule data on tvg website
+	# 2) remove these channels from their configuration list
+
+	if (defined $opt->{makeignorelist}) {
+		makeignorelist($channels);
+	}
+
+	if (defined $opt->{useignorelist}) {
+		useignorelist($channels);
+		warning "Remaining ".(scalar keys %$channels)." channels \n";
+	}
+
+	#debug Dumper $channels;
+
+
+	#-------------------------------------------------------------------------------------------
+
+	# Format & write out the config file
+
 	# Notifying the user :)
 	#$bar = new XMLTV::ProgressBar({
 	#	name => "Reformatting",
@@ -1068,6 +1071,117 @@ sub fetch_channels {
 
 	return $result;
 }
+
+
+
+sub makeignorelist ($) {
+	my $channels = shift;
+
+	if (defined $opt->{makeignorelist}) {
+
+		#-------------------------------------------------------------------------------------------#
+		# this fetch pulls in a lot of 'duplicate' channels (16x Sky Sports Golf !) which, when you look at them
+		#   are devoid of listings.
+		# let's see if we can root those out at this stage and not present them to the poor wee user (who doesn't know
+		#   which one to pick during '--configure' )
+		# get the listings page for this channel and see if it has data
+		# this reduces to 1x Sky Sports Golf  :-)
+		#
+		# reduced total to 494 channels (from 1207 in method 1)
+		#
+		# doing this for each channel will, of course, slow down the channel fetch 
+		#   - so we only do it when asked with --makeignorelist
+		#
+		#-------------------------------------------------------------------------------------------#
+
+		warning "Checking channels for listings data";
+
+		warning "Creating the check list will take about an hour.\n You don't need to do this every time - unless your check list \n is very out-of-date you can simply use your existing check list. \n (Ctrl+C to abort)";
+
+		my $bar = new XMLTV::ProgressBar({
+			name => "Checking channels",
+			count => (scalar keys %$channels)
+		}) unless ($opt->{quiet} || $opt->{debug});
+
+
+		my $skipchannels = [];
+		my $i = 0 if $opt->{test};
+
+		my @channels = keys %$channels;
+		for my $channel (@channels) {
+
+			last if $opt->{test} and (++$i >= $opt->{test});  # limit during testing
+
+			(my $id) = $channels->{$channel}->{id} =~ /^(\d+)/;
+			next if !$id;
+			#debug "Checking: $id";
+
+			# are there any listings for tomorrow, for this channel?
+			my $url = $ROOT_URL.'channellistings.asp' . '?ch=' . $id . '&cTime=' . uri_escape( DateTime->today->add(days => 1)->set_time_zone('Europe/London')->strftime('%m/%d/%Y 00:00:00') );
+			#debug "Fetching: $url";
+
+			my $tree = fetch_url($url);
+			if ($tree) {
+				# 	(see fetch_listings for details)
+				my @shows = $tree->look_down('_tag' => 'table', 'border' => '0', 'cellpadding' => '0', 'style' => qr/background:\s*black;border-collapse:\s*collapse;/);
+
+				if (scalar @shows == 0) {			# empty listings schedule
+					push @$skipchannels, $id;
+					debug "Channel ".$channels->{$channel}->{id}." - SKIPPED";
+				}
+			}
+
+			$bar->update() if defined $bar;
+		}
+
+		$bar->finish() && undef $bar if defined $bar;
+
+
+		# write the ignore list
+		my $fn = ($opt->{makeignorelist} || 'uktvguideignorelist');
+		debug "Writing $fn";
+		open my $fh, '>', $fn or die "Can't open file $!";
+		print $fh '# LIST OF IGNORED CHANNELS'."\n";
+		print $fh '# These channels contain no data, so it is safe to '."\n";
+		print $fh '#  remove them from the configuration file.'."\n";
+		foreach (@$skipchannels) {
+			print $fh 'channel='.$_."\n";
+		}
+
+		close $fh;
+
+	}
+
+}
+
+
+sub useignorelist ($) {
+	my $channels = shift;
+
+	if (defined $opt->{useignorelist}) {
+
+		warning "Removing ignored channels";
+
+		# read the ignore list
+		my $fn = ($opt->{useignorelist} || 'uktvguideignorelist');
+		debug "Reading $fn";
+		open my $fh, '<', $fn or die "Can't open file $!";
+
+		while (my $r = <$fh>) {
+			chomp $r;
+			next if $r =~ /^\s*#/;
+			(my $id) = $r =~ /^channel=(\d+)$/;
+			next if !$id;
+			# remove from channellist
+			delete $channels->{$id} if ($channels->{$id});
+		}
+
+		close $fh;
+
+	}
+
+}
+
 
 sub config_stage {
 	my( $stage, $conf ) = @_;
@@ -1213,6 +1327,7 @@ tv_grab_uk_tvguide --usage
 tv_grab_uk_tvguide --version
 
 tv_grab_uk_tvguide --configure [--config-file FILE] [--gui OPTION] [--method N]
+                   [--makeignorelist FILE] [--useignorelist FILE] [--debug]
 
 tv_grab_uk_tvguide [--config-file FILE] [--output FILE] [--days N]
                    [--offset N] [--nodetailspage]  [--legacychannels]
@@ -1268,6 +1383,20 @@ sequence until a channels list is obtained. A parameter of --method 0 will run
 the preferred method only.
 
 Normally you should omit this parameter.
+
+B<--makeignorelist FILE> The source channel list contains many channels which
+have no programme listings available. By using a local file of channel ids
+these can be filtered out during the configure process. This option creates 
+a list of channel ids which can be excluded from your config file
+
+makeignorelist can take over an hour to run but you only need run it 
+infrequently (not every time you run --configure).
+
+B<--useignorelist FILE> Specify the file containing a list of channel ids 
+to be removed during the configure stage.
+
+This may be the file just created with --makeignorelist
+(e.g. --configure --makeignorelist myfile --useignorelist myfile )
 
 B<--quiet> Suppress the progress messages normally written to the console.
 
@@ -1378,9 +1507,9 @@ TVGuide provide this data for free, so let's not abuse their generosity.
 
 =head1 DISCLAIMER
 
-The TVGuide website"s license for these data does not allow non-personal use.
+The TVGuide website's license for these data does not allow non-personal use.
 
-Certainly any commercial use of listings data obtained by using this grabber will breach copyright law, but if you are just using the data for your own personal use then you are probably fine.
+Certainly, any commercial use of listings data obtained by using this grabber will breach copyright law, but if you are just using the data for your own personal use then you are probably fine.
 
 By using this grabber you aver you are using the listings data for your own personal use only and you absolve the author(s) from any liability under copyright law or otherwise.
 
