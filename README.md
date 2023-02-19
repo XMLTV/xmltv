@@ -4,7 +4,7 @@
   </a>
 </p>
 
-# XMLTV 1.1.2
+# XMLTV 1.2.0
 
 ## Table of Contents
 
@@ -56,7 +56,7 @@ XMLTV is packaged for most major Linux distributions and FreeBSD. It is recommen
 % sudo apt install xmltv
 ```
 
-#### Fedora/CentOS (via RPM Fusion)
+#### Fedora/CentOS Stream/Rocky Linux (via RPM Fusion)
 
 ```bash
 % dnf install xmltv
@@ -261,4 +261,4 @@ We run the following mailing lists:
 
 We run an IRC channel #xmltv on Libera Chat. Please join us!
 
--- Nick Morrott, knowledgejunkie@gmail.com, 2022-04-18
+-- Nick Morrott, knowledgejunkie@gmail.com, 2023-02-19
