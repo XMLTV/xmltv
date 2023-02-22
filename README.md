@@ -135,13 +135,12 @@ XML::Writer 0.6.0
 Required modules for grabbers/utilities are:
 
 ```
-Archive::Zip                  (tv_grab_eu_epgdata, tv_grab_uk_bleb)
+Archive::Zip                  (tv_grab_eu_epgdata)
 CGI                           (tv_pick_cgi, core module until 5.20.3, part of CGI)
 CGI::Carp                     (tv_pick_cgi, core module until 5.20.3, part of CGI)
 Compress::Zlib                (for some of the grabbers, core module since 5.9.3, part of IO::Compress)
 Data::Dump                    (for tv_grab_it_dvb)
 Date::Format                  (for some of the grabbers, part of TimeDate)
-Date::Language                (tv_grab_ar, part of TimeDate)
 DateTime                      (for several of the grabbers)
 DateTime::Format::ISO8601     (tv_grab_zz_sdjson_sqlite)
 DateTime::Format::SQLite      (tv_grab_zz_sdjson_sqlite)
