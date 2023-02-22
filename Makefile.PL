@@ -281,15 +281,6 @@ END
 my @opt_components
   = (
 
-     { name => 'tv_grab_ar',
-       blurb => 'Grabber for Argentina',
-       exes => [ 'grab/ar/tv_grab_ar' ],
-       prereqs => { 'Date::Language'    => 0,
-                    'HTML::Entities'    => 0,
-                    'HTML::TreeBuilder' => 0,
-                    'HTTP::Cookies'     => 0, },
-     },
-
      { name => 'tv_grab_ch_search',
        blurb => 'Grabber for Switzerland',
        exes => [ 'grab/ch_search/tv_grab_ch_search' ],
