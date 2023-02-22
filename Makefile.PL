@@ -295,13 +295,6 @@ my @opt_components
                     'URI::URL'          => 0, },
      },
 
-     # { name => 'tv_grab_dk_dr',
-     #   blurb => 'Grabber for Denmark (dr.dk)',
-     #   exes => [ 'grab/dk_dr/tv_grab_dk_dr' ],
-     #   prereqs => { 'DateTime'       => 0,
-     #                'IO::Scalar'     => 0, },
-     # },
-
      { name => 'tv_grab_eu_epgdata',
        blurb => '$$ Grabber for some European countries (epgdata.com)',
        exes => [ 'grab/eu_epgdata/tv_grab_eu_epgdata' ],
