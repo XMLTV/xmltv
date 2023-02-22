@@ -475,18 +475,6 @@ my @opt_components
      #                'URI::Escape'    => 0, },
      # },
 
-     # { name => 'tv_grab_uk_bleb',
-     #   blurb => 'Fast alternative grabber for the UK',
-     #   exes => [ 'grab/uk_bleb/tv_grab_uk_bleb' ],
-     #   pl_files => { 'grab/uk_bleb/tv_grab_uk_bleb.PL' => 'grab/uk_bleb/tv_grab_uk_bleb' },
-     #   share_files => { 'grab/uk_bleb/icon_urls' => 'tv_grab_uk_bleb/icon_urls' },
-     #   to_clean => [ 'grab/uk_bleb/tv_grab_uk_bleb' ],
-     #   deps => [ 'grab/uk_bleb/tv_grab_uk_bleb' => [ 'grab/uk_bleb/tv_grab_uk_bleb.in' ] ],
-     #   grab_need_share => [ 'uk_bleb' ],
-     #   prereqs => { 'Archive::Zip' => 0,
-     #                'IO::Scalar' => 0, },
-     # },
-
      { name => 'tv_grab_uk_tvguide',
        blurb => 'Grabber for UK and Ireland using TV Guide website',
        exes => [ 'grab/uk_tvguide/tv_grab_uk_tvguide' ],
