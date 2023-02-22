@@ -465,16 +465,6 @@ my @opt_components
                     'URI::Encode' => 0, },
      },
 
-     # { name => 'tv_grab_tr',
-     #   blurb => 'Grabber for Turkey (Digiturk)',
-     #   exes => [ 'grab/tr/tv_grab_tr' ],
-     #   prereqs => { 'Date::Parse'    => 0,
-     #                'DateTime'       => 0,
-     #                'HTTP::Cache::Transparent' => 1.0,
-     #                'HTTP::Cookies'  => 0,
-     #                'URI::Escape'    => 0, },
-     # },
-
      { name => 'tv_grab_uk_tvguide',
        blurb => 'Grabber for UK and Ireland using TV Guide website',
        exes => [ 'grab/uk_tvguide/tv_grab_uk_tvguide' ],
