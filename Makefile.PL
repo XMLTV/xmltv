@@ -93,7 +93,7 @@ our %extra_constants;
 # because it is accessed by some code we add to MakeMaker.
 #
 our @docs;
-@docs = qw(doc/COPYING doc/QuickStart doc/readme.win32 doc/README.win64 README.md);
+@docs = qw(doc/COPYING doc/QuickStart doc/README-Windows.md README.md);
 
 # Executables to be installed.
 my @exes
@@ -896,7 +896,7 @@ xmltv.exe :: $(EXE_FILES) lib/xmltv.pl lib/exe_opt.pl
 
 windows_dist ::
 	@perl -e "if (-e '$location') { print STDERR qq[To build a Windows distribution, please rerun Makefile.PL with\nPREFIX set to a new (nonexistent) directory then 'make windows_dist'.\n(Remember that only absolute paths work properly with MakeMaker.)\n]; exit 1 }"
-	@perl -e 'print "Have you updated doc/README.win64 for this release? "; exit 1 unless <STDIN> =~ /^[yY]/'
+	@perl -e 'print "Have you updated doc/README-Windows.md for this release? "; exit 1 unless <STDIN> =~ /^[yY]/'
 	$(MAKE) install
 	perl -MExtUtils::Command -e mv $(INSTALLPLAINDOC) $location/doc/
 	perl -MExtUtils::Command -e rm_r $location/share/doc
@@ -915,7 +915,7 @@ windows_dist ::
 	echo "This is an extract from the documentation of Perl's Date::Manip module," >>$location/doc/man/date_formats.txt
 	echo "describing the different format strings that may be used for dates."     >>$location/doc/man/date_formats.txt
 	echo "Bear in mind that depending on your Windows version you will need to"    >>$location/doc/man/date_formats.txt
-	echo "quote the % characters on the command line somehow (see README.win64)."  >>$location/doc/man/date_formats.txt
+	echo "quote the % characters on the command line somehow (see README-Windows.md)."  >>$location/doc/man/date_formats.txt
 	echo "" >>$location/doc/man/date_formats.txt
 	perldoc -u Date::Manip >$location/doc/man/date_formats.txt.tmp
 	perl -ne "BEGIN { print qq'\n=pod\n\n' } print if (/^The format options are:/ .. /^=/) and not /^=/" <$location/doc/man/date_formats.txt.tmp >$location/doc/man/date_formats.txt.tmp.1
@@ -937,7 +937,7 @@ windows_dist ::
 	#
 	perl -MFile::Find -e "find(sub { print qq[\\$$File::Find::name\n] if -f and not /[.]jpg/ }, '$location')" | perl -e 'chomp(@ARGV = (@ARGV, <STDIN>)); exec @ARGV' perl -i -pe 'BEGIN { binmode STDIN } s/\r*\n*$$/\r\n/'
 	perl -MExtUtils::Command -e mv $location/doc/README* $location
-	perl -MExtUtils::Command -e mv $location/README.win64 $location/README.txt
+	perl -MExtUtils::Command -e mv $location/README-Windows.md $location/README.txt
 	@echo
 	@echo Part of a Windows distribution tree has been made in $location/.
 	@echo Now copy in the executables!
