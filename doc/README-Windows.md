@@ -8,7 +8,7 @@
   * [Changes](#changes)
   * [Installation](#installation)
   * [General Notes](#general-notes)
-  * [Known Issues](known-issues)
+  * [Known Issues](#known-issues)
   + [Proxy Servers](#proxy-servers)
   * [License](#license)
   * [Authors](#authors)
