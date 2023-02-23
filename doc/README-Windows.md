@@ -1,4 +1,4 @@
-# XMLTV 1.2.0 Windows Release
+# XMLTV 1.2.1 Windows Release
 
 ## Table of Contents
 
@@ -36,24 +36,19 @@ To build and run a current version yourself you will need to run Cygwin, or Stra
 
 ## Changes
 
-Major Changes in this release (1.2.0)
+Major Changes in this release
 
-tv_grab_tr:          disable grabber
-
-tv_grab_fi:          improvements to handle upstream changes
-
-tv_grab_fr:          improvements to channel name handling and
-                     upstream changes
-
-tv_grab_na_dd:       add some debug info
-
-tv_grab_uk_tvguide:  minor bug fixes & improvements
-
-tv_grab_zz_sdjson:   support Schedules Direct redirection response
-
-tv_grab_zz_sdjson_sqlite:
-                     improve rating agency data validation and update
-                     documentation
+| Grabber                  | Change    |
+| ----------               | --------- |
+| tv_grab_ar               | **disable grabber** |
+| tv_grab_tr               | **disable grabber** |
+| tv_grab_fi               | improvements to handle upstream changes |
+| tv_grab_fi_sv            | update UserAgent to work with upstream changes |
+| tv_grab_fr               | improvements to channel name handling and upstream changes |
+| tv_grab_na_dd            | add some debug info |
+| tv_grab_uk_tvguide       | minor bug fixes & improvements |
+| tv_grab_zz_sdjson        | support Schedules Direct redirection response |
+| tv_grab_zz_sdjson_sqlite | improve rating agency data validation and update documentation |
 
 Please see the git log for full details of changes in this release.
 
@@ -127,4 +122,4 @@ We run the following mailing lists:
 
 - [xmltv-announce](https://sourceforge.net/projects/xmltv/lists/xmltv-announce): announcements of new XMLTV releases
 
--- Nick Morrott, knowledgejunkie@gmail.com, 2023-02-19
+-- Nick Morrott, knowledgejunkie@gmail.com, 2023-02-23
