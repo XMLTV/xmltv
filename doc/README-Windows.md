@@ -30,7 +30,7 @@ This is a release of the software as a single Windows binary (xmltv.exe), genera
 
 Please keep an eye on our [releases page](https://github.com/XMLTV/xmltv/releases) for 64-bit and 32-bit builds of our current releases when available.
 
-All current releases of XMLTV for Windows are built for 64-bit Windows by default. The latest 32-bit version of XMLTV is currently [XMLTV v0.6.1.](https://github.com/XMLTV/xmltv/releases/download/v0.6.1/xmltv-v0.6.1-win32.exe) *This version is not recommended.* 32-bit versions of new releases may appear on the release page.
+All current releases of XMLTV for Windows are built for 64-bit and 32-bit Windows by default. Download the one relevant to your version of Windows - see [How Do I Know if I’m Running 32-bit or 64-bit Windows?](https://www.howtogeek.com/21726/) - or, if in doubt, simply download the 32-bit version (as it will probably work in all cases). If using the 32-bit version then substitute xmltv32.exe for xmltv.exe in the following instructions.
 
 To build and run a current version yourself you will need to run Cygwin, or Strawberry Perl. [Some instructions are available in the XMLTV Wiki](http://wiki.xmltv.org/index.php/XMLTVWindowsBuild)
 
