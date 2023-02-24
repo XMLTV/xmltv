@@ -307,227 +307,25 @@ jobs:
         run: make test
 
 
+
   windows-build:
     name: Build on Windows
 
-    runs-on: windows-latest
+    # Build Windows self-extracting executables.
+    # Build 32-bit and 64-bit versions.
+    # Strictly speaking we only need the 32-bit version (since that will also run
+    #  on 64-bit) but there may be some benefit in the 64-bit Perl for machine-
+    #  intensive operations, such as tv_imdb.
 
     strategy:
-      fail-fast: false
+      matrix:
+        target: [win64, win32]
 
-    steps:
-      - name: Insure Strawberry perl is first in path
-        run: echo "PATH=C:\Strawberry\c\bin;C:\Strawberry\perl\site\bin;C:\Strawberry\perl\bin;C:\msys64\mingw64\bin;C:\msys64\usr\bin;$Env:Path" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-        shell: powershell
+    uses: ./.github/workflows/winbuild.yml
+    with:
+      arch: ${{ matrix.target }}
+    secrets: inherit
 
-      - name: Install perl requirements
-        run: >
-          cpanm --notest --no-interactive
-          App::PP::Autolink
-          Archive::Zip
-          CGI
-          CGI::Carp
-          Date::Manip
-          DateTime
-          DateTime::Format::ISO8601
-          DateTime::Format::SQLite
-          DBD::SQLite
-          DBI
-          File::HomeDir
-          File::Slurp
-          HTML::FormatText
-          HTTP::Cache::Transparent
-          IO::Scalar
-          JSON
-          Lingua::EN::Numbers::Ordinate
-          Lingua::Preferred
-          List::MoreUtils
-          LWP::Protocol::https
-          LWP::UserAgent::Determined
-          Memoize
-          Module::Install
-          Params::Validate
-          SOAP::Lite
-          Term::ProgressBar
-          Tk
-          Tk::TableMatrix
-          Unicode::String
-          Unicode::UTF8simple
-          URI::Encode
-          XML::DOM
-          XML::LibXML
-          XML::LibXSLT
-          XML::Twig
-          XML::Writer
-          XML::TreePP
-
-      - name: Download Packer
-        # modify PAR::Packer to print our custom "don't panic" message
-        working-directory: /temp
-        run: |
-          # cpan -g  didn't work, so...
-          wget https://cpan.metacpan.org/authors/id/R/RS/RSCHUPP/PAR-Packer-1.054.tar.gz
-          gzip -d PAR-Packer-1.054.tar.gz
-          tar xf PAR-Packer-1.054.tar
-          cd PAR-Packer-1.054
-          sed -i '/if ( rc == -1 && errno != EEXIST)/i\    if ( rc == 0 ) fprintf(stderr,\"Note: This will take a while on first run\\\n\");' myldr/boot.c
-
-      - name: Install Packer
-        working-directory: /temp
-        run: |
-          cd PAR-Packer-1.054
-          cpanm --notest --no-interactive .
-
-      - name: Show content of log files on failure
-        if: ${{ failure() }}
-        run: cat C:/Users/RUNNER~1/.cpanm/work/*/build.log
-
-      - name: Checkout
-        uses: actions/checkout@v3
-
-      - name: Checkout tags
-        # need to avoid a shallow clone for git describe to work
-        run: git fetch --prune --unshallow --tags
-
-      - name: Make version string
-        id: vars
-        run: |
-          $gitid = "$(git describe HEAD)"
-          # e.g. "v1.1.2-17-g3b2d042a"
-          # note "v1.1.2" for tagged releases
-          $r = '^v(\d*(?:\.\d*){0,2})-(\d*)-g(.*)$'
-          if ( $gitid -imatch $r ) {
-            $gittag     = $matches[1]
-            $gitcommits = $matches[2]
-            $githash    = $matches[3]
-          }
-          if ( $gitcommits ) {
-            # zero fill the alpha
-            $gitcommits = "000$gitcommits"
-            $gitcommits = $gitcommits.substring($gitcommits.length-3,3)
-          }
-          echo "tag=$gittag" >> $env:GITHUB_OUTPUT
-          echo "release=$gitcommits" >> $env:GITHUB_OUTPUT
-          echo "hash=$githash" >> $env:GITHUB_OUTPUT
-
-      - name: Check release distance
-        run: echo release=${{ steps.vars.outputs.release }}
-
-      - name: Update Version string
-        # only if doesn't already contain an alpha
-        run: |
-          sed -ri "s/(VERSION = ')[0-9\.]*?('.*?)$/\1${{ steps.vars.outputs.tag }}_${{ steps.vars.outputs.release }}\2/" Makefile.PL
-          sed -ri "s/(VERSION = ')[0-9\.]*?('.*?)$/\1${{ steps.vars.outputs.tag }}_${{ steps.vars.outputs.release }}\2/" lib/XMLTV.pm.in 
-        if: |
-          steps.vars.outputs.release != ''
-
-      - name: Check Version string
-        run: |
-          grep 'VERSION =' Makefile.PL
-          grep 'VERSION =' lib/XMLTV.pm.in
-        if: |
-          steps.vars.outputs.release != ''
-
-      - name: perl Makefile.PL
-        run: perl Makefile.PL -default NO_PACKLIST=1 NO_PERLLOCAL=1
-
-      - name: gmake
-        run: gmake
-
-      - name: gmake install
-        run: gmake pure_install
-        if: github.event_name == 'push'
-
-      - name: gmake xmltv.exe
-        run: gmake xmltv.exe
-        if: github.event_name == 'push'
-
-      - name: Create target artifact directory
-        run: |
-          md "artifacts"
-        if: github.event_name == 'push'
-
-      - name: Copy xmltv.exe to Artifacts
-        run: copy xmltv.exe artifacts/xmltv.exe
-        if: github.event_name == 'push'
-
-      - name: Publish xmltv.exe Artifact
-        uses: actions/upload-artifact@v3
-        with:
-          name: xmltv.exe
-          path: artifacts
-          retention-days: 15
-        if: github.event_name == 'push'
-
-      # deprecated - use SCP
-      #- name: Check if FTP defined
-      #  id: vars2
-      #  run: |
-      #    echo "::set-output name=ftp_ready::${{ secrets.ALPHA_FTP_SERVER != '' }}"
-      #    echo ftp_ready=${{ steps.vars2.outputs.ftp_ready }}
-      #
-      #- name: Sync files to FTP
-      #  uses: SamKirkland/FTP-Deploy-Action@4.1.0
-      #  with:
-      #    server:   ${{ secrets.ALPHA_FTP_SERVER }}
-      #    port:     ${{ secrets.ALPHA_FTP_PORT }}
-      #    protocol: ${{ secrets.ALPHA_FTP_PROTOCOL }}
-      #    username: ${{ secrets.ALPHA_FTP_USERNAME }}
-      #    password: ${{ secrets.ALPHA_FTP_PASSWORD }}
-      #    local-dir: artifacts/
-      #    #dry-run: true
-      #    #log-level: verbose
-      #  if: |
-      #    github.event_name == 'push'
-      #    && steps.vars2.outputs.ftp_ready == 'true'
-
-
-  windows-upload:
-    name: Upload Windows build
-
-    needs: windows-build
-
-    if: github.event_name == 'push'
-
-    runs-on: ubuntu-latest
-
-    env:
-      # Use the same ssh-agent socket across all steps
-      SSH_AUTH_SOCK: /tmp/ssh_agent.sock
-
-    steps:
-      - name: Fetch files from windows-build
-        uses: actions/download-artifact@v3
-        with:
-          name: xmltv.exe
-          # artifacts/ now available in this job
-
-      - name: Check if SSH params set
-        id: vars
-        run: |
-          echo "ssh_ready=${{ secrets.ALPHA_SSH_HOST != '' }}" >> $GITHUB_OUTPUT
-          # (not available to same step) echo ssh_ready=${{ steps.vars.outputs.ssh_ready }}
-
-      - name: Check if SSH defined
-        run: echo ssh_ready=${{ steps.vars.outputs.ssh_ready }}
-        
-      - name: Load SSH
-        run: |
-          ssh-agent -a $SSH_AUTH_SOCK > /dev/null
-          echo 'echo ${{ secrets.ALPHA_SSH_PASSPHRASE }}' > ~/.ssh_askpass && chmod +x ~/.ssh_askpass
-          echo "${{ secrets.ALPHA_SSH_PRIVATE_KEY }}" | tr -d '\r' | DISPLAY=None SSH_ASKPASS=~/.ssh_askpass ssh-add - >/dev/null
-          rm -f ~/.ssh_askpass
-        if: steps.vars.outputs.ssh_ready == 'true'
-
-      - name: Check SSH identity
-        run: |
-          ssh-add -l
-        if: steps.vars.outputs.ssh_ready == 'true'
-
-      - name: Upload files
-        run: |
-          scp -o StrictHostKeyChecking=no -o HostKeyAlgorithms=+ssh-rsa -P ${{ secrets.ALPHA_SSH_PORT }} xmltv.exe ${{ secrets.ALPHA_SSH_USER }}@${{ secrets.ALPHA_SSH_HOST }}:${{ secrets.ALPHA_SSH_REMOTE_DIR }}
-        if: steps.vars.outputs.ssh_ready == 'true'
 
 
   macos-build:

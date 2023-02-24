@@ -1,0 +1,266 @@
+---
+name: winbuild
+
+on:
+   workflow_call:
+     inputs:
+       arch:
+         required: true
+         type: string
+
+env:
+  exefile: xmltv.exe
+
+jobs:
+  windows-build:
+    name: Build on Windows ${{ inputs.arch }}
+
+    runs-on: windows-latest
+
+    strategy:
+      fail-fast: false
+
+    steps:
+      - name: Print build architecture
+        run: echo ${{ inputs.arch }}
+
+      - name: Set exe filename
+        if: ${{ inputs.arch == 'win32'}}
+        run: echo "exefile=xmltv32.exe" >> $env:GITHUB_ENV
+        shell: powershell
+
+      - name: Print exe filename
+        run: echo "${{ env.exefile }}"
+
+      - name: Uninstall existing strawberry perl
+        if: ${{ inputs.arch == 'win32' }}
+        run: choco uninstall strawberryperl
+
+      - name: Install 32-bit strawberry perl
+        if: ${{ inputs.arch == 'win32' }}
+        run: choco install strawberryperl --x86
+
+      - name: Insure Strawberry perl is first in path
+        run: echo "PATH=C:\Strawberry\c\bin;C:\Strawberry\perl\site\bin;C:\Strawberry\perl\bin;C:\msys64\mingw64\bin;C:\msys64\usr\bin;$Env:Path" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        shell: powershell
+
+      - name: Print perl version
+        run: perl -v
+
+      - name: Install perl requirements
+        run: >
+          cpanm --notest --no-interactive
+          App::PP::Autolink
+          Archive::Zip
+          CGI
+          CGI::Carp
+          Date::Manip
+          DateTime
+          DateTime::Format::ISO8601
+          DateTime::Format::SQLite
+          DBD::SQLite
+          DBI
+          File::HomeDir
+          File::Slurp
+          HTML::FormatText
+          HTTP::Cache::Transparent
+          IO::Scalar
+          JSON
+          Lingua::EN::Numbers::Ordinate
+          Lingua::Preferred
+          List::MoreUtils
+          LWP::Protocol::https
+          LWP::UserAgent::Determined
+          Memoize
+          Module::Install
+          Params::Validate
+          SOAP::Lite
+          Term::ProgressBar
+          Tk
+          Tk::TableMatrix
+          Unicode::String
+          Unicode::UTF8simple
+          URI::Encode
+          XML::DOM
+          XML::LibXML
+          XML::LibXSLT
+          XML::Twig
+          XML::Writer
+          XML::TreePP
+
+      - name: Download Packer
+        # modify PAR::Packer to print our custom "don't panic" message
+        working-directory: /temp
+        run: |
+          # cpan -g  didn't work, so...
+          wget https://cpan.metacpan.org/authors/id/R/RS/RSCHUPP/PAR-Packer-1.054.tar.gz
+          gzip -d PAR-Packer-1.054.tar.gz
+          tar xf PAR-Packer-1.054.tar
+          cd PAR-Packer-1.054
+          sed -i '/if ( rc == -1 && errno != EEXIST)/i\    if ( rc == 0 ) fprintf(stderr,\"Note: This will take a while on first run\\\n\");' myldr/boot.c
+
+      - name: Install Packer
+        working-directory: /temp
+        run: |
+          cd PAR-Packer-1.054
+          cpanm --notest --no-interactive .
+
+      - name: Show content of log files on failure
+        if: ${{ failure() }}
+        run: cat C:/Users/RUNNER~1/.cpanm/work/*/build.log
+
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Checkout tags
+        # need to avoid a shallow clone for git describe to work
+        run: git fetch --prune --unshallow --tags
+
+      - name: Make version string
+        id: vars
+        run: |
+          $gitid = "$(git describe HEAD)"
+          # e.g. "v1.1.2-17-g3b2d042a"
+          # note "v1.1.2" for tagged releases
+          $r = '^v(\d*(?:\.\d*){0,2})-(\d*)-g(.*)$'
+          if ( $gitid -imatch $r ) {
+            $gittag     = $matches[1]
+            $gitcommits = $matches[2]
+            $githash    = $matches[3]
+          }
+          if ( $gitcommits ) {
+            # zero fill the alpha
+            $gitcommits = "000$gitcommits"
+            $gitcommits = $gitcommits.substring($gitcommits.length-3,3)
+          }
+          echo "tag=$gittag" >> $env:GITHUB_OUTPUT
+          echo "release=$gitcommits" >> $env:GITHUB_OUTPUT
+          echo "hash=$githash" >> $env:GITHUB_OUTPUT
+
+      - name: Check release distance
+        run: echo release=${{ steps.vars.outputs.release }}
+
+      - name: Update Version string
+        # only if doesn't already contain an alpha
+        if: steps.vars.outputs.release != ''
+        run: |
+          sed -ri "s/(VERSION = ')[0-9\.]*?('.*?)$/\1${{ steps.vars.outputs.tag }}_${{ steps.vars.outputs.release }}\2/" Makefile.PL
+          sed -ri "s/(VERSION = ')[0-9\.]*?('.*?)$/\1${{ steps.vars.outputs.tag }}_${{ steps.vars.outputs.release }}\2/" lib/XMLTV.pm.in 
+
+      - name: Check Version string
+        run: |
+          grep 'VERSION =' Makefile.PL
+          grep 'VERSION =' lib/XMLTV.pm.in
+
+      - name: Set build filename
+        # Build xmltv.exe (win64) or xmltv32.exe (win32)
+        if: ${{ inputs.arch == 'win32' }}
+        run: |
+          sed -ri "s/^xmltv.exe :: /xmltv32.exe :: /" Makefile.PL
+          sed -ri "s/pp_autolink -o xmltv.exe/pp_autolink -o xmltv32.exe/" Makefile.PL
+
+      - name: perl Makefile.PL
+        run: perl Makefile.PL -default NO_PACKLIST=1 NO_PERLLOCAL=1
+
+      - name: gmake
+        run: gmake
+
+      - name: gmake install
+        if: github.event_name == 'push'
+        run: gmake pure_install
+
+      - name: gmake xmltv.exe
+        if: github.event_name == 'push'
+        run: gmake ${{ env.exefile }}
+
+      - name: Create target artifact directory
+        if: github.event_name == 'push'
+        run: md "artifacts"
+
+      - name: Copy xmltv.exe to artifacts
+        if: github.event_name == 'push'
+        run: copy ${{ env.exefile }} artifacts/${{ env.exefile }}
+
+      - name: Publish xmltv.exe artifact
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@v3
+        with:
+          name: ${{ env.exefile }}
+          path: artifacts
+          retention-days: 15
+
+      - name: Create zip
+        if: github.event_name == 'push'
+        id: files
+        run: |
+          echo "zipfilename=xmltv-${{ steps.vars.outputs.tag }}-${{ inputs.arch }}.zip" >> $env:GITHUB_OUTPUT 
+          # remove subdir from output zip
+          7z a -tzip files.zip ${{ env.exefile }} .\doc\QuickStart .\doc\README-Windows.md xmltv.dtd COPYING Changes 
+
+      - name: Copy zip to artifacts
+        if: github.event_name == 'push'
+        run: |
+          copy files.zip artifacts/${{ steps.files.outputs.zipfilename }}
+          # need to remove the .exe as upload-artifact does the whole folder
+          remove-item artifacts/${{ env.exefile }} -Force
+
+      - name: Publish zip artifact
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@v3
+        with:
+          name: ${{ steps.files.outputs.zipfilename }}
+          path: artifacts
+          retention-days: 15
+
+
+
+
+  windows-upload:
+    name: Upload Windows build
+
+    needs: windows-build
+
+    # facilitate testing on forks
+    # skip this workflow unless on XMLTV GH
+    if: github.repository == 'XMLTV/xmltv'
+      && github.event_name == 'push'
+
+    runs-on: ubuntu-latest
+
+    env:
+      # Use the same ssh-agent socket across all steps
+      SSH_AUTH_SOCK: /tmp/ssh_agent.sock
+
+    steps:
+      - name: Fetch files from windows-build
+        uses: actions/download-artifact@v3
+        with:
+          name: ${{ env.exefile }}
+          # artifacts/ now available in this job
+
+      - name: Check if SSH params set
+        id: vars
+        run: |
+          echo "ssh_ready=${{ secrets.ALPHA_SSH_HOST != '' }}" >> $GITHUB_OUTPUT
+
+      - name: Check if SSH defined
+        run: echo ssh_ready=${{ steps.vars.outputs.ssh_ready }}
+
+      - name: Load SSH
+        if: steps.vars.outputs.ssh_ready == 'true'
+        run: |
+          ssh-agent -a $SSH_AUTH_SOCK > /dev/null
+          echo 'echo ${{ secrets.ALPHA_SSH_PASSPHRASE }}' > ~/.ssh_askpass && chmod +x ~/.ssh_askpass
+          echo "${{ secrets.ALPHA_SSH_PRIVATE_KEY }}" | tr -d '\r' | DISPLAY=None SSH_ASKPASS=~/.ssh_askpass ssh-add - >/dev/null
+          rm -f ~/.ssh_askpass
+
+      - name: Check SSH identity
+        if: steps.vars.outputs.ssh_ready == 'true'
+        run: |
+          ssh-add -l
+
+      - name: Upload files
+        if: steps.vars.outputs.ssh_ready == 'true'
+        run: |
+          scp -o StrictHostKeyChecking=no -o HostKeyAlgorithms=+ssh-rsa -P ${{ secrets.ALPHA_SSH_PORT }} ${{ env.exefile }} ${{ secrets.ALPHA_SSH_USER }}@${{ secrets.ALPHA_SSH_HOST }}:${{ secrets.ALPHA_SSH_REMOTE_DIR }}
+
