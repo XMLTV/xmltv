@@ -5,11 +5,12 @@ on:
    workflow_call:
      inputs:
        arch:
+         description: Architecture to build - either 'win32' or 'win64'
          required: true
          type: string
 
 env:
-  exefile: xmltv.exe
+  EXEFILE: xmltv.exe
 
 jobs:
   windows-build:
@@ -20,17 +21,24 @@ jobs:
     strategy:
       fail-fast: false
 
+    outputs:
+      # can't pass env vars between jobs so we use outputs to send to the dependent job
+      exefile: ${{ steps.setexefile.outputs.exefile }}
+
     steps:
       - name: Print build architecture
         run: echo ${{ inputs.arch }}
 
       - name: Set exe filename
         if: ${{ inputs.arch == 'win32'}}
-        run: echo "exefile=xmltv32.exe" >> $env:GITHUB_ENV
-        shell: powershell
+        run: echo "EXEFILE=xmltv32.exe" >> $env:GITHUB_ENV
 
       - name: Print exe filename
-        run: echo "${{ env.exefile }}"
+        id: setexefile
+        run: |
+          echo "${{ env.EXEFILE }}"
+          # make the env var available to other jobs
+          echo "exefile=${{ env.EXEFILE }}" >> $env:GITHUB_OUTPUT
 
       - name: Uninstall existing strawberry perl
         if: ${{ inputs.arch == 'win32' }}
@@ -171,7 +179,7 @@ jobs:
 
       - name: gmake xmltv.exe
         if: github.event_name == 'push'
-        run: gmake ${{ env.exefile }}
+        run: gmake ${{ env.EXEFILE }}
 
       - name: Create target artifact directory
         if: github.event_name == 'push'
@@ -179,13 +187,13 @@ jobs:
 
       - name: Copy xmltv.exe to artifacts
         if: github.event_name == 'push'
-        run: copy ${{ env.exefile }} artifacts/${{ env.exefile }}
+        run: copy ${{ env.EXEFILE }} artifacts/${{ env.EXEFILE }}
 
       - name: Publish xmltv.exe artifact
         if: github.event_name == 'push'
         uses: actions/upload-artifact@v3
         with:
-          name: ${{ env.exefile }}
+          name: ${{ env.EXEFILE }}
           path: artifacts
           retention-days: 15
 
@@ -195,14 +203,14 @@ jobs:
         run: |
           echo "zipfilename=xmltv-${{ steps.vars.outputs.tag }}-${{ inputs.arch }}.zip" >> $env:GITHUB_OUTPUT 
           # remove subdir from output zip
-          7z a -tzip files.zip ${{ env.exefile }} .\doc\QuickStart .\doc\README-Windows.md xmltv.dtd COPYING Changes 
+          7z a -tzip files.zip ${{ env.EXEFILE }} .\doc\QuickStart .\doc\README-Windows.md xmltv.dtd COPYING Changes
 
       - name: Copy zip to artifacts
         if: github.event_name == 'push'
         run: |
           copy files.zip artifacts/${{ steps.files.outputs.zipfilename }}
           # need to remove the .exe as upload-artifact does the whole folder
-          remove-item artifacts/${{ env.exefile }} -Force
+          remove-item artifacts/${{ env.EXEFILE }} -Force
 
       - name: Publish zip artifact
         if: github.event_name == 'push'
@@ -216,7 +224,7 @@ jobs:
 
 
   windows-upload:
-    name: Upload Windows build
+    name: Upload Windows build ${{ inputs.arch }}
 
     needs: windows-build
 
@@ -228,6 +236,7 @@ jobs:
       && inputs.arch == 'win64'
 
     env:
+      EXEFILE: ${{ needs.windows-build.outputs.exefile }}
       # Use the same ssh-agent socket across all steps
       SSH_AUTH_SOCK: /tmp/ssh_agent.sock
 
@@ -237,17 +246,13 @@ jobs:
       - name: Print build architecture
         run: echo ${{ inputs.arch }}
 
-      - name: Set exe filename
-        if: ${{ inputs.arch == 'win32'}}
-        run: echo "exefile=xmltv32.exe" >> $GITHUB_ENV
-
-      - name: Print exe filename
-        run: echo "${{ env.exefile }}"
+      - name: Print exe filename (passed from build job)
+        run: echo "${{ env.EXEFILE }}"
 
       - name: Fetch files from windows-build
         uses: actions/download-artifact@v3
         with:
-          name: ${{ env.exefile }}
+          name: ${{ env.EXEFILE }}
           # artifacts/ now available in this job
 
       - name: Check if SSH params set
@@ -274,5 +279,5 @@ jobs:
       - name: Upload files
         if: steps.vars.outputs.ssh_ready == 'true'
         run: |
-          scp -o StrictHostKeyChecking=no -o HostKeyAlgorithms=+ssh-rsa -P ${{ secrets.ALPHA_SSH_PORT }} ${{ env.exefile }} ${{ secrets.ALPHA_SSH_USER }}@${{ secrets.ALPHA_SSH_HOST }}:${{ secrets.ALPHA_SSH_REMOTE_DIR }}
+          scp -o StrictHostKeyChecking=no -o HostKeyAlgorithms=+ssh-rsa -P ${{ secrets.ALPHA_SSH_PORT }} ${{ env.EXEFILE }} ${{ secrets.ALPHA_SSH_USER }}@${{ secrets.ALPHA_SSH_HOST }}:${{ secrets.ALPHA_SSH_REMOTE_DIR }}
 
