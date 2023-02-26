@@ -16,6 +16,7 @@ print '
 -M Params::Validate::
 -M Date::Language::
 -M Class::MethodMaker::
+-M Encode::Byte::
 -X JSON::PP58
 -X Test::Builder::IO::Scalar
 -X Win32::Console
