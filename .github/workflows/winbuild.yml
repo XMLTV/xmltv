@@ -25,6 +25,7 @@ jobs:
       # can't pass env vars between jobs so we use outputs to send to the dependent job
       exefile: ${{ steps.setexefile.outputs.exefile }}
       zipfile: ${{ steps.files.outputs.zipfilename }}
+      tag:     ${{ steps.vars.outputs.tag }}
 
     steps:
       - name: Print build architecture
@@ -249,6 +250,7 @@ jobs:
     env:
       EXEFILE: ${{ needs.windows-build.outputs.exefile }}
       ZIPFILE: ${{ needs.windows-build.outputs.zipfile }}
+      TAG:     ${{ needs.windows-build.outputs.tag }}
       # Use the same ssh-agent socket across all steps
       SSH_AUTH_SOCK: /tmp/ssh_agent.sock
 
@@ -262,6 +264,10 @@ jobs:
         run: |
           echo "${{ env.EXEFILE }}"
           echo "${{ env.ZIPFILE }}"
+          echo "${{ env.TAG }}"
+
+
+      # fetch files to upload
 
       - name: Fetch file from windows-build
         # actions/download-artifact does only one artifact (or all)
@@ -274,6 +280,9 @@ jobs:
         uses: actions/download-artifact@v3
         with:
           name: ${{ env.ZIPFILE }}
+
+
+      # upload files to alpha xmltv
 
       - name: Check if SSH params set
         id: vars
@@ -301,3 +310,31 @@ jobs:
         run: |
           scp -o StrictHostKeyChecking=no -o HostKeyAlgorithms=+ssh-rsa -P ${{ secrets.ALPHA_SSH_PORT }} ${{ env.EXEFILE }} ${{ env.ZIPFILE }} ${{ secrets.ALPHA_SSH_USER }}@${{ secrets.ALPHA_SSH_HOST }}:${{ secrets.ALPHA_SSH_REMOTE_DIR }}
 
+
+      # upload files to SourceForge xmltv
+
+      - name: Check if SSH (SF) params set
+        id: sf_vars
+        run: |
+          echo "ssh_ready=${{ secrets.SF_SSH_HOST != '' }}" >> $GITHUB_OUTPUT
+
+      - name: Check if SSH (SF) defined
+        run: echo ssh_ready=${{ steps.sf_vars.outputs.ssh_ready }}
+
+      - name: Load SSH (SF)
+        if: steps.sf_vars.outputs.ssh_ready == 'true'
+        run: |
+          ssh-agent -a $SSH_AUTH_SOCK > /dev/null
+          echo 'echo ${{ secrets.SF_SSH_PASSPHRASE }}' > ~/.ssh_askpass && chmod +x ~/.ssh_askpass
+          echo "${{ secrets.SF_SSH_PRIVATE_KEY }}" | tr -d '\r' | DISPLAY=None SSH_ASKPASS=~/.ssh_askpass ssh-add - >/dev/null
+          rm -f ~/.ssh_askpass
+
+      - name: Check SSH (SF) identity
+        if: steps.sf_vars.outputs.ssh_ready == 'true'
+        run: |
+          ssh-add -l
+
+      - name: Upload files (SF)
+        if: steps.sf_vars.outputs.ssh_ready == 'true'
+        run: |
+          scp -o StrictHostKeyChecking=no -o HostKeyAlgorithms=+ssh-rsa -P ${{ secrets.SF_SSH_PORT }} ${{ env.EXEFILE }} ${{ env.ZIPFILE }} ${{ secrets.SF_SSH_USER }}@${{ secrets.SF_SSH_HOST }}:${{ secrets.SF_SSH_REMOTE_DIR }}/v${{ env.TAG }}
