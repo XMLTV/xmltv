@@ -1,0 +1,98 @@
+---
+name: ftptest
+
+on:
+   workflow_dispatch:
+
+env:
+  EXEFILE: xmltv.exe
+  # Use the same ssh-agent socket across all steps
+  SSH_AUTH_SOCK: /tmp/ssh_agent.sock
+  
+jobs:
+  sf-ftp:
+    name: Test FTP to SF
+
+    #runs-on: windows-latest
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+
+    steps:
+
+      - name: Checkout
+        uses: actions/checkout@v3
+        
+      - name: Checkout tags
+        # need to avoid a shallow clone for git describe to work
+        run: git fetch --prune --unshallow --tags    
+        
+      - name: Make version string
+        id: vars
+        run: |
+
+          echo "tag=1.2.1" >> $GITHUB_OUTPUT
+          echo "release=10" >> $GITHUB_OUTPUT
+          echo "hash=3b2d042b" >> $GITHUB_OUTPUT
+
+
+          echo "arch=win32" >> $GITHUB_OUTPUT
+
+
+
+      - name: Set exe filename
+        run: echo "EXEFILE=DUMMYxmltv32.exe" >> $GITHUB_ENV
+
+      - name: Create target artifact directory
+        run: mkdir "artifacts"
+
+      - name: Copy xmltv.exe to artifacts
+        # dummy file while testing
+        run: cp Makefile.PL artifacts/${{ env.EXEFILE }}
+
+      - name: Create zip
+        id: files
+        run: |
+          echo "zipfilename=DUMMYxmltv-${{ steps.vars.outputs.tag }}-${{ steps.vars.outputs.arch }}.zip" >> $GITHUB_OUTPUT 
+
+      - name: Copy zip to Artifacts
+        run: cp COPYING artifacts/${{ steps.files.outputs.zipfilename }}
+
+      - name: Set zip filename
+        run: echo "ZIPFILE=${{ steps.files.outputs.zipfilename }}" >> $GITHUB_ENV
+
+
+      - name: Print filenames (passed from build job)
+        run: |
+          echo "${{ env.EXEFILE }}"
+          echo "${{ env.ZIPFILE }}"
+
+
+
+      - name: Check if SSH params set
+        id: vars2
+        run: |
+          echo "ssh_ready=${{ secrets.SF_SSH_HOST != '' }}" >> $GITHUB_OUTPUT
+
+      - name: Check if SSH defined
+        run: echo ssh_ready=${{ steps.vars2.outputs.ssh_ready }}
+
+      - name: Load SSH
+        if: steps.vars2.outputs.ssh_ready == 'true'
+        run: |
+          ssh-agent -a $SSH_AUTH_SOCK > /dev/null
+          echo 'echo ${{ secrets.SF_SSH_PASSPHRASE }}' > ~/.ssh_askpass && chmod +x ~/.ssh_askpass
+          echo "${{ secrets.SF_SSH_PRIVATE_KEY }}" | tr -d '\r' | DISPLAY=None SSH_ASKPASS=~/.ssh_askpass ssh-add - >/dev/null
+          rm -f ~/.ssh_askpass
+
+      - name: Check SSH identity
+        if: steps.vars2.outputs.ssh_ready == 'true'
+        run: |
+          ssh-add -l
+
+      - name: Upload files
+        if: steps.vars2.outputs.ssh_ready == 'true'
+        run: |
+          scp -o StrictHostKeyChecking=no -o HostKeyAlgorithms=+ssh-rsa -P ${{ secrets.SF_SSH_PORT }} artifacts/${{ env.EXEFILE }} artifacts/${{ env.ZIPFILE }} ${{ secrets.SF_SSH_USER }}@${{ secrets.SF_SSH_HOST }}:${{ secrets.SF_SSH_REMOTE_DIR }}/v${{ steps.vars.outputs.tag }}
+
