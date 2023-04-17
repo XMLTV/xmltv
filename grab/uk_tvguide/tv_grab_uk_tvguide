@@ -74,7 +74,7 @@ my $generator_info_url	= $GRABBER_URL;
 my $source_info_name	= $SOURCE_NAME;
 my $source_info_url		= $SOURCE_URL;
 #
-my $grabberid = '2023-03-25.1545';
+my $grabberid = '2023-04-17.1645';
 
 # ------------------------------------------------------------------------------------------------------------------------------------- #
 # Use XMLTV::Options::ParseOptions to parse the options and take care of the basic capabilities that a tv_grabber should have
@@ -144,6 +144,9 @@ my $channels = ();
 # Store channel names during fetch
 my $channames = undef;
 
+# Cache for alternative ID lookups
+my $channels_cache = {};
+
 # Get the schedule(s) from TV Guide
 fetch_listings();
 
@@ -207,550 +210,569 @@ sub fetch_listings {
 		# tvguide runs from 06:00 so we need to get the previous day as well just for any programmes after midnight
 		#
 		for (my $i=($opt->{offset} -1); $i < ($opt->{offset} + $opt->{days}); $i++) {
-			my $theday = DateTime->today->add (days => $i)->set_time_zone('Europe/London');
 
-			# Construct the listings url
-			my $url = $baseurl . '?ch=' . $channel_id . '&cTime=' . uri_escape( $theday->strftime('%m/%d/%Y 00:00:00') );
-			#debug "Fetching: $url";
+			# Inner loop allows us to push alternative IDs (if found) into @alts when no schedule is found for the user selected ID
+			my @alts = ($channel_id);
 
-			# If we need to map the fetched channel_id to a different value
-			my $xmlchannel_id = $channel_id;
-			$xmlchannel_id .= '.tvguide.co.uk' unless $opt->{legacychannels};		# make channel RFC2838 compliant
-			if (defined(&map_channel_id)) { $xmlchannel_id = map_channel_id($xmlchannel_id); }
+			foreach my $alt_channel_id (@alts) {
 
-			# Fetch the page
-			#   my $tree = XMLTV::Get_nice::get_nice_tree($url);
-			my $tree = fetch_url($url);
-			# $tree->dump; exit;
+				my $alt_success = 0;
 
-			# Scrub the page
-			if ($tree) {
-				my $channelname = undef;
-				
-				# Store the channel ids in a list (do this only once per program run)
-				if (!defined $channames) {
-					#debug 'fetching options tags';
-					my $choptions = $tree->look_down('_tag' => 'select', 'name' => 'ch');
-					if (defined $choptions) {
-						my @choptionslist = $choptions->look_down('_tag' => 'option');
-						if (@choptionslist) {
-							foreach my $choption (@choptionslist) {
-								$channames->{$choption->attr('value')} = $choption->as_text;
+				my $theday = DateTime->today->add (days => $i)->set_time_zone('Europe/London');
+
+				# Construct the listings url
+				my $url = $baseurl . '?ch=' . $alt_channel_id . '&cTime=' . uri_escape( $theday->strftime('%m/%d/%Y 00:00:00') );
+				#debug "Fetching: $url";
+
+				# If we need to map the fetched channel_id to a different value
+				my $xmlchannel_id = $channel_id;
+				$xmlchannel_id .= '.tvguide.co.uk' unless $opt->{legacychannels};		# make channel RFC2838 compliant
+				if (defined(&map_channel_id)) { $xmlchannel_id = map_channel_id($xmlchannel_id); }
+
+				# Fetch the page
+				#   my $tree = XMLTV::Get_nice::get_nice_tree($url);
+				my $tree = fetch_url($url);
+				# $tree->dump; exit;
+
+				# Scrub the page
+				if ($tree) {
+					my $channelname = undef;
+
+					# Store the channel ids in a list (do this only once per program run)
+					if (!defined $channames) {
+						#debug 'fetching options tags';
+						my $choptions = $tree->look_down('_tag' => 'select', 'name' => 'ch');
+						if (defined $choptions) {
+							my @choptionslist = $choptions->look_down('_tag' => 'option');
+							if (@choptionslist) {
+								foreach my $choption (@choptionslist) {
+									$channames->{$choption->attr('value')} = $choption->as_text;
+								}
 							}
 						}
 					}
-				}
 
-				$channelname = $channames->{$channel_id} if $channames;
+					$channelname = $channames->{$alt_channel_id} if $channames;
 
-				# Try a fallback method if the form options are missing [Credit mkbloke]
-				if (!defined $channelname) {
-					#debug 'using fallback method';
-					my $fallback = $tree->look_down('_tag' => 'input', 'name' => 'cTime');
-					$fallback = $fallback->look_up('_tag', 'tr') if $fallback;
-					$channelname = $fallback->look_down('_tag' => 'span', 'class' => 'programmeheading') if $fallback;
-					$channelname = $channelname->as_text if $channelname;
-				}
+					# Try a fallback method if the form options are missing [Credit mkbloke]
+					if (!defined $channelname) {
+						#debug 'using fallback method';
+						my $fallback = $tree->look_down('_tag' => 'input', 'name' => 'cTime');
+						$fallback = $fallback->look_up('_tag', 'tr') if $fallback;
+						$channelname = $fallback->look_down('_tag' => 'span', 'class' => 'programmeheading') if $fallback;
+						$channelname = $channelname->as_text if $channelname;
+					}
 
-				#debug 'found channel name: '.$channelname;
+					#debug 'found channel name: '.$channelname;
 
-				# tvguide website can be very slow - try to avoid barfing when no response
-				# if no channelname then assume we got no response from website
-				if (!defined $channelname) {
-					warning "Unable to retrieve web page for $channel_id";
-					next;
-				}
+					# tvguide website can be very slow - try to avoid barfing when no response
+					# if no channelname then assume we got no response from website
+					if (!defined $channelname) {
+						warning "Unable to retrieve web page for $alt_channel_id";
+						next;
+					}
 
-				# 	<table border="0" cellpadding="0" style="background:black;border-collapse: collapse;background-image: url(http://i.g8.tv/HighlightImages/Large/);background-repeat: no-repeat;" width="677">
-				#
-				my @shows = $tree->look_down('_tag' => 'table', 'border' => '0', 'cellpadding' => '0', 'style' => qr/background:\s*black;border-collapse:\s*collapse;/);
+					# 	<table border="0" cellpadding="0" style="background:black;border-collapse: collapse;background-image: url(http://i.g8.tv/HighlightImages/Large/);background-repeat: no-repeat;" width="677">
+					#
+					my @shows = $tree->look_down('_tag' => 'table', 'border' => '0', 'cellpadding' => '0', 'style' => qr/background:\s*black;border-collapse:\s*collapse;/);
 
-				if (@shows) {
-					my $count = 0;
+					if (@shows) {
+						my $count = 0;
 
-					foreach my $show (@shows) {
-						#	$show->dump;
-						$count++;
+						foreach my $show (@shows) {
+							#	$show->dump;
+							$count++;
 
-						# are we processing yesterday's schedule? (see above)
-						if ($i == ($opt->{offset} -1)) {
-							my $showstart = $show->look_down('_tag' => 'span', 'class' => 'tvchannel');
-							my ($h, $i, $a) = $showstart->as_text =~ /(\d*):(\d*)\s*(am|pm)/;
-							# 2014-04-02  see note below
-							if (!defined $a) {
-								$showstart = $show->look_down('_tag' => 'span', 'class' => 'season');
-								($h, $i, $a) = $showstart->as_text =~ /(\d*):(\d*)\s*(am|pm)/;
+							# are we processing yesterday's schedule? (see above)
+							if ($i == ($opt->{offset} -1)) {
+								my $showstart = $show->look_down('_tag' => 'span', 'class' => 'tvchannel');
+								my ($h, $i, $a) = $showstart->as_text =~ /(\d*):(\d*)\s*(am|pm)/;
+								# 2014-04-02  see note below
+								if (!defined $a) {
+									$showstart = $show->look_down('_tag' => 'span', 'class' => 'season');
+									($h, $i, $a) = $showstart->as_text =~ /(\d*):(\d*)\s*(am|pm)/;
+								}
+								if ($a eq 'am' && ($h < 6 || $h == 12)) {
+									next if $count == 1;	# we don't want first programme in file if it overlaps 6am boundary
+									# continue processing of pre-6am programme
+								} else {
+									next;
+								}
+								$showstart = $h = $i = $a = undef;
 							}
-							if ($a eq 'am' && ($h < 6 || $h == 12)) {
-								next if $count == 1;	# we don't want first programme in file if it overlaps 6am boundary
-								# continue processing of pre-6am programme
-							} else {
-								next;
-							}
-							$showstart = $h = $i = $a = undef;
-						}
 
-						my %prog = ();
+							my %prog = ();
 
-						my $showtime;
+							my $showtime;
 
-						# see if we have a details page
-						#		<a href="javascript:popup(151361219);" ...
-						#		http://www.tvguide.co.uk/detail.asp?id=151451760
-						# 2013-12-14 site changed
-						#    <a href="javascript:popupshow('http://www.tvguide.co.uk/detail/1889599/94819598/saturday-kitchen-live');" target="_blank" ...
-						# 2014-04-02 site changed
-						#    <a href="http://www.tvguide.co.uk/detail/138990373/88745969/breakfast" target="_blank"...
-						# 2014-11-26 site changed
-						#    <a href="http://watch.tvguide.co.uk/engage/2057116/103685857-fake_britain" target="_blank"...
-						# 2014-12-03 site changed
-						#  my $webdetails = $show->look_down('_tag' => 'a', 'href' => qr/javascript:popup/);
-						# 2014-12-03 The new website seems a bit flakey with these details pages, often returning a 500 Server Error
-						#    Here's an option to disable the details pages  (  --nodetailspage )
-						# 2014-12-24 site changed
-						#  my $webdetails = $show->look_down('_tag' => 'a', 'href' => qr/\/engage\//);
-						#
-						if (!$opt->{nodetailspage}) {
+							# see if we have a details page
+							#		<a href="javascript:popup(151361219);" ...
+							#		http://www.tvguide.co.uk/detail.asp?id=151451760
+							# 2013-12-14 site changed
+							#    <a href="javascript:popupshow('http://www.tvguide.co.uk/detail/1889599/94819598/saturday-kitchen-live');" target="_blank" ...
+							# 2014-04-02 site changed
+							#    <a href="http://www.tvguide.co.uk/detail/138990373/88745969/breakfast" target="_blank"...
+							# 2014-11-26 site changed
+							#    <a href="http://watch.tvguide.co.uk/engage/2057116/103685857-fake_britain" target="_blank"...
+							# 2014-12-03 site changed
+							#  my $webdetails = $show->look_down('_tag' => 'a', 'href' => qr/javascript:popup/);
+							# 2014-12-03 The new website seems a bit flakey with these details pages, often returning a 500 Server Error
+							#    Here's an option to disable the details pages  (  --nodetailspage )
+							# 2014-12-24 site changed
+							#  my $webdetails = $show->look_down('_tag' => 'a', 'href' => qr/\/engage\//);
+							#
+							if (!$opt->{nodetailspage}) {
 
-							my $webdetails = $show->look_down('_tag' => 'a', 'href' => qr/\/detail\//);
-							my $href = $webdetails->attr('href');
-							#    my ($id) = $href =~ /javascript:popup\((\d*)\);/;
-							#    $url = $ROOT_URL . 'detail.asp?id=' . $id;
-							#    my ($url) = $href =~ /javascript:popupshow\('(.*)'\);/;
-							my ($url) = $href;
-							#debug "Fetching: $url";
+								my $webdetails = $show->look_down('_tag' => 'a', 'href' => qr/\/detail\//);
+								my $href = $webdetails->attr('href');
+								#    my ($id) = $href =~ /javascript:popup\((\d*)\);/;
+								#    $url = $ROOT_URL . 'detail.asp?id=' . $id;
+								#    my ($url) = $href =~ /javascript:popupshow\('(.*)'\);/;
+								my ($url) = $href;
+								#debug "Fetching: $url";
 
-							# Fetch the page
-							#   my $showdetail = XMLTV::Get_nice::get_nice_tree($url);
-							my $showdetail = fetch_url($url);
-							#	$showdetail->dump;
+								# Fetch the page
+								#   my $showdetail = XMLTV::Get_nice::get_nice_tree($url);
+								my $showdetail = fetch_url($url);
+								#	$showdetail->dump;
 
-							if ($showdetail) {
-								# Details page contains Director names and a better list of Actors
+								if ($showdetail) {
+									# Details page contains Director names and a better list of Actors
 
-								# Get the cast and extract them into a new tree
-								my @lis = $showdetail->look_down('_tag' => 'div', 'class' => 'cast-entry');
+									# Get the cast and extract them into a new tree
+									my @lis = $showdetail->look_down('_tag' => 'div', 'class' => 'cast-entry');
 
-								LOOP:
-								foreach my $person (@lis) {
+									LOOP:
+									foreach my $person (@lis) {
+										#
+										# 30/6/16
+										#   <div class="cast-entry">
+										#       <span class="role">Margaret Sellinger</span>
+										#       <a href="http://www.tvguide.co.uk/actor.asp?actor=Lesley-Anne Down" target="_blank">
+										#          <span itemprop="actor" itemscope itemtype="http://schema.org/Person">
+										#             <span class="actor" itemprop="name">Lesley-Anne Down</span>
+										#          </span>
+										#       </a>
+										#       <a target="_blank" href="http://uk.imdb.com/find?s=nm&q=Lesley-Anne+Down"><span class="actor">(IMDB)</span></a>
+										#   </span>
+										#   </div>
+
+										my ($name, $role);
+										if ( my ($_name) = $person->look_down('_tag' => 'span', 'itemprop' => 'name') ) {
+											$name = $_name->as_text;
+										}
+										if ( my ($_role) = $person->look_down('_tag' => 'span', 'class' => 'role') ) {
+											$role = $_role->as_text;
+										}
+										#	drop the "Executive Director" & "Executive Producer"   - any others we should drop?
+										next LOOP  if ( $role =~ /^(Executive Director|Executive Producer)/ );
+
+										# map the website role to an xmltv role
+										my %xmltvroles = ( 'Director'=>'director', 'Producer'=>'producer', 'Series Producer'=>'producer', 'Writer'=>'writer', 'Co-Director'=>'director', 'Presenter'=>'presenter', 'Commentator'=>'commentator', 'Guest'=>'guest' );
+
+										my $credit;
+										if (exists $xmltvroles{$role}) {
+											$credit = $xmltvroles{$role};
+										} else {
+											$credit = 'actor';
+										}
+
+										if ($credit eq 'actor' && defined $role) {
+											push @{$prog{'credits'}{$credit}}, [ encode('utf-8', $name), encode('utf-8', $role) ];
+										} else {
+											push @{$prog{'credits'}{$credit}}, encode('utf-8', $name);
+										}
+
+									}
+
+									undef @lis;
+
+
+									# Get the "Left Panel" which contains the programme times and attributes
+									my $lhs = $showdetail->look_down('_tag' => 'div', 'class' => qr/divLHS-section-2/);
+
+
+									# Get the programme's "attributes" e.g. "Certificate"
+									if ($lhs) {
+										my @attrs = $lhs->look_down('_tag' => 'span', 'class' => 'LHS-attribute');
+										if (@attrs) {
+											foreach my $attr (@attrs) {
+												# $attr->dump;
+												if ( my $showattr = $attr->as_text() ) {
+													if ( $showattr =~ /^Certificate\s:\s(.*)\s*$/ ) { $prog{'rating'} = [[ $1, 'BBFC' ]] if $1; }
+												}
+											}
+										}
+									}
+
+
+									# start time, and stop time (actually an optional DTD element)
+									#		<span class="datetime">10:00am-11:50am <span class=programmetext> (1 hour 50 minutes)</span> Wed 20 Mar</span>
+									# (use the Date provided to avoid issues with the site running from 06:00-06:00)
 									#
-									# 30/6/16
-									#   <div class="cast-entry">
-									#       <span class="role">Margaret Sellinger</span>
-									#       <a href="http://www.tvguide.co.uk/actor.asp?actor=Lesley-Anne Down" target="_blank">
-									#          <span itemprop="actor" itemscope itemtype="http://schema.org/Person">
-									#             <span class="actor" itemprop="name">Lesley-Anne Down</span>
-									#          </span>
-									#       </a>
-									#       <a target="_blank" href="http://uk.imdb.com/find?s=nm&q=Lesley-Anne+Down"><span class="actor">(IMDB)</span></a>
-									#   </span>
-									#   </div>
+									# Note site displays stop time wrong on GMT/BST changeover, e.g.:
+									#			12:45am-1:10am (25 minutes) Sun 31 Mar
+									# 	this should be 12:45am-2:10am (BST)
+									# 	this makes $showtime->set barf on "invalid local time for date in timezone"
+									#
+									#  1/Jan/17 times are now in the left panel. 'datetime' is used for user comments!
+									#     my $showtimes = $showdetail->look_down('_tag' => 'span', 'class' => 'datetime');
+									#
+									#  25/Mar/2023 now displays the correct time on GMT/BST changeover...but the duration is wrong!
+									#			Sun 26 Mar 12:40am-2:40am (2 hours)
+									#	this should be '1 hour'
+									#
+									if ($lhs) {
 
-									my ($name, $role);
-									if ( my ($_name) = $person->look_down('_tag' => 'span', 'itemprop' => 'name') ) {
-										$name = $_name->as_text;
+										# Unfortunately the div with the date doesn't have any safe identifier. There are several ways we could remove the
+										#  cruft from the container but the following, although clunky, is probably the safest
+										my ($dt, $h, $i, $a, $h2, $i2, $a2) = $lhs->as_text =~ /((?:Mon|Tue|Wed|Thu|Fri|Sat|Sun|Christmas\s(?:Eve|Day)|Boxing\sDay|New\sYears\s(?:Eve|Day))[\s<].*?)(\d*):(\d*)(am|pm)(?:-(\d*):(\d*)(am|pm))?/;
+										# print STDERR $dt."\n";
+
+										if ($dt && $dt !~ /\D\D\D\s\d\d?\s\D\D\D/) {
+											my @thedt = localtime(time);	# ($sec,$min,$hour,$mday,$mon,$year,$wday,$yday,$isdst)
+											my ($yr1, $yr2) = ($thedt[5]+1900, $thedt[5]+1900);
+											if ($thedt[4] == 11) { $yr2++; }
+											if ($thedt[4] == 0) { $yr1--; }
+											SWITCH: {
+												$dt =~ 'Christmas\s+Eve' 		&& do { $dt = '24 Dec '.$yr1; last SWITCH; };
+												$dt =~ 'Christmas\s+Day' 		&& do { $dt = '25 Dec '.$yr1; last SWITCH; };
+												$dt =~ 'Boxing\s+Day' 			&& do { $dt = '26 Dec '.$yr1; last SWITCH; };
+												$dt =~ 'New\s+Years\s+Eve' 		&& do { $dt = '31 Dec '.$yr1; last SWITCH; };
+												$dt =~ 'New\s+Years\s+Day' 		&& do { $dt = '1 Jan ' .$yr2; last SWITCH; };
+												undef $dt;
+											}
+										}
+										if ($dt) {
+											 #v1.3: $showtime = DateTime::Format::DateParse->parse_datetime( $dt, 'Europe/London' );
+
+											 # workaround for bug in Date::Time::str2time() which generates wrong dates for future months when no year is given
+											 #		https://rt.cpan.org/Public/Bug/Display.html?id=92611
+											 $dt .= ' '.( $theday->year() )  if $dt !~ /(19|20)\d\d/;
+											 $showtime = DateTime->from_epoch( epoch=>str2time( $dt, 'GMT' ) )->set_time_zone('Europe/London');
+										} else {
+											 $showtime = $theday->clone;
+										}
+										$h  += 12 if $a  eq 'pm' && $h   < 12;		# e.g. 12:30pm means 12:30 !
+										$h  -= 12 if $a  eq 'am' && $h  == 12;		# e.g. 12:30am means 00:30 !
+										$h2 += 12 if $a2 eq 'pm' && $h2  < 12;
+										$h2 -= 12 if $a2 eq 'am' && $h2 == 12;
+										$showtime->set(hour => $h, minute => $i, second => 0);
+										$prog{'start'} = $showtime->strftime("%Y%m%d%H%M%S %z");
+										my $showtime_ = $showtime->clone;
+										if (defined $h2 && $h2 >= 0) {
+											$showtime->add (days => 1) if $h2 < $h;
+											# see note above re errors with GMT/BST transition
+											eval {				# try
+												$showtime->set(hour => $h2, minute => $i2, second => 0);
+												$prog{'stop'} = $showtime->strftime("%Y%m%d%H%M%S %z");
+											} or do {			# catch
+												# let's see if we can get a duration
+												my ($durh, $durm) = $lhs->as_text =~ /\((?:(\d*)\shours?)?\s?(?:(\d*)\sminutes?)?\)/;
+												if (defined $durh || defined $durm) {
+													$durh = 0 if !defined $durh; $durm = 0 if !defined $durm;
+													$showtime_->set_time_zone('UTC')->add( hours => $durh, minutes => $durm )->set_time_zone('Europe/London');
+													$prog{'stop'} = $showtime_->strftime("%Y%m%d%H%M%S %z");
+												} else {
+													# no output prog 'stop' time
+												}
+											}
+										} else {
+											# no output prog 'stop' time
+										}
+
+										# if the first programme starts before 06:00 we should ignore it as it will create a duplicate programme
+										if ($h < 6) {
+											# skip this prog as we have already retrieved it with 'yesterday's schedule
+											next if ($count == 1);
+										}
+
 									}
-									if ( my ($_role) = $person->look_down('_tag' => 'span', 'class' => 'role') ) {
-										$role = $_role->as_text;
-									}
-									#	drop the "Executive Director" & "Executive Producer"   - any others we should drop?
-									next LOOP  if ( $role =~ /^(Executive Director|Executive Producer)/ );
-
-									# map the website role to an xmltv role
-									my %xmltvroles = ( 'Director'=>'director', 'Producer'=>'producer', 'Series Producer'=>'producer', 'Writer'=>'writer', 'Co-Director'=>'director', 'Presenter'=>'presenter', 'Commentator'=>'commentator', 'Guest'=>'guest' );
-
-									my $credit;
-									if (exists $xmltvroles{$role}) {
-										$credit = $xmltvroles{$role};
-									} else {
-										$credit = 'actor';
-									}
-
-									if ($credit eq 'actor' && defined $role) {
-										push @{$prog{'credits'}{$credit}}, [ encode('utf-8', $name), encode('utf-8', $role) ];
-									} else {
-										push @{$prog{'credits'}{$credit}}, encode('utf-8', $name);
-									}
-
-								}
-
-								undef @lis;
 
 
-								# Get the "Left Panel" which contains the programme times and attributes
-								my $lhs = $showdetail->look_down('_tag' => 'div', 'class' => qr/divLHS-section-2/);
-
-
-								# Get the programme's "attributes" e.g. "Certificate"
-								if ($lhs) {
-									my @attrs = $lhs->look_down('_tag' => 'span', 'class' => 'LHS-attribute');
-									if (@attrs) {
-										foreach my $attr (@attrs) {
-											# $attr->dump;
-											if ( my $showattr = $attr->as_text() ) {
-												if ( $showattr =~ /^Certificate\s:\s(.*)\s*$/ ) { $prog{'rating'} = [[ $1, 'BBFC' ]] if $1; }
+									# programme image
+									my $c = $showdetail->look_down('_tag' => 'div', 'id' => 'divCentre');
+									if ($c) {
+										my $img = $c->look_down('_tag' => 'div', 'id' => 'headerImage');
+										if ($img) {
+											my $showattr = $img->attr('style');
+											(my $showimage) = $showattr =~ /background-image:\s*url\((.*?\.jpg)\)/;
+											if ($showimage) {
+												$prog{'image'} = [[ $showimage, { 'system'=>'tvguide', 'type'=>'backdrop' } ]];
 											}
 										}
 									}
-								}
+
+								}	# end showdetail
+
+								$showdetail->delete() if $showdetail;
+
+							}	# end nodetailspage
 
 
-								# start time, and stop time (actually an optional DTD element)
-								#		<span class="datetime">10:00am-11:50am <span class=programmetext> (1 hour 50 minutes)</span> Wed 20 Mar</span>
-								# (use the Date provided to avoid issues with the site running from 06:00-06:00)
-								#
-								# Note site displays stop time wrong on GMT/BST changeover, e.g.:
-								#			12:45am-1:10am (25 minutes) Sun 31 Mar
-								# 	this should be 12:45am-2:10am (BST)
-								# 	this makes $showtime->set barf on "invalid local time for date in timezone"
-								#
-								#  1/Jan/17 times are now in the left panel. 'datetime' is used for user comments!
-								#     my $showtimes = $showdetail->look_down('_tag' => 'span', 'class' => 'datetime');
-								#
-								#  25/Mar/2023 now displays the correct time on GMT/BST changeover...but the duration is wrong!
-								#			Sun 26 Mar 12:40am-2:40am (2 hours)
-								#	this should be '1 hour'
-								#
-								if ($lhs) {
+							# channel
+							$prog{'channel'} = $xmlchannel_id;
 
-									# Unfortunately the div with the date doesn't have any safe identifier. There are several ways we could remove the
-									#  cruft from the container but the following, although clunky, is probably the safest
-									my ($dt, $h, $i, $a, $h2, $i2, $a2) = $lhs->as_text =~ /((?:Mon|Tue|Wed|Thu|Fri|Sat|Sun|Christmas\s(?:Eve|Day)|Boxing\sDay|New\sYears\s(?:Eve|Day))[\s<].*?)(\d*):(\d*)(am|pm)(?:-(\d*):(\d*)(am|pm))?/;
-									# print STDERR $dt."\n";
-
-									if ($dt && $dt !~ /\D\D\D\s\d\d?\s\D\D\D/) {
-										my @thedt = localtime(time);	# ($sec,$min,$hour,$mday,$mon,$year,$wday,$yday,$isdst)
-										my ($yr1, $yr2) = ($thedt[5]+1900, $thedt[5]+1900);
-										if ($thedt[4] == 11) { $yr2++; }
-										if ($thedt[4] == 0) { $yr1--; }
-										SWITCH: {
-											$dt =~ 'Christmas\s+Eve' 		&& do { $dt = '24 Dec '.$yr1; last SWITCH; };
-											$dt =~ 'Christmas\s+Day' 		&& do { $dt = '25 Dec '.$yr1; last SWITCH; };
-											$dt =~ 'Boxing\s+Day' 			&& do { $dt = '26 Dec '.$yr1; last SWITCH; };
-											$dt =~ 'New\s+Years\s+Eve' 		&& do { $dt = '31 Dec '.$yr1; last SWITCH; };
-											$dt =~ 'New\s+Years\s+Day' 		&& do { $dt = '1 Jan ' .$yr2; last SWITCH; };
-											undef $dt;
-										}
-									}
-									if ($dt) {
-										 #v1.3: $showtime = DateTime::Format::DateParse->parse_datetime( $dt, 'Europe/London' );
-
-										 # workaround for bug in Date::Time::str2time() which generates wrong dates for future months when no year is given
-										 #		https://rt.cpan.org/Public/Bug/Display.html?id=92611
-										 $dt .= ' '.( $theday->year() )  if $dt !~ /(19|20)\d\d/;
-										 $showtime = DateTime->from_epoch( epoch=>str2time( $dt, 'GMT' ) )->set_time_zone('Europe/London');
-									} else {
-										 $showtime = $theday->clone;
-									}
-									$h  += 12 if $a  eq 'pm' && $h   < 12;		# e.g. 12:30pm means 12:30 !
-									$h  -= 12 if $a  eq 'am' && $h  == 12;		# e.g. 12:30am means 00:30 !
-									$h2 += 12 if $a2 eq 'pm' && $h2  < 12;
-									$h2 -= 12 if $a2 eq 'am' && $h2 == 12;
-									$showtime->set(hour => $h, minute => $i, second => 0);
-									$prog{'start'} = $showtime->strftime("%Y%m%d%H%M%S %z");
-									my $showtime_ = $showtime->clone;
-									if (defined $h2 && $h2 >= 0) {
-										$showtime->add (days => 1) if $h2 < $h;
-										# see note above re errors with GMT/BST transition
-										eval {				# try
-											$showtime->set(hour => $h2, minute => $i2, second => 0);
-											$prog{'stop'} = $showtime->strftime("%Y%m%d%H%M%S %z");
-										} or do {			# catch
-											# let's see if we can get a duration
-											my ($durh, $durm) = $lhs->as_text =~ /\((?:(\d*)\shours?)?\s?(?:(\d*)\sminutes?)?\)/;
-											if (defined $durh || defined $durm) {
-												$durh = 0 if !defined $durh; $durm = 0 if !defined $durm;
-												$showtime_->set_time_zone('UTC')->add( hours => $durh, minutes => $durm )->set_time_zone('Europe/London');
-												$prog{'stop'} = $showtime_->strftime("%Y%m%d%H%M%S %z");
-											} else {
-												# no output prog 'stop' time
-											}
-										}
-									} else {
-										# no output prog 'stop' time
-									}
-
-									# if the first programme starts before 06:00 we should ignore it as it will create a duplicate programme
-									if ($h < 6) {
-										# skip this prog as we have already retrieved it with 'yesterday's schedule
-										next if ($count == 1);
-									}
-
-								}
+							# title (mandatory)
+							#		<span class="programmeheading">Baywatch</span>
+							my $showtitle = $show->look_down('_tag' => 'span', 'class' => 'programmeheading');
+							$prog{'title'} = [[ encode('utf-8', $showtitle->as_text), 'en' ]];
+							$showtitle->detach;
 
 
-								# programme image
-								my $c = $showdetail->look_down('_tag' => 'div', 'id' => 'divCentre');
-								if ($c) {
-									my $img = $c->look_down('_tag' => 'div', 'id' => 'headerImage');
-									if ($img) {
-										my $showattr = $img->attr('style');
-										(my $showimage) = $showattr =~ /background-image:\s*url\((.*?\.jpg)\)/;
-										if ($showimage) {
-											$prog{'image'} = [[ $showimage, { 'system'=>'tvguide', 'type'=>'backdrop' } ]];
-										}
-									}
-								}
+							# Note: <span class="tvchannel"> is used by StartTime then SubTitle then Category then Subtitles/B&W/etc
 
-							}	# end showdetail
+							# start (mandatory)
+							#		<span class="tvchannel">3:00pm </span>
+							# (don't add it even we already have it from the detail page but we still need to delete it from the tree)
 
-							$showdetail->delete() if $showdetail;
-
-						}	# end nodetailspage
-
-
-						# channel
-						$prog{'channel'} = $xmlchannel_id;
-
-						# title (mandatory)
-						#		<span class="programmeheading">Baywatch</span>
-						my $showtitle = $show->look_down('_tag' => 'span', 'class' => 'programmeheading');
-						$prog{'title'} = [[ encode('utf-8', $showtitle->as_text), 'en' ]];
-						$showtitle->detach;
-
-
-						# Note: <span class="tvchannel"> is used by StartTime then SubTitle then Category then Subtitles/B&W/etc
-
-						# start (mandatory)
-						#		<span class="tvchannel">3:00pm </span>
-						# (don't add it even we already have it from the detail page but we still need to delete it from the tree)
-
-						# @ 2014-04-02 the site has changed to
-						#                         <span class="season">6:00 am </span>
-						# but this just doesn't sound right to me (i.e. I think it might change again), so let's try both ways
-						#
-						# @2016-08-05 looks like this is permanent
-						# my $showstart = $show->look_down('_tag' => 'span', 'class' => 'tvchannel');
-						my $showstart = $show->look_down('_tag' => 'span', 'class' => 'season');
-						if (!$prog{'start'}) {
-							my ($h, $i, $a) = $showstart->as_text =~ /(\d*):(\d*)\s*(am|pm)/;
-							if (!defined $a) {
-								$showstart = $show->look_down('_tag' => 'span', 'class' => 'season');
-								($h, $i, $a) = $showstart->as_text =~ /(\d*):(\d*)\s*(am|pm)/;
-							}
-							$h += 12 if $a eq 'pm' && $h  < 12;		# e.g. 12:30pm means 12:30 !
-							$h -= 12 if $a eq 'am' && $h == 12;		# e.g. 12:30am means 00:30 !
-							$showtime = $theday->clone;
-
-							# @ 2023-03-25 The assumption that the site works from 06:00 - 06:00 breaks when the first programme overlaps 06:00
-							#   so it seems the rule is the 'first' programme ends *after* 6:00 am
-							#       Saturday, March 25, 2023  ITVBe
-							#       1:00am  Teleshopping
-							#       7:00am  Sam Faiers: The Mummy Diaries
+							# @ 2014-04-02 the site has changed to
+							#                         <span class="season">6:00 am </span>
+							# but this just doesn't sound right to me (i.e. I think it might change again), so let's try both ways
 							#
-							#       Saturday, March 25, 2023  BBC Two HD
-							#       3:45am  This Is BBC Two
-							#       6:35am  Hey Duggee
-							# Only way I can think of to handle this is to tag the first programme on a day
-							# In addition, this programme should be ignored to avoid duplicates
-							#
-							if ($h < 6) {
-								# skip this prog as we have already retrieved it with 'yesterday's schedule
-								next if ($count == 1);
-								$showtime->add(days => 1) if ($h < 6);		# site runs from 06:00-06:00 so anything <06:00 is for tomorrow
+							# @2016-08-05 looks like this is permanent
+							# my $showstart = $show->look_down('_tag' => 'span', 'class' => 'tvchannel');
+							my $showstart = $show->look_down('_tag' => 'span', 'class' => 'season');
+							if (!$prog{'start'}) {
+								my ($h, $i, $a) = $showstart->as_text =~ /(\d*):(\d*)\s*(am|pm)/;
+								if (!defined $a) {
+									$showstart = $show->look_down('_tag' => 'span', 'class' => 'season');
+									($h, $i, $a) = $showstart->as_text =~ /(\d*):(\d*)\s*(am|pm)/;
+								}
+								$h += 12 if $a eq 'pm' && $h  < 12;		# e.g. 12:30pm means 12:30 !
+								$h -= 12 if $a eq 'am' && $h == 12;		# e.g. 12:30am means 00:30 !
+								$showtime = $theday->clone;
+
+								# @ 2023-03-25 The assumption that the site works from 06:00 - 06:00 breaks when the first programme overlaps 06:00
+								#   so it seems the rule is the 'first' programme ends *after* 6:00 am
+								#       Saturday, March 25, 2023  ITVBe
+								#       1:00am  Teleshopping
+								#       7:00am  Sam Faiers: The Mummy Diaries
+								#
+								#       Saturday, March 25, 2023  BBC Two HD
+								#       3:45am  This Is BBC Two
+								#       6:35am  Hey Duggee
+								# Only way I can think of to handle this is to tag the first programme on a day
+								# In addition, this programme should be ignored to avoid duplicates
+								#
+								if ($h < 6) {
+									# skip this prog as we have already retrieved it with 'yesterday's schedule
+									next if ($count == 1);
+									$showtime->add(days => 1) if ($h < 6);		# site runs from 06:00-06:00 so anything <06:00 is for tomorrow
+								}
+
+								$showtime->set(hour => $h, minute => $i, second => 0);
+								$prog{'start'} = $showtime->strftime("%Y%m%d%H%M%S %z");
+								# no prog 'stop' time available
+							}
+							$showstart->detach;
+
+							# category
+							#		<span class="tvchannel">Category </span><span class="programmetext">General Movie/Drama</span>
+							my $showcategory = $show->look_down('_tag' => 'span', 'class' => 'tvchannel', sub { $_[0]->as_text =~ /^Category\s*$/ } );
+							if ($showcategory) {
+								$showcategory = $showcategory->right;
+								my @showcategory = split(/\//, $showcategory->as_text);
+								my @showcategories = ();
+								foreach my $category (@showcategory) {
+									# category translation?
+									if (defined(&map_category)) { $category = map_category($category); }
+									if ($category =~ /\|/) {
+										foreach my $cat (split(/\|/, $category)) { push @showcategories, $cat unless grep(/$cat/, @showcategories); }
+									} elsif ($category ne '') {
+										push @showcategories, $category unless grep(/$category/, @showcategories);
+									}
+								}
+								foreach my $category (@showcategories) {
+									push @{$prog{'category'}}, [ encode('utf-8', $category), 'en' ];
+								}
+								$showcategory->left->detach;
 							}
 
-							$showtime->set(hour => $h, minute => $i, second => 0);
-							$prog{'start'} = $showtime->strftime("%Y%m%d%H%M%S %z");
-							# no prog 'stop' time available
-						}
-						$showstart->detach;
-
-						# category
-						#		<span class="tvchannel">Category </span><span class="programmetext">General Movie/Drama</span>
-						my $showcategory = $show->look_down('_tag' => 'span', 'class' => 'tvchannel', sub { $_[0]->as_text =~ /^Category\s*$/ } );
-						if ($showcategory) {
-							$showcategory = $showcategory->right;
-							my @showcategory = split(/\//, $showcategory->as_text);
-							my @showcategories = ();
-							foreach my $category (@showcategory) {
-								# category translation?
-								if (defined(&map_category)) { $category = map_category($category); }
-								if ($category =~ /\|/) {
-									foreach my $cat (split(/\|/, $category)) { push @showcategories, $cat unless grep(/$cat/, @showcategories); }
-								} elsif ($category ne '') {
-									push @showcategories, $category unless grep(/$category/, @showcategories);
+							# desc
+							#		<span class="programmetext">Dissolving bikinis cause a stir on the beach</span>
+							my $showdesc = $show->look_down('_tag' => 'span', 'class' => 'programmetext');
+							if ($showdesc) {
+								$showdesc = $showdesc->as_text;
+								$showdesc .= '.' if ( (length $showdesc) && (substr $showdesc,-1,1 ne '.') );	# addend a fullstop
+								if (length $showdesc) {
+									$prog{'desc'} = [[ encode('utf-8', $showdesc), 'en' ]];
 								}
 							}
-							foreach my $category (@showcategories) {
-								push @{$prog{'category'}}, [ encode('utf-8', $category), 'en' ];
+
+							# year
+							# 	strip this off the title e.g. "A Useful Life (2010)"
+							my ($showyear) = $prog{'title'}->[0][0] =~ /.*\((\d\d\d\d)\)$/;
+							if ($showyear) {
+								$prog{'date'} = $showyear;
+								# assume anything with a year is a film - add Films category group
+								push @{$prog{'category'}}, [ 'Films', 'en' ];
 							}
-							$showcategory->left->detach;
-						}
 
-						# desc
-						#		<span class="programmetext">Dissolving bikinis cause a stir on the beach</span>
-						my $showdesc = $show->look_down('_tag' => 'span', 'class' => 'programmetext');
-						if ($showdesc) {
-							$showdesc = $showdesc->as_text;
-							$showdesc .= '.' if ( (length $showdesc) && (substr $showdesc,-1,1 ne '.') );	# addend a fullstop
-							if (length $showdesc) {
-								$prog{'desc'} = [[ encode('utf-8', $showdesc), 'en' ]];
+							# flags
+							# 		<span class='tvchannel'>(Subtitles)</span> <span class='tvchannel'>(Black &amp; White)</span>
+							my $showflags = $show->look_down('_tag' => 'span', 'class' => 'tvchannel', sub { $_[0]->as_text =~ /Subtitles/ } );
+							if ($showflags) {
+								push @{$prog{'subtitles'}}, {'type' => 'teletext'};
+								$showflags->detach;
 							}
-						}
-
-						# year
-						# 	strip this off the title e.g. "A Useful Life (2010)"
-						my ($showyear) = $prog{'title'}->[0][0] =~ /.*\((\d\d\d\d)\)$/;
-						if ($showyear) {
-							$prog{'date'} = $showyear;
-							# assume anything with a year is a film - add Films category group
-							push @{$prog{'category'}}, [ 'Films', 'en' ];
-						}
-
-						# flags
-						# 		<span class='tvchannel'>(Subtitles)</span> <span class='tvchannel'>(Black &amp; White)</span>
-						my $showflags = $show->look_down('_tag' => 'span', 'class' => 'tvchannel', sub { $_[0]->as_text =~ /Subtitles/ } );
-						if ($showflags) {
-							push @{$prog{'subtitles'}}, {'type' => 'teletext'};
-							$showflags->detach;
-						}
-						$showflags = $show->look_down('_tag' => 'span', 'class' => 'tvchannel', sub { $_[0]->as_text =~ /Audio Described/ } );
-						if ($showflags) {
-						#	push @{$prog{'subtitles'}}, {'type' => 'deaf-signed'};    <-- Audio Described is not deaf-signed
-							$showflags->detach;
-						}
-						$showflags = $show->look_down('_tag' => 'span', 'class' => 'tvchannel', sub { $_[0]->as_text =~ /Repeat/ } );
-						if ($showflags) {
+							$showflags = $show->look_down('_tag' => 'span', 'class' => 'tvchannel', sub { $_[0]->as_text =~ /Audio Described/ } );
+							if ($showflags) {
+							#	push @{$prog{'subtitles'}}, {'type' => 'deaf-signed'};    <-- Audio Described is not deaf-signed
+								$showflags->detach;
+							}
+							$showflags = $show->look_down('_tag' => 'span', 'class' => 'tvchannel', sub { $_[0]->as_text =~ /Repeat/ } );
+							if ($showflags) {
+								#	push @{$prog{'previously-shown'}}, {};
+								$prog{'previously-shown'} = {};
+								$showflags->detach;
+							}
+							my $showvideo = $show->look_down('_tag' => 'span', 'class' => 'tvchannel', sub { $_[0]->as_text =~ /Black & White/ } );
+							if ($showvideo) {
+								$prog{'video'}->{'colour'} = '0';
+								$showvideo->detach;
+							}
+							#if ($showflags && $showflags->as_text =~ '\[REP\]') {
 							#	push @{$prog{'previously-shown'}}, {};
-							$prog{'previously-shown'} = {};
-							$showflags->detach;
-						}
-						my $showvideo = $show->look_down('_tag' => 'span', 'class' => 'tvchannel', sub { $_[0]->as_text =~ /Black & White/ } );
-						if ($showvideo) {
-							$prog{'video'}->{'colour'} = '0';
-							$showvideo->detach;
-						}
-						#if ($showflags && $showflags->as_text =~ '\[REP\]') {
-						#	push @{$prog{'previously-shown'}}, {};
-						#}
-						$showflags = $show->look_down('_tag' => 'span', 'class' => 'tvchannel', sub { $_[0]->as_text =~ /Interactive/ } );
-						if ($showflags) {
-							# no flag in DTD for this
-							$showflags->detach;
-						}
-
-
-						# episode number
-						# 	<span class="season">Season 2 </span> <span class="season">Episode 3 of 22</span>
-						my @showepisode = $show->look_down('_tag' => 'span', 'class' => 'season');
-						my $showepisode;
-						foreach my $el (@showepisode) {
-							$showepisode .= $el->as_text;
-						}
-						if ($showepisode) {
-							my ($showsxx, $showexx, $showeof) = ( $showepisode =~ /^(?:(?:Series|Season) (\d+)(?:[., :]+)?)?(?:Episode (\d+)(?: of (\d+))?)?/ );
-							# scan the description for any "Part x of x." info
-							my ($showpxx, $showpof) = ('', '');
-							($showpxx, $showpof) = ( $showdesc =~ /Part (one|two|three|four|five|six|seven|eight|nine|\d+)(?: of (one|two|three|four|five|six|seven|eight|nine|\d+))?/ ) if ($showdesc);
-							my $showepnum = make_ns_epnum($showsxx, $showexx, $showeof, $showpxx, $showpof);
-							if ($showepnum && $showepnum ne '...') {
-								$prog{'episode-num'} = [[ $showepnum, 'xmltv_ns' ]];
+							#}
+							$showflags = $show->look_down('_tag' => 'span', 'class' => 'tvchannel', sub { $_[0]->as_text =~ /Interactive/ } );
+							if ($showflags) {
+								# no flag in DTD for this
+								$showflags->detach;
 							}
-							#debug "--$showepnum-- ".$showepisode->as_text;
-						}
 
-						# episode title
-						# 	<span class="tvchannel">The Fabulous Buchannon Boys</span>
-						my $showeptitle = $show->look_down('_tag' => 'span', 'class' => 'tvchannel');
-						if ($showeptitle) {
-						  if ($showeptitle->as_text =~ /\(?Premiere\)?/) {
-								$prog{'premiere'} = [];
-							} else {
-								$prog{'sub-title'} = [[ encode('utf-8', $showeptitle->as_text), 'en' ]];
+
+							# episode number
+							# 	<span class="season">Season 2 </span> <span class="season">Episode 3 of 22</span>
+							my @showepisode = $show->look_down('_tag' => 'span', 'class' => 'season');
+							my $showepisode;
+							foreach my $el (@showepisode) {
+								$showepisode .= $el->as_text;
 							}
-							$showeptitle->detach;
-						}
+							if ($showepisode) {
+								my ($showsxx, $showexx, $showeof) = ( $showepisode =~ /^(?:(?:Series|Season) (\d+)(?:[., :]+)?)?(?:Episode (\d+)(?: of (\d+))?)?/ );
+								# scan the description for any "Part x of x." info
+								my ($showpxx, $showpof) = ('', '');
+								($showpxx, $showpof) = ( $showdesc =~ /Part (one|two|three|four|five|six|seven|eight|nine|\d+)(?: of (one|two|three|four|five|six|seven|eight|nine|\d+))?/ ) if ($showdesc);
+								my $showepnum = make_ns_epnum($showsxx, $showexx, $showeof, $showpxx, $showpof);
+								if ($showepnum && $showepnum ne '...') {
+									$prog{'episode-num'} = [[ $showepnum, 'xmltv_ns' ]];
+								}
+								#debug "--$showepnum-- ".$showepisode->as_text;
+							}
 
-						# director
-						# never seen one but let's assume they're in the description
-						if (!$prog{'credits'}->{'director'}) {
-							if ($showdesc) {
-								my ($directors) = ( $showdesc =~ /(?:Directed by|Director) ([^\.]*)\.?/ );
-								if ($directors) {
-									$directors =~ s/ (with|and) /,/ig;
-									$directors =~ s/ (singer|actor|actress) //ig;			# strip these words
-									$directors =~ s/,,/,/g;	# delete empties
-									$directors = encode('utf-8', $directors);	# encode names into utf-8
-									#debug $directors;
-									my @directors = split(/,/, $directors);
-									s{^\s+|\s+$}{}g foreach @directors;	# strip leading & trailing spaces
-									$prog{'credits'}->{'director'} = \@directors  if (scalar @directors > 0);
+							# episode title
+							# 	<span class="tvchannel">The Fabulous Buchannon Boys</span>
+							my $showeptitle = $show->look_down('_tag' => 'span', 'class' => 'tvchannel');
+							if ($showeptitle) {
+							  if ($showeptitle->as_text =~ /\(?Premiere\)?/) {
+									$prog{'premiere'} = [];
+								} else {
+									$prog{'sub-title'} = [[ encode('utf-8', $showeptitle->as_text), 'en' ]];
+								}
+								$showeptitle->detach;
+							}
+
+							# director
+							# never seen one but let's assume they're in the description
+							if (!$prog{'credits'}->{'director'}) {
+								if ($showdesc) {
+									my ($directors) = ( $showdesc =~ /(?:Directed by|Director) ([^\.]*)\.?/ );
+									if ($directors) {
+										$directors =~ s/ (with|and) /,/ig;
+										$directors =~ s/ (singer|actor|actress) //ig;			# strip these words
+										$directors =~ s/,,/,/g;	# delete empties
+										$directors = encode('utf-8', $directors);	# encode names into utf-8
+										#debug $directors;
+										my @directors = split(/,/, $directors);
+										s{^\s+|\s+$}{}g foreach @directors;	# strip leading & trailing spaces
+										$prog{'credits'}->{'director'} = \@directors  if (scalar @directors > 0);
+									}
 								}
 							}
-						}
 
-						# actors
-						# these are buried in the description  :-(
-						if (!$prog{'credits'}->{'actor'}) {
-							if ($showdesc) {
-								my ($actors) = ( $showdesc =~ /(?:starring)([^\.]*)\.?/i );
-								if ($actors) {
-									$actors =~ s/ (also|starring|with|and) /,/ig;		# may be used to separate names
-									$actors =~ s/ (singer|actor|actress) //ig;			# strip these words
-									$actors =~ s/,,/,/g;	# delete empties
-									$actors = encode('utf-8', $actors);	# encode names into utf-8
-									#debug $actors;
-									my @actors = split(/,/, $actors);
-									s{^\s+|\s+$}{}g foreach @actors;	# strip leading & trailing spaces
-									$prog{'credits'}->{'actor'} = \@actors  if (scalar @actors > 0);
+							# actors
+							# these are buried in the description  :-(
+							if (!$prog{'credits'}->{'actor'}) {
+								if ($showdesc) {
+									my ($actors) = ( $showdesc =~ /(?:starring)([^\.]*)\.?/i );
+									if ($actors) {
+										$actors =~ s/ (also|starring|with|and) /,/ig;		# may be used to separate names
+										$actors =~ s/ (singer|actor|actress) //ig;			# strip these words
+										$actors =~ s/,,/,/g;	# delete empties
+										$actors = encode('utf-8', $actors);	# encode names into utf-8
+										#debug $actors;
+										my @actors = split(/,/, $actors);
+										s{^\s+|\s+$}{}g foreach @actors;	# strip leading & trailing spaces
+										$prog{'credits'}->{'actor'} = \@actors  if (scalar @actors > 0);
+									}
 								}
 							}
-						}
 
-						# rating
-						#		<span class="programmetext">Rating<br></span><span class="programmeheading">3.9</span>
-						my $showrating = $show->look_down('_tag' => 'span', 'class' => 'programmetext', sub { $_[0]->as_trimmed_text =~ /^Rating$/ } );
-						if ($showrating) {
-							$showrating = $showrating->right;
-							$showrating = $showrating->right if ($showrating->tag eq 'br');
-							if ($showrating->tag eq 'span' && $showrating->attr('class') eq 'programmeheading') {
-								if ($showrating->as_text) {
-									$prog{'star-rating'} =  [ $showrating->as_text . '/10' ];
+							# rating
+							#		<span class="programmetext">Rating<br></span><span class="programmeheading">3.9</span>
+							my $showrating = $show->look_down('_tag' => 'span', 'class' => 'programmetext', sub { $_[0]->as_trimmed_text =~ /^Rating$/ } );
+							if ($showrating) {
+								$showrating = $showrating->right;
+								$showrating = $showrating->right if ($showrating->tag eq 'br');
+								if ($showrating->tag eq 'span' && $showrating->attr('class') eq 'programmeheading') {
+									if ($showrating->as_text) {
+										$prog{'star-rating'} =  [ $showrating->as_text . '/10' ];
+									}
 								}
 							}
+
+							# programme url
+							# 	<a href="https://www.tvguide.co.uk/detail/4206442/61651117/homes-under-the-hammer" title="Click to rate and review">
+							my $showurl = $show->look_down('_tag' => 'a', 'title' => 'Click to rate and review');
+							if ($showurl) {
+								$prog{'url'} = [ encode( 'utf-8', $showurl->attr('href') ) ];
+							}
+
+							# programme image
+							#	<table border="0" cellpadding="0" width="677" style="background:black;border-collapse: collapse;background-image: url(https://cdn.tvguide.co.uk/HighlightImages/Large/Homes-Under.jpg);background-repeat: no-repeat;">
+							my $showattr = $show->attr('style');
+							(my $showimage) = $showattr =~ /background-image:\s*url\((.*?\.jpg)\)/;
+							if ($showimage) {
+								$prog{'image'} = [] if not defined $prog{'image'} or not @{$prog{'image'}};
+								push @{$prog{'image'}}, [ $showimage, { 'system'=>'tvguide', 'type'=>'backdrop' } ];
+							}
+
+
+							# debug Dumper \%prog;
+							push(@{$programmes}, \%prog);
+
+							$alt_success = 1;
 						}
 
-						# programme url
-						# 	<a href="https://www.tvguide.co.uk/detail/4206442/61651117/homes-under-the-hammer" title="Click to rate and review">
-						my $showurl = $show->look_down('_tag' => 'a', 'title' => 'Click to rate and review');
-						if ($showurl) {
-							$prog{'url'} = [ encode( 'utf-8', $showurl->attr('href') ) ];
+
+					} else {
+						# no schedule found
+						debug "No schedule found for channel ID: $alt_channel_id";
+						if (scalar @alts == 1) {
+							push @alts, get_alt_channel_ids($channel_id, $channelname);
+							debug "Found alternative IDs: @alts[1..$#alts]" if (scalar @alts > 1);
 						}
-
-						# programme image
-						#	<table border="0" cellpadding="0" width="677" style="background:black;border-collapse: collapse;background-image: url(https://cdn.tvguide.co.uk/HighlightImages/Large/Homes-Under.jpg);background-repeat: no-repeat;">
-						my $showattr = $show->attr('style');
-						(my $showimage) = $showattr =~ /background-image:\s*url\((.*?\.jpg)\)/;
-						if ($showimage) {
-							$prog{'image'} = [] if not defined $prog{'image'} or not @{$prog{'image'}};
-							push @{$prog{'image'}}, [ $showimage, { 'system'=>'tvguide', 'type'=>'backdrop' } ];
-						}
-
-
-						# debug Dumper \%prog;
-						push(@{$programmes}, \%prog);
+						# issue warning only when all alternatives have been tried
+						warning 'No schedule found' if ($alt_channel_id == $alts[$#alts]);
 					}
 
+					undef @shows;
+
+					# Add to the channels hash
+					$channels->{$channel_id} = { 'id'=> $xmlchannel_id , 'display-name' => [[ encode('utf-8', $channelname), 'en' ]]  };
+
+					$tree->delete();
 
 				} else {
-					# no schedule found
-					warning 'No schedule found';
+					# tree conversion failed
+					warning 'Could not parse the page';
 				}
 
-				undef @shows;
+				$bar->update if defined $bar;
 
-				# Add to the channels hash
-				$channels->{$channel_id} = { 'id'=> $xmlchannel_id , 'display-name' => [[ encode('utf-8', $channelname), 'en' ]]  };
-
-				$tree->delete();
-
-			} else {
-				# tree conversion failed
-				warning 'Could not parse the page';
+				last if $alt_success;
 			}
-
-			$bar->update if defined $bar;
 		}
 	}
 }
@@ -826,6 +848,65 @@ sub map_category {
 			return $mapcategories->{$category} ;
 		}
 		return $category;
+}
+
+sub fetch_all_channel_ids {
+	# Fetch all channel IDs with method 1, used for channel list creation and alternative ID searches
+	#
+	my $channels = {};
+
+	my $tree = fetch_url('https://www.tvguide.co.uk/mychannels.asp?gw=1242', 'post', [
+		thisDay => '',
+		thisTime => '',
+		gridSpan => '',
+		emailaddress => '',
+		regionid => 1,
+		systemid => 5,
+		xn => 'Show me the channels'
+	]);
+
+	my @c = $tree->look_down('_tag' => qr/table|tr/, 'class' => qr/^tr[XC]/);
+
+	my $j = 0 if $opt->{test};	# --test is an undocumented (private) option
+
+	foreach (@c) {
+		my ($ch, $id, $l, $t);
+
+		if ($_->id =~ /^trX?\d+/) {
+			($id) = $_->id =~ /^trX?(\d+)/;
+			($ch) = $ROOT_URL.'channellistings.asp?ch='.$id;
+			($l) = $_->as_HTML =~ /background-image:url\(([^)]+)\)/;
+			($t) = $_->as_text;
+		}
+
+		$channels->{$id} = {id => $id . (!$opt->{'list-channels'}?"   # ".encode('utf-8', $t):(!$opt->{legacychannels}?'.tvguide.co.uk':'')),
+							'display-name' => [[ encode('utf-8', $t), 'en' ]],
+							icon => [{ 'src'=>$l }],
+							url => [ $ch ],
+							}
+							if $id;
+
+		debug $id if $opt->{test};
+		last if $opt->{test} and (++$j >= $opt->{test});  # limit during testing
+	}
+	return $channels;
+}
+
+sub get_alt_channel_ids ($$) {
+	# Find alternate IDs for the same exact channel name
+	#
+	my ($channel_id, $channel_name) = @_;
+
+	$channels_cache = fetch_all_channel_ids if (scalar keys %$channels_cache == 0);
+
+	my @alts;
+
+	foreach my $id (keys %$channels_cache) {
+		next if $id == $channel_id;
+		push @alts, $id if ($channels_cache->{$id}->{'display-name'}[0][0] eq $channel_name);
+	}
+
+	return @alts;
 }
 
 sub loadmapconf {
@@ -952,40 +1033,7 @@ sub fetch_channels {
 			count => 1
 		}) unless ($opt->{quiet} || $opt->{debug});
 
-		my $tree = fetch_url('https://www.tvguide.co.uk/mychannels.asp?gw=1242', 'post', [
-			thisDay => '',
-			thisTime => '',
-			gridSpan => '',
-			emailaddress => '',
-			regionid => 1,
-			systemid => 5,
-			xn => 'Show me the channels'
-		]);
-
-		my @c = $tree->look_down('_tag' => qr/table|tr/, 'class' => qr/^tr[XC]/);
-
-		my $j = 0 if $opt->{test};	# --test is an undocumented (private) option
-
-		foreach (@c) {
-			my ($ch, $id, $l, $t);
-
-			if ($_->id =~ /^trX?\d+/) {
-				($id) = $_->id =~ /^trX?(\d+)/;
-				($ch) = $ROOT_URL.'channellistings.asp?ch='.$id;
-				($l) = $_->as_HTML =~ /background-image:url\(([^)]+)\)/;
-				($t) = $_->as_text;
-			}
-
-			$channels->{$id} = {id => $id . (!$opt->{'list-channels'}?"   # ".encode('utf-8', $t):(!$opt->{legacychannels}?'.tvguide.co.uk':'')),
-								'display-name' => [[ encode('utf-8', $t), 'en' ]],
-								icon => [{ 'src'=>$l }],
-								url => [ $ch ],
-								}
-								if $id;
-
-			debug $id if $opt->{test};
-			last if $opt->{test} and (++$j >= $opt->{test});  # limit during testing
-		}
+		$channels = fetch_all_channel_ids;
 
 		$bar->update() if defined $bar; $bar->finish() && undef $bar if defined $bar;
 
