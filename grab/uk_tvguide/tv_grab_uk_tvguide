@@ -74,7 +74,7 @@ my $generator_info_url	= $GRABBER_URL;
 my $source_info_name	= $SOURCE_NAME;
 my $source_info_url		= $SOURCE_URL;
 #
-my $grabberid = '2023-03-25.1545';
+my $grabberid = '2023-04-17.1645';
 
 # ------------------------------------------------------------------------------------------------------------------------------------- #
 # Use XMLTV::Options::ParseOptions to parse the options and take care of the basic capabilities that a tv_grabber should have
@@ -144,6 +144,9 @@ my $channels = ();
 # Store channel names during fetch
 my $channames = undef;
 
+# Cache for alternative ID lookups
+my $channels_cache = {};
+
 # Get the schedule(s) from TV Guide
 fetch_listings();
 
@@ -207,10 +210,18 @@ sub fetch_listings {
 		# tvguide runs from 06:00 so we need to get the previous day as well just for any programmes after midnight
 		#
 		for (my $i=($opt->{offset} -1); $i < ($opt->{offset} + $opt->{days}); $i++) {
+
+			# Inner loop allows us to push alternative IDs (if found) into @alts when no schedule is found for the user selected ID
+			my @alts = ($channel_id);
+
+			foreach my $alt_channel_id (@alts) {
+
+				my $alt_success = 0;
+
 			my $theday = DateTime->today->add (days => $i)->set_time_zone('Europe/London');
 
 			# Construct the listings url
-			my $url = $baseurl . '?ch=' . $channel_id . '&cTime=' . uri_escape( $theday->strftime('%m/%d/%Y 00:00:00') );
+				my $url = $baseurl . '?ch=' . $alt_channel_id . '&cTime=' . uri_escape( $theday->strftime('%m/%d/%Y 00:00:00') );
 			#debug "Fetching: $url";
 
 			# If we need to map the fetched channel_id to a different value
@@ -241,7 +252,7 @@ sub fetch_listings {
 					}
 				}
 
-				$channelname = $channames->{$channel_id} if $channames;
+					$channelname = $channames->{$alt_channel_id} if $channames;
 
 				# Try a fallback method if the form options are missing [Credit mkbloke]
 				if (!defined $channelname) {
@@ -257,7 +268,7 @@ sub fetch_listings {
 				# tvguide website can be very slow - try to avoid barfing when no response
 				# if no channelname then assume we got no response from website
 				if (!defined $channelname) {
-					warning "Unable to retrieve web page for $channel_id";
+						warning "Unable to retrieve web page for $alt_channel_id";
 					next;
 				}
 
@@ -730,12 +741,20 @@ sub fetch_listings {
 
 						# debug Dumper \%prog;
 						push(@{$programmes}, \%prog);
+
+							$alt_success = 1;
 					}
 
 
 				} else {
 					# no schedule found
-					warning 'No schedule found';
+						debug "No schedule found for channel ID: $alt_channel_id";
+						if (scalar @alts == 1) {
+							push @alts, get_alt_channel_ids($channel_id, $channelname);
+							debug "Found alternative IDs: @alts[1..$#alts]" if (scalar @alts > 1);
+						}
+						# issue warning only when all alternatives have been tried
+						warning 'No schedule found' if ($alt_channel_id == $alts[$#alts]);
 				}
 
 				undef @shows;
@@ -751,6 +770,9 @@ sub fetch_listings {
 			}
 
 			$bar->update if defined $bar;
+
+				last if $alt_success;
+			}
 		}
 	}
 }
@@ -857,6 +879,65 @@ sub loadmapconf {
 		# debug Dumper ($mapchannels, $mapcategories);
 }
 
+sub fetch_all_channel_ids {
+	# Fetch all channel IDs with method 1, used for channel list creation and alternative ID searches
+	#
+	my $channels = {};
+
+	my $tree = fetch_url('https://www.tvguide.co.uk/mychannels.asp?gw=1242', 'post', [
+		thisDay => '',
+		thisTime => '',
+		gridSpan => '',
+		emailaddress => '',
+		regionid => 1,
+		systemid => 5,
+		xn => 'Show me the channels'
+	]);
+
+	my @c = $tree->look_down('_tag' => qr/table|tr/, 'class' => qr/^tr[XC]/);
+
+	my $j = 0 if $opt->{test};	# --test is an undocumented (private) option
+
+	foreach (@c) {
+		my ($ch, $id, $l, $t);
+
+		if ($_->id =~ /^trX?\d+/) {
+			($id) = $_->id =~ /^trX?(\d+)/;
+			($ch) = $ROOT_URL.'channellistings.asp?ch='.$id;
+			($l) = $_->as_HTML =~ /background-image:url\(([^)]+)\)/;
+			($t) = $_->as_text;
+		}
+
+		$channels->{$id} = {id => $id . (!$opt->{'list-channels'}?"   # ".encode('utf-8', $t):(!$opt->{legacychannels}?'.tvguide.co.uk':'')),
+							'display-name' => [[ encode('utf-8', $t), 'en' ]],
+							icon => [{ 'src'=>$l }],
+							url => [ $ch ],
+							}
+							if $id;
+
+		debug $id if $opt->{test};
+		last if $opt->{test} and (++$j >= $opt->{test});  # limit during testing
+	}
+	return $channels;
+}
+
+sub get_alt_channel_ids ($$) {
+	# Find alternate IDs for the same exact channel name
+	#
+	my ($channel_id, $channel_name) = @_;
+
+	$channels_cache = fetch_all_channel_ids if (scalar keys %$channels_cache == 0);
+
+	my @alts;
+
+	foreach my $id (keys %$channels_cache) {
+		next if $id == $channel_id;
+		push @alts, $id if ($channels_cache->{$id}->{'display-name'}[0][0] eq $channel_name);
+	}
+
+	return @alts;
+}
+
 sub fetch_channels {
     # ParseOptions() handles --configure and --list-channels internally without returning,
 	#  so we do not have global $opt available during --configure
@@ -952,40 +1033,7 @@ sub fetch_channels {
 			count => 1
 		}) unless ($opt->{quiet} || $opt->{debug});
 
-		my $tree = fetch_url('https://www.tvguide.co.uk/mychannels.asp?gw=1242', 'post', [
-			thisDay => '',
-			thisTime => '',
-			gridSpan => '',
-			emailaddress => '',
-			regionid => 1,
-			systemid => 5,
-			xn => 'Show me the channels'
-		]);
-
-		my @c = $tree->look_down('_tag' => qr/table|tr/, 'class' => qr/^tr[XC]/);
-
-		my $j = 0 if $opt->{test};	# --test is an undocumented (private) option
-
-		foreach (@c) {
-			my ($ch, $id, $l, $t);
-
-			if ($_->id =~ /^trX?\d+/) {
-				($id) = $_->id =~ /^trX?(\d+)/;
-				($ch) = $ROOT_URL.'channellistings.asp?ch='.$id;
-				($l) = $_->as_HTML =~ /background-image:url\(([^)]+)\)/;
-				($t) = $_->as_text;
-			}
-
-			$channels->{$id} = {id => $id . (!$opt->{'list-channels'}?"   # ".encode('utf-8', $t):(!$opt->{legacychannels}?'.tvguide.co.uk':'')),
-								'display-name' => [[ encode('utf-8', $t), 'en' ]],
-								icon => [{ 'src'=>$l }],
-								url => [ $ch ],
-								}
-								if $id;
-
-			debug $id if $opt->{test};
-			last if $opt->{test} and (++$j >= $opt->{test});  # limit during testing
-		}
+		$channels = fetch_all_channel_ids;
 
 		$bar->update() if defined $bar; $bar->finish() && undef $bar if defined $bar;
 
