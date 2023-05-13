@@ -4,7 +4,7 @@
   </a>
 </p>
 
-# XMLTV 1.2.1
+# XMLTV 1.2.2
 
 ## Table of Contents
 
@@ -135,7 +135,6 @@ XML::Writer 0.6.0
 Required modules for grabbers/utilities are:
 
 ```
-Archive::Zip                  (tv_grab_eu_epgdata)
 CGI                           (tv_pick_cgi, core module until 5.20.3, part of CGI)
 CGI::Carp                     (tv_pick_cgi, core module until 5.20.3, part of CGI)
 Compress::Zlib                (for some of the grabbers, core module since 5.9.3, part of IO::Compress)
@@ -144,7 +143,6 @@ Date::Format                  (for some of the grabbers, part of TimeDate)
 DateTime                      (for several of the grabbers)
 DateTime::Format::ISO8601     (tv_grab_zz_sdjson_sqlite)
 DateTime::Format::SQLite      (tv_grab_zz_sdjson_sqlite)
-DateTime::Format::Strptime    (tv_grab_eu_epgdata)
 DateTime::TimeZone            (tv_grab_fr)
 DBD::SQLite                   (tv_grab_zz_sdjson_sqlite)
 DBI                           (tv_grab_zz_sdjson_sqlite)
@@ -157,7 +155,6 @@ HTML::Tree                    (for many of the grabbers, part of HTML::Tree)
 HTML::TreeBuilder             (for many of the grabbers, part of HTML::Tree)
 HTTP::Cache::Transparent 1.0  (for several of the grabbers)
 HTTP::Cookies                 (for several of the grabbers)
-HTTP::Request::Common         (tv_grab_eu_epgdata, part of HTTP::Message)
 IO::Scalar                    (for some of the grabbers, part of IO::Stringy)
 List::MoreUtils               (tv_grab_zz_sdjson_sqlite)
 LWP::Protocol::https          (tv_grab_fi, tv_grab_huro, tv_grab_zz_sdjson)

@@ -58,7 +58,7 @@ GetOptions('strict-deps'  => \$opt_strictdeps,  # be strict about dependencies
           );
 
 our $VERSION;
-$VERSION = '1.2.1';
+$VERSION = '1.2.2';
 
 # Fragment of Makefile text to give the directory where files should
 # be installed.  The extra '.' in the middle of the path is to avoid
@@ -293,17 +293,6 @@ my @opt_components
                     'HTTP::Cookies'     => 0,
                     'URI::Escape'       => 0,
                     'URI::URL'          => 0, },
-     },
-
-     { name => 'tv_grab_eu_epgdata',
-       blurb => '$$ Grabber for some European countries (epgdata.com)',
-       exes => [ 'grab/eu_epgdata/tv_grab_eu_epgdata' ],
-       share_files => { 'grab/eu_epgdata/channel_ids' => 'tv_grab_eu_epgdata/channel_ids' },
-       prereqs => { 'Archive::Zip'   => 0,
-                    'Date::Format'   => 0,
-                    'DateTime::Format::Strptime' => 0,
-                    'HTML::Entities' => 0,
-                    'HTTP::Request::Common' => 0, },
      },
 
      { name  => 'tv_grab_fi',
