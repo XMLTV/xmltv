@@ -11,6 +11,7 @@ package fi::source::yle;
 use strict;
 use warnings;
 use Date::Manip;
+use JSON qw();
 
 BEGIN {
   our $ENABLED = 1;
@@ -53,31 +54,40 @@ sub channels {
     if ($root) {
 
       #
-      # Channel list can be found from this list:
+      # Channel list can be found from Next.js JSON data
       #
-      #   <ul class="guide-channels">
-      #    <li class="guide-channels__channel">
-      #	    <h2 class="channel-header">
-      #      <a>...<div class="channel-header__logo " ... aria-label="Yle TV1"></div></a>
-      #	    </h2>
-      #     ...
-      #    </li>
-      #	   ...
-      #   </ul>
-      #
-      if (my @divs = $root->look_down("_tag"       => "div",
-                                      "aria-label" => qr/^.+$/)) {
-	debug(2, "Source ${code}.yle.fi found " . scalar(@divs) . " channels");
-	foreach my $div (@divs) {
-	  my $name = $div->attr("aria-label");
+      if (my $script = $root->look_down("_tag" => "script",
+					"id"   => "__NEXT_DATA__",
+					"type" => "application/json")) {
+	my($json)   = $script->content_list();
+	my $decoded = JSON->new->decode($json);
 
-	  if (defined($name) && length($name)) {
-	    # replace space with hyphen
-	    my $id;
-	    ($id = $name) =~ s/ /-/g;
+	if ((ref($decoded)                                       eq "HASH")  &&
+	    (ref($decoded->{props})                              eq "HASH")  &&
+	    (ref($decoded->{props}->{pageProps})                 eq "HASH")  &&
+	    (ref($decoded->{props}->{pageProps}->{view})         eq "HASH")  &&
+	    (ref($decoded->{props}->{pageProps}->{view}->{tabs}) eq "ARRAY")) {
 
-	    debug(3, "channel '$name' ($id)");
-	    $channels{"${id}.${code}.yle.fi"} = "$code $name";
+	  foreach my $tab (@{ $decoded->{props}->{pageProps}->{view}->{tabs} }) {
+	    if ((ref($tab)            eq "HASH")  &&
+		(ref($tab->{content}) eq "ARRAY")) {
+	      my($content) = @{ $tab->{content} };
+
+	      if ((ref($content)           eq "HASH")  &&
+		  (ref($content->{source}) eq "HASH")) {
+		my $name = $tab->{title};
+		my $uri  = $content->{source}->{uri};
+
+		if ($name && length($name) && $uri) {
+		  my($slug) = $uri =~ m,/ui/schedules/([^/]+)/[\d-]+\.json,;
+
+		  if ($slug) {
+		    debug(3, "channel '$name' ($slug)");
+		    $channels{"${slug}.${code}.yle.fi"} = "$code $name";
+		  }
+		}
+	      }
+	    }
 	  }
 	}
       }
