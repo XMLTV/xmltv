@@ -136,6 +136,7 @@ sub _epoch_to_xmltv_time($) {
 }
 
 # Configuration data
+my %option;
 my %series_description;
 my %series_title;
 my @title_map;
@@ -358,10 +359,19 @@ sub parseConfigLine {
 
   # apply URI unescaping if string contains '%XX'
   if ($param =~ /%[0-9A-Fa-f]{2}/) {
-      $param = uri_unescape($param);
+    $param = uri_unescape($param);
   }
 
-  if ($command eq "series") {
+  if ($command eq "option") {
+    # option <source> key=value
+    my($key, $value) = split('=', $param, 2);
+    if ($keyword && $key && $value) {
+      $option{$keyword}->{$key} = $value;
+    } else {
+      # Corrupted option
+      return;
+    }
+  } elsif ($command eq "series") {
     if ($keyword eq "description") {
       $series_description{$param}++;
     } elsif ($keyword eq "title") {
@@ -413,6 +423,15 @@ sub fixOverlaps {
     # Next programme
     $current = $next;
   }
+}
+
+# Get option value for source
+sub getOption($$) {
+  my($source, $key) = @_;
+
+  # Avoid creating empty entries for non-existing options
+  return $option{$source}->{$key}
+    if exists $option{$source}->{$key};
 }
 
 # That's all folks
