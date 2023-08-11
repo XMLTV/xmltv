@@ -44,6 +44,7 @@
 #
 # Version history:
 #
+# 2023/08/11 - 1.116 - support schedule hash download retry
 # 2023/08/11 - 1.115 - remove last updated datetime support
 # 2023/08/11 - 1.114 - add in atsc 3.0 system type for get-lineup
 # 2023/07/19 - 1.113 - rename downloadQueued to downloadRetry
@@ -207,7 +208,7 @@ use sort 'stable';
 my $RFC2838_COMPLIANT          = 1;            # RFC2838 compliant station ids, which makes XMLTV
                                                # validate even though the docs say "SHOULD" not "MUST"
 
-my $SCRIPT_VERSION             = '$Id: tv_grab_zz_sdjson_sqlite,v 1.115 2023/08/11 15:40:00 gtb Exp ed $';
+my $SCRIPT_VERSION             = '$Id: tv_grab_zz_sdjson_sqlite,v 1.116 2023/08/11 17:10:00 gtb Exp ed $';
 my $SCRIPT_URL                 = 'https://github.com/garybuhrmaster/tv_grab_zz_sdjson_sqlite';
 my $SCRIPT_NAME                = basename("$0");
 my $SCRIPT_NAME_DIR            = dirname("$0");
@@ -469,78 +470,13 @@ for my $lineup(@{$conf->{'lineup'}})
   }
 
 #
-# Obtain the current schedule hash values for our
-# lineup stations and feed to our DB
+# Obtain the current schedule hash values for our lineup stations
 #
-$sql = 'select distinct stations.station from stations as stations where stations.station in (select distinct channels.station from channels as channels where channels.lineup in ( ' . join(', ', ('?') x scalar(@{$conf->{'lineup'}})) . ' ) and channels.selected = 1)';
-
-$sth = $DBH->prepare_cached($sql);
-if (!defined($sth))
+for (my $retry = 0; $retry < 2; $retry++)
   {
-    print (STDERR "Unexpected error when preparing statement ($sql): " . $DBH->errstr . "\n");
-    exit(1);
-  }
+    my $downloadRetry = 0;
 
-$param = 1;
-for (my $i=0; $i < scalar(@{$conf->{'lineup'}}); $i++)
-  {
-    $sth->bind_param( $param, @{$conf->{'lineup'}}[$i], SQL_VARCHAR);
-    $param++;
-  }
-
-$sth->execute();
-if ($sth->err())
-  {
-    print (STDERR "Unexpected error when executing statement ($sql): " . $sth->errstr . "\n");
-    $DBH->rollback();
-    exit(1);
-  }
-
-$sth->bind_col( 1, undef, SQL_VARCHAR );
-
-my $stationsSchedulesHashList = $sth->fetchall_arrayref([0]);
-if ($sth->err())
-  {
-    print (STDERR "Unexpected error when executing fetch after execute of statement ($sql): " . $sth->errstr . "\n");
-    $DBH->rollback();
-    exit(1);
-  }
-
-$DBH->commit();
-
-undef $sth;
-
-print (STDERR "   downloading station schedule hashes for " . scalar(@{$stationsSchedulesHashList}) . " stations\n") if (!$quiet);
-
-my $stationsSchedulesHashIter;
-$stationsSchedulesHashIter = natatime $SD_SCHEDULE_HASH_CHUNK, @{$stationsSchedulesHashList};
-while(my @chunk = $stationsSchedulesHashIter->())
-  {
-    print (STDERR "      downloading schedule hashes for " . scalar(@chunk) . " stations in this chunk\n") if ((!$quiet) && ((scalar(@chunk) != scalar(@{$stationsSchedulesHashList}))));
-
-    my $stationsSchedulesHashRequest = [];
-
-    foreach (@chunk)
-      {
-        my $s = {};
-        $s->{'stationID'} = $_->[0];
-        push(@{$stationsSchedulesHashRequest}, $s);
-      }
-
-    my $r = $SD->obtainStationsSchedulesHash(@{$stationsSchedulesHashRequest});
-    if (!defined($r))
-      {
-        print (STDERR "Unexpected error when obtaining station schedules hashes: " . $SD->ErrorString() . "\n");
-        exit(1);
-      }
-
-    if (ref($r) ne 'ARRAY')
-      {
-        print (STDERR "Unexpected return data type " . ref($r) . " when obtaining station schedules hashes.\n");
-        exit(1);
-      }
-
-    $sql = "replace into stations_schedules_hash (station, day, hash, details) values ( ?, ?, ?, ?)";
+    $sql = 'select distinct stations.station from stations as stations where stations.station in (select distinct channels.station from channels as channels where channels.lineup in ( ' . join(', ', ('?') x scalar(@{$conf->{'lineup'}})) . ' ) and channels.selected = 1)';
 
     $sth = $DBH->prepare_cached($sql);
     if (!defined($sth))
@@ -549,71 +485,152 @@ while(my @chunk = $stationsSchedulesHashIter->())
         exit(1);
       }
 
-    foreach my $e(@{$r})
+    $param = 1;
+    for (my $i=0; $i < scalar(@{$conf->{'lineup'}}); $i++)
       {
-        if (ref($e) ne 'HASH')
-          {
-            # print (STDERR "Unexpected return data type " . ref($e) . " while iterating station schedules hashes\n");
-            next;
-          }
-        if ((!defined($e->{'stationID'})) ||
-            (!defined($e->{'date'})) ||
-            ((substr($e->{'date'}, 0, 10)) !~ /^\d{4}-\d{2}-\d{2}$/) ||
-            (!defined($e->{'MD5'})))
-          {
-            # print (STDERR "Station, date, or hash not provided while iterating station schedules hashes\n");
-            next;
-          }
-        my $station = $e->{'stationID'};
-        my $date = substr($e->{'date'}, 0, 10);
-        my $hash = $e->{'MD5'};
-        my $details = $JSON->utf8->encode($e);
-        $sth->bind_param( 1, $station, SQL_VARCHAR );
-        $sth->bind_param( 2, $date, SQL_DATE );
-        $sth->bind_param( 3, $hash, SQL_VARCHAR );
-        $sth->bind_param( 4, $details, SQL_VARCHAR );
-        $sth->execute();
-        if ($sth->err)
-          {
-            print (STDERR "Unexpected error when executing statement ($sql): " . $sth->errstr . "\n");
-            $DBH->rollback();
-            exit(1);
-          }
+        $sth->bind_param( $param, @{$conf->{'lineup'}}[$i], SQL_VARCHAR);
+        $param++;
+      }
+
+    $sth->execute();
+    if ($sth->err())
+      {
+        print (STDERR "Unexpected error when executing statement ($sql): " . $sth->errstr . "\n");
+        $DBH->rollback();
+        exit(1);
+      }
+
+    $sth->bind_col( 1, undef, SQL_VARCHAR );
+
+    my $stationsSchedulesHashList = $sth->fetchall_arrayref([0]);
+    if ($sth->err())
+      {
+        print (STDERR "Unexpected error when executing fetch after execute of statement ($sql): " . $sth->errstr . "\n");
+        $DBH->rollback();
+        exit(1);
       }
 
     $DBH->commit();
 
     undef $sth;
-  }
 
-#
-# Indicate we have downloaded the data
-#
-$sql = 'update lineups set downloaded = ? where lineup in ( ' . join(', ', ('?') x scalar(@{$conf->{'lineup'}})) . ' )';
-$sth = $DBH->prepare_cached($sql);
-if (!defined($sth))
-  {
-    print (STDERR "Unexpected error when preparing statement ($sql): " . $DBH->errstr . "\n");
-    exit(1);
-  }
-$param = 1;
-$sth->bind_param( $param, $nowDateTimeSQLite, SQL_DATETIME );
-$param++;
-for (my $i=0; $i < scalar(@{$conf->{'lineup'}}); $i++)
-  {
-    $sth->bind_param( $param, @{$conf->{'lineup'}}[$i], SQL_VARCHAR);
-    $param++;
-  }
-$sth->execute();
-if ($sth->err())
-  {
-    print (STDERR "Unexpected error when executing statement ($sql): " . $sth->errstr . "\n");
-    $DBH->rollback();
-    exit(1);
-  }
-$DBH->commit();
+    print (STDERR "   downloading station schedule hashes for " . scalar(@{$stationsSchedulesHashList}) . " stations"  . (($retry == 0) ? "" : " (retry $retry)") . "\n") if (!$quiet);
 
-undef $sth;
+    my $stationsSchedulesHashIter;
+    $stationsSchedulesHashIter = natatime $SD_SCHEDULE_HASH_CHUNK, @{$stationsSchedulesHashList};
+    while(my @chunk = $stationsSchedulesHashIter->())
+      {
+        print (STDERR "      downloading schedule hashes for " . scalar(@chunk) . " stations in this chunk\n") if ((!$quiet) && ((scalar(@chunk) != scalar(@{$stationsSchedulesHashList}))));
+
+        my $stationsSchedulesHashRequest = [];
+
+        foreach (@chunk)
+          {
+            my $s = {};
+            $s->{'stationID'} = $_->[0];
+            push(@{$stationsSchedulesHashRequest}, $s);
+          }
+
+        my $r = $SD->obtainStationsSchedulesHash(@{$stationsSchedulesHashRequest});
+        if (!defined($r))
+          {
+            print (STDERR "Unexpected error when obtaining station schedules hashes: " . $SD->ErrorString() . " (will retry)\n");
+            $downloadRetry = 1;
+          }
+
+        if (ref($r) ne 'ARRAY')
+          {
+            print (STDERR "Unexpected return data type " . ref($r) . " when obtaining station schedules hashes. (will retry)\n");
+            $downloadRetry = 1;
+          }
+
+        $sql = "replace into stations_schedules_hash (station, day, hash, details) values ( ?, ?, ?, ?)";
+
+        $sth = $DBH->prepare_cached($sql);
+        if (!defined($sth))
+          {
+            print (STDERR "Unexpected error when preparing statement ($sql): " . $DBH->errstr . "\n");
+            exit(1);
+          }
+
+        foreach my $e(@{$r})
+          {
+            if (ref($e) ne 'HASH')
+              {
+                print (STDERR "Unexpected return data type " . ref($e) . " while iterating station schedules hashes (will retry)\n");
+                $downloadRetry = 1;
+                next;
+              }
+            if ((!defined($e->{'stationID'})) ||
+                (!defined($e->{'date'})) ||
+                ((substr($e->{'date'}, 0, 10)) !~ /^\d{4}-\d{2}-\d{2}$/) ||
+                (!defined($e->{'MD5'})))
+              {
+                print (STDERR "Station, date, or hash not provided while iterating station schedules hashes (will retry)\n");
+                $downloadRetry = 1;
+                next;
+              }
+            my $station = $e->{'stationID'};
+            my $date = substr($e->{'date'}, 0, 10);
+            my $hash = $e->{'MD5'};
+            my $details = $JSON->utf8->encode($e);
+            $sth->bind_param( 1, $station, SQL_VARCHAR );
+            $sth->bind_param( 2, $date, SQL_DATE );
+            $sth->bind_param( 3, $hash, SQL_VARCHAR );
+            $sth->bind_param( 4, $details, SQL_VARCHAR );
+            $sth->execute();
+            if ($sth->err)
+              {
+                print (STDERR "Unexpected error when executing statement ($sql): " . $sth->errstr . "\n");
+                $DBH->rollback();
+                exit(1);
+              }
+          }
+
+        $DBH->commit();
+
+        undef $sth;
+      }
+
+    if (!$downloadRetry)
+      {
+
+        #
+        # Indicate we have downloaded the data
+        #
+        $sql = 'update lineups set downloaded = ? where lineup in ( ' . join(', ', ('?') x scalar(@{$conf->{'lineup'}})) . ' )';
+        $sth = $DBH->prepare_cached($sql);
+        if (!defined($sth))
+          {
+            print (STDERR "Unexpected error when preparing statement ($sql): " . $DBH->errstr . "\n");
+            exit(1);
+          }
+        $param = 1;
+        $sth->bind_param( $param, $nowDateTimeSQLite, SQL_DATETIME );
+        $param++;
+        for (my $i=0; $i < scalar(@{$conf->{'lineup'}}); $i++)
+          {
+            $sth->bind_param( $param, @{$conf->{'lineup'}}[$i], SQL_VARCHAR);
+            $param++;
+          }
+        $sth->execute();
+        if ($sth->err())
+          {
+            print (STDERR "Unexpected error when executing statement ($sql): " . $sth->errstr . "\n");
+            $DBH->rollback();
+            exit(1);
+          }
+        $DBH->commit();
+
+        undef $sth;
+
+        #
+        # And we are done here
+        #
+        last;
+      }
+
+  }
 
 #
 # Obtain the station schedules for days for which we do
