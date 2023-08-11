@@ -44,6 +44,7 @@
 #
 # Version history:
 #
+# 2023/08/11 - 1.115 - remove last updated datetime support
 # 2023/08/11 - 1.114 - add in atsc 3.0 system type for get-lineup
 # 2023/07/19 - 1.113 - rename downloadQueued to downloadRetry
 # 2023/07/18 - 1.112 - remove legacy commented out code
@@ -206,7 +207,7 @@ use sort 'stable';
 my $RFC2838_COMPLIANT          = 1;            # RFC2838 compliant station ids, which makes XMLTV
                                                # validate even though the docs say "SHOULD" not "MUST"
 
-my $SCRIPT_VERSION             = '$Id: tv_grab_zz_sdjson_sqlite,v 1.114 2023/08/11 14:30:00 gtb Exp ed $';
+my $SCRIPT_VERSION             = '$Id: tv_grab_zz_sdjson_sqlite,v 1.115 2023/08/11 15:40:00 gtb Exp ed $';
 my $SCRIPT_URL                 = 'https://github.com/garybuhrmaster/tv_grab_zz_sdjson_sqlite';
 my $SCRIPT_NAME                = basename("$0");
 my $SCRIPT_NAME_DIR            = dirname("$0");
@@ -418,17 +419,9 @@ if (!defined($expiry))
     print (STDERR "Unable to obtain the account expiration date: " . $SD->ErrorString . "\n");
     exit(1);
   }
-my $dataLastUpdated = $SD->obtainDataLastUpdated;
-if (!defined($dataLastUpdated))
-  {
-    print (STDERR "Unable to obtain the Schedules Direct data last updated: " . $SD->ErrorString . "\n");
-    exit(1);
-  }
 my $expiryDateTime = DateTime::Format::ISO8601->parse_datetime($expiry);
-my $dataLastUpdatedDateTime = DateTime::Format::ISO8601->parse_datetime($dataLastUpdated);
 
 print (STDERR "   Schedules Direct account expires on " . $expiryDateTime . "\n") if (!$quiet);
-print (STDERR "   Schedules Direct data last updated on " . $dataLastUpdatedDateTime . "\n") if (!$quiet);
 
 SD_cleanLineups();
 
@@ -476,9 +469,10 @@ for my $lineup(@{$conf->{'lineup'}})
   }
 
 #
-# We can skip downloading station schedules if our data is current
+# Obtain the current schedule hash values for our
+# lineup stations and feed to our DB
 #
-$sql = 'select 1 from lineups l1 where (l1.downloaded <= ? and l1.lineup in ( ' . join(', ', ('?') x scalar(@{$conf->{'lineup'}})) . ' )) union select 1 where not exists (select 1 from lineups l2 where l2.lineup in ( ' . join(', ', ('?') x scalar(@{$conf->{'lineup'}})) . ' ))';
+$sql = 'select distinct stations.station from stations as stations where stations.station in (select distinct channels.station from channels as channels where channels.lineup in ( ' . join(', ', ('?') x scalar(@{$conf->{'lineup'}})) . ' ) and channels.selected = 1)';
 
 $sth = $DBH->prepare_cached($sql);
 if (!defined($sth))
@@ -488,13 +482,6 @@ if (!defined($sth))
   }
 
 $param = 1;
-$sth->bind_param( $param, DateTime::Format::SQLite->format_datetime($dataLastUpdatedDateTime), SQL_DATETIME );
-$param++;
-for (my $i=0; $i < scalar(@{$conf->{'lineup'}}); $i++)
-  {
-    $sth->bind_param( $param, @{$conf->{'lineup'}}[$i], SQL_VARCHAR);
-    $param++;
-  }
 for (my $i=0; $i < scalar(@{$conf->{'lineup'}}); $i++)
   {
     $sth->bind_param( $param, @{$conf->{'lineup'}}[$i], SQL_VARCHAR);
@@ -509,7 +496,9 @@ if ($sth->err())
     exit(1);
   }
 
-my $fetchStationSchedulesRequired = $sth->fetchrow_array() || 0;;
+$sth->bind_col( 1, undef, SQL_VARCHAR );
+
+my $stationsSchedulesHashList = $sth->fetchall_arrayref([0]);
 if ($sth->err())
   {
     print (STDERR "Unexpected error when executing fetch after execute of statement ($sql): " . $sth->errstr . "\n");
@@ -517,23 +506,41 @@ if ($sth->err())
     exit(1);
   }
 
-$sth->finish();
-
 $DBH->commit();
 
 undef $sth;
 
-if ((!$fetchStationSchedulesRequired) && (!$fetchLineupRequired))
+print (STDERR "   downloading station schedule hashes for " . scalar(@{$stationsSchedulesHashList}) . " stations\n") if (!$quiet);
+
+my $stationsSchedulesHashIter;
+$stationsSchedulesHashIter = natatime $SD_SCHEDULE_HASH_CHUNK, @{$stationsSchedulesHashList};
+while(my @chunk = $stationsSchedulesHashIter->())
   {
-    print (STDERR "   not downloading station schedule hashes (data current)\n") if (!$quiet);
-  }
-else
-  {
-    #
-    # Obtain the current schedule hash values for our
-    # lineup stations and feed to our DB
-    #
-    $sql = 'select distinct stations.station from stations as stations where stations.station in (select distinct channels.station from channels as channels where channels.lineup in ( ' . join(', ', ('?') x scalar(@{$conf->{'lineup'}})) . ' ) and channels.selected = 1)';
+    print (STDERR "      downloading schedule hashes for " . scalar(@chunk) . " stations in this chunk\n") if ((!$quiet) && ((scalar(@chunk) != scalar(@{$stationsSchedulesHashList}))));
+
+    my $stationsSchedulesHashRequest = [];
+
+    foreach (@chunk)
+      {
+        my $s = {};
+        $s->{'stationID'} = $_->[0];
+        push(@{$stationsSchedulesHashRequest}, $s);
+      }
+
+    my $r = $SD->obtainStationsSchedulesHash(@{$stationsSchedulesHashRequest});
+    if (!defined($r))
+      {
+        print (STDERR "Unexpected error when obtaining station schedules hashes: " . $SD->ErrorString() . "\n");
+        exit(1);
+      }
+
+    if (ref($r) ne 'ARRAY')
+      {
+        print (STDERR "Unexpected return data type " . ref($r) . " when obtaining station schedules hashes.\n");
+        exit(1);
+      }
+
+    $sql = "replace into stations_schedules_hash (station, day, hash, details) values ( ?, ?, ?, ?)";
 
     $sth = $DBH->prepare_cached($sql);
     if (!defined($sth))
@@ -542,140 +549,71 @@ else
         exit(1);
       }
 
-    $param = 1;
-    for (my $i=0; $i < scalar(@{$conf->{'lineup'}}); $i++)
+    foreach my $e(@{$r})
       {
-        $sth->bind_param( $param, @{$conf->{'lineup'}}[$i], SQL_VARCHAR);
-        $param++;
-      }
-
-    $sth->execute();
-    if ($sth->err())
-      {
-        print (STDERR "Unexpected error when executing statement ($sql): " . $sth->errstr . "\n");
-        $DBH->rollback();
-        exit(1);
-      }
-
-    $sth->bind_col( 1, undef, SQL_VARCHAR );
-
-    my $stationsSchedulesHashList = $sth->fetchall_arrayref([0]);
-    if ($sth->err())
-      {
-        print (STDERR "Unexpected error when executing fetch after execute of statement ($sql): " . $sth->errstr . "\n");
-        $DBH->rollback();
-        exit(1);
+        if (ref($e) ne 'HASH')
+          {
+            # print (STDERR "Unexpected return data type " . ref($e) . " while iterating station schedules hashes\n");
+            next;
+          }
+        if ((!defined($e->{'stationID'})) ||
+            (!defined($e->{'date'})) ||
+            ((substr($e->{'date'}, 0, 10)) !~ /^\d{4}-\d{2}-\d{2}$/) ||
+            (!defined($e->{'MD5'})))
+          {
+            # print (STDERR "Station, date, or hash not provided while iterating station schedules hashes\n");
+            next;
+          }
+        my $station = $e->{'stationID'};
+        my $date = substr($e->{'date'}, 0, 10);
+        my $hash = $e->{'MD5'};
+        my $details = $JSON->utf8->encode($e);
+        $sth->bind_param( 1, $station, SQL_VARCHAR );
+        $sth->bind_param( 2, $date, SQL_DATE );
+        $sth->bind_param( 3, $hash, SQL_VARCHAR );
+        $sth->bind_param( 4, $details, SQL_VARCHAR );
+        $sth->execute();
+        if ($sth->err)
+          {
+            print (STDERR "Unexpected error when executing statement ($sql): " . $sth->errstr . "\n");
+            $DBH->rollback();
+            exit(1);
+          }
       }
 
     $DBH->commit();
 
     undef $sth;
+  }
 
-    print (STDERR "   downloading station schedule hashes for " . scalar(@{$stationsSchedulesHashList}) . " stations\n") if (!$quiet);
-
-    my $stationsSchedulesHashIter;
-    $stationsSchedulesHashIter = natatime $SD_SCHEDULE_HASH_CHUNK, @{$stationsSchedulesHashList};
-    while(my @chunk = $stationsSchedulesHashIter->())
-      {
-        print (STDERR "      downloading schedule hashes for " . scalar(@chunk) . " stations in this chunk\n") if ((!$quiet) && ((scalar(@chunk) != scalar(@{$stationsSchedulesHashList}))));
-
-        my $stationsSchedulesHashRequest = [];
-
-        foreach (@chunk)
-          {
-            my $s = {};
-            $s->{'stationID'} = $_->[0];
-            push(@{$stationsSchedulesHashRequest}, $s);
-          }
-
-        my $r = $SD->obtainStationsSchedulesHash(@{$stationsSchedulesHashRequest});
-        if (!defined($r))
-          {
-            print (STDERR "Unexpected error when obtaining station schedules hashes: " . $SD->ErrorString() . "\n");
-            exit(1);
-          }
-
-        if (ref($r) ne 'ARRAY')
-          {
-            print (STDERR "Unexpected return data type " . ref($r) . " when obtaining station schedules hashes.\n");
-            exit(1);
-          }
-
-        $sql = "replace into stations_schedules_hash (station, day, hash, details) values ( ?, ?, ?, ?)";
-
-        $sth = $DBH->prepare_cached($sql);
-        if (!defined($sth))
-          {
-            print (STDERR "Unexpected error when preparing statement ($sql): " . $DBH->errstr . "\n");
-            exit(1);
-          }
-
-        foreach my $e(@{$r})
-          {
-            if (ref($e) ne 'HASH')
-              {
-                # print (STDERR "Unexpected return data type " . ref($e) . " while iterating station schedules hashes\n");
-                next;
-              }
-            if ((!defined($e->{'stationID'})) ||
-                (!defined($e->{'date'})) ||
-                ((substr($e->{'date'}, 0, 10)) !~ /^\d{4}-\d{2}-\d{2}$/) ||
-                (!defined($e->{'MD5'})))
-              {
-                # print (STDERR "Station, date, or hash not provided while iterating station schedules hashes\n");
-                next;
-              }
-            my $station = $e->{'stationID'};
-            my $date = substr($e->{'date'}, 0, 10);
-            my $hash = $e->{'MD5'};
-            my $details = $JSON->utf8->encode($e);
-            $sth->bind_param( 1, $station, SQL_VARCHAR );
-            $sth->bind_param( 2, $date, SQL_DATE );
-            $sth->bind_param( 3, $hash, SQL_VARCHAR );
-            $sth->bind_param( 4, $details, SQL_VARCHAR );
-            $sth->execute();
-            if ($sth->err)
-              {
-                print (STDERR "Unexpected error when executing statement ($sql): " . $sth->errstr . "\n");
-                $DBH->rollback();
-                exit(1);
-              }
-          }
-
-        $DBH->commit();
-
-        undef $sth;
-      }
-
-    #
-    # Indicate we have downloaded the data
-    #
-    $sql = 'update lineups set downloaded = ? where lineup in ( ' . join(', ', ('?') x scalar(@{$conf->{'lineup'}})) . ' )';
-    $sth = $DBH->prepare_cached($sql);
-    if (!defined($sth))
-      {
-        print (STDERR "Unexpected error when preparing statement ($sql): " . $DBH->errstr . "\n");
-        exit(1);
-      }
-    $param = 1;
-    $sth->bind_param( $param, $nowDateTimeSQLite, SQL_DATETIME );
+#
+# Indicate we have downloaded the data
+#
+$sql = 'update lineups set downloaded = ? where lineup in ( ' . join(', ', ('?') x scalar(@{$conf->{'lineup'}})) . ' )';
+$sth = $DBH->prepare_cached($sql);
+if (!defined($sth))
+  {
+    print (STDERR "Unexpected error when preparing statement ($sql): " . $DBH->errstr . "\n");
+    exit(1);
+  }
+$param = 1;
+$sth->bind_param( $param, $nowDateTimeSQLite, SQL_DATETIME );
+$param++;
+for (my $i=0; $i < scalar(@{$conf->{'lineup'}}); $i++)
+  {
+    $sth->bind_param( $param, @{$conf->{'lineup'}}[$i], SQL_VARCHAR);
     $param++;
-    for (my $i=0; $i < scalar(@{$conf->{'lineup'}}); $i++)
-      {
-        $sth->bind_param( $param, @{$conf->{'lineup'}}[$i], SQL_VARCHAR);
-        $param++;
-      }
-    $sth->execute();
-    if ($sth->err())
-      {
-        print (STDERR "Unexpected error when executing statement ($sql): " . $sth->errstr . "\n");
-        $DBH->rollback();
-        exit(1);
-      }
-    $DBH->commit();
-
-    undef $sth;
   }
+$sth->execute();
+if ($sth->err())
+  {
+    print (STDERR "Unexpected error when executing statement ($sql): " . $sth->errstr . "\n");
+    $DBH->rollback();
+    exit(1);
+  }
+$DBH->commit();
+
+undef $sth;
 
 #
 # Obtain the station schedules for days for which we do
@@ -2831,17 +2769,9 @@ sub listChannels
             print (STDERR "Unable to obtain the account expiration date: " . $SD->ErrorString . "\n");
             exit(1);
           }
-        my $dataLastUpdated = $SD->obtainDataLastUpdated;
-        if (!defined($dataLastUpdated))
-          {
-            print (STDERR "Unable to obtain the Schedules Direct data last updated: " . $SD->ErrorString . "\n");
-            exit(1);
-          }
         my $expiryDateTime = DateTime::Format::ISO8601->parse_datetime($expiry);
-        my $dataLastUpdatedDateTime = DateTime::Format::ISO8601->parse_datetime($dataLastUpdated);
 
         print (STDERR "   Schedules Direct account expires on " . $expiryDateTime . "\n") if (!$quiet);
-        print (STDERR "   Schedules Direct data last updated on " . $dataLastUpdatedDateTime . "\n") if (!$quiet);
 
         #
         # We can avoid downloading lineup and map information
@@ -3082,17 +3012,9 @@ sub listLineups
             print (STDERR "Unable to obtain the account expiration date: " . $SD->ErrorString . "\n");
             exit(1);
           }
-        my $dataLastUpdated = $SD->obtainDataLastUpdated;
-        if (!defined($dataLastUpdated))
-          {
-            print (STDERR "Unable to obtain the Schedules Direct data last updated: " . $SD->ErrorString . "\n");
-            exit(1);
-          }
         my $expiryDateTime = DateTime::Format::ISO8601->parse_datetime($expiry);
-        my $dataLastUpdatedDateTime = DateTime::Format::ISO8601->parse_datetime($dataLastUpdated);
 
         print (STDERR "   Schedules Direct account expires on " . $expiryDateTime . "\n") if (!$quiet);
-        print (STDERR "   Schedules Direct data last updated on " . $dataLastUpdatedDateTime . "\n") if (!$quiet);
 
         #
         # Optimizing lineup download is simply not worth the effort
@@ -3223,17 +3145,9 @@ sub getLineup
             print (STDERR "Unable to obtain the account expiration date: " . $SD->ErrorString . "\n");
             exit(1);
           }
-        my $dataLastUpdated = $SD->obtainDataLastUpdated;
-        if (!defined($dataLastUpdated))
-          {
-            print (STDERR "Unable to obtain the Schedules Direct data last updated: " . $SD->ErrorString . "\n");
-            exit(1);
-          }
         my $expiryDateTime = DateTime::Format::ISO8601->parse_datetime($expiry);
-        my $dataLastUpdatedDateTime = DateTime::Format::ISO8601->parse_datetime($dataLastUpdated);
 
         print (STDERR "   Schedules Direct account expires on " . $expiryDateTime . "\n") if (!$quiet);
-        print (STDERR "   Schedules Direct data last updated on " . $dataLastUpdatedDateTime . "\n") if (!$quiet);
 
         #
         # We can avoid downloading lineup and map information
