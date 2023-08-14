@@ -44,6 +44,7 @@
 #
 # Version history:
 #
+# 2023/08/14 - 1.119 - add routeto option for Schedules Direct debugging
 # 2023/08/12 - 1.118 - limit potential messages for retry cases
 # 2023/08/11 - 1.117 - add in delay for schedule hash retry
 # 2023/08/11 - 1.116 - support schedule hash download retry
@@ -210,7 +211,7 @@ use sort 'stable';
 my $RFC2838_COMPLIANT          = 1;            # RFC2838 compliant station ids, which makes XMLTV
                                                # validate even though the docs say "SHOULD" not "MUST"
 
-my $SCRIPT_VERSION             = '$Id: tv_grab_zz_sdjson_sqlite,v 1.118 2023/08/12 03:50:00 gtb Exp ed $';
+my $SCRIPT_VERSION             = '$Id: tv_grab_zz_sdjson_sqlite,v 1.119 2023/08/14 21:30:00 gtb Exp ed $';
 my $SCRIPT_URL                 = 'https://github.com/garybuhrmaster/tv_grab_zz_sdjson_sqlite';
 my $SCRIPT_NAME                = basename("$0");
 my $SCRIPT_NAME_DIR            = dirname("$0");
@@ -256,6 +257,7 @@ my $download = 1;
 my $passwordHash;
 
 my $resturl;
+my $routeto;
 
 my $opt;
 my $conf;
@@ -282,6 +284,19 @@ if (defined($resturl))
     $SD->RESTUrl($resturl);
   }
 
+#
+# We attempt to pick off the --routeto option due to
+# the XMLTV ParseOptions not allowing extra_options to be
+# processed in the configure stage.
+#
+Getopt::Long::Configure("pass_through");
+GetOptions('routeto=s' => \$routeto);
+Getopt::Long::Configure("no_pass_through");
+if (defined($routeto))
+  {
+    $SD->RouteTo($routeto);
+  }
+
 ( $opt, $conf ) = ParseOptions
   (
     {
@@ -295,7 +310,7 @@ if (defined($resturl))
       preferredmethod => 'allatonce',
       version => "$SCRIPT_VERSION",
       description => 'Multinational (Schedules Direct JSON web services with SQLite DB)',
-      extra_options => [qw/manage-lineups force-download download-only no-download passwordhash=s scale-download=f resturl=s/],
+      extra_options => [qw/manage-lineups force-download download-only no-download passwordhash=s scale-download=f resturl=s routeto=s/],
       defaults => { days => 30 },
     }
   );
@@ -6253,23 +6268,23 @@ tv_grab_zz_sdjson_sqlite --manage-lineups [--config-file FILE]
 
 tv_grab_zz_sdjson_sqlite [--days N] [--offset N] [--config-file FILE]
               [--output FILE] [--quiet] [--debug]
-              [--passwordhash HASH]
+              [--passwordhash HASH] [--resturl URL] [--routeto ROUTETO]
 
 tv_grab_zz_sdjson_sqlite --configure [--config-file FILE]
               [--quiet] [--debug]
-              [--passwordhash HASH]
+              [--passwordhash HASH] [--resturl URL] [--routeto ROUTETO]
 
 tv_grab_zz_sdjson_sqlite --list-channels [--config-file FILE]
               [--output FILE] [--quiet] [--debug]
-              [--passwordhash HASH]
+              [--passwordhash HASH] [--resturl URL] [--routeto ROUTETO]
 
 tv_grab_zz_sdjson_sqlite --list-lineups  [--config-file FILE]
               [--output FILE] [--quiet] [--debug]
-              [--passwordhash HASH]
+              [--passwordhash HASH] [--resturl URL] [--routeto ROUTETO]
 
 tv_grab_zz_sdjson_sqlite --get-lineup [--config-file FILE]
               [--output FILE] [--quiet] [--debug]
-              [--passwordhash HASH]
+              [--passwordhash HASH] [--resturl URL] [--routeto ROUTETO]
 
 =head1 DESCRIPTION
 
@@ -6350,7 +6365,12 @@ sizes. A value of .5 would reduce the sizes of the chunks requested
 by half.  The resulting number is bound between 1 and the max value.
 
 B<--resturl URL> Provide the Schedules Direct service endpoint URL.
-This is primarily useful for testing.
+This is primarily useful for testing when directed by
+Schedules Direct staff.
+
+B<--routeto ROUTETO> Provide the Schedules Direct service endpoint
+RouteTo header.  This is primarily useful for testing when
+directed by Schedules Direct staff.
 
 B<--list-channels> Write output giving <channel> elements for every
 channel available in the current configuration.
@@ -6610,6 +6630,7 @@ sub new
     $self->{'UserAgent'} = 'tv_grab_zz_sdjson_sqlite' unless $self->{'UserAgent'};
     $self->{'Debug'} = 0 unless $self->{'Debug'};
     $self->{'RESTUrl'} = 'https://json.schedulesdirect.org/20141201' unless $self->{'RESTUrl'};
+    $self->{'RouteTo'} = undef unless $self->{'RouteTo'};
     $self->{'RaiseError'} = 0 unless $self->{'RaiseError'};    # Not (yet) implemented
     $self->{'PrintError'} = 0 unless $self->{'PrintError'};    # Not (yet) implemented
     $self->{'_Token'} = undef;
@@ -6637,9 +6658,13 @@ sub new
     $self->{'_LWP'}->requests_redirectable(['GET', 'HEAD', 'POST', 'PUT', 'DELETE']);
     $self->{'_LWP'}->default_header('Accept-Encoding' => scalar HTTP::Message::decodable(),
                                     'Accept' => 'application/json',
-                                    'Content_Type' => 'application/json',
+                                    'Content-Type' => 'application/json',
                                     'Pragma' => 'no-cache',
                                     'Cache-Control' => 'no-cache');
+    if (defined($self->{'RouteTo'}))
+      {
+        $self->{'_LWP'}->default_headers->header('RouteTo' => $self->{'RouteTo'});
+      }
 
     bless($self, $class);
 
@@ -6972,6 +6997,37 @@ sub RESTUrl
       }
 
     $return = $self->{'RESTUrl'};
+
+    print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
+
+    return $return;
+  }
+
+#
+# set/return RouteTo
+#
+sub RouteTo
+  {
+    my $self = shift;
+
+    print (STDERR "DEBUG: Entering " . (caller(0))[3] . " with args: \n" . Data::Dumper->new(\@_)->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
+
+    my $return;
+
+    $self->_resetError;
+
+    if (@_)
+      {
+        $self->{'RouteTo'} = shift;
+        $self->{'_LWP'}->default_headers->remove_header('RouteTo');
+        if (defined($self->{'RouteTo'}))
+          {
+            $self->{'_LWP'}->default_headers->header('RouteTo' => $self->{'RouteTo'});
+          }
+        $self->_resetSession;
+      }
+
+    $return = $self->{'RouteTo'};
 
     print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
 
