@@ -44,6 +44,17 @@
 #
 # Version history:
 #
+# 2023/08/18 - 1.120 - adjust retry numbers
+# 2023/08/14 - 1.119 - add routeto option for Schedules Direct debugging
+# 2023/08/12 - 1.118 - limit potential messages for retry cases
+# 2023/08/11 - 1.117 - add in delay for schedule hash retry
+# 2023/08/11 - 1.116 - support schedule hash download retry
+# 2023/08/11 - 1.115 - remove last updated datetime support
+# 2023/08/11 - 1.114 - add in atsc 3.0 system type for get-lineup
+# 2023/07/19 - 1.113 - rename downloadQueued to downloadRetry
+# 2023/07/18 - 1.112 - remove legacy commented out code
+# 2023/07/17 - 1.111 - adjust _resetSession and _resetError usage
+# 2022/02/28 - 1.110 - improve token revalidation logic
 # 2022/02/24 - 1.109 - update pod for resturl option
 # 2022/02/24 - 1.108 - improve rating agency data validation
 # 2021/05/14 - 1.107 - allow specification of SD REST endpoint
@@ -201,7 +212,7 @@ use sort 'stable';
 my $RFC2838_COMPLIANT          = 1;            # RFC2838 compliant station ids, which makes XMLTV
                                                # validate even though the docs say "SHOULD" not "MUST"
 
-my $SCRIPT_VERSION             = '$Id: tv_grab_zz_sdjson_sqlite,v 1.109 2022/02/24 23:00:00 gtb Exp ed $';
+my $SCRIPT_VERSION             = '$Id: tv_grab_zz_sdjson_sqlite,v 1.120 2023/08/18 02:40:00 gtb Exp ed $';
 my $SCRIPT_URL                 = 'https://github.com/garybuhrmaster/tv_grab_zz_sdjson_sqlite';
 my $SCRIPT_NAME                = basename("$0");
 my $SCRIPT_NAME_DIR            = dirname("$0");
@@ -247,6 +258,7 @@ my $download = 1;
 my $passwordHash;
 
 my $resturl;
+my $routeto;
 
 my $opt;
 my $conf;
@@ -273,6 +285,19 @@ if (defined($resturl))
     $SD->RESTUrl($resturl);
   }
 
+#
+# We attempt to pick off the --routeto option due to
+# the XMLTV ParseOptions not allowing extra_options to be
+# processed in the configure stage.
+#
+Getopt::Long::Configure("pass_through");
+GetOptions('routeto=s' => \$routeto);
+Getopt::Long::Configure("no_pass_through");
+if (defined($routeto))
+  {
+    $SD->RouteTo($routeto);
+  }
+
 ( $opt, $conf ) = ParseOptions
   (
     {
@@ -286,7 +311,7 @@ if (defined($resturl))
       preferredmethod => 'allatonce',
       version => "$SCRIPT_VERSION",
       description => 'Multinational (Schedules Direct JSON web services with SQLite DB)',
-      extra_options => [qw/manage-lineups force-download download-only no-download passwordhash=s scale-download=f resturl=s/],
+      extra_options => [qw/manage-lineups force-download download-only no-download passwordhash=s scale-download=f resturl=s routeto=s/],
       defaults => { days => 30 },
     }
   );
@@ -413,17 +438,9 @@ if (!defined($expiry))
     print (STDERR "Unable to obtain the account expiration date: " . $SD->ErrorString . "\n");
     exit(1);
   }
-my $dataLastUpdated = $SD->obtainDataLastUpdated;
-if (!defined($dataLastUpdated))
-  {
-    print (STDERR "Unable to obtain the Schedules Direct data last updated: " . $SD->ErrorString . "\n");
-    exit(1);
-  }
 my $expiryDateTime = DateTime::Format::ISO8601->parse_datetime($expiry);
-my $dataLastUpdatedDateTime = DateTime::Format::ISO8601->parse_datetime($dataLastUpdated);
 
 print (STDERR "   Schedules Direct account expires on " . $expiryDateTime . "\n") if (!$quiet);
-print (STDERR "   Schedules Direct data last updated on " . $dataLastUpdatedDateTime . "\n") if (!$quiet);
 
 SD_cleanLineups();
 
@@ -471,63 +488,12 @@ for my $lineup(@{$conf->{'lineup'}})
   }
 
 #
-# We can skip downloading station schedules if our data is current
+# Obtain the current schedule hash values for our lineup stations
 #
-$sql = 'select 1 from lineups l1 where (l1.downloaded <= ? and l1.lineup in ( ' . join(', ', ('?') x scalar(@{$conf->{'lineup'}})) . ' )) union select 1 where not exists (select 1 from lineups l2 where l2.lineup in ( ' . join(', ', ('?') x scalar(@{$conf->{'lineup'}})) . ' ))';
-
-$sth = $DBH->prepare_cached($sql);
-if (!defined($sth))
+for (my $retry = 0; $retry < 4; $retry++)
   {
-    print (STDERR "Unexpected error when preparing statement ($sql): " . $DBH->errstr . "\n");
-    exit(1);
-  }
+    my $downloadRetry = 0;
 
-$param = 1;
-$sth->bind_param( $param, DateTime::Format::SQLite->format_datetime($dataLastUpdatedDateTime), SQL_DATETIME );
-$param++;
-for (my $i=0; $i < scalar(@{$conf->{'lineup'}}); $i++)
-  {
-    $sth->bind_param( $param, @{$conf->{'lineup'}}[$i], SQL_VARCHAR);
-    $param++;
-  }
-for (my $i=0; $i < scalar(@{$conf->{'lineup'}}); $i++)
-  {
-    $sth->bind_param( $param, @{$conf->{'lineup'}}[$i], SQL_VARCHAR);
-    $param++;
-  }
-
-$sth->execute();
-if ($sth->err())
-  {
-    print (STDERR "Unexpected error when executing statement ($sql): " . $sth->errstr . "\n");
-    $DBH->rollback();
-    exit(1);
-  }
-
-my $fetchStationSchedulesRequired = $sth->fetchrow_array() || 0;;
-if ($sth->err())
-  {
-    print (STDERR "Unexpected error when executing fetch after execute of statement ($sql): " . $sth->errstr . "\n");
-    $DBH->rollback();
-    exit(1);
-  }
-
-$sth->finish();
-
-$DBH->commit();
-
-undef $sth;
-
-if ((!$fetchStationSchedulesRequired) && (!$fetchLineupRequired))
-  {
-    print (STDERR "   not downloading station schedule hashes (data current)\n") if (!$quiet);
-  }
-else
-  {
-    #
-    # Obtain the current schedule hash values for our
-    # lineup stations and feed to our DB
-    #
     $sql = 'select distinct stations.station from stations as stations where stations.station in (select distinct channels.station from channels as channels where channels.lineup in ( ' . join(', ', ('?') x scalar(@{$conf->{'lineup'}})) . ' ) and channels.selected = 1)';
 
     $sth = $DBH->prepare_cached($sql);
@@ -566,7 +532,9 @@ else
 
     undef $sth;
 
-    print (STDERR "   downloading station schedule hashes for " . scalar(@{$stationsSchedulesHashList}) . " stations\n") if (!$quiet);
+    print (STDERR "   downloading station schedule hashes for " . scalar(@{$stationsSchedulesHashList}) . " stations"  . (($retry == 0) ? "" : " (retry $retry)") . "\n") if (!$quiet);
+
+    sleep(min(30, (10 * $retry)));
 
     my $stationsSchedulesHashIter;
     $stationsSchedulesHashIter = natatime $SD_SCHEDULE_HASH_CHUNK, @{$stationsSchedulesHashList};
@@ -586,14 +554,20 @@ else
         my $r = $SD->obtainStationsSchedulesHash(@{$stationsSchedulesHashRequest});
         if (!defined($r))
           {
-            print (STDERR "Unexpected error when obtaining station schedules hashes: " . $SD->ErrorString() . "\n");
-            exit(1);
+            if ($downloadRetry < 10)
+              {
+                print (STDERR "Unexpected error when obtaining station schedules hashes: " . $SD->ErrorString() . " (will retry)\n");
+              }
+            $downloadRetry++;
           }
 
         if (ref($r) ne 'ARRAY')
           {
-            print (STDERR "Unexpected return data type " . ref($r) . " when obtaining station schedules hashes.\n");
-            exit(1);
+            if ($downloadRetry < 10)
+              {
+                print (STDERR "Unexpected return data type " . ref($r) . " when obtaining station schedules hashes. (will retry)\n");
+              }
+            $downloadRetry++;
           }
 
         $sql = "replace into stations_schedules_hash (station, day, hash, details) values ( ?, ?, ?, ?)";
@@ -609,7 +583,11 @@ else
           {
             if (ref($e) ne 'HASH')
               {
-                # print (STDERR "Unexpected return data type " . ref($e) . " while iterating station schedules hashes\n");
+                if ($downloadRetry < 10)
+                  {
+                    print (STDERR "Unexpected return data type " . ref($e) . " while iterating station schedules hashes (will retry)\n");
+                  }
+                $downloadRetry++;
                 next;
               }
             if ((!defined($e->{'stationID'})) ||
@@ -617,7 +595,11 @@ else
                 ((substr($e->{'date'}, 0, 10)) !~ /^\d{4}-\d{2}-\d{2}$/) ||
                 (!defined($e->{'MD5'})))
               {
-                # print (STDERR "Station, date, or hash not provided while iterating station schedules hashes\n");
+                if ($downloadRetry < 10)
+                  {
+                    print (STDERR "Station, date, or hash not provided while iterating station schedules hashes (will retry)\n");
+                  }
+                $downloadRetry++;
                 next;
               }
             my $station = $e->{'stationID'};
@@ -642,34 +624,43 @@ else
         undef $sth;
       }
 
-    #
-    # Indicate we have downloaded the data
-    #
-    $sql = 'update lineups set downloaded = ? where lineup in ( ' . join(', ', ('?') x scalar(@{$conf->{'lineup'}})) . ' )';
-    $sth = $DBH->prepare_cached($sql);
-    if (!defined($sth))
+    if (!$downloadRetry)
       {
-        print (STDERR "Unexpected error when preparing statement ($sql): " . $DBH->errstr . "\n");
-        exit(1);
-      }
-    $param = 1;
-    $sth->bind_param( $param, $nowDateTimeSQLite, SQL_DATETIME );
-    $param++;
-    for (my $i=0; $i < scalar(@{$conf->{'lineup'}}); $i++)
-      {
-        $sth->bind_param( $param, @{$conf->{'lineup'}}[$i], SQL_VARCHAR);
-        $param++;
-      }
-    $sth->execute();
-    if ($sth->err())
-      {
-        print (STDERR "Unexpected error when executing statement ($sql): " . $sth->errstr . "\n");
-        $DBH->rollback();
-        exit(1);
-      }
-    $DBH->commit();
 
-    undef $sth;
+        #
+        # Indicate we have downloaded the data
+        #
+        $sql = 'update lineups set downloaded = ? where lineup in ( ' . join(', ', ('?') x scalar(@{$conf->{'lineup'}})) . ' )';
+        $sth = $DBH->prepare_cached($sql);
+        if (!defined($sth))
+          {
+            print (STDERR "Unexpected error when preparing statement ($sql): " . $DBH->errstr . "\n");
+            exit(1);
+          }
+        $param = 1;
+        $sth->bind_param( $param, $nowDateTimeSQLite, SQL_DATETIME );
+        $param++;
+        for (my $i=0; $i < scalar(@{$conf->{'lineup'}}); $i++)
+          {
+            $sth->bind_param( $param, @{$conf->{'lineup'}}[$i], SQL_VARCHAR);
+            $param++;
+          }
+        $sth->execute();
+        if ($sth->err())
+          {
+            print (STDERR "Unexpected error when executing statement ($sql): " . $sth->errstr . "\n");
+            $DBH->rollback();
+            exit(1);
+          }
+        $DBH->commit();
+
+        undef $sth;
+
+        #
+        # And we are done here
+        #
+        last;
+      }
   }
 
 #
@@ -677,10 +668,10 @@ else
 # not have current information based on hash values and
 # feed to our DB
 #
-for (my $retry = 0; $retry < 7; $retry++)
+for (my $retry = 0; $retry < 4; $retry++)
   {
 
-    my $downloadQueued = 0;
+    my $downloadRetry = 0;
 
     my $startDateTime = DateTime->now(time_zone => 'UTC')->add(days => $opt->{'offset'});
     my $endDateTime = DateTime->now(time_zone => 'UTC')->add(days => $opt->{'offset'})->add(days => $opt->{'days'});
@@ -784,8 +775,11 @@ for (my $retry = 0; $retry < 7; $retry++)
             # For some reason, sometimes Schedules Direct returns malformed response (I believe due to
             # their optimization for the program array returns, which can result in partial data).
             # We will force a retry under those conditions.
-            print (STDERR "Unexpected error when obtaining station schedules: " . $SD->ErrorString() . " (will retry)\n") if (!$quiet);
-            $downloadQueued = 1;
+            if ($downloadRetry < 10)
+              {
+                print (STDERR "Unexpected error when obtaining station schedules: " . $SD->ErrorString() . " (will retry)\n") if (!$quiet);
+              }
+            $downloadRetry++;
             next;
           }
 
@@ -794,8 +788,11 @@ for (my $retry = 0; $retry < 7; $retry++)
             # For some reason, sometimes Schedules Direct returns malformed response (I believe due to
             # their optimization for the program array returns, which can result in partial data).
             # We will force a retry under those conditions.
-            print (STDERR "Unexpected error when obtaining station schedules: " . $SD->ErrorString() . " (will retry)\n") if (!$quiet);
-            $downloadQueued = 1;
+            if ($downloadRetry < 10)
+              {
+                print (STDERR "Unexpected error when obtaining station schedules: " . $SD->ErrorString() . " (will retry)\n") if (!$quiet);
+              }
+            $downloadRetry++;
             next;
           }
 
@@ -831,9 +828,13 @@ for (my $retry = 0; $retry < 7; $retry++)
             my $code = $sched->{'code'} || 0;
             if ($code != 0)
               {
-                if ($code == 7100)
+                if ($code == 7100) # request queued
                   {
-                    $downloadQueued = 1;
+                    if ($downloadRetry < 10)
+                      {
+                        print (STDERR "Request for schedule queued when obtaining station schedules: (will retry)\n") if (!$quiet);
+                      }
+                    $downloadRetry++;
                   }
                 next;
               }
@@ -898,8 +899,8 @@ for (my $retry = 0; $retry < 7; $retry++)
         undef $sth3;
       }
 
-    # We are done unless one (or more) entities indicate that the server queued the request
-    last if (!$downloadQueued);
+    # We are done unless one (or more) entities indicate that the server queued the request or needs to retry
+    last if (!$downloadRetry);
   }
 
 #
@@ -908,9 +909,9 @@ for (my $retry = 0; $retry < 7; $retry++)
 # and feed to our DB
 #
 
-for (my $retry = 0; $retry < 7; $retry++)
+for (my $retry = 0; $retry < 4; $retry++)
   {
-    my $downloadQueued = 0;
+    my $downloadRetry = 0;
 
     my $startDateTime = DateTime->now(time_zone => 'UTC')->add(days => $opt->{'offset'});
     my $endDateTime = DateTime->now(time_zone => 'UTC')->add(days => $opt->{'offset'})->add(days => $opt->{'days'});
@@ -1008,8 +1009,11 @@ for (my $retry = 0; $retry < 7; $retry++)
             # For some reason, sometimes Schedules Direct returns malformed response (I believe due to
             # their optimization for the program array returns, which can result in partial data).
             # We will force a retry under those conditions.
-            print (STDERR "Unexpected error when obtaining programs: " . $SD->ErrorString() . " (will retry)\n") if (!$quiet);
-            $downloadQueued = 1;
+            if ($downloadRetry < 10)
+              {
+                print (STDERR "Unexpected error when obtaining programs: " . $SD->ErrorString() . " (will retry)\n") if (!$quiet);
+              }
+            $downloadRetry++;
             next;
           }
 
@@ -1018,8 +1022,11 @@ for (my $retry = 0; $retry < 7; $retry++)
             # For some reason, sometimes Schedules Direct return malformed response (I believe due to
             # their optiomization for the program array returns, which can result in partial data).
             # We will force a retry under those conditions.
-            print (STDERR "Unexpected return data type " . ref($r) . " when obtaining program array (will retry)\n") if (!$quiet);
-            $downloadQueued = 1;
+            if ($downloadRetry < 10)
+              {
+                print (STDERR "Unexpected return data type " . ref($r) . " when obtaining program array (will retry)\n") if (!$quiet);
+              }
+            $downloadRetry++;
             next;
           }
 
@@ -1040,9 +1047,13 @@ for (my $retry = 0; $retry < 7; $retry++)
             my $code = $program->{'code'} || 0;
             if ($code != 0)
               {
-                if ($code == 6001)
+                if ($code == 6001) # request queued
                   {
-                    $downloadQueued = 1;
+                    if ($downloadRetry < 10)
+                      {
+                        print (STDERR "Request for program queued when obtaining program data: (will retry)\n") if (!$quiet);
+                      }
+                    $downloadRetry++;
                   }
                 next;
               }
@@ -1071,20 +1082,20 @@ for (my $retry = 0; $retry < 7; $retry++)
         undef $sth1;
       }
 
-    # We are done unless one (or more) entities indicate that the server queued the request
-    last if (!$downloadQueued);
+    # We are done unless one (or more) entities indicate that the server queued the request or needs to retry
+    last if (!$downloadRetry);
   }
 
 #
 # Obtain the program supplemental information for programs
 # for which we do not have current information
 #
-for (my $retry = 0; $retry < 7; $retry++)
+for (my $retry = 0; $retry < 4; $retry++)
   {
     my $startDateTime = DateTime->now(time_zone => 'UTC')->add(days => $opt->{'offset'});
     my $endDateTime = DateTime->now(time_zone => 'UTC')->add(days => $opt->{'offset'})->add(days => $opt->{'days'});
 
-    my $downloadQueued = 0;
+    my $downloadRetry = 0;
 
     # Select all necessary supplemental program entities, and
     # randomly select others with an age bias (older more likely)
@@ -1174,10 +1185,12 @@ for (my $retry = 0; $retry < 7; $retry++)
             # For some reason, sometimes Schedules Direct returns malformed response (I believe due to
             # their optimization for the program array returns, which can result in partial data).
             # We will force a retry under those conditions.
-            print (STDERR "Unexpected error when obtaining programs: " . $SD->ErrorString() . " (will retry)\n") if (!$quiet);
-            $downloadQueued = 1;
+            if ($downloadRetry < 10)
+              {
+                print (STDERR "Unexpected error when obtaining programs: " . $SD->ErrorString() . " (will retry)\n") if (!$quiet);
+              }
+            $downloadRetry++;
             next;
-            exit(1);
           }
 
         if (ref($r) ne 'ARRAY')
@@ -1185,10 +1198,12 @@ for (my $retry = 0; $retry < 7; $retry++)
             # For some reason, sometimes Schedules Direct return malformed response (I believe due to
             # their optiomization for the program array returns, which can result in partial data).
             # We will force a retry under those conditions.
-            print (STDERR "Unexpected return data type " . ref($r) . " when obtaining program array (will retry)\n") if (!$quiet);
-            $downloadQueued = 1;
+            if ($downloadRetry < 10)
+              {
+                print (STDERR "Unexpected return data type " . ref($r) . " when obtaining program array (will retry)\n") if (!$quiet);
+              }
+            $downloadRetry++;
             next;
-            exit(1);
           }
 
         $sql1 = "replace into programs (program, hash, details, program_supplemental, downloaded) values (?, ?, ?, ?, ?)";
@@ -1208,9 +1223,13 @@ for (my $retry = 0; $retry < 7; $retry++)
             my $code = $program->{'code'} || 0;
             if ($code != 0)
               {
-                if ($code == 6001)
+                if ($code == 6001) # request queued
                   {
-                    $downloadQueued = 1;
+                    if ($downloadRetry < 10)
+                      {
+                        print (STDERR "Request for program queued when obtaining program data: (will retry)\n") if (!$quiet);
+                      }
+                    $downloadRetry++;
                   }
                 next;
               }
@@ -1239,8 +1258,8 @@ for (my $retry = 0; $retry < 7; $retry++)
         undef $sth1;
       }
 
-    # We are done unless one (or more) entities indicate that the server queued the request
-    last if (!$downloadQueued);
+    # We are done unless one (or more) entities indicate that the server queued the request or needs to retry
+    last if (!$downloadRetry);
   }
 
 #
@@ -2826,17 +2845,9 @@ sub listChannels
             print (STDERR "Unable to obtain the account expiration date: " . $SD->ErrorString . "\n");
             exit(1);
           }
-        my $dataLastUpdated = $SD->obtainDataLastUpdated;
-        if (!defined($dataLastUpdated))
-          {
-            print (STDERR "Unable to obtain the Schedules Direct data last updated: " . $SD->ErrorString . "\n");
-            exit(1);
-          }
         my $expiryDateTime = DateTime::Format::ISO8601->parse_datetime($expiry);
-        my $dataLastUpdatedDateTime = DateTime::Format::ISO8601->parse_datetime($dataLastUpdated);
 
         print (STDERR "   Schedules Direct account expires on " . $expiryDateTime . "\n") if (!$quiet);
-        print (STDERR "   Schedules Direct data last updated on " . $dataLastUpdatedDateTime . "\n") if (!$quiet);
 
         #
         # We can avoid downloading lineup and map information
@@ -3077,17 +3088,9 @@ sub listLineups
             print (STDERR "Unable to obtain the account expiration date: " . $SD->ErrorString . "\n");
             exit(1);
           }
-        my $dataLastUpdated = $SD->obtainDataLastUpdated;
-        if (!defined($dataLastUpdated))
-          {
-            print (STDERR "Unable to obtain the Schedules Direct data last updated: " . $SD->ErrorString . "\n");
-            exit(1);
-          }
         my $expiryDateTime = DateTime::Format::ISO8601->parse_datetime($expiry);
-        my $dataLastUpdatedDateTime = DateTime::Format::ISO8601->parse_datetime($dataLastUpdated);
 
         print (STDERR "   Schedules Direct account expires on " . $expiryDateTime . "\n") if (!$quiet);
-        print (STDERR "   Schedules Direct data last updated on " . $dataLastUpdatedDateTime . "\n") if (!$quiet);
 
         #
         # Optimizing lineup download is simply not worth the effort
@@ -3218,17 +3221,9 @@ sub getLineup
             print (STDERR "Unable to obtain the account expiration date: " . $SD->ErrorString . "\n");
             exit(1);
           }
-        my $dataLastUpdated = $SD->obtainDataLastUpdated;
-        if (!defined($dataLastUpdated))
-          {
-            print (STDERR "Unable to obtain the Schedules Direct data last updated: " . $SD->ErrorString . "\n");
-            exit(1);
-          }
         my $expiryDateTime = DateTime::Format::ISO8601->parse_datetime($expiry);
-        my $dataLastUpdatedDateTime = DateTime::Format::ISO8601->parse_datetime($dataLastUpdated);
 
         print (STDERR "   Schedules Direct account expires on " . $expiryDateTime . "\n") if (!$quiet);
-        print (STDERR "   Schedules Direct data last updated on " . $dataLastUpdatedDateTime . "\n") if (!$quiet);
 
         #
         # We can avoid downloading lineup and map information
@@ -3445,21 +3440,29 @@ sub getLineup
                         }
                       $w->endTag('stb-channel');
                     }
-
-                  if ($SDtype eq 'Antenna')
+                  elsif ($SDtype eq 'Antenna')
                     {
                       my $atscMajor = $c->{'atscMajor'};
                       my $atscMinor = $c->{'atscMinor'};
+                      my $atscType = $c->{'atscType'};
 
                       my $ATSC = (defined($atscMajor) && defined($atscMinor) &&
                                   looks_like_number($atscMajor) && looks_like_number($atscMinor));
+                      my $ATSC3 = ($ATSC && defined($atscType) && ($atscType eq '3.0'));
 
                       if ($ATSC)
                         {
                           $atscMajor = 0 + $atscMajor;
                           $atscMinor = 0 + $atscMinor;
                           $w->startTag('atsc-channel');
-                            $w->dataElement('system', 'US-ATSC');
+                            if ($ATSC3)
+                              {
+                                $w->dataElement('system', 'US-ATSC-3.0');
+                              }
+                            else
+                              {
+                                $w->dataElement('system', 'US-ATSC');
+                              }
                         }
                       else
                         {
@@ -3503,8 +3506,7 @@ sub getLineup
                           $w->endTag('analog-channel');
                         }
                     }
-
-                  if (($SDtype eq 'DVB-T') || ($SDtype eq 'DVB-S') | ($SDtype eq 'DVB-C'))
+                  elsif (($SDtype eq 'DVB-T') || ($SDtype eq 'DVB-S') | ($SDtype eq 'DVB-C'))
                     {
                       $w->startTag('dvb-channel');
                         my $freq = $c->{'frequencyHz'};
@@ -6267,23 +6269,23 @@ tv_grab_zz_sdjson_sqlite --manage-lineups [--config-file FILE]
 
 tv_grab_zz_sdjson_sqlite [--days N] [--offset N] [--config-file FILE]
               [--output FILE] [--quiet] [--debug]
-              [--passwordhash HASH]
+              [--passwordhash HASH] [--resturl URL] [--routeto ROUTETO]
 
 tv_grab_zz_sdjson_sqlite --configure [--config-file FILE]
               [--quiet] [--debug]
-              [--passwordhash HASH]
+              [--passwordhash HASH] [--resturl URL] [--routeto ROUTETO]
 
 tv_grab_zz_sdjson_sqlite --list-channels [--config-file FILE]
               [--output FILE] [--quiet] [--debug]
-              [--passwordhash HASH]
+              [--passwordhash HASH] [--resturl URL] [--routeto ROUTETO]
 
 tv_grab_zz_sdjson_sqlite --list-lineups  [--config-file FILE]
               [--output FILE] [--quiet] [--debug]
-              [--passwordhash HASH]
+              [--passwordhash HASH] [--resturl URL] [--routeto ROUTETO]
 
 tv_grab_zz_sdjson_sqlite --get-lineup [--config-file FILE]
               [--output FILE] [--quiet] [--debug]
-              [--passwordhash HASH]
+              [--passwordhash HASH] [--resturl URL] [--routeto ROUTETO]
 
 =head1 DESCRIPTION
 
@@ -6364,7 +6366,12 @@ sizes. A value of .5 would reduce the sizes of the chunks requested
 by half.  The resulting number is bound between 1 and the max value.
 
 B<--resturl URL> Provide the Schedules Direct service endpoint URL.
-This is primarily useful for testing.
+This is primarily useful for testing when directed by
+Schedules Direct staff.
+
+B<--routeto ROUTETO> Provide the Schedules Direct service endpoint
+RouteTo header.  This is primarily useful for testing when
+directed by Schedules Direct staff.
 
 B<--list-channels> Write output giving <channel> elements for every
 channel available in the current configuration.
@@ -6624,6 +6631,7 @@ sub new
     $self->{'UserAgent'} = 'tv_grab_zz_sdjson_sqlite' unless $self->{'UserAgent'};
     $self->{'Debug'} = 0 unless $self->{'Debug'};
     $self->{'RESTUrl'} = 'https://json.schedulesdirect.org/20141201' unless $self->{'RESTUrl'};
+    $self->{'RouteTo'} = undef unless $self->{'RouteTo'};
     $self->{'RaiseError'} = 0 unless $self->{'RaiseError'};    # Not (yet) implemented
     $self->{'PrintError'} = 0 unless $self->{'PrintError'};    # Not (yet) implemented
     $self->{'_Token'} = undef;
@@ -6651,9 +6659,13 @@ sub new
     $self->{'_LWP'}->requests_redirectable(['GET', 'HEAD', 'POST', 'PUT', 'DELETE']);
     $self->{'_LWP'}->default_header('Accept-Encoding' => scalar HTTP::Message::decodable(),
                                     'Accept' => 'application/json',
-                                    'Content_Type' => 'application/json',
+                                    'Content-Type' => 'application/json',
                                     'Pragma' => 'no-cache',
                                     'Cache-Control' => 'no-cache');
+    if (defined($self->{'RouteTo'}))
+      {
+        $self->{'_LWP'}->default_headers->header('RouteTo' => $self->{'RouteTo'});
+      }
 
     bless($self, $class);
 
@@ -6683,7 +6695,9 @@ sub isOnline
     my $return;
 
     $self->_resetError;
+
     $self->obtainStatus;
+
     if ($self->{'_Error'})
       {
         $return = undef;
@@ -6725,7 +6739,9 @@ sub accountExpiry
     my $return;
 
     $self->_resetError;
+
     $self->obtainStatus;
+
     if ($self->{'_Error'})
       {
         $return = undef;
@@ -6759,7 +6775,9 @@ sub obtainDataLastUpdated
     my $return;
 
     $self->_resetError;
+
     $self->obtainStatus;
+
     if ($self->{'_Error'})
       {
         $return = undef;
@@ -6826,6 +6844,8 @@ sub Debug
 
     print (STDERR "DEBUG: Entering " . (caller(0))[3] . " with args: \n" . Data::Dumper->new(\@_)->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
 
+    $self->_resetError;
+
     if (@_) { $self->{'Debug'} = shift }
 
     my $return = $self->{'Debug'};
@@ -6845,6 +6865,8 @@ sub RaiseError
     print (STDERR "DEBUG: Entering " . (caller(0))[3] . " with args: \n" . Data::Dumper->new(\@_)->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
 
     my $return;
+
+    $self->_resetError;
 
     if (@_) { $self->{'RaiseError'} = shift }
 
@@ -6866,6 +6888,8 @@ sub PrintError
 
     my $return;
 
+    $self->_resetError;
+
     if (@_) { $self->{'PrintError'} = shift }
 
     $return = $self->{'PrintError'};
@@ -6885,6 +6909,8 @@ sub Username
     print (STDERR "DEBUG: Entering " . (caller(0))[3] . " with args: \n" . Data::Dumper->new(\@_)->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
 
     my $return;
+
+    $self->_resetError;
 
     if (@_)
       {
@@ -6909,6 +6935,8 @@ sub Password
     print (STDERR "DEBUG: Entering " . (caller(0))[3] . " with args: \n" . Data::Dumper->new(\@_)->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
 
     my $return;
+
+    $self->_resetError;
 
     if (@_)
       {
@@ -6935,6 +6963,8 @@ sub PasswordHash
 
     my $return;
 
+    $self->_resetError;
+
     if (@_)
       {
         $self->{'PasswordHash'} = shift;
@@ -6959,6 +6989,8 @@ sub RESTUrl
 
     my $return;
 
+    $self->_resetError;
+
     if (@_)
       {
         $self->{'RESTUrl'} = shift;
@@ -6966,6 +6998,37 @@ sub RESTUrl
       }
 
     $return = $self->{'RESTUrl'};
+
+    print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
+
+    return $return;
+  }
+
+#
+# set/return RouteTo
+#
+sub RouteTo
+  {
+    my $self = shift;
+
+    print (STDERR "DEBUG: Entering " . (caller(0))[3] . " with args: \n" . Data::Dumper->new(\@_)->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
+
+    my $return;
+
+    $self->_resetError;
+
+    if (@_)
+      {
+        $self->{'RouteTo'} = shift;
+        $self->{'_LWP'}->default_headers->remove_header('RouteTo');
+        if (defined($self->{'RouteTo'}))
+          {
+            $self->{'_LWP'}->default_headers->header('RouteTo' => $self->{'RouteTo'});
+          }
+        $self->_resetSession;
+      }
+
+    $return = $self->{'RouteTo'};
 
     print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
 
@@ -6982,6 +7045,8 @@ sub Token
     print (STDERR "DEBUG: Entering " . (caller(0))[3] . " with args: \n" . Data::Dumper->new(\@_)->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
 
     my $return;
+
+    $self->_resetError;
 
     if (@_)
       {
@@ -7028,9 +7093,7 @@ sub uriResolve
 
     my $return;
 
-    # strip off leading /
-    # add trailing / if needed
-    #$rel = '/' . $rel . '/' if (defined($rel) && ($rel ne ''));
+    $self->_resetError;
 
     $return = URI->new_abs( $uri, "$self->{'RESTUrl'}" . $path . "/" )->as_string();
 
@@ -8459,6 +8522,8 @@ sub obtainStatus
         return $return;
       }
 
+    $self->{'_Status'} = undef;
+
     my $request = HTTP::Request->new(GET => "$self->{'RESTUrl'}/status");
 
     $request->header('Token' => "$self->{'_Token'}");
@@ -8579,39 +8644,28 @@ sub obtainToken
           }
         else
           {
-            # Try a status request with the token
-
-            my $request = HTTP::Request->new(GET => "$self->{'RESTUrl'}/status");
-
-            $request->header('Token' => "$self->{'_Token'}");
-
-            print (STDERR "DEBUG:   HTTP request:\n" . Data::Dumper->new([$request])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
-
-            my $response = $self->{'_LWP'}->request($request);
-
-            print (STDERR "DEBUG:   HTTP response:\n" . Data::Dumper->new([$response])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
-
-            my $responseCode = $response->code();
-            my $responseContent = $response->decoded_content();
-
-            print (STDERR "DEBUG:   HTTP decoded response content:\n" . Data::Dumper->new([$responseContent])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
-
-            if (($responseCode == 200) && (defined($responseContent)) && ($responseContent ne ''))
+            # Try a status request to validate provided token
+            print (STDERR "DEBUG:   attempting to validate token\n") if ($self->{'Debug'});
+            $self->{'_TokenValidated'} = 1;    # Avoid infinite recursion by presuming success
+            $self->obtainStatus;
+            if ($self->{'_Error'})
               {
-                my $r = eval { $self->{'_JSON'}->decode($responseContent) };
-                if ((defined($r)) && (ref($r) eq 'HASH') && (defined($r->{'code'})) && ($r->{'code'} == 0))
-                  {
-                    $self->{'_TokenValidated'} = 1;
-                    print (STDERR "DEBUG:   (re)using validated token\n") if ($self->{'Debug'});
-                    $return = $self->Token;
-                    print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
-                    return $return;
-                  }
+                $self->{'_TokenValidated'} = 0;
+                print (STDERR "DEBUG:   unable to validate token, will attempt to obtain a new token\n") if ($self->{'Debug'});
+              }
+            else
+              {
+                print (STDERR "DEBUG:   using validated token\n") if ($self->{'Debug'});
+                $return = $self->Token;
+                print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
+                return $return;
               }
           }
       }
 
-    $self->{'_Token'} = undef;
+    $self->_resetSession;
+
+    $self->_resetError;
 
     if (!defined($self->{'Username'}))
       {
@@ -8629,8 +8683,6 @@ sub obtainToken
         print (STDERR "DEBUG: Returning from " . (caller(0))[3] . " with: \n" . Data::Dumper->new([$return])->Pad('DEBUG:   ')->Useqq(1)->Dump) if ($self->{'Debug'});
         return $return;
       }
-
-    $self->_resetSession;
 
     my $request = HTTP::Request->new(POST => "$self->{'RESTUrl'}/token");
 
@@ -8845,8 +8897,9 @@ sub _resetSession
     print (STDERR "DEBUG: Entering " . (caller(0))[3] . "\n") if ($self->{'Debug'});
 
     $self->{'_Token'} = undef;
+    $self->{'_TokenAcquired'} = 0;
+    $self->{'_TokenValidated'} = 0;
     $self->{'_Status'} = undef;
-    $self->_resetError();
 
     print (STDERR "DEBUG: Returning from " . (caller(0))[3] . "\n") if ($self->{'Debug'});
 
