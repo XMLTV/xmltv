@@ -428,15 +428,16 @@ my @opt_components
        grab_need_share => [ 'na_dd' ],
      },
 
-     { name => 'tv_grab_na_dtv',
-       blurb => 'Grabber for North America (DirecTV)',
-       exes => [ 'grab/na_dtv/tv_grab_na_dtv' ],
-       prereqs => {
-         'DateTime'         => 0,
-         'HTTP::Cookies'    => 0,
-         'URI'              => 0,
-         'URI::Escape'      => 0, },
-     },
+# 2023-09-04 edenr  tv_grab_na_dtv removed due to source site changes
+#     { name => 'tv_grab_na_dtv',
+#       blurb => 'Grabber for North America (DirecTV)',
+#       exes => [ 'grab/na_dtv/tv_grab_na_dtv' ],
+#       prereqs => {
+#         'DateTime'         => 0,
+#         'HTTP::Cookies'    => 0,
+#         'URI'              => 0,
+#         'URI::Escape'      => 0, },
+#     },
 
      { name => 'tv_grab_na_tvmedia',
        blurb => 'Grabber for North America (TVMedia)',
