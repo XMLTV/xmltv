@@ -44,6 +44,7 @@
 #
 # Version history:
 #
+# 2023/09/04 - 1.126 - always download current account lineups
 # 2023/09/04 - 1.125 - improve retry logic for station schedules hashes
 # 2023/09/02 - 1.124 - protect against missing or malformed json string
 # 2023/09/01 - 1.123 - eliminate redundent json utf8 invokations
@@ -217,7 +218,7 @@ use sort 'stable';
 my $RFC2838_COMPLIANT          = 1;            # RFC2838 compliant station ids, which makes XMLTV
                                                # validate even though the docs say "SHOULD" not "MUST"
 
-my $SCRIPT_VERSION             = '$Id: tv_grab_zz_sdjson_sqlite,v 1.125 2023/09/04 15:30:00 gtb Exp ed $';
+my $SCRIPT_VERSION             = '$Id: tv_grab_zz_sdjson_sqlite,v 1.126 2023/09/04 21:30:00 gtb Exp ed $';
 my $SCRIPT_URL                 = 'https://github.com/garybuhrmaster/tv_grab_zz_sdjson_sqlite';
 my $SCRIPT_NAME                = basename("$0");
 my $SCRIPT_NAME_DIR            = dirname("$0");
@@ -447,28 +448,16 @@ my $expiryDateTime = DateTime::Format::ISO8601->parse_datetime($expiry);
 
 print (STDERR "   Schedules Direct account expires on " . $expiryDateTime . "\n") if (!$quiet);
 
-SD_cleanLineups();
-
 #
 # Start the download process
 #
 print (STDERR "Downloading data from Schedules Direct\n") if (!$quiet);
 
 #
-# We can avoid downloading lineup and map information
-# if we have updated our maps more recently than the
-# account lineup information indicates
+# Always make sure we have a current lineup list
 #
-my $fetchLineupRequired = SD_isLineupFetchRequired($conf->{'lineup'});
-if ($fetchLineupRequired)
-  {
-    print (STDERR "   downloading account lineups from Schedules Direct\n") if (!$quiet);
-    SD_downloadLineups();
-  }
-else
-  {
-    print (STDERR "   not downloading lineups from Schedules Direct (data current)\n") if (!$quiet);
-  }
+print (STDERR "   downloading account lineups from Schedules Direct\n") if (!$quiet);
+SD_downloadLineups();
 
 #
 # Validate that the configured lineup exists in our database
@@ -2873,19 +2862,15 @@ sub listChannels
         print (STDERR "   Schedules Direct account expires on " . $expiryDateTime . "\n") if (!$quiet);
 
         #
-        # We can avoid downloading lineup and map information
-        # if we have updated our maps more recently than the
-        # account lineup information indicates
+        # Start the download process
         #
-        if (SD_isLineupFetchRequired($conf->{'lineup'}))
-          {
-            print (STDERR "Downloading account lineups from Schedules Direct\n") if (!$quiet);
-            SD_downloadLineups();
-          }
-        else
-          {
-            print (STDERR "Not downloading lineups from Schedules Direct (data current)\n") if (!$quiet);
-          }
+        print (STDERR "Downloading data from Schedules Direct\n") if (!$quiet);
+
+        #
+        # Always make sure we have a current lineup list
+        #
+        print (STDERR "   downloading account lineups from Schedules Direct\n") if (!$quiet);
+        SD_downloadLineups();
 
         #
         # Validate that the configured lineup exists in our database
@@ -3112,14 +3097,14 @@ sub listLineups
         print (STDERR "   Schedules Direct account expires on " . $expiryDateTime . "\n") if (!$quiet);
 
         #
-        # Optimizing lineup download is simply not worth the effort
-        # due to having the check if any lineup has been modified
-        # since the last time the data was downloaded.  And since
-        # list-lineups is expected to be used rarely, we are going
-        # to skip any attempt at optimization
+        # Start the download process
         #
+        print (STDERR "Downloading data from Schedules Direct\n") if (!$quiet);
 
-        print (STDERR "Downloading lineups from Schedules Direct\n") if (!$quiet);
+        #
+        # Always make sure we have a current lineup list
+        #
+        print (STDERR "   downloading account lineups from Schedules Direct\n") if (!$quiet);
         SD_downloadLineups();
       }
     else
@@ -3245,19 +3230,15 @@ sub getLineup
         print (STDERR "   Schedules Direct account expires on " . $expiryDateTime . "\n") if (!$quiet);
 
         #
-        # We can avoid downloading lineup and map information
-        # if we have updated our maps more recently than the
-        # account lineup information indicates
+        # Start the download process
         #
-        if (SD_isLineupFetchRequired($conf->{'lineup'}))
-          {
-            print (STDERR "Downloading account lineups from Schedules Direct\n") if (!$quiet);
-            SD_downloadLineups();
-          }
-        else
-          {
-            print (STDERR "Not downloading lineups from Schedules Direct (data current)\n") if (!$quiet);
-          }
+        print (STDERR "Downloading data from Schedules Direct\n") if (!$quiet);
+
+        #
+        # Always make sure we have a current lineup list
+        #
+        print (STDERR "   downloading account lineups from Schedules Direct\n") if (!$quiet);
+        SD_downloadLineups();
 
         #
         # Validate that the configured lineup exists in our database
@@ -3272,12 +3253,12 @@ sub getLineup
           {
             if (SD_isLineupFetchRequired([$lineup]))
               {
-                print (STDERR "Downloading channel and station maps for lineup $lineup \n") if (!$quiet);
+                print (STDERR "   Downloading channel and station maps for lineup $lineup \n") if (!$quiet);
                 SD_downloadLineupMaps($lineup);
               }
             else
               {
-                print (STDERR "Not downloading channel and station maps for lineup $lineup (data current)\n") if (!$quiet);
+                print (STDERR "   Not downloading channel and station maps for lineup $lineup (data current)\n") if (!$quiet);
               }
           }
       }
@@ -3779,74 +3760,6 @@ sub SD_isLineupFetchRequired
   }
 
 #
-# SD_cleanLineups
-#
-# Convenience routine to clean the database of
-# lineups not in the account.  Errors are fatal.
-#
-#   Input:
-#              <none>
-#   Output:
-#              <none>
-#
-sub SD_cleanLineups
-  {
-    my $sql;
-    my $sth;
-    my $param;
-    my $lineups;
-    my @accountLineups = ();
-
-    #
-    # Delete any lineups not in our account
-    #
-    $lineups = $SD->obtainLineups();
-
-    if (!defined($lineups))
-      {
-        print (STDERR "Unable to obtain Schedules Direct account lineups: " . $SD->ErrorString() . "\n");
-        exit(1);
-      }
-
-    for my $lu(@{$lineups})
-      {
-        next if (ref($lu) ne 'HASH');
-        if (defined($lu->{'lineupID'}))
-          {
-            push(@accountLineups, $lu->{'lineupID'});
-          }
-      }
-
-    $sql = 'delete from lineups where lineup not in ( ' . join(', ', ('?') x scalar(@accountLineups)) . ' )';
-
-    $sth = $DBH->prepare_cached($sql);
-    if (!defined($sth))
-      {
-        print (STDERR "Unexpected error when preparing statement ($sql): " . $DBH->errstr . "\n");
-        exit(1);
-      }
-
-    $param = 1;
-    for (my $i=0; $i < scalar(@accountLineups); $i++)
-      {
-        $sth->bind_param( $param, $accountLineups[$i], SQL_VARCHAR);
-        $param++;
-      }
-
-    $sth->execute();
-    if ($sth->err)
-      {
-        print (STDERR "Unexpected error when executing statement ($sql): " . $sth->errstr . "\n");
-        $DBH->rollback();
-        exit(1);
-      }
-
-    $DBH->commit();
-
-    return;
-  }
-
-#
 # SD_downloadLineups
 #
 # Convenience routine to download lineups and
@@ -3863,14 +3776,17 @@ sub SD_downloadLineups
     my $sth;
     my $sql1;
     my $sth1;
+    my $sql2;
+    my $sth2;
     my $lu;
     my $lineups;
-
-    SD_cleanLineups();
+    my $param;
+    my @accountLineups = ();
 
     #
     # Obtain our lineups
     #
+
     $lineups = $SD->obtainLineups();
     if (!defined($lineups))
       {
@@ -3903,6 +3819,7 @@ sub SD_downloadLineups
       {
         next if ((ref($l) ne 'HASH') || (!defined($l->{'lineupID'})));
         my $id = $l->{'lineupID'};
+        push(@accountLineups, $id);
         my $name = $l->{'name'} || '';
         my $transport = $l->{'transport'} || '';
         my $location = $l->{'location'} || '';
@@ -3931,6 +3848,34 @@ sub SD_downloadLineups
             $DBH->rollback();
             exit(1);
           }
+      }
+
+    #
+    # Remove any lineups from our database not in our schedules direct account
+    #
+
+    $sql2 = 'delete from lineups where lineup not in ( ' . join(', ', ('?') x scalar(@accountLineups)) . ' )';
+
+    $sth2 = $DBH->prepare_cached($sql2);
+    if (!defined($sth2))
+      {
+        print (STDERR "Unexpected error when preparing statement ($sql2): " . $DBH->errstr . "\n");
+        exit(1);
+      }
+
+    $param = 1;
+    for (my $i=0; $i < scalar(@accountLineups); $i++)
+      {
+        $sth2->bind_param( $param, $accountLineups[$i], SQL_VARCHAR);
+        $param++;
+      }
+
+    $sth2->execute();
+    if ($sth2->err)
+      {
+        print (STDERR "Unexpected error when executing statement ($sql2): " . $sth2->errstr . "\n");
+        $DBH->rollback();
+        exit(1);
       }
 
     $DBH->commit();
