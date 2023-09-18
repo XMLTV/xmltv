@@ -44,6 +44,14 @@
 #
 # Version history:
 #
+# 2023/09/10 - 1.128 - protect against no database in manage-lineups
+# 2023/09/04 - 1.127 - various minor message text updates
+# 2023/09/04 - 1.126 - always download current account lineups
+# 2023/09/04 - 1.125 - improve retry logic for station schedules hashes
+# 2023/09/02 - 1.124 - protect against missing or malformed json string
+# 2023/09/01 - 1.123 - eliminate redundent json utf8 invokations
+# 2023/09/01 - 1.122 - update cast and crew mappings
+# 2023/08/31 - 1.121 - protect against missing or malformed json string
 # 2023/08/18 - 1.120 - adjust retry numbers
 # 2023/08/14 - 1.119 - add routeto option for Schedules Direct debugging
 # 2023/08/12 - 1.118 - limit potential messages for retry cases
@@ -212,7 +220,7 @@ use sort 'stable';
 my $RFC2838_COMPLIANT          = 1;            # RFC2838 compliant station ids, which makes XMLTV
                                                # validate even though the docs say "SHOULD" not "MUST"
 
-my $SCRIPT_VERSION             = '$Id: tv_grab_zz_sdjson_sqlite,v 1.120 2023/08/18 02:40:00 gtb Exp ed $';
+my $SCRIPT_VERSION             = '$Id: tv_grab_zz_sdjson_sqlite,v 1.128 2023/09/10 04:10:00 gtb Exp ed $';
 my $SCRIPT_URL                 = 'https://github.com/garybuhrmaster/tv_grab_zz_sdjson_sqlite';
 my $SCRIPT_NAME                = basename("$0");
 my $SCRIPT_NAME_DIR            = dirname("$0");
@@ -442,28 +450,16 @@ my $expiryDateTime = DateTime::Format::ISO8601->parse_datetime($expiry);
 
 print (STDERR "   Schedules Direct account expires on " . $expiryDateTime . "\n") if (!$quiet);
 
-SD_cleanLineups();
-
 #
 # Start the download process
 #
 print (STDERR "Downloading data from Schedules Direct\n") if (!$quiet);
 
 #
-# We can avoid downloading lineup and map information
-# if we have updated our maps more recently than the
-# account lineup information indicates
+# Always make sure we have a current lineup list
 #
-my $fetchLineupRequired = SD_isLineupFetchRequired($conf->{'lineup'});
-if ($fetchLineupRequired)
-  {
-    print (STDERR "   downloading account lineups from Schedules Direct\n") if (!$quiet);
-    SD_downloadLineups();
-  }
-else
-  {
-    print (STDERR "   not downloading lineups from Schedules Direct (data current)\n") if (!$quiet);
-  }
+print (STDERR "   downloading account lineups from Schedules Direct\n") if (!$quiet);
+SD_downloadLineups();
 
 #
 # Validate that the configured lineup exists in our database
@@ -590,6 +586,19 @@ for (my $retry = 0; $retry < 4; $retry++)
                 $downloadRetry++;
                 next;
               }
+            my $code = $e->{'code'} || 0;
+            if ($code != 0)
+              {
+                if ($code == 7100) # request queued
+                  {
+                    if ($downloadRetry < 10)
+                      {
+                        print (STDERR "Request for schedule queued when obtaining station schedules hashes: (will retry)\n") if (!$quiet);
+                      }
+                    $downloadRetry++;
+                  }
+                next;
+              }
             if ((!defined($e->{'stationID'})) ||
                 (!defined($e->{'date'})) ||
                 ((substr($e->{'date'}, 0, 10)) !~ /^\d{4}-\d{2}-\d{2}$/) ||
@@ -605,7 +614,7 @@ for (my $retry = 0; $retry < 4; $retry++)
             my $station = $e->{'stationID'};
             my $date = substr($e->{'date'}, 0, 10);
             my $hash = $e->{'MD5'};
-            my $details = $JSON->utf8->encode($e);
+            my $details = $JSON->encode($e);
             $sth->bind_param( 1, $station, SQL_VARCHAR );
             $sth->bind_param( 2, $date, SQL_DATE );
             $sth->bind_param( 3, $hash, SQL_VARCHAR );
@@ -858,7 +867,7 @@ for (my $retry = 0; $retry < 4; $retry++)
                 my $airDateTime = $program->{'airDateTime'};
                 my $duration = $program->{'duration'};
                 my $phash = $program->{'md5'};
-                my $details = $JSON->utf8->encode($program);
+                my $details = $JSON->encode($program);
                 if ((!defined($duration)) || (!defined($phash)) || (!defined($pID)) || (!defined($airDateTime)))
                   {
                     print (STDERR "Unexpected parsing error in program (data malformed) in schedule for $sID on " . $sched->{'date'} . ", skipping\n") if (!$quiet);
@@ -1057,7 +1066,7 @@ for (my $retry = 0; $retry < 4; $retry++)
                   }
                 next;
               }
-            my $details = $JSON->utf8->encode($program);
+            my $details = $JSON->encode($program);
             my $supplemental;
             if (substr($pID, 0, 2) eq 'EP')
               {
@@ -1233,7 +1242,7 @@ for (my $retry = 0; $retry < 4; $retry++)
                   }
                 next;
               }
-            my $details = $JSON->utf8->encode($program);
+            my $details = $JSON->encode($program);
             my $supplemental;
             if (substr($pID, 0, 2) eq 'EP')
               {
@@ -1294,6 +1303,7 @@ my $castMap =
     'Voice'                                => { 'role' => 'actor' },
     'Guest Star'                           => { 'role' => 'actor', 'guest' => 1 },
     'Guest Voice'                          => { 'role' => 'actor', 'guest' => 1 },
+    'Athlete'                              => { 'role' => 'guest' },
     'Correspondent'                        => { 'role' => 'guest' },
     'Contestant'                           => { 'role' => 'guest' },
     'Guest'                                => { 'role' => 'guest' },
@@ -1318,6 +1328,7 @@ my $crewMap =
     'Film Consultant'                      => { 'role' => 'writer' },
     'Screen Story'                         => { 'role' => 'writer' },
     'Screenwriter'                         => { 'role' => 'writer' },
+    'Script'                               => { 'role' => 'writer' },
     'Script Editor'                        => { 'role' => 'writer' },
     'Story Supervisor'                     => { 'role' => 'writer' },
     'Story'                                => { 'role' => 'writer' },
@@ -1388,6 +1399,7 @@ my $crewMap =
     'Trainee Assistant Director'           => { 'role' => 'director' },
     'Unit Director'                        => { 'role' => 'director' },
     'Voice Director'                       => { 'role' => 'director' },
+    'Wardrobe Director'                    => { 'role' => 'director' },
     'Additional Editor'                    => { 'role' => 'editor' },
     'Assistant Dialogue Editor'            => { 'role' => 'editor' },
     'Assistant Editor'                     => { 'role' => 'editor' },
@@ -1398,6 +1410,7 @@ my $crewMap =
     'Dialogue Editor'                      => { 'role' => 'editor' },
     'Editing'                              => { 'role' => 'editor' },
     'Editor'                               => { 'role' => 'editor' },
+    'Film Editing'                         => { 'role' => 'editor' },
     'Film Editor'                          => { 'role' => 'editor' },
     'Foley Editor'                         => { 'role' => 'editor' },
     'Music Editor'                         => { 'role' => 'editor' },
@@ -1433,8 +1446,10 @@ my $crewMap =
     'Visual Effects Producer'              => { 'role' => 'producer' },
     'Additional Music'                     => { 'role' => 'composer' },
     'Composer'                             => { 'role' => 'composer' },
+    'Lyricist'                             => { 'role' => 'composer' },
     'Lyrics'                               => { 'role' => 'composer' },
     'Music'                                => { 'role' => 'composer' },
+    'Music Arranger'                       => { 'role' => 'composer' },
     'Music Score'                          => { 'role' => 'composer' },
     'Music Supervisor'                     => { 'role' => 'composer' },
     'Music Theme'                          => { 'role' => 'composer' },
@@ -1469,16 +1484,20 @@ my $crewMap =
     'Chief Hair Stylist'                   => { 'role' => 'undefined' },
     'Chief Makeup Artist'                  => { 'role' => 'undefined' },
     'Choreographer'                        => { 'role' => 'undefined' },
+    'Cinematography'                       => { 'role' => 'undefined' },
     'Conductor'                            => { 'role' => 'undefined' },
     'Construction Coordinator'             => { 'role' => 'undefined' },
     'Co-Production Designer'               => { 'role' => 'undefined' },
+    'Costume Design'                       => { 'role' => 'undefined' },
     'Costume Designer'                     => { 'role' => 'undefined' },
     'Costume Supervisor'                   => { 'role' => 'undefined' },
     'Creative Consultant'                  => { 'role' => 'undefined' },
     'Design'                               => { 'role' => 'undefined' },
     'Dialogue'                             => { 'role' => 'undefined' },
+    'Executive Assistant'                  => { 'role' => 'undefined' },
     'Foley Artist'                         => { 'role' => 'undefined' },
     'Graphic Artist'                       => { 'role' => 'undefined' },
+    'Graphic Design'                       => { 'role' => 'undefined' },
     'Graphic Designer'                     => { 'role' => 'undefined' },
     'Graphics'                             => { 'role' => 'undefined' },
     'Hair Designer'                        => { 'role' => 'undefined' },
@@ -1487,6 +1506,7 @@ my $crewMap =
     'Key Grip'                             => { 'role' => 'undefined' },
     'Key Hair Stylist'                     => { 'role' => 'undefined' },
     'Key Makeup Artist'                    => { 'role' => 'undefined' },
+    'Lighting'                             => { 'role' => 'undefined' },
     'Location Manager'                     => { 'role' => 'undefined' },
     'Makeup'                               => { 'role' => 'undefined' },
     'Makeup Artist'                        => { 'role' => 'undefined' },
@@ -1496,11 +1516,13 @@ my $crewMap =
     'Makeup Supervisor'                    => { 'role' => 'undefined' },
     'Martial Arts Advisor'                 => { 'role' => 'undefined' },
     'Martial Arts Choreographer'           => { 'role' => 'undefined' },
+    'Mixing'                               => { 'role' => 'undefined' },
     'Music Mixer'                          => { 'role' => 'undefined' },
     'Music Recordist'                      => { 'role' => 'undefined' },
     'Original Concept'                     => { 'role' => 'undefined' },
     'Photographer'                         => { 'role' => 'undefined' },
     'Post-Production'                      => { 'role' => 'undefined' },
+    'Post-Production Manager'              => { 'role' => 'undefined' },
     'Post-Production Supervisor'           => { 'role' => 'undefined' },
     'Production Assistant'                 => { 'role' => 'undefined' },
     'Production Coordinator'               => { 'role' => 'undefined' },
@@ -1512,6 +1534,7 @@ my $crewMap =
     'Production Sound Mixer'               => { 'role' => 'undefined' },
     'Production Supervisor'                => { 'role' => 'undefined' },
     'Property Master'                      => { 'role' => 'undefined' },
+    'Recording Engineer'                   => { 'role' => 'undefined' },
     'Recording Supervisor'                 => { 'role' => 'undefined' },
     'Researcher'                           => { 'role' => 'undefined' },
     'Scene Designer'                       => { 'role' => 'undefined' },
@@ -1525,6 +1548,7 @@ my $crewMap =
     'Set Dresser'                          => { 'role' => 'undefined' },
     'Singer'                               => { 'role' => 'undefined' },
     'Sound'                                => { 'role' => 'undefined' },
+    'Sound Assistant'                      => { 'role' => 'undefined' },
     'Sound Consultant'                     => { 'role' => 'undefined' },
     'Sound Designer'                       => { 'role' => 'undefined' },
     'Sound Effects'                        => { 'role' => 'undefined' },
@@ -1540,7 +1564,9 @@ my $crewMap =
     'Special Makeup Effects Artist'        => { 'role' => 'undefined' },
     'Special Makeup Effects'               => { 'role' => 'undefined' },
     'Special Photographic Effects'         => { 'role' => 'undefined' },
+    'Storyboard'                           => { 'role' => 'undefined' },
     'Storyboard Artist'                    => { 'role' => 'undefined' },
+    'Storyboard Supervisor'                => { 'role' => 'undefined' },
     'Stunt Choreographer'                  => { 'role' => 'undefined' },
     'Stunt Coordinator'                    => { 'role' => 'undefined' },
     'Stunt Supervisor'                     => { 'role' => 'undefined' },
@@ -1641,22 +1667,10 @@ $w->startTag('tv',
       # my $startTime = DateTime::Format::SQLite->parse_datetime($r->[1]);
       # my $endTime = $startTime->clone()->add(seconds => $r->[2]);
       my $pID = $r->[3];
-      my $scheduleDetails = $JSON->decode($r->[4]);
-      my $programDetails;
-      if (defined($r->[5]))
-        {
-          $programDetails = $JSON->decode($r->[5]);
-        }
-      my $stationDetails;
-      if (defined($r->[8]))
-        {
-          $stationDetails = $JSON->decode($r->[8]);
-        }
-      my $supplementalDetails;
-      if (defined($r->[9]))
-        {
-          $supplementalDetails = $JSON->decode($r->[9]);
-        }
+      my $scheduleDetails = eval { $JSON->decode($r->[4]) } || {};
+      my $programDetails = eval { $JSON->decode($r->[5]) } || {};
+      my $stationDetails = eval { $JSON->decode($r->[8]) } || {};;
+      my $supplementalDetails = eval { $JSON->decode($r->[9]) } || {};;
 
       $w->startTag('programme', 'channel' => generateRFC2838($sID),
                                 'start'   => "$r->[6] +0000",
@@ -2850,19 +2864,15 @@ sub listChannels
         print (STDERR "   Schedules Direct account expires on " . $expiryDateTime . "\n") if (!$quiet);
 
         #
-        # We can avoid downloading lineup and map information
-        # if we have updated our maps more recently than the
-        # account lineup information indicates
+        # Start the download process
         #
-        if (SD_isLineupFetchRequired($conf->{'lineup'}))
-          {
-            print (STDERR "Downloading account lineups from Schedules Direct\n") if (!$quiet);
-            SD_downloadLineups();
-          }
-        else
-          {
-            print (STDERR "Not downloading lineups from Schedules Direct (data current)\n") if (!$quiet);
-          }
+        print (STDERR "Downloading data from Schedules Direct\n") if (!$quiet);
+
+        #
+        # Always make sure we have a current lineup list
+        #
+        print (STDERR "   downloading account lineups from Schedules Direct\n") if (!$quiet);
+        SD_downloadLineups();
 
         #
         # Validate that the configured lineup exists in our database
@@ -2877,12 +2887,12 @@ sub listChannels
           {
             if (SD_isLineupFetchRequired([$lineup]))
               {
-                print (STDERR "Downloading channel and station maps for lineup $lineup \n") if (!$quiet);
+                print (STDERR "   downloading channel and station maps for lineup $lineup \n") if (!$quiet);
                 SD_downloadLineupMaps($lineup);
               }
             else
               {
-                print (STDERR "Not downloading channel and station maps for lineup $lineup (data current)\n") if (!$quiet);
+                print (STDERR "   not downloading channel and station maps for lineup $lineup (data current)\n") if (!$quiet);
               }
           }
       }
@@ -2892,6 +2902,8 @@ sub listChannels
         my $token = DB_settingsGet('token');
         $SD->Token($token) if (defined($token));
       }
+
+    print (STDERR "Processing data and creating XMLTV output\n") if (!$quiet);
 
     my $w = XML::Writer->new( 'ENCODING' => 'UTF-8',
                               'DATA_MODE' => 1,
@@ -2911,7 +2923,7 @@ sub listChannels
     $w->endTag('tv');
     $w->end();
 
-    print (STDERR "$channelsWritten channels processed\n") if (!$quiet);
+    print (STDERR "   $channelsWritten channels processed\n") if (!$quiet);
 
     return(encode('UTF-8', $w->to_string));
   }
@@ -2986,12 +2998,8 @@ sub channelWriter
       {
         my $sID = $r->[0];
         my $channum = $r->[1];
-        my $c = $JSON->decode($r->[2]);
-        my $s = {};
-        if (defined($r->[3]))
-          {
-            $s = $JSON->decode($r->[3]);
-          }
+        my $c = eval { $JSON->decode($r->[2]) } || {};
+        my $s = eval { $JSON->decode($r->[3]) } || {};;
 
         $writer->startTag('channel', 'id' => generateRFC2838($sID) ) ;
 
@@ -3093,14 +3101,14 @@ sub listLineups
         print (STDERR "   Schedules Direct account expires on " . $expiryDateTime . "\n") if (!$quiet);
 
         #
-        # Optimizing lineup download is simply not worth the effort
-        # due to having the check if any lineup has been modified
-        # since the last time the data was downloaded.  And since
-        # list-lineups is expected to be used rarely, we are going
-        # to skip any attempt at optimization
+        # Start the download process
         #
+        print (STDERR "Downloading data from Schedules Direct\n") if (!$quiet);
 
-        print (STDERR "Downloading lineups from Schedules Direct\n") if (!$quiet);
+        #
+        # Always make sure we have a current lineup list
+        #
+        print (STDERR "   downloading account lineups from Schedules Direct\n") if (!$quiet);
         SD_downloadLineups();
       }
     else
@@ -3143,6 +3151,10 @@ sub listLineups
 
     undef $sth;
 
+    print (STDERR "Processing data and creating XMLTV output\n") if (!$quiet);
+
+    my $lineupsWritten = 0;
+
     my $w = XML::Writer->new( 'ENCODING' => 'UTF-8', 'DATA_MODE' => 1, 'DATA_INDENT' => 1, OUTPUT => 'self' );
     $w->xmlDecl('UTF-8');
     $w->comment('Note: list-lineups and get-lineup is still unofficial in XMLTV, and the format and content of this xml is liable to change.');
@@ -3162,10 +3174,13 @@ sub listLineups
             $w->dataElement('type', $type);
             $w->dataElement('display-name', $lineupDesc);
           $w->endTag('xmltv-lineup');
+          $lineupsWritten++;
         }
 
     $w->endTag('xmltv-lineups');
     $w->end();
+
+    print (STDERR "   $lineupsWritten lineups processed\n") if (!$quiet);
 
     return(encode('UTF-8', $w->to_string));
   }
@@ -3226,19 +3241,15 @@ sub getLineup
         print (STDERR "   Schedules Direct account expires on " . $expiryDateTime . "\n") if (!$quiet);
 
         #
-        # We can avoid downloading lineup and map information
-        # if we have updated our maps more recently than the
-        # account lineup information indicates
+        # Start the download process
         #
-        if (SD_isLineupFetchRequired($conf->{'lineup'}))
-          {
-            print (STDERR "Downloading account lineups from Schedules Direct\n") if (!$quiet);
-            SD_downloadLineups();
-          }
-        else
-          {
-            print (STDERR "Not downloading lineups from Schedules Direct (data current)\n") if (!$quiet);
-          }
+        print (STDERR "Downloading data from Schedules Direct\n") if (!$quiet);
+
+        #
+        # Always make sure we have a current lineup list
+        #
+        print (STDERR "   downloading account lineups from Schedules Direct\n") if (!$quiet);
+        SD_downloadLineups();
 
         #
         # Validate that the configured lineup exists in our database
@@ -3253,12 +3264,12 @@ sub getLineup
           {
             if (SD_isLineupFetchRequired([$lineup]))
               {
-                print (STDERR "Downloading channel and station maps for lineup $lineup \n") if (!$quiet);
+                print (STDERR "   downloading channel and station maps for lineup $lineup \n") if (!$quiet);
                 SD_downloadLineupMaps($lineup);
               }
             else
               {
-                print (STDERR "Not downloading channel and station maps for lineup $lineup (data current)\n") if (!$quiet);
+                print (STDERR "   not downloading channel and station maps for lineup $lineup (data current)\n") if (!$quiet);
               }
           }
       }
@@ -3314,6 +3325,10 @@ sub getLineup
     $DBH->commit();
 
     undef $sth;
+
+    print (STDERR "Processing data and creating XMLTV output\n") if (!$quiet);
+
+    my $channelsWritten = 0;
 
     my $w = XML::Writer->new( 'ENCODING' => 'UTF-8', 'DATA_MODE' => 1, 'DATA_INDENT' => 1, OUTPUT => 'self' );
     $w->xmlDecl('UTF-8');
@@ -3380,8 +3395,8 @@ sub getLineup
               {
                 my $sID = $r->[0];
                 my $channum = $r->[1];
-                my $c = $JSON->decode($r->[2]);
-                my $s = $JSON->decode($r->[3]);
+                my $c = eval { $JSON->decode($r->[2]) } || {};
+                my $s = eval { $JSON->decode($r->[3]) } || {};
                 my $SDtype = $r->[4] || 'Unknown';
                 my $type = mapTransport($r->[4]);
 
@@ -3547,6 +3562,8 @@ sub getLineup
                       $w->endTag('dvb-channel');
                     }
 
+                  $channelsWritten++;
+
                 $w->endTag('lineup-entry');
               }
 
@@ -3560,6 +3577,8 @@ sub getLineup
     $w->endTag('xmltv-lineups');
 
     $w->end();
+
+    print (STDERR "   $channelsWritten channels processed\n") if (!$quiet);
 
     return(encode('UTF-8', $w->to_string));
   }
@@ -3760,74 +3779,6 @@ sub SD_isLineupFetchRequired
   }
 
 #
-# SD_cleanLineups
-#
-# Convenience routine to clean the database of
-# lineups not in the account.  Errors are fatal.
-#
-#   Input:
-#              <none>
-#   Output:
-#              <none>
-#
-sub SD_cleanLineups
-  {
-    my $sql;
-    my $sth;
-    my $param;
-    my $lineups;
-    my @accountLineups = ();
-
-    #
-    # Delete any lineups not in our account
-    #
-    $lineups = $SD->obtainLineups();
-
-    if (!defined($lineups))
-      {
-        print (STDERR "Unable to obtain Schedules Direct account lineups: " . $SD->ErrorString() . "\n");
-        exit(1);
-      }
-
-    for my $lu(@{$lineups})
-      {
-        next if (ref($lu) ne 'HASH');
-        if (defined($lu->{'lineupID'}))
-          {
-            push(@accountLineups, $lu->{'lineupID'});
-          }
-      }
-
-    $sql = 'delete from lineups where lineup not in ( ' . join(', ', ('?') x scalar(@accountLineups)) . ' )';
-
-    $sth = $DBH->prepare_cached($sql);
-    if (!defined($sth))
-      {
-        print (STDERR "Unexpected error when preparing statement ($sql): " . $DBH->errstr . "\n");
-        exit(1);
-      }
-
-    $param = 1;
-    for (my $i=0; $i < scalar(@accountLineups); $i++)
-      {
-        $sth->bind_param( $param, $accountLineups[$i], SQL_VARCHAR);
-        $param++;
-      }
-
-    $sth->execute();
-    if ($sth->err)
-      {
-        print (STDERR "Unexpected error when executing statement ($sql): " . $sth->errstr . "\n");
-        $DBH->rollback();
-        exit(1);
-      }
-
-    $DBH->commit();
-
-    return;
-  }
-
-#
 # SD_downloadLineups
 #
 # Convenience routine to download lineups and
@@ -3844,14 +3795,17 @@ sub SD_downloadLineups
     my $sth;
     my $sql1;
     my $sth1;
+    my $sql2;
+    my $sth2;
     my $lu;
     my $lineups;
-
-    SD_cleanLineups();
+    my $param;
+    my @accountLineups = ();
 
     #
     # Obtain our lineups
     #
+
     $lineups = $SD->obtainLineups();
     if (!defined($lineups))
       {
@@ -3884,10 +3838,11 @@ sub SD_downloadLineups
       {
         next if ((ref($l) ne 'HASH') || (!defined($l->{'lineupID'})));
         my $id = $l->{'lineupID'};
+        push(@accountLineups, $id);
         my $name = $l->{'name'} || '';
         my $transport = $l->{'transport'} || '';
         my $location = $l->{'location'} || '';
-        my $details = $JSON->utf8->canonical->encode($l);
+        my $details = $JSON->canonical->encode($l);
         $sth->bind_param( 1, $id, SQL_VARCHAR );
         $sth->bind_param( 2, $name, SQL_VARCHAR );
         $sth->bind_param( 3, $location, SQL_VARCHAR );
@@ -3912,6 +3867,34 @@ sub SD_downloadLineups
             $DBH->rollback();
             exit(1);
           }
+      }
+
+    #
+    # Remove any lineups from our database not in our schedules direct account
+    #
+
+    $sql2 = 'delete from lineups where lineup not in ( ' . join(', ', ('?') x scalar(@accountLineups)) . ' )';
+
+    $sth2 = $DBH->prepare_cached($sql2);
+    if (!defined($sth2))
+      {
+        print (STDERR "Unexpected error when preparing statement ($sql2): " . $DBH->errstr . "\n");
+        exit(1);
+      }
+
+    $param = 1;
+    for (my $i=0; $i < scalar(@accountLineups); $i++)
+      {
+        $sth2->bind_param( $param, $accountLineups[$i], SQL_VARCHAR);
+        $param++;
+      }
+
+    $sth2->execute();
+    if ($sth2->err)
+      {
+        print (STDERR "Unexpected error when executing statement ($sql2): " . $sth2->errstr . "\n");
+        $DBH->rollback();
+        exit(1);
       }
 
     $DBH->commit();
@@ -4061,7 +4044,7 @@ sub SD_downloadLineupMaps
       {
         my $station = $c->{'stationID'};
         $station = '' if (!defined($station));
-        my $details = $JSON->utf8->canonical->encode($c);
+        my $details = $JSON->canonical->encode($c);
         my $channum = '';
         if (($lineupTransport eq 'Cable') ||
             ($lineupTransport eq 'Satellite') ||
@@ -4144,7 +4127,7 @@ sub SD_downloadLineupMaps
       {
         my $station = $s->{'stationID'};
         next if (!defined($station));
-        my $details = $JSON->utf8->canonical->encode($s);
+        my $details = $JSON->canonical->encode($s);
 
         $sth->bind_param( 1, $station, SQL_VARCHAR );
         $sth->bind_param( 2, $details, SQL_VARCHAR );
@@ -4253,7 +4236,7 @@ sub lineupValidate
           }
         else
           {
-            my $lineupDeleted = $JSON->utf8->decode($llu->[4])->{'isDeleted'};
+            my $lineupDeleted = eval { $JSON->decode($llu->[4])->{'isDeleted'} } || 0;
 
             if (defined($lineupDeleted) && $lineupDeleted)
               {
@@ -5555,9 +5538,16 @@ sub manageLineups
           }
         elsif ($choice eq 'Delete Password Hash')
           {
-            DB_settingsDelete('passwordhash');
-            DB_settingsDelete('token');
-            $prompt .= "Password hash deleted from the database\n";
+            if (!defined($DBH))
+              {
+                $prompt .= "No database available, unable to delete any stored password hash\n";
+              }
+            else
+              {
+                DB_settingsDelete('passwordhash');
+                DB_settingsDelete('token');
+                $prompt .= "Password hash deleted from the database\n";
+              }
           }
         elsif ($choice eq 'Initialize Database')
           {
@@ -5802,10 +5792,8 @@ sub manageLineups
                         my $selected = $channelSelect->[3];
                         my $cdetails = $channelSelect->[4];
                         my $sdetails = $channelSelect->[5];
-                        my $c = {};
-                        $c = $JSON->decode($cdetails) if (defined($cdetails) && ($cdetails ne ''));
-                        my $s = {};
-                        $s = $JSON->decode($sdetails) if (defined($sdetails) && ($sdetails ne ''));
+                        my $c = eval { $JSON->decode($cdetails) } || {};
+                        my $s = eval { $JSON->decode($sdetails) } || {};
                         my $name;
                         $name = $s->{'name'} if (defined($s->{'name'}));
                         my $callsign;
