@@ -34,7 +34,8 @@ package XMLTV::Get_nice;
 # 0.005067 : new method post_nice_json()
 # 0.005070 : skip get_nice sleep for cached pages
 # 0.005070 : support passing HTML::TreeBuilder options via a hashref
-our $VERSION = 0.005070;
+# 0.005071 : accept optional HTTP request headers in post_nice_json
+our $VERSION = 0.005071;
 
 use base 'Exporter';
 our @EXPORT = qw(get_nice get_nice_tree get_nice_xml get_nice_json post_nice_json error_msg);
@@ -191,10 +192,11 @@ sub get_nice_aux( $ ) {
 # Arguments:
 #    URI to post to
 #    JSON object with the AJAX data to be posted e.g. "{ 'programId':'123456', 'channel':'BBC'}"
+# Optional arguments:
+# i) hash with additional HTTP request headers to be posted
 #
-sub post_nice_json( $$ ) {
-    my $url = shift;
-    my $json = shift;
+sub post_nice_json ( $$;% ) {
+    my ($url, $json, %additional_headers) = @_;
 
     require JSON;
 
@@ -207,7 +209,12 @@ sub post_nice_json( $$ ) {
         sleep $sleep_time if $sleep_time > 0;
     }
 
-    my $r = $ua->post($url, 'Content_Type' => 'application/json; charset=utf-8', 'Content' => $json);
+    my %default_headers = (
+      'Content_Type' => 'application/json; charset=utf-8',
+    );
+    my %headers = (%default_headers, %additional_headers);
+
+    my $r = $ua->post($url, %headers, 'Content' => $json);
 
     $last_get_time = time();
 
