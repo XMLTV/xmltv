@@ -12,7 +12,7 @@ use strict;
 use warnings;
 use base qw(Exporter);
 
-our @EXPORT      = qw(message debug fetchRaw fetchTree
+our @EXPORT      = qw(message debug fetchRaw fetchTree fetchJSON
 		      cloneUserAgentHeaders restoreUserAgentHeaders
 		      timeToEpoch fullTimeToEpoch);
 our @EXPORT_OK   = qw(setQuiet setDebug setTimeZone);
@@ -27,6 +27,7 @@ use Time::Local qw(timelocal);
 
 # Other modules
 use HTML::TreeBuilder;
+use JSON qw();
 use XMLTV::Get_nice;
 
 #
@@ -137,6 +138,24 @@ sub fetchTree($;$$$) {
   $tree->parse($content) or croak("fetchTree() parse failure for '$url'");
   $tree->eof;
   return($tree);
+}
+
+# Fetch URL as parsed JSON object and return contents of the given key
+sub fetchJSON($$) {
+  my($url, $key) = @_;
+
+  # Fetch raw JSON text
+  my $text = fetchRaw($url);
+  if ($text) {
+    my $decoded = JSON->new->decode($text);
+
+    if (ref($decoded) eq "HASH") {
+      # debug(5, JSON->new->pretty->encode($decoded));
+      return $decoded->{$key};
+    }
+  }
+
+  croak("fetchJSON() couldn't fetch from '$url'");
 }
 
 # get_nice() user agent default headers handling

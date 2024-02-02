@@ -9,8 +9,8 @@ files=(
     fi/day.pm
     fi/programme.pm
     fi/programmeStartOnly.pm
-    fi/source/foxtv.pm
     fi/source/iltapulu.pm
+    fi/source/star.pm
     fi/source/telkku.pm
     fi/source/yle.pm
 )

@@ -11,7 +11,6 @@ package fi::source::telkku;
 use strict;
 use warnings;
 use Date::Manip qw(UnixDate);
-use JSON qw();
 
 BEGIN {
   our $ENABLED = 1;
@@ -37,18 +36,8 @@ our %categories = (
 sub _getJSON($) {
   my($api_path) = @_;
 
-  # Fetch raw JSON text directly from API endpoint
-  my $text = fetchRaw("https://www.telkku.com/api/channel-groups/$api_path");
-  if ($text) {
-    my $decoded = JSON->new->decode($text);
-
-    if (ref($decoded) eq "HASH") {
-      # debug(5, JSON->new->pretty->encode($decoded));
-      return $decoded->{response};
-    }
-  }
-
-  return;
+  # Fetch JSON object from API endpoint and return contents of "response" property
+  return fetchJSON("https://www.telkku.com/api/channel-groups/$api_path", "response");
 }
 
 # cache for group name to API ID mapping

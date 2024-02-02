@@ -10,7 +10,9 @@
 package fi::source::yle;
 use strict;
 use warnings;
-use Date::Manip;
+use Carp;
+use Date::Manip qw(UnixDate);
+use JSON qw();
 
 BEGIN {
   our $ENABLED = 1;
@@ -26,6 +28,19 @@ our %languages = (
     "fi" => [ "areena", "opas"  ],
     "sv" => [ "arenan", "guide" ],
 );
+
+sub _getJSON($$$) {
+  my($slug, $language, $date) = @_;
+
+  # Options "app_id" & "app_key" are mandatory
+  my $app_id  = fi::programme::getOption(description(), "app_id");
+  my $app_key = fi::programme::getOption(description(), "app_key");
+  croak("You must set yle.fi options 'app_id' & 'app_key' in the configuration")
+    unless $app_id && $app_key;
+
+  # Fetch JSON object from API endpoint and return contents of "data" property
+  return fetchJSON("https://areena.api.yle.fi/v1/ui/schedules/${slug}/${date}.json?v=10&language=${language}&app_id=${app_id}&app_key=${app_key}", "data");
+}
 
 sub _set_ua_headers() {
   my($headers, $clone) = cloneUserAgentHeaders();
@@ -53,31 +68,40 @@ sub channels {
     if ($root) {
 
       #
-      # Channel list can be found from this list:
+      # Channel list can be found from Next.js JSON data
       #
-      #   <ul class="guide-channels">
-      #    <li class="guide-channels__channel">
-      #	    <h2 class="channel-header">
-      #      <a>...<div class="channel-header__logo " ... aria-label="Yle TV1"></div></a>
-      #	    </h2>
-      #     ...
-      #    </li>
-      #	   ...
-      #   </ul>
-      #
-      if (my @divs = $root->look_down("_tag"       => "div",
-                                      "aria-label" => qr/^.+$/)) {
-	debug(2, "Source ${code}.yle.fi found " . scalar(@divs) . " channels");
-	foreach my $div (@divs) {
-	  my $name = $div->attr("aria-label");
+      if (my $script = $root->look_down("_tag" => "script",
+					"id"   => "__NEXT_DATA__",
+					"type" => "application/json")) {
+	my($json)   = $script->content_list();
+	my $decoded = JSON->new->decode($json);
 
-	  if (defined($name) && length($name)) {
-	    # replace space with hyphen
-	    my $id;
-	    ($id = $name) =~ s/ /-/g;
+	if ((ref($decoded)                                       eq "HASH")  &&
+	    (ref($decoded->{props})                              eq "HASH")  &&
+	    (ref($decoded->{props}->{pageProps})                 eq "HASH")  &&
+	    (ref($decoded->{props}->{pageProps}->{view})         eq "HASH")  &&
+	    (ref($decoded->{props}->{pageProps}->{view}->{tabs}) eq "ARRAY")) {
 
-	    debug(3, "channel '$name' ($id)");
-	    $channels{"${id}.${code}.yle.fi"} = "$code $name";
+	  foreach my $tab (@{ $decoded->{props}->{pageProps}->{view}->{tabs} }) {
+	    if ((ref($tab)            eq "HASH")  &&
+		(ref($tab->{content}) eq "ARRAY")) {
+	      my($content) = @{ $tab->{content} };
+
+	      if ((ref($content)           eq "HASH")  &&
+		  (ref($content->{source}) eq "HASH")) {
+		my $name = $tab->{title};
+		my $uri  = $content->{source}->{uri};
+
+		if ($name && length($name) && $uri) {
+		  my($slug) = $uri =~ m,/ui/schedules/([^/]+)/[\d-]+\.json,;
+
+		  if ($slug) {
+		    debug(3, "channel '$name' ($slug)");
+		    $channels{"${slug}.${code}.yle.fi"} = "$code $name";
+		  }
+		}
+	      }
+	    }
 	  }
 	}
       }
@@ -102,99 +126,84 @@ sub grab {
 
   # Get channel number from XMLTV id
   return unless my($channel, $code) = ($id =~ /^([^.]+)\.([^.]+)\.yle\.fi$/);
-  $channel =~ s/-/ /g;
-
-  # set up user agent default headers
-  my $headers = _set_ua_headers();
 
   # Fetch & parse HTML (do not ignore HTML5 <time>)
-  my $root = fetchTree("https://$languages{$code}[0].yle.fi/tv/$languages{$code}[1]?t=" . $today->ymdd(),
-		       undef, undef, 1);
-  if ($root) {
+  my $data = _getJSON($channel, $code, $today->ymdd());
+
+  #
+  # Programme data has the following structure
+  #
+  #  [
+  #    {
+  #      type         => "card",
+  #      presentation => "scheduleCard",
+  #      labels       => [
+  #        {
+  #          type => "broadcastStartDate",
+  #          raw  => "2023-07-09T07:00:00+03:00",
+  #          ...
+  #        },
+  #        {
+  #          type => "broadcastEndDate",
+  #          raw  => "2023-07-09T07:55:26+03:00",
+  #          ...
+  #        },
+  #        ...
+  #      ],
+  #      title        => "Suuri keramiikkakisa",
+  #      description  => "Kausi 4, 2/10. Tiiliä ja laastia. ...",
+  #      ...
+  #    },
+  #    ...
+  #  ],
+  #
+  if ((ref($data) eq "ARRAY")) {
     my @objects;
 
-    #
-    # Each programme can be found in a separate <li> node
-    #
-    #   <ul class="guide-channels">
-    #    <li class="guide-channels__channel">
-    #	  <h2 class="channel-header">
-    #      <a>...<div class="channel-header__logo " ... aria-label="Yle TV1"></div></a>
-    #	  </h2>
-    #     <ul class="schedule-list">
-    #      <li class="schedule-card ..." ... itemtype="http://schema.org/Movie">
-    #       ...
-    #       <time datetime="2017-07-11T06:25:00+03:00" itemprop="startDate">06.25</time>
-    #       <time datetime="2017-07-11T06:55:00+03:00" itemprop="endDate"></time>
-    #       ...
-    #       <span itemprop="name">Mikä meitä lihottaa?</span>
-    #       ...
-    #       <span itemprop="description">1/8. Lihavuusepidemia. ...</span>
-    #       ...
-    #      </li>
-    #      ...
-    #     </ul>
-    #    </li>
-    #	 ...
-    #   </ul>
-    #
-    if (my $div = $root->look_down("_tag"       => "div",
-                                   "aria-label" => qr/^${channel}$/)) {
-      if (my $parent = $div->look_up("class" => qr/guide-channels__channel/)) {
-	if (my @programmes = $parent->look_down("class" => qr/^schedule-card\s+/)) {
-	  foreach my $programme (@programmes) {
-	    my $start = $programme->look_down("itemprop", "startDate");
-	    my $end   = $programme->look_down("itemprop", "endDate");
-	    my $title = $programme->look_down("itemprop", "name");
-	    my $desc  = $programme->look_down("itemprop", "description");
+    foreach my $item (@{ $data }) {
+      if ((ref($item)                 eq "HASH")  &&
+	  ($item->{type}              eq "card")  &&
+	  (ref($item->{labels})       eq "ARRAY")) {
+	my($title, $desc) = @{$item}{qw(title description)};
+	my($category, $start, $end);
 
-	    if ($start && $end && $title && $desc) {
-	      $start = UnixDate($start->attr("datetime"), "%s");
-	      $end   = UnixDate($end->attr("datetime"),   "%s");
+	foreach my $label (@{ $item->{labels} }) {
+	  if (ref($label) eq "HASH") {
+	    my($type, $raw) = @{$label}{qw(type raw)};
 
-	      my $category = $programme->attr("itemtype") =~ /Movie/ ? "elokuvat" : undef;
-
-	      # NOTE: entries with same start and end time are invalid
-	      if ($start && $end && ($start != $end)) {
-
-		$title = $title->as_text();
-		$title =~ s/^\s+//;
-		$title =~ s/\s+$//;
-
-		if (length($title)) {
-
-		  $desc = $desc->as_text();
-		  $desc =~ s/^\s+//;
-		  $desc =~ s/\s+$//;
-
-		  debug(3, "List entry $channel ($start -> $end) $title");
-		  debug(4, $desc);
-		  debug(4, $category) if defined $category;
-
-		  # Create program object
-		  my $object = fi::programme->new($id, $code, $title, $start, $end);
-		  $object->category($category);
-		  $object->description($desc);
-		  push(@objects, $object);
-		}
+	    if ($type && $raw) {
+	      if (     $type eq "broadcastStartDate") {
+		$start    = UnixDate($raw, "%s");
+	      } elsif ($type eq "broadcastEndDate") {
+		$end      = UnixDate($raw, "%s");
+	      } elsif ($type eq "highlight") {
+		$category = "elokuvat" if $raw eq "movie";
 	      }
 	    }
 	  }
 	}
+
+	# NOTE: entries with same start and end time are invalid
+	if ($start && $end && ($start != $end) && $title && $desc) {
+	  debug(3, "List entry $channel ($start -> $end) $title");
+	  debug(4, $desc);
+	  debug(4, $category) if defined $category;
+
+	  # Create program object
+	  my $object = fi::programme->new($id, $code, $title, $start, $end);
+	  $object->category($category);
+	  $object->description($desc);
+	  push(@objects, $object);
+	}
       }
     }
-
-    # Done with the HTML tree
-    $root->delete();
 
     # Fix overlapping programmes
     fi::programme->fixOverlaps(\@objects);
 
-    restoreUserAgentHeaders($headers);
     return(\@objects);
   }
 
-  restoreUserAgentHeaders($headers);
   return;
 }
 

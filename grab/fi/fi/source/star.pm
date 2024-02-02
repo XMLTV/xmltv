@@ -1,16 +1,19 @@
 # -*- mode: perl; coding: utf-8 -*- ###########################################
 #
-# tv_grab_fi: source specific grabber code for https://www.foxtv.fi
+# tv_grab_fi: source specific grabber code for https://www.starchannel.fi
 #
 ###############################################################################
 #
 # Setup
 #
 # INSERT FROM HERE ############################################################
-package fi::source::foxtv;
+package fi::source::star;
 use strict;
 use warnings;
 
+#
+# NOTE: this data source was earlier known as https://www.foxtv.fi
+#
 BEGIN {
   our $ENABLED = 1;
 }
@@ -23,21 +26,21 @@ fi::programmeStartOnly->import();
 our $cleanup_match = qr!\s*(?:(?:\d+\.\s+)?(?:Kausi|Jakso|Osa)\.?(?:\s+(:?\d+/)?\d+\.\s+)?){1,2}!i;
 
 # Description
-sub description { 'foxtv.fi' }
+sub description { 'star.fi' }
 
 # Grab channel list - only one channel available, no need to fetch anything...
-sub channels { { 'foxtv.fi' => 'fi FOX' } }
+sub channels { { 'star.fi' => 'fi STAR Channel' } }
 
 # Grab one day
 sub grab {
   my($self, $id, $yesterday, $today, $tomorrow, $offset) = @_;
 
   # Get channel number from XMLTV id
-  return unless ($id eq "foxtv.fi");
+  return unless ($id eq "star.fi");
 
   # Fetch & parse HTML (do not ignore HTML5 <section>)
   # Anything beyond 14 days results in 404 error -> ignore errors
-  my $root = fetchTree("https://www.foxtv.fi/ohjelmaopas/fox/$today",
+  my $root = fetchTree("https://www.starchannel.fi/ohjelmaopas/star/$today",
 		       undef, 1, 1);
   if ($root) {
 
