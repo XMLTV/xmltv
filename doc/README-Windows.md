@@ -1,4 +1,4 @@
-# XMLTV 1.2.1 Windows Release
+# XMLTV 1.2.2 Windows Release
 
 ## Table of Contents
 
