@@ -1,0 +1,906 @@
+#!/usr/bin/perl
+
+=pod
+
+=head1 NAME
+
+tv_grab_uk_freeview - Grab TV listings for UK (Freeview).
+
+=head1 SYNOPSIS
+
+tv_grab_uk_freeview --help
+
+tv_grab_uk_freeview [--config-file FILE] --configure [--gui OPTION]
+
+tv_grab_uk_freeview [--config-file FILE] [--output FILE] [--days N]
+                    [--offset N] [--fast] [--quiet] [--debug]
+
+tv_grab_uk_freeview --list-channels [--config-file FILE]
+                    [--output FILE] [--quiet] [--debug]
+
+=head1 DESCRIPTION
+
+Output TV listings for channels available on Freeview (UK).
+
+First run B<tv_grab_uk_freeview --configure> to choose, which channels you want
+to download. Then running B<tv_grab_uk_freeview> with no arguments will output
+listings in XML format to standard output.
+
+Channel ids will be output either as the Freeview channel number (e.g. 101
+for BBC One HD) or as the internal channel id (e.g. 17536 for BBC One HD).
+You can set this option during --configure.
+
+B<--configure> Prompt for which channels, and write the configuration file.
+
+B<--gui OPTION> Use this option to enable a graphical interface to be used.
+OPTION may be 'Tk', or left blank for the best available choice.
+Additional allowed values of OPTION are 'Term' for normal terminal output
+(default) and 'TermNoProgressBar' to disable the use of Term::ProgressBar.
+
+B<--config-file FILE> Set the name of the configuration file, the
+default is B<~/.xmltv/tv_grab_uk_freeview.conf>.  This is the file written by
+B<--configure> and read when grabbing.
+
+B<--days N> Grab N days.  The default is 7 days.
+
+B<--offset N> Start N days in the future.  The default is to start
+from today.
+
+B<--fast> Only fetch summary information for each programme. This is
+only title, start/stop times, episode number.
+
+B<--output FILE> Write to FILE rather than standard output.
+
+B<--quiet> Suppress the progress messages normally written to standard
+error.
+
+B<--debug> Provide more information on progress to standard error to help in
+debugging.
+
+B<--list-channels> Output a list (in xmltv format) of all channels that can be fetched.
+
+B<--version> Show the version of the grabber.
+
+B<--help> Print a help message and exit.
+
+=head1 SEE ALSO
+
+L<xmltv(5)>.
+
+=head1 AUTHOR
+
+Geoff Westcott,
+February 2024
+
+=head1 BUGS
+
+None known.
+
+=cut
+
+######################################################################
+# initializations
+
+use warnings;
+use strict;
+use Getopt::Long;
+#use Date::Manip;
+use DateTime;
+use Data::Dumper;
+use IO::File;
+use File::Path;
+use File::Basename;
+use LWP::UserAgent;
+use Encode;
+use JSON;
+use HTTP::Cache::Transparent;
+
+use XMLTV;
+use XMLTV::Version "$XMLTV::VERSION";
+use XMLTV::ProgressBar;
+use XMLTV::Ask;
+use XMLTV::Config_file;
+use XMLTV::DST;
+use XMLTV::Get_nice 0.005067;
+use XMLTV::Mode;
+use XMLTV::Capabilities qw/baseline manualconfig cache/;
+use XMLTV::Description 'UK Freeview';
+
+use XMLTV::Usage <<END;
+$0: get Freeview (UK) television listings in XMLTV format
+To configure: $0 --configure [--config-file FILE] [--gui OPTION]
+To grab listings: $0 [--config-file FILE] [--output FILE] [--quiet] [--offset OFFSET] [--days DAYS]
+To list channels: $0 --list-channels
+END
+
+
+# Although we use HTTP::Cache::Transparent, this undocumented --cache
+# option for debugging is still useful since it will _always_ use a
+# cached copy of a page, without contacting the server at all.
+use XMLTV::Memoize; XMLTV::Memoize::check_argv('XMLTV::Get_nice::get_nice_json');
+
+
+my $DOMAIN     = 'freeview.co.uk';
+my $SOURCE_URL = "https://www.$DOMAIN";
+
+
+# Attributes of the root element in output.
+my $HEAD = { 'source-info-url'	 => "$SOURCE_URL/",
+			 'source-data-url'	 => "$SOURCE_URL/api/tv-guide",
+			 'generator-info-name' => 'XMLTV',
+			 'generator-info-url'  => 'http://xmltv.org/',
+		   };
+
+# default language
+my $LANG="en";
+
+
+######################################################################
+# get options
+
+our ($opt_help, $opt_output,
+	$opt_configure, $opt_config_file, $opt_gui, $opt_quiet,
+	$opt_list_channels, $opt_offset, $opt_days, $opt_fast,
+	$opt_debug);
+$opt_quiet  = 0; # default
+$opt_days   = 7; # default
+$opt_offset = 0; # default
+$opt_fast   = 0; # default
+$opt_debug  = 0;
+GetOptions('help'			=> \$opt_help,
+		   'configure'		=> \$opt_configure,
+		   'config-file=s'	=> \$opt_config_file,
+		   'gui:s'			=> \$opt_gui,
+		   'output=s'		=> \$opt_output,
+		   'quiet'			=> \$opt_quiet,
+		   'list-channels'	=> \$opt_list_channels,
+		   'offset=i'		=> \$opt_offset,
+		   'days=i'			=> \$opt_days,
+		   'fast'			=> \$opt_fast,
+		   'debug'			=> \$opt_debug,		 # undocumented option
+		  )
+		or usage(0);
+usage(1) if $opt_help;
+
+##$XMLTV::Get_nice::Delay = 0 if $opt_debug;
+
+XMLTV::Ask::init($opt_gui);
+
+
+# ------------------------------------------------------------------ #
+# Initialise the web page cache
+if ($opt_debug) {
+HTTP::Cache::Transparent::init( {
+	BasePath => '/root/.xmltv/cache',
+	NoUpdate => 60*60,			# cache time in seconds
+	MaxAge => 24,				# flush time in hours
+	Verbose => $opt_debug,
+} );
+}
+
+
+
+######################################################################
+# initialisation
+
+our $first_day = ($opt_offset || 0);
+our $last_day  = $first_day + $opt_days;
+print 'cannot grab more than one week ahead'."\n" if $first_day >= 7 || $last_day > 7;
+exit(1) if $first_day >= 7 || $last_day > 7;
+
+my $mode = XMLTV::Mode::mode('grab', # default
+							 $opt_configure => 'configure',
+							 $opt_list_channels => 'list-channels',
+							);
+
+# File that stores which channels to download.
+my $config_file
+  = XMLTV::Config_file::filename($opt_config_file, 'tv_grab_uk_freeview', $opt_quiet);
+
+my @config_lines; # used only in grab/list-channels mode
+if ($mode eq 'configure') {
+	XMLTV::Config_file::check_no_overwrite($config_file);
+	mkpath(dirname($config_file));
+}
+elsif ( ($mode eq 'grab') || ($mode eq 'list-channels') ) {
+	@config_lines = XMLTV::Config_file::read_lines($config_file);
+}
+else { die }
+
+
+# Default values until we get the config file.
+our $channel_format = 'label';		# format for channel_if (label (e.g. 17536) vs. number (e.g. 101))
+our $region_id = '64257';			# region id for which to retrieve programmes (e.g. 64257 = London)
+
+# Lists of channels
+#   note this varies according to network_id (region) e.g. BBC1 is 4164 in London but 4165 in W.Mids.
+#   so we need the $region_id before we can run get_channels()
+our @ch_all;						# list of channels in received order
+our %channels; 						# channel_data
+our %channellabels;					# channel label->id cross ref
+my  @channels;						# channels to fetch (data from config file)
+
+
+
+
+######################################################################
+# write configuration
+
+if ($mode eq 'configure') {
+	open(CONF, ">:encoding(utf-8)", $config_file) or die "cannot write to $config_file: $!";
+
+	# Ask about channel id format
+	$channel_format = ask_choice('Format for channel id (e.g. Dave: number=19 label=22272)?', 'number', qw/number label/ );
+	print CONF "format=$channel_format\n";
+
+	# Ask about region id
+	my $postcode = ask('Enter your postcode');
+	$region_id = get_region($postcode);
+	print CONF "region=$region_id\n";
+
+	# Get the current list of channels - note this varies according to network_id (region) 
+	say('Fetching channels list for your region');
+	my  ( $r1, $r2 ) = get_channels();
+	%channels = %$r1;
+	%channellabels = %$r2;
+
+	# Ask about each channel.
+	my @chs = sort keys %channels;
+	my @names = map { $channels{$_}->{'channel-name'} . " (" . $channels{$_}->{'debug-channel-number'} .")" } @chs;
+	my @qs = map { "add channel $_ ?"} @names;
+	my @want = ask_many_boolean(1, @qs);
+	foreach (@chs) {
+		my $w = shift @want;
+		warn("cannot read input, stopping channel questions"), last
+		  if not defined $w;
+		# No need to print to user - XMLTV::Ask is verbose enough.
+
+		# Print a config line, but comment it out if channel not wanted.
+		my $name = shift @names;
+		## use this for verbose identifiers:  my $chid = ( $channel_format eq 'number' ? $channels{$_}->{'id_by_number'} : $channels{$_}->{'id_by_label'} );
+		my $chid = ( $channel_format eq 'number' ? $channels{$_}->{'id'} : $channels{$_}->{'callsign'} );
+		print CONF "channel".($w?'=':'!').$chid.(" "x(15-length $chid))."\t\t# ".substr('    '.$channels{$_}->{'debug-channel-number'},-4)." : ".$channels{$_}->{'channel-name'}."\n";
+	}
+
+	close CONF or warn "cannot close $config_file: $!";
+	say("Finished configuration.");
+
+	exit();
+}
+
+
+
+######################################################################
+# Get the configuration, even if list-channels (so we know what 'format' to use)
+die if $mode ne 'grab' and $mode ne 'list-channels';
+
+# Read configuration
+my $line_num = 1;
+foreach (@config_lines) {
+	++$line_num;
+	next if not defined;
+
+	if (/^channel([=!])(.+)\s*/) {
+		my $ch_did = $2;
+		die if not defined $ch_did;
+		push @channels, $ch_did  if $1 eq '=';
+	}
+	elsif (/^format=(.+)\s*$/) {
+		$channel_format = $1;
+	}
+	elsif (/^region=(.+)\s*$/) {
+		$region_id = $1;
+	}
+	else {
+		warn "$config_file:$line_num: bad line\n";
+	}
+}
+
+
+# Fetch channels if we don't have them (e.g. from --configure)
+if (scalar @ch_all == 0) {
+	my  ( $r1, $r2 ) = get_channels();
+	%channels = %$r1;
+	%channellabels = %$r2;
+}
+
+
+print STDERR "using channel format '$channel_format' \n" if $opt_debug;
+print STDERR "using region id '$region_id' \n" if $opt_debug;
+print STDERR "fetch ".scalar(@channels)." channels \n" if $opt_debug;
+
+
+######################################################################
+# Not configuration, we must be writing something, either full
+# listings or just channels.
+#
+die if $mode ne 'grab' and $mode ne 'list-channels';
+
+# Options to be used for XMLTV::Writer.
+my %w_args;
+if (defined $opt_output) {
+	my $fh = new IO::File(">$opt_output");
+	die "cannot write to $opt_output: $!" if not defined $fh;
+	$w_args{OUTPUT} = $fh;
+}
+$w_args{encoding} = 'UTF-8';
+my $writer;
+sub start_writing() { ($writer = new XMLTV::Writer(%w_args))->start($HEAD) }
+
+
+if ($mode eq 'list-channels') {
+	start_writing;
+	foreach (@ch_all) {
+		$_->{'id'} = $_->{'id_by_number'}  if ( $channel_format eq 'number' );
+		$_->{'id'} = $_->{'id_by_label'}   if ( $channel_format eq 'label' );
+		delete $_->{'channel-name'};		# not a valid DTD element
+		delete $_->{'callsign'};			# not a valid DTD element
+		delete $_->{'id_by_number'};		# not for output
+		delete $_->{'id_by_label'};			# not for output
+		delete $_->{'debug-channel-number'};# not for output
+		$writer->write_channel($_)
+	}
+	$writer->end();
+	exit();
+}
+
+
+######################################################################
+# We are producing full listings.
+die if $mode ne 'grab';
+
+die "No channels specified, run me with --configure\n"
+  if not scalar @channels;
+
+start_writing;
+
+# write the <channels> elements
+foreach my $ch_did (@channels) {
+	die if not defined $ch_did;
+
+	my $ch = ( $channel_format eq 'number' ? $channels{$ch_did} : $channels{$channellabels{$ch_did}->{'id'}} );
+
+	my $ch_name=$ch->{'channel-name'};
+	my $channel = { 'id'			=> ( $channel_format eq 'number' ? $ch->{'id_by_number'} : $ch->{'id_by_label'} ),
+					'display-name'	=> $ch->{'display-name'},
+					'icon'			=> $ch->{'icon'},
+				  };
+
+	$writer->write_channel($channel);
+}
+
+
+# time limits for grab
+my $today_date = DateTime->today(time_zone => 'Europe/Lisbon');
+my $grab_start = $today_date->epoch() + ($opt_offset * 86400);
+my $grab_stop  = $grab_start + ($opt_days * 86400);
+print STDERR "\n start/end grab: $grab_start $grab_stop \n" if $opt_debug;
+
+my $dt_start = DateTime->from_epoch( epoch => $grab_start );
+my $dt_stop  = DateTime->from_epoch( epoch => $grab_stop );
+
+
+# get the programmes and write the <programme> elements
+my $some=0;
+foreach (get_programmes(\@channels)) {
+	$writer->write_programme($_);
+	$some = 1;
+}
+if (not $some) {
+  die "no programmes found\n" unless $some;
+}
+
+$writer->end();
+
+
+
+######################################################################
+exit(0);
+
+
+
+######################################################################
+######################################################################
+# subroutine definitions
+
+# Use Log::TraceMessages if installed.
+BEGIN {
+	eval { require Log::TraceMessages };
+	if ($@) {
+		*t = sub {};
+		*d = sub { '' };
+	}
+	else {
+		*t = \&Log::TraceMessages::t;
+		*d = \&Log::TraceMessages::d;
+		Log::TraceMessages::check_argv();
+	}
+}
+
+# Remove bad chars from an element
+sub tidy( $ ) {
+	return $_[0] if !defined $_[0];
+	$_[0] =~ s/(\s)\xA0/$1/og;	# replace 'space-&nbsp;' with 'space'
+	$_[0] =~ s/\xA0/ /og;		# replace any remaining &nbsp; with space
+	$_[0] =~ s/\xAD//og;		# delete soft hyphens
+	return $_[0];
+}
+
+# Wrapper around Encode (and fix_utf8)
+sub toUTF8( $ )  {
+    return fix_utf8( Encode::encode("utf-8", $_[0]) );
+}
+
+# Wrapper around Encode (and fix_utf8)
+sub fromUTF8( $ )  {
+    return Encode::decode("utf-8", $_[0]);
+}
+
+# UTF-8 fixups.
+sub fix_utf8( $ ) {
+	return $_[0] if !defined $_[0];
+
+	# there's some UTF-16 codes in the data
+	$_[0] =~ s/\x{2013}/\xE2\x80\x93/og;      # replace invalid en-dash with correct value
+	$_[0] =~ s/\x{20ac}/\xE2\x82\xAC/og;      # euro
+	$_[0] =~ s/\x{2026}/\xE2\x80\xA6/og;      # ellipsis
+	$_[0] =~ s/\x{201c}/\xE2\x80\x9C/og;      # open double quote
+	$_[0] =~ s/\x{201d}/\xE2\x80\x9D/og;      # close double quote
+	$_[0] =~ s/\x{2039}/\xE2\x80\x98/og;      # open single quote
+	$_[0] =~ s/\x{203a}/\xE2\x80\x99/og;      # close single quote
+
+	return $_[0];
+}
+
+# Convert some utf-8 to nearest ascii
+sub clean_utf8( $ ) {
+	return $_[0] if !defined $_[0];
+
+	# this is ugly. I don't like doing chrs individually like this, but there's no cheap
+	# way to do this (c.f. Unicode::Normalize)
+	$_[0] =~ s/\x{00C7}/\x43/g;		# C cedilla
+
+	$_[0] =~ s/[^[:ascii:]]//g; 	# Remove all non-ascii & then...
+	$_[0] =~ s/[^A-Za-z0-9]/_/g; 	# ...Replace all non-alphanumericals with _
+
+	return $_[0];
+}
+
+# Remove leading & trailing spaces
+sub trim( $ ) {
+	return $_[0] if !defined $_[0];
+	$_[0] =~ s/^\s+|\s+$//g;
+	return $_[0];
+}
+
+# Remove all spaces
+sub trim_all( $ ) {
+	return $_[0] if !defined $_[0];
+	$_[0] =~ s/\s//g;
+	return $_[0];
+}
+
+
+sub get_programmes {
+	my ($ch_xmltv_ids) = @_;
+
+	#print STDERR Dumper($ch_xmltv_ids);
+
+	# This progress bar is for both downloading and parsing.
+	#  - maybe they could be separate.
+	my $bar = new XMLTV::ProgressBar('getting listings', (scalar(@channels) * $opt_days)) if not $opt_quiet;
+
+	# convert list to hash for speed of lookups
+	my %config_chs = map { $_ => undef } @$ch_xmltv_ids;
+
+	t "Getting programmes \n";
+
+	my $programmes = {};
+	my $start_time = $grab_start;				# note start_time has to be xxxT00:00:00
+
+	while ( $start_time < $grab_stop ) {
+
+		my $url = "$SOURCE_URL/api/tv-guide?nid=$region_id&start=$start_time";
+		print STDERR " URL= $url \n" if $opt_debug;
+		t $url;
+
+		# fetch json content (will be decoded from utf8)
+		my $data = get_nice_json( $url );
+		if ($data->{status} ne 'success') { print STDERR " PROGRAMME fetch failed : ".$data->{status}."\n" if $opt_debug; }
+		
+		#print STDERR Dumper($data);die();
+
+		my $debug_url_done=0;	# for debug use
+
+		my $ch_xmltv_id = '';
+
+		foreach my $ch (@{ $data->{data}->{programs} }) {
+
+			# get the channel identifier ('service_id')
+			$ch_xmltv_id = $ch->{service_id};
+			#print STDERR " Received $ch_xmltv_id \n" if $opt_debug;
+
+			# is 'service_id' valid?
+			next unless $channels{$ch_xmltv_id} || $channellabels{$ch_xmltv_id};
+
+			# is 'service_id' wanted?
+			my $ch_id = ( $channel_format eq 'number' ? $channellabels{$ch_xmltv_id}->{'id'} : $ch_xmltv_id );
+			#print STDERR " Checking $ch_id \n" if $opt_debug;
+
+			next unless exists $config_chs{$ch_id};
+
+			print STDERR " Wanted $ch_xmltv_id \n" if $opt_debug;
+
+			# process the progs ('events') in this channel ('service_id')
+			PROG:
+
+			foreach my $prog (@{ $ch->{events} }) {
+
+				my ( $p_id, $p_category, $p_title, $p_desc, $p_image, $p_duration, $p_year, $p_start, $p_stop, $p_start_epoch, $p_stop_epoch, $p_episode_num, $p_rating, $p_subtitle, %p_credits, $p_subtitles, $p_video, $p_audio, $p_new, $p_descshort, $p_onscreen );
+
+				$p_id		= $prog->{'uuid'};
+				$p_category	= '';	# not seen in the data
+				$p_year		= '';	# not seen in the data
+				$p_title	= $prog->{'main_title'};
+				$p_desc		= '';	# needs 'details' page
+				$p_image	= $prog->{'image_url'};
+				$p_rating	= '';	# needs 'details' page
+				$p_subtitle	= $prog->{'secondary_title'};
+
+
+				# get prog times
+				my ($y,$m,$d,$h,$i,$s,$z) = $prog->{'start_time'} =~ /^(\d\d\d\d)-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d)\+(\d\d\d\d)$/;
+				my $start = DateTime->new( year=>$y, month=>$m, day=>$d, hour=>$h, minute=>$i, second=>$s, time_zone=>$z );
+
+				# duration is of the form "PTxHxMxS" where the H,M,S may be omitted
+				#		e.g. PT1H30M  PT17M30S  PT10M
+				#            
+				my ($h2,$i2,$s2) = $prog->{duration} =~ /^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$/;
+				my $stop = $start->clone();
+				$stop->add( hours=>($h2||0), minutes=>($i2||0), seconds=>($s2||0) );
+
+				$p_start 		= $start->strftime("%Y%m%d%H%M%S %z");
+				$p_stop  		= $stop->strftime("%Y%m%d%H%M%S %z");
+				$p_start_epoch 	= $start->epoch();
+				$p_stop_epoch  	= $stop->epoch();
+				$p_duration  	= $stop->epoch() - $start->epoch();		# seconds
+
+
+				# is programme within requested range?
+				next if $p_start_epoch < $grab_start || $p_start_epoch >= $grab_stop;
+
+
+				# various formats seen for "secondary_title"
+				#	"Series 12: Episode 2"
+				#	"2024: Episode 51"
+				#	"2023/24: Episode 11"
+				#	"21/02/2024"
+				#	"Series 4: Sunny Bunnies Cafe"
+				#	"1. Peak District National Park"
+				#	"Mysteries of the Bayeux Tapestry"
+				#	"Series 34: 3957. Wednesday 21 Feb"
+				#
+				my ($p_ser, $p_ep, $p_of) = ('', '', '');
+				if (defined $p_subtitle) {
+					($p_ser, $p_ep) = $p_subtitle =~ /Series (\d+)[:\s]*(\d+)\.\s*/;
+					$p_subtitle =~ s/Series (\d+)[:\s]*(\d+)\.\s*//;
+					($p_ser) = $p_subtitle =~ /Series (\d+)[:\s]*/;
+					$p_subtitle =~ s/Series (\d+)[:\s]*//;
+					($p_ep)  = $p_subtitle =~ /Episode (\d+)[:\s]*/;
+					$p_subtitle =~ s/Episode (\d+)[:\s]*//;
+
+					if (defined $p_ser || defined $p_ep) {
+						$p_episode_num = (defined $p_ser ? --$p_ser : '') . ' . ' . (defined $p_ep ? --$p_ep : '') . ' . '  if (defined $p_ser || defined $p_ep);
+					}
+				}
+
+				# the year may be in the title e.g. "The Outsiders (1983)"
+				if ( $p_title =~ s/\s\((\d\d\d\d)\)$// ) { $p_year = $1; }
+
+
+				# get programme description from the programme page unless the user says no
+				if (!$opt_fast) {
+
+					#  https://www.freeview.co.uk/api/program?sid=4164&nid=64257&pid=crid://bbc.co.uk/icc/episode/m001jfky&start_time=2024-02-21T17%3A15%3A00%2B0000&duration=PT45M"
+					my $p_pid = $prog->{'program_id'};
+					my $p_start_time = $prog->{'start_time'};
+					my $p_duration = $prog->{'duration'};
+					#
+					my $url = "$SOURCE_URL/api/program?sid=$ch_id&nid=$region_id&pid=$p_pid&start=$p_start_time&duration=$p_duration";
+					#print STDERR " URL= $url \n" if $opt_debug;
+					t $url;
+
+					# fetch json content (will be decoded from utf8)
+					my $data = get_nice_json( $url );
+					if ($data->{status} ne 'success') { print STDERR " DETAILS fetch failed : ".$data->{status}."\n" if $opt_debug; }
+
+					#print STDERR Dumper($data);die();
+
+					foreach my $pg (@{ $data->{data}->{programs} }) {
+
+						$p_descshort = ( $pg->{'synopsis'}->{'short'} ) if defined $pg->{'synopsis'}->{'short'} and (defined $pg->{'synopsis'}->{'medium'} or defined $pg->{'synopsis'}->{'long'});
+						$p_desc	= ( $pg->{'synopsis'}->{'long'} or $pg->{'synopsis'}->{'medium'} or $pg->{'synopsis'}->{'short'} ) if defined $pg->{'synopsis'};
+						$p_image = $pg->{'image_url'} if defined $pg->{'image_url'};
+
+						# tidy the description
+						# - extract year
+						if ( $p_desc =~ s/^\((\d\d\d\d)\)\s// ) { $p_year = $1 if $p_year eq ''; }
+						if ( $p_desc =~ s/\s\((\d\d\d\d)\)$// ) { $p_year = $1 if $p_year eq ''; }
+
+						# get the credits
+						my %roles = ( 'director' => 'director', 'actor' => 'actor', 'voice' => 'actor', 'writer' => 'writer', 'producer' => 'producer', 'host' => 'presenter',  'anchor' => 'presenter',  'guest' => 'guest',  'contestant' => 'guest' );
+						 
+						foreach my $pg_credit (@{ $pg->{'credits'} }) {
+							my ($role, $fname, $lname, $character) = ($pg_credit->{'role'}, $pg_credit->{'given_name'}, $pg_credit->{'family_name'}, $pg_credit->{'character'});
+							my $fullname = (defined $fname ? $fname . ' ' : '') . $lname;
+							my $attr = $roles{lc($role)} if defined $role;
+
+							push (@{$p_credits{$attr}}, (defined $character ? [ $fullname, $character ] : $fullname ) ) if defined $attr;
+						}
+
+						# we can get the Series/Ep in the synopsis for some channels (e.g. Sky Arts)
+						#   (S5, ep 4)
+						if (!defined $p_episode_num) {
+							if ( $p_desc =~ s/\s*(\((s\s*\d+)?[, ]*?(ep\s*\d+)\))(?:\s|$)//i ) {
+								($p_onscreen, $p_ser, $p_ep) = ($1, $2, $3);
+								$p_ser =~ s/^s\s*//i;
+								$p_ep  =~ s/^ep\s*//i;
+								$p_episode_num = (defined $p_ser ? --$p_ser : '') . ' . ' . (defined $p_ep ? --$p_ep : '') . ' . '  if (defined $p_ser || defined $p_ep);
+							}
+						}
+						#   (7/10)
+						if (!defined $p_episode_num) {
+							if ( $p_desc =~ s/\s*(\((\d+)\/(\d+)\))(?:\s|$)//i ) {
+								($p_onscreen, $p_ep, $p_of) = ($1, $2, $3);
+								$p_episode_num = '' . ' . ' . (defined $p_ep ? --$p_ep : '') . (defined $p_of ? '/' . $p_of : '') . ' . ' if (defined $p_ep || defined $p_of);
+							}
+						}
+
+						# extract flags from end of synopsis  e.g. [AD,S,W] AD=audio-described, S=subtitles, SL=sign-language, W=widescreen, HD=high definition (implicit W), DS=surround sound
+						if ($p_desc =~ s/\s*\[([A-Z,]*)\]$// ) {
+							my @flags = split(',',$1);
+							foreach (@flags) {
+								if   ($_ eq 'AD') {		# there is no DTD element for 'audio described'
+								#	$p_audio = { stereo=>'audio described' };
+								}
+								elsif($_ eq 'DS') {
+									$p_audio = { stereo=>'surround' };
+								}
+								elsif($_ eq 'S') {
+									$p_subtitles = { type => 'onscreen' };
+								}
+								elsif($_ eq 'HD') {
+									$p_video = { aspect=>'16:9', quality=>'hd'};
+								}
+								elsif($_ eq 'W') {
+									$p_video = { aspect=>'16:9' };
+								}
+								else {
+									print STDERR "unknown attribute: $_\n";
+								}
+							}
+						}
+
+						# TODO - is there a movie rating / classification anywhere?
+
+						# TODO - can we make a sub-title?
+
+
+						# the year may be in the description e.g. "The Outsiders (1983)"
+						if ( $p_desc =~ s/\s\((\d\d\d\d)\)$// ) { $p_year = $1  if $p_year eq ''; }
+
+						# extract "New." marker from start of description
+						if ($p_desc =~ s/^New. // ) {
+							$p_new = 1;
+						}
+
+						#-----------------------------------
+
+						last;   # why would there be >1 ?
+					}
+
+				}
+
+
+				my %prog;
+				$prog{'channel'}	= ( $channel_format eq 'number' ? $channels{$ch_id}->{'id_by_number'} : $channels{$channellabels{$ch_xmltv_id}->{'id'}}->{'id_by_label'} );
+				$prog{'id'}		 	= $p_id;
+				$prog{'category'}	= $p_category;
+				$prog{'title'}		= $p_title;
+				$prog{'desc'}		= $p_desc;
+				$prog{'icon'}   	= $p_image;
+				$prog{'duration'}	= $p_duration;
+				$prog{'year'}		= $p_year;
+				$prog{'rating'}		= $p_rating;
+				$prog{'start'}		= $p_start;
+				$prog{'stop'}		= $p_stop;
+				$prog{'episode-num'}= $p_episode_num;
+				$prog{'credits'}	= \%p_credits;
+				$prog{'video'}		= $p_video;
+				$prog{'audio'}		= $p_audio;
+				$prog{'subtitles'}	= $p_subtitles;
+				$prog{'new'}		= $p_new;
+				$prog{'descshort'}	= $p_descshort;
+				$prog{'onscreen'}	= $p_onscreen;
+
+
+				# store the programme avoiding duplicates
+				# also check for duplicate start times and set clumpidx
+				{
+					if ( defined $programmes->{ $ch_xmltv_id }->{ $p_start_epoch } ) {
+						# duplicate prog or contemporary?
+						my $dup = 0; my $_P;
+						foreach $_P ( @{ $programmes->{ $ch_xmltv_id }->{ $p_start_epoch } } ) {
+							$dup = 1  if ( $_P->{'title'} eq $prog{'title'} );	# duplicate
+						}
+						next PROG if $dup;	# ignore duplicates (go to next programme)
+						if (!$dup) {
+							# contemporary programme so set clumpidx
+							my $numclumps = scalar @{ $programmes->{ $ch_xmltv_id }->{ $p_start_epoch } }  + 1;
+							# set (or adjust) clumpidx of existing programmes
+							my $i = 0;
+							foreach $_P ( @{ $programmes->{ $ch_xmltv_id }->{ $p_start_epoch } } ) {
+								$_P->{'clumpidx'} = "$i/$numclumps";
+								$i++;
+							}
+							# set clumpidx for new programme
+							$prog{'clumpidx'} = "$i/$numclumps";
+						}
+					}
+				}
+
+				# store the programme
+				push @{ $programmes->{ $ch_xmltv_id }->{ $p_start_epoch } }, \%prog;
+
+			} # end each prog
+
+			# update progress bar
+			update $bar if $bar;
+
+		} # programs-container
+
+
+		# advance one day
+		$start_time += 86400; 
+
+	}
+
+	# did we get any programmes?
+	if ( scalar keys %{$programmes} == 0 ) {
+			warn "no programmes found\n";
+		return;
+	}
+
+	# format the programmes ready for XMLTV::Writer
+	my @r;
+	foreach ( keys %{$programmes} ) {
+		my $_ch_progs = $programmes->{$_};
+		foreach ( sort keys %{$_ch_progs} ) {
+			my $_dt_progs = $_ch_progs->{$_};
+			foreach (@{ $_dt_progs }) {
+				push @r, make_programme_hash( $_ );
+			 }
+		}
+	}
+
+	# close progress bar
+	finish $bar if $bar;
+
+	return @r;
+}
+
+
+# reformat the data to something acceptable to xmltv:::writer
+sub make_programme_hash {
+	my ( $cur ) = @_;
+
+	my %prog;
+
+	$prog{channel} = $cur->{'channel'};
+
+	#$prog{channel} =~ s/\s/_/g;
+
+	$prog{'title'} 		= [ [ toUTF8( $cur->{'title'} ), $LANG ] ];
+	$prog{'sub-title'} 	= [ [ toUTF8( $cur->{'subtitle'} ), $LANG ] ] if $cur->{'subtitle'};
+	$prog{'category'} 	= [ [ toUTF8( $cur->{'category'} ), $LANG ] ] if $cur->{'category'};
+	#$prog{'episode-num'}= [[ $cur->{'episode-num'}, 'xmltv_ns' ]] if $cur->{'episode-num'};
+	push @{$prog{'episode-num'}},[ $cur->{'episode-num'}, 'xmltv_ns' ] if $cur->{'episode-num'};
+	push @{$prog{'episode-num'}},[ $cur->{'onscreen'}, 'onscreen' ] if $cur->{'onscreen'};
+	push @{$prog{'episode-num'}},[ $cur->{'id'}, 'uuid' ] if $cur->{'id'};				# add the uuid as a custom <episode-num>
+	$prog{'start'} 		= $cur->{'start'} if $cur->{'start'};
+	$prog{'stop'} 		= $cur->{'stop'} if $cur->{'stop'};
+	#$prog{'desc'} 		= [ [ toUTF8( $cur->{'desc'} ), $LANG ] ] if $cur->{'desc'};
+	push @{$prog{'desc'}},[ toUTF8( $cur->{'desc'} ), $LANG ] if $cur->{'desc'};
+	push @{$prog{'desc'}},[ toUTF8( $cur->{'descshort'} ), 'short' ] if $cur->{'descshort'};
+	$prog{'icon'} 		= [ { 'src' => $cur->{'icon'} } ] if $cur->{'icon'};
+	$prog{'rating'} 	= [ [ $cur->{'rating'}, 'CCE' ] ] if $cur->{'rating'};
+	$prog{'credits'} 	= $cur->{'credits'} if $cur->{'credits'};
+	$prog{'date'}		= $cur->{'year'} if $cur->{'year'};
+	$prog{'video'}		= $cur->{'video'} if $cur->{'video'};
+	$prog{'audio'}		= $cur->{'audio'} if $cur->{'audio'};
+	$prog{'subtitles'}	= [ $cur->{'subtitles'} ] if $cur->{'subtitles'};
+	$prog{'new'}		= $cur->{'new'} if $cur->{'new'};
+
+	return \%prog;
+}
+
+
+# get channel listing
+sub get_channels {
+	my $bar = new XMLTV::ProgressBar( 'getting list of channels', 1 )  if not $opt_quiet;
+	my ( %channels, %channellabels );
+
+	# retrieve channels
+	my $url = "$SOURCE_URL/api/channel-list?nid=$region_id";
+	print STDERR " URL= $url \n" if $opt_debug;
+	t $url;
+
+	# fetch json content (already decoded from utf8)
+	my $data = get_nice_json( $url );
+	if ($data->{status} ne 'success') { print STDERR " CHANNEL fetch failed : ".$data->{status}."\n" if $opt_debug; }
+
+	foreach (@{ $data->{data}->{services} }) {
+
+		my ($channel_id, $channel_number, $channel_name, $channel_logo);
+
+		$channel_id		= $_->{service_id};
+		$channel_number	= $_->{logical_channel_number};
+		$channel_name	= $_->{title};
+		$channel_logo	= $_->{service_image};
+
+		##(note: $channel_id_clean not applicable to this grabber (in pt_meo it was textual channel name) )
+		my $channel_id_clean = $channel_id;
+		$channel_id_clean = clean_utf8(trim_all($channel_id_clean));		# some contain spaces! e.g. "E! HD"
+																			# XMLTV DTD doesn't allow non-ascii channel ids
+
+		# store the channel
+		if ( defined $channel_id_clean && $channel_id_clean ne '' ) {
+			my $ch =
+			  {
+				'channel-name'  		=> toUTF8($channel_name),
+				'display-name'  		=> [ [ toUTF8($channel_name), $LANG ] ],
+				'icon'					=> [ { 'src' => $channel_logo } ],
+				'id'					=> $channel_number,
+				'callsign'				=> $channel_id,
+				'id_by_label'			=> $channel_id_clean.'.'.$DOMAIN,
+				'id_by_number'			=> $channel_number.'.'.$DOMAIN,
+				'debug-channel-number'	=> $channel_number,
+			  };
+			$channels{$channel_number} = $ch;									# store the channel details by logical_channel_number
+			$channellabels{$channel_id_clean} = { 'id' => $channel_number };	# store a cross-ref of service_id to logical_channel_number
+			push @ch_all, $ch;													# store the channel details as an unkeyed list (for print-channels use)
+		}
+
+	} #foreach
+
+	#print STDERR Dumper(\%channels);die();
+	#print STDERR Dumper(\%channellabels);die();
+
+	die "no channels could be found" if not keys %channels;
+
+	update $bar if not $opt_quiet;
+	finish $bar if not $opt_quiet;
+	return ( \%channels, \%channellabels );
+}
+
+
+# get region id
+sub get_region {
+	my ($postcode) = @_;
+
+	# retrieve network id
+	my $url = "$SOURCE_URL/api/get-network-id?postcode=$postcode";
+	print STDERR " URL= $url \n" if $opt_debug;
+	t $url;
+
+	my $data = get_nice_json( $url );
+
+	if ($data->{status} ne 'success') { print STDERR " POSTCODE lookup failed : ".$data->{status}."\n" if $opt_debug; return $region_id; }
+
+	$region_id   = $data->{data}->{network_id};
+	my $region_name = $data->{data}->{network_name};
+
+	print STDERR " REGION= $region_id $region_name \n" if $opt_debug;
+
+	return ( $region_id );
+}

@@ -455,6 +455,17 @@ my @opt_components
                     'URI::Encode' => 0, },
      },
 
+     { name => 'tv_grab_uk_freeview',
+       blurb => 'Grabber for UK using Freeview website',
+       exes => [ 'grab/uk_freeview/tv_grab_uk_freeview' ],
+       prereqs => { 'DateTime'        => 0,
+                    'Encode'          => 0,
+                    'JSON'            => 0,
+                    'IO::File'        => 0,
+                    'File::Path'      => 0,
+                    'File::Basename'  => 0, },
+     },
+
 ##   { name => 'tv_grab_uk_tvguide',
 ##     blurb => 'Grabber for UK and Ireland using TV Guide website',
 ##     exes => [ 'grab/uk_tvguide/tv_grab_uk_tvguide' ],
