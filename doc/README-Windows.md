@@ -1,4 +1,4 @@
-# XMLTV 1.2.2 Windows Release
+# XMLTV 1.3.0 Windows Release
 
 ## Table of Contents
 
@@ -40,15 +40,16 @@ Major Changes in this release
 
 | Grabber                  | Change    |
 | ----------               | --------- |
-| tv_grab_ar               | **disable grabber** |
-| tv_grab_tr               | **disable grabber** |
-| tv_grab_fi               | improvements to handle upstream changes |
-| tv_grab_fi_sv            | update UserAgent to work with upstream changes |
-| tv_grab_fr               | improvements to channel name handling and upstream changes |
-| tv_grab_na_dd            | add some debug info |
-| tv_grab_uk_tvguide       | minor bug fixes & improvements |
-| tv_grab_zz_sdjson        | support Schedules Direct redirection response |
-| tv_grab_zz_sdjson_sqlite | improve rating agency data validation and update documentation |
+| tv_grab_uk_freeview      | new grabber for Freeview schedules |
+| tv_grab_eu_epgdata       | disable grabber (upstream site gone) |
+| tv_grab_na_dtv           | disable grabber (upstream site changes) |
+| tv_grab_pt_meo           | disable grabber (upstream site changes) |
+| tv_grab_uk_guide         | disable grabber (upstream site changes) |
+| tv_grab_ch_search        | fix setting of configured channels |
+| tv_grab_fi               | updates for STAR Chanel/FOXTV rename, and YLE data source (API key needs) |
+| tv_grab_zz_sdjson        | improvements to episode/season handling |
+| tv_grab_zz_sdjson_sqlite | improvements to episode/season handling, 3rd-party metadata, lineups handling, and more |
+
 
 Please see the git log for full details of changes in this release.
 
@@ -122,4 +123,4 @@ We run the following mailing lists:
 
 - [xmltv-announce](https://sourceforge.net/projects/xmltv/lists/xmltv-announce): announcements of new XMLTV releases
 
--- Nick Morrott, knowledgejunkie@gmail.com, 2023-02-23
+-- Nick Morrott, knowledgejunkie@gmail.com, 2024-02-24
