@@ -246,8 +246,11 @@ sub _read_channel_data
     open( my $input_fh, "<", $input_file ) || die "Can't open $input_file: $!";
     while (my $channel_string = <$input_fh>) {
         chomp($channel_string);
+        # remove commented channels
+        $channel_string =~ s/^#.*//;
         next if not length $channel_string;
         my @items = split("\t",$channel_string);
+        $items[1] =~ s/\"//g;
         $channel_list->{ $items[0] } = { 
             name => decode('UTF-8', $items[1]),
             icon => $items[2]
@@ -268,13 +271,14 @@ sub get_epg
     my %xmlprogs;
 
     my $curDate = $startDate;
-    my $nr_days = $startDate->delta_days($endDate)->days;
 
     my $channelInfo = _read_channel_data();
 
-    for my $day ( 0 .. $nr_days ) {
+    # start the day before to fetch potential programmes that started the previous day
+    $curDate->add(days => -1);
+    my @daily_blocks = ("18-00");
 
-        $curDate->add(days => $day);
+    while ( $curDate <=  $endDate ) {
 
         for my $channel (@channelList) {
 
@@ -285,7 +289,8 @@ sub get_epg
             );
             # multiple display-names are ok and may be useful to match other tools lists
             my @displayname = ( [  sanitizeUTF8( $channelInfo->{$channel}->{name} ), 'pt' ] ,
-                                [  sanitizeUTF8( $channelId ), 'pt' ] );
+                                [  sanitizeUTF8( $channelId ), 'pt' ] ,
+                                [  sanitizeUTF8( $channel ), 'pt' ] );
 
             push @{ $ch{'display-name'} }, @displayname ;
 
@@ -295,9 +300,9 @@ sub get_epg
             my $date_month = $curDate->month;
             my $date_year = $curDate->year;
 
-            for my $period ("00-06","06-12","12-18","18-00") {
+            for my $period (@daily_blocks) {
 
-                print( STDERR "requesting EPG from " . $curDate->ymd() ." [".$period."]". " for " . $channel . "\n" )  if( !$opt->{quiet} );
+                print( STDERR "requesting EPG from " . $curDate->ymd() ." [".$period."]". " for " . $channelId . "\n" )  if( !$opt->{quiet} );
                 print( STDERR " GET ".$json_baseurl.$channel."/".$date_year."/".$date_month."/".$date_day."/".$period."\n" )  if( $opt->{debug} );
 
                 my $epgSource = json_request('get', $channel."/".$date_year."/".$date_month."/".$date_day."/".$period);
@@ -331,7 +336,8 @@ sub get_epg
                         $prog{length} = $duration_items[2]*3600+$duration_items[3]*60+$duration_items[4] if scalar @duration_items;
                     }
                     
-                    $prog{icon} = [ { src => $programme->{images}[0]{url} } ]  if ($programme->{images}[0]{url});
+                    # fetch programme images in 16:9
+                    $prog{icon} = [ { src => $programme->{images}[0]{url}."/width/854/height/480/quality/95" } ]  if ($programme->{images}[0]{url});
 
                     if ( $programme->{tags}{genre} ) {
                         my @category = map { [ sanitizeUTF8($_->{value}) , 'pt' ] } @{$programme->{tags}{genre}{objects}};
@@ -361,11 +367,10 @@ sub get_epg
                 
             }
 
-
         }
 
-
-        $curDate->add( days => 1);
+        $curDate->add(days => 1);
+        @daily_blocks = ("00-06","06-12","12-18","18-00");
     }
 
     $writer->write_channel($_) for values %xmlchannels;
@@ -388,7 +393,7 @@ sub json_request {
     my ($method, $path, $content) = @_;
 
     # TODO(nsenica): Implement proper throttling control.
-    sleep(1);
+    sleep(0.1);
     
     my $url = $json_baseurl . $path;
 
@@ -473,12 +478,11 @@ sub make_dates
 sub make_channelid
 {
     my( $id ) = @_;
-    $id = decode 'UTF-8', $id;
     $id = lc( $id );      # turn into lowercase
     $id =~ s/\s+//g;      # remove whitespace
     $id =~ s/&//g;        # remove ampersand
     $id =~ s/!//g;        # remove !
-    $id =~ s/\x{e7}/c/g;  # turn c-cecille into plain c
+    $id =~ s/\"//g;       # remove ""
     $id =~ s/\+/-plus/g;  # turn + into -plus
     $id = unidecode($id);
     $id .= '.tv.vodafone.pt'; # append domain part
