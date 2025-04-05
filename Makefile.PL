@@ -308,6 +308,7 @@ my @opt_components
                      'grab/fi/fi/source/iltapulu.pm',
                      'grab/fi/fi/source/star.pm',
                      'grab/fi/fi/source/telkku.pm',
+                     'grab/fi/fi/source/telsu.pm',
                      'grab/fi/fi/source/yle.pm',
                  ],
                ],
