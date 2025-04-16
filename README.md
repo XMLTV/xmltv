@@ -4,7 +4,7 @@
   </a>
 </p>
 
-# XMLTV 1.3.0
+# XMLTV 1.4.0
 
 ## Table of Contents
 
@@ -150,7 +150,7 @@ Digest::SHA                   (tv_grab_zz_sdjson{,_sqlite}, core module since 5.
 File::HomeDir                 (tv_grab_zz_sdjson_sqlite)
 File::Which                   (tv_grab_zz_sdjson_sqlite)
 HTML::Entities 1.27           (for several of the grabbers, part of HTML::Parser 3.34)
-HTML::Parser 3.34             (tv_grab_it, tv_grab_it_dvb, part of HTML::Parser 3.34)
+HTML::Parser 3.34             (tv_grab_it_dvb, part of HTML::Parser 3.34)
 HTML::Tree                    (for many of the grabbers, part of HTML::Tree)
 HTML::TreeBuilder             (for many of the grabbers, part of HTML::Tree)
 HTTP::Cache::Transparent 1.0  (for several of the grabbers)
@@ -258,4 +258,4 @@ We run the following mailing lists:
 
 We run an IRC channel #xmltv on Libera Chat. Please join us!
 
--- Nick Morrott, knowledgejunkie@gmail.com, 2024-02-24
+-- Nick Morrott, knowledgejunkie@gmail.com, 2025-04-17

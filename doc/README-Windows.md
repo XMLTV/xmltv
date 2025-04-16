@@ -1,4 +1,4 @@
-# XMLTV 1.3.0 Windows Release
+# XMLTV 1.4.0 Windows Release
 
 ## Table of Contents
 
@@ -40,16 +40,15 @@ Major Changes in this release
 
 | Grabber                  | Change    |
 | ----------               | --------- |
-| tv_grab_uk_freeview      | new grabber for Freeview schedules |
-| tv_grab_eu_epgdata       | disable grabber (upstream site gone) |
-| tv_grab_na_dtv           | disable grabber (upstream site changes) |
-| tv_grab_pt_meo           | disable grabber (upstream site changes) |
-| tv_grab_uk_guide         | disable grabber (upstream site changes) |
-| tv_grab_ch_search        | fix setting of configured channels |
-| tv_grab_fi               | updates for STAR Chanel/FOXTV rename, and YLE data source (API key needs) |
+| tv_grab_fi_sv            | disable grabber (upstream site changes) |
+| tv_grab_fr               | disable grabber (upstream Terms and Conditions) |
+| tv_grab_huro             | disable Romanian listings (upstream site gone) |
+| tv_grab_it               | disable grabber (upstream site changes) |
+| tv_grab_fi               | improvements to episode/season handling and upstream channel availability |
+| tv_grab_pt_vodafone      | migrate to new upstream API and improvements to quality of programme data |
+| tv_grab_uk_freeview      | improvements to programme retrieval and handling, web page cache is now used by default |
 | tv_grab_zz_sdjson        | improvements to episode/season handling |
-| tv_grab_zz_sdjson_sqlite | improvements to episode/season handling, 3rd-party metadata, lineups handling, and more |
-
+| tv_grab_zz_sdjson_sqlite | adds deaf-signed subtitles element support and improves database handling |
 
 Please see the git log for full details of changes in this release.
 
@@ -123,4 +122,4 @@ We run the following mailing lists:
 
 - [xmltv-announce](https://sourceforge.net/projects/xmltv/lists/xmltv-announce): announcements of new XMLTV releases
 
--- Nick Morrott, knowledgejunkie@gmail.com, 2024-02-24
+-- Nick Morrott, knowledgejunkie@gmail.com, 2025-04-17
