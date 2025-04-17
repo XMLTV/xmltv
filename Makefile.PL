@@ -450,7 +450,8 @@ my @opt_components
                     'URI::Escape' => 0,
                     'XML::LibXML' => 0,
                     'DateTime::Format::Strptime' => 0,
-                    'URI::Encode' => 0, },
+                    'URI::Encode' => 0,
+                    'Text::Unidecode' => 0, },
      },
 
      { name => 'tv_grab_uk_freeview',
