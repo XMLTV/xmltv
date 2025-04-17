@@ -446,6 +446,7 @@ my @opt_components
      { name => 'tv_grab_pt_vodafone',
        blurb => 'Grabber for Portugal (Vodafone)',
        exes => [ 'grab/pt_vodafone/tv_grab_pt_vodafone' ],
+       share_files => { 'grab/pt_vodafone/channel.list' => 'tv_grab_pt_vodafone/channel.list', },
        prereqs => { 'DateTime'    => 0,
                     'URI::Escape' => 0,
                     'XML::LibXML' => 0,
