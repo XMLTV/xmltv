@@ -141,13 +141,14 @@ sub grab {
 					  "id" => qr/^channel-${channel}/)) {
 	if (my @entries = $section->look_down("_tag" => "li")) {
 	  foreach my $entry (@entries) {
-	    my $start = $entry->look_down("_tag" => "time");
-	    my $link  = $entry->look_down("_tag" => "b");
+	    my $start = $entry->look_down("_tag"  => "time");
+	    my $link  = $entry->look_down("class" => "op");
+	    my $title = $entry->look_down("_tag"  => "b");
 
-	    if ($start && $link) {
+	    if ($start && $link && $title) {
 	      if (my($hour, $minute) =
 		  $start->as_text() =~ /^(\d{2})[:.](\d{2})$/) {
-		my($title) = $link->content_list();
+		($title) = $title->content_list();
 
 	        if (defined $title && length($title)) {
 		  my $desc      = $link->attr("title");
