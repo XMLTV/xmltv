@@ -28,16 +28,13 @@ our %categories = (
 );
 
 #
-# Unfortunately the embedded JSON data generated into the HTML page by
-# the server is (temporarily?) broken and unreliable. The web application
-# is not affected by this, because it always updates its state via XHR
-# calls to the JSON API endpoints.
+# Use the JSON API endpoints from the web application.
 #
 sub _getJSON($) {
   my($api_path) = @_;
 
   # Fetch JSON object from API endpoint and return contents of "response" property
-  return fetchJSON("https://www.telkku.com/api/channel-groups/$api_path", "response");
+  return fetchJSON("https://il-telkku-api.prod.il.fi/v1/channel-groups/$api_path", "response");
 }
 
 # cache for group name to API ID mapping
@@ -54,12 +51,13 @@ sub channels {
   #
   #  [
   #    {
-  #      id       => "default_builtin_channelgroup1"
+  #      id       => "d63736b5-7f72-45d4-8f9e-6505f1bac855"
   #      slug     => "peruskanavat",
   #      channels => [
   #                    {
-  #                      id   => "yle-tv1",
-  #                      name => "Yle TV1",
+  #                      id   => "391",
+  #                      name => "YLE TV1",
+  #                      slug => "yle-tv-1",
   #                      ...
   #                    },
   #                    ...
@@ -75,37 +73,44 @@ sub channels {
 
     foreach my $item (@{$data}) {
       if ((ref($item)             eq "HASH")  &&
-	  (exists $item->{id})                &&
-	  (exists $item->{slug})              &&
-	  (exists $item->{channels})          &&
-	  (ref($item->{channels}) eq "ARRAY")) {
-	my($api_id, $group, $channels) = @{$item}{qw(id slug channels)};
+          (exists $item->{id})                &&
+          (exists $item->{slug})              &&
+          (exists $item->{channels})          &&
+          (ref($item->{channels}) eq "ARRAY")) {
+        my($api_id, $group, $channels) = @{$item}{qw(id slug channels)};
 
-	if (defined($api_id) && length($api_id) &&
-	    defined($group)  && length($group)  &&
-	    (ref($channels) eq "ARRAY")) {
-	  debug(2, "Source telkku.com found group '$group' ($api_id) with " . scalar(@{$channels}) . " channels");
+        if (defined($api_id) && length($api_id) &&
+            defined($group)  && length($group)  &&
+            (ref($channels) eq "ARRAY")) {
+          debug(2, "Source telkku.com found group '$group' ($api_id) with " . scalar(@{$channels}) . " channels");
 
-	  # initialize group name to API ID map
-	  $group2id{$group} = $api_id;
+          # initialize group/channel name to API ID map
+          my %channel2id;
+          $group2id{$group} = {
+            id       => $api_id,
+            channels => \%channel2id,
+          };
 
-	  foreach my $channel (@{$channels}) {
-	    if (ref($channel) eq "HASH") {
-	      my $id   = $channel->{id};
-	      my $name = $channel->{name};
+          foreach my $channel (@{$channels}) {
+            if (ref($channel) eq "HASH") {
+              my($id, $slug, $name) = @{$channel}{qw(id slug name)};
 
-	      if (defined($id) && length($id)   &&
-		  (not exists $duplicates{$id}) &&
-		  length($name)) {
-		debug(3, "channel '$name' ($id)");
-		$channels{"${id}.${group}.telkku.com"} = "fi $name";
+              if (defined($id)  && length($id)    &&
+                  (not exists $duplicates{$id})   &&
+                  defined($slug) && length($slug) &&
+                  length($name)) {
+                debug(3, "channel '$name' '$slug' ($id)");
+                $channels{"${slug}.${group}.telkku.com"} = "fi $name";
 
-		# Same ID can appear in multiple groups - avoid duplicates
-		$duplicates{$id}++;
-	      }
-	    }
-	  }
-	}
+                # Same ID can appear in multiple groups - avoid duplicates
+                $duplicates{$id}++;
+
+                # add channel to group mapping
+                $channel2id{$slug} = $id;
+              }
+            }
+          }
+        }
       }
     }
 
@@ -122,7 +127,7 @@ sub _group2id($) {
   # Make sure group to ID map is initialized
   channels() unless %group2id;
 
-  return $group2id{$group};
+  return $group2id{$group}->{id};
 }
 
 # Grab one day
