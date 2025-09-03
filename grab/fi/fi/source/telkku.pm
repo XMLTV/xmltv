@@ -190,6 +190,7 @@ sub grab {
           ($item->{channelId}     eq $channel_id) &&
           (ref($item->{programs}) eq "HASH")) {
 
+        # NOTE: hash doesn't retain chronological order of the slots!
         foreach my $programmes (values %{ $item->{programs} }) {
           if (ref($programmes) eq "ARRAY") {
 
@@ -231,6 +232,12 @@ sub grab {
         }
       }
     }
+
+    # Overlap check requies programmes to be sorted by ascending start time
+    @objects = sort { $a->start() <=> $b->start() } @objects;
+
+    # Fix overlapping programmes
+    fi::programme->fixOverlaps(\@objects);
 
     return(\@objects);
   }
