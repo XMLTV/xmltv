@@ -211,8 +211,11 @@ sub grab {
                       @{$programme}{qw(format seasonNumber episodeNumber)};
                     $category = $categories{$category};
 
+                    # drop empty description
+                    undef $desc if $desc eq '';
+
                     debug(3, "List entry $channel.$group ($start -> $end) $title");
-                    debug(4, $desc);
+                    debug(4, $desc)     if defined $desc;
                     debug(4, $category) if defined $category;
                     debug(4, sprintf("s%02de%02d", $season, $episode_number))
                       if (defined($season) && defined($episode_number));
