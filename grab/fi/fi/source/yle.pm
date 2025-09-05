@@ -71,39 +71,39 @@ sub channels {
       # Channel list can be found from Next.js JSON data
       #
       if (my $script = $root->look_down("_tag" => "script",
-					"id"   => "__NEXT_DATA__",
-					"type" => "application/json")) {
-	my($json)   = $script->content_list();
-	my $decoded = JSON->new->decode($json);
+                                        "id"   => "__NEXT_DATA__",
+                                        "type" => "application/json")) {
+        my($json)   = $script->content_list();
+        my $decoded = JSON->new->decode($json);
 
-	if ((ref($decoded)                                       eq "HASH")  &&
-	    (ref($decoded->{props})                              eq "HASH")  &&
-	    (ref($decoded->{props}->{pageProps})                 eq "HASH")  &&
-	    (ref($decoded->{props}->{pageProps}->{view})         eq "HASH")  &&
-	    (ref($decoded->{props}->{pageProps}->{view}->{tabs}) eq "ARRAY")) {
+        if ((ref($decoded)                                       eq "HASH")  &&
+            (ref($decoded->{props})                              eq "HASH")  &&
+            (ref($decoded->{props}->{pageProps})                 eq "HASH")  &&
+            (ref($decoded->{props}->{pageProps}->{view})         eq "HASH")  &&
+            (ref($decoded->{props}->{pageProps}->{view}->{tabs}) eq "ARRAY")) {
 
-	  foreach my $tab (@{ $decoded->{props}->{pageProps}->{view}->{tabs} }) {
-	    if ((ref($tab)            eq "HASH")  &&
-		(ref($tab->{content}) eq "ARRAY")) {
-	      my($content) = @{ $tab->{content} };
+          foreach my $tab (@{ $decoded->{props}->{pageProps}->{view}->{tabs} }) {
+            if ((ref($tab)            eq "HASH")  &&
+                (ref($tab->{content}) eq "ARRAY")) {
+              my($content) = @{ $tab->{content} };
 
-	      if ((ref($content)           eq "HASH")  &&
-		  (ref($content->{source}) eq "HASH")) {
-		my $name = $tab->{title};
-		my $uri  = $content->{source}->{uri};
+              if ((ref($content)           eq "HASH")  &&
+                  (ref($content->{source}) eq "HASH")) {
+                my $name = $tab->{title};
+                my $uri  = $content->{source}->{uri};
 
-		if ($name && length($name) && $uri) {
-		  my($slug) = $uri =~ m,/ui/schedules/([^/]+)/[\d-]+\.json,;
+                if ($name && length($name) && $uri) {
+                  my($slug) = $uri =~ m,/ui/schedules/([^/]+)/[\d-]+\.json,;
 
-		  if ($slug) {
-		    debug(3, "channel '$name' ($slug)");
-		    $channels{"${slug}.${code}.yle.fi"} = "$code $name";
-		  }
-		}
-	      }
-	    }
-	  }
-	}
+                  if ($slug) {
+                    debug(3, "channel '$name' ($slug)");
+                    $channels{"${slug}.${code}.yle.fi"} = "$code $name";
+                  }
+                }
+              }
+            }
+          }
+        }
       }
 
       # Done with the HTML tree
@@ -162,39 +162,40 @@ sub grab {
 
     foreach my $item (@{ $data }) {
       if ((ref($item)                 eq "HASH")  &&
-	  ($item->{type}              eq "card")  &&
-	  (ref($item->{labels})       eq "ARRAY")) {
-	my($title, $desc) = @{$item}{qw(title description)};
-	my($category, $start, $end);
+          ($item->{type}              eq "card")  &&
+          (ref($item->{labels})       eq "ARRAY")) {
+        my($title, $desc) = @{$item}{qw(title description)};
+        my($category, $start, $end);
 
-	foreach my $label (@{ $item->{labels} }) {
-	  if (ref($label) eq "HASH") {
-	    my($type, $raw) = @{$label}{qw(type raw)};
+        foreach my $label (@{ $item->{labels} }) {
+          if (ref($label) eq "HASH") {
+            my($type, $raw) = @{$label}{qw(type raw)};
 
-	    if ($type && $raw) {
-	      if (     $type eq "broadcastStartDate") {
-		$start    = UnixDate($raw, "%s");
-	      } elsif ($type eq "broadcastEndDate") {
-		$end      = UnixDate($raw, "%s");
-	      } elsif ($type eq "highlight") {
-		$category = "elokuvat" if $raw eq "movie";
-	      }
-	    }
-	  }
-	}
+            if ($type && $raw) {
+              if (     $type eq "broadcastStartDate") {
+                $start    = UnixDate($raw, "%s");
+              } elsif ($type eq "broadcastEndDate") {
+                $end      = UnixDate($raw, "%s");
+              } elsif ($type eq "highlight") {
+                $category = "elokuvat" if $raw eq "movie";
+              }
+            }
+          }
+        }
 
-	# NOTE: entries with same start and end time are invalid
-	if ($start && $end && ($start != $end) && $title && $desc) {
-	  debug(3, "List entry $channel ($start -> $end) $title");
-	  debug(4, $desc);
-	  debug(4, $category) if defined $category;
+        # NOTE: entries with same start and end time are invalid
+        # NOTE: programme description is optional
+        if ($start && $end && ($start != $end) && $title) {
+          debug(3, "List entry $channel ($start -> $end) $title");
+          debug(4, $desc)     if defined $desc;
+          debug(4, $category) if defined $category;
 
-	  # Create program object
-	  my $object = fi::programme->new($id, $code, $title, $start, $end);
-	  $object->category($category);
-	  $object->description($desc);
-	  push(@objects, $object);
-	}
+          # Create program object
+          my $object = fi::programme->new($id, $code, $title, $start, $end);
+          $object->category($category);
+          $object->description($desc);
+          push(@objects, $object);
+        }
       }
     }
 
