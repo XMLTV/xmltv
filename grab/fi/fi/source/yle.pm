@@ -186,6 +186,9 @@ sub grab {
         # NOTE: entries with same start and end time are invalid
         # NOTE: programme description is optional
         if ($start && $end && ($start != $end) && $title) {
+          # drop empty description
+          undef $desc if defined($desc) && $desc eq '';
+
           debug(3, "List entry $channel ($start -> $end) $title");
           debug(4, $desc)     if defined $desc;
           debug(4, $category) if defined $category;
