@@ -46,6 +46,9 @@ script_file=${script_dir}/tv_grab_fi.pl
 test_dir=${build_dir}/test-fi
 xmltv_lib=${build_dir}/blib/lib
 xmltv_script=${build_dir}/blib/script
+# any gap in the schedule longer than 3 hours will be considered OK,
+# i.e. the gap between station sign-off and sign-on.
+gap_error=180
 export PERL5LIB=${xmltv_lib}
 
 # Command line options
@@ -104,7 +107,7 @@ check_perl_warnings t_fi_1.log
 validate_xml t_fi_1_2.xml
 ${xmltv_script}/tv_cat t_fi_1_2.xml --output /dev/null 2>t_fi_6.log
 check_log t_fi_6.log
-${xmltv_script}/tv_sort --duplicate-error t_fi_1_2.xml --output t_fi_1_2.sorted.xml 2>t_fi_1_2.sort.log
+${xmltv_script}/tv_sort --duplicate-error --gap-error ${gap_error} t_fi_1_2.xml --output t_fi_1_2.sorted.xml 2>t_fi_1_2.sort.log
 check_log t_fi_1_2.sort.log
 perl -I ${xmltv_lib} ${script_file} --config-file ${script_dir}/test.conf --offset 1 --days 1 --cache  t_fi_cache  --output t_fi_1_1.xml  2>t_fi_2.log
 check_perl_warnings t_fi_2.log
@@ -114,7 +117,7 @@ perl -I ${xmltv_lib} ${script_file} --config-file ${script_dir}/test.conf --offs
 check_perl_warnings t_fi_4.log
 ${xmltv_script}/tv_cat t_fi_1_1.xml t_fi_2_1.xml --output t_fi_1_2-2.xml 2>t_fi_5.log
 check_log t_fi_5.log
-${xmltv_script}/tv_sort --duplicate-error t_fi_1_2-2.xml --output t_fi_1_2-2.sorted.xml 2>t_fi_7.log
+${xmltv_script}/tv_sort --duplicate-error --gap-error ${gap_error} t_fi_1_2-2.xml --output t_fi_1_2-2.sorted.xml 2>t_fi_7.log
 check_log t_fi_7.log
 diff t_fi_1_2.sorted.xml t_fi_1_2-2.sorted.xml > t_fi__1_2.diff
 check_log t_fi__1_2.diff
@@ -132,10 +135,10 @@ for d in $(seq 1 7); do
 done
 check_perl_warnings t_fi_single.log
 ${xmltv_script}/tv_cat t_fi_full_7.xml --output /dev/null 2>t_fi_output.log
-${xmltv_script}/tv_sort --duplicate-error t_fi_full_7.xml --output t_fi_full_7.sorted.xml 2>>t_fi_output.log
+${xmltv_script}/tv_sort --duplicate-error --gap-error ${gap_error} t_fi_full_7.xml --output t_fi_full_7.sorted.xml 2>>t_fi_output.log
 check_log t_fi_output.log
 ${xmltv_script}/tv_cat t_fi_single_*.xml --output t_fi_full_7-2.xml 2>t_fi_output-2.log
-${xmltv_script}/tv_sort --duplicate-error t_fi_full_7-2.xml --output t_fi_full_7-2.sorted.xml 2>>t_fi_output-2.log
+${xmltv_script}/tv_sort --duplicate-error --gap-error ${gap_error} t_fi_full_7-2.xml --output t_fi_full_7-2.sorted.xml 2>>t_fi_output-2.log
 check_log t_fi_output-2.log
 diff t_fi_full_7.sorted.xml t_fi_full_7-2.sorted.xml >t_fi__7.diff
 check_log t_fi__7.diff
