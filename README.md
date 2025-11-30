@@ -64,7 +64,7 @@ XMLTV is packaged for most major Linux distributions and FreeBSD. It is recommen
 
 ### Windows
 
-Windows users are strongly advised to use the [official Windows release] (https://github.com/XMLTV/xmltv/releases)
+Windows users are strongly advised to use the [official Windows release] (https://github.com/XMLTV/xmltv/releases/)
 or the [alpha-exe binary](http://alpha-exe.xmltv.org/) as installing all prerequisites is non-trivial.
 
 For those who want to give it a go, please read the [EXE build instructions](doc/exe_build.html). The instructions can be used for both building xmltv.exe as well as a local install.
