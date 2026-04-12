@@ -338,7 +338,7 @@ sub dump {
       foreach (@{ $xmltv{'sub-title'} });
   } elsif (defined($season) && defined($episode)) {
   	$xmltv{'sub-title'} = 'S' . $season . 'E' . $episode;
-    debug(3, "XMLTV programme subtitle: S$seasonE$episode");
+    debug(3, "XMLTV programme subtitle: S${season}E${episode}");
   }
   if (defined($category) && length($category)) {
     $xmltv{category} = [[$category, $language]];
