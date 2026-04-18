@@ -39,7 +39,7 @@ sub _getJSON($$$) {
     unless $app_id && $app_key;
 
   # Fetch JSON object from API endpoint and return contents of "data" property
-  return fetchJSON("https://areena.api.yle.fi/v1/ui/schedules/${slug}/${date}.json?v=10&language=${language}&app_id=${app_id}&app_key=${app_key}", "data");
+  return fetchJSON("https://areena.api.yle.fi/v1/ui/schedules/${slug}/${date}.json?v=10&client=yle-areena-web&language=${language}&app_id=${app_id}&app_key=${app_key}", "data");
 }
 
 sub _set_ua_headers() {
