@@ -336,7 +336,12 @@ sub dump {
     $xmltv{'sub-title'} = $subtitle;
     debug(3, "XMLTV programme episode ($_->[1]): $_->[0]")
       foreach (@{ $xmltv{'sub-title'} });
-  } elsif (defined($season) && defined($episode)) {
+  #
+  # When no subtitle is given, use season/episode.
+  #
+  # NOTE: this feature is optional and needs to be enabled manually in the configuration!
+  #
+  } elsif (getOption("programme", "episode-num-as-default-subtitle") && defined($season) && defined($episode)) {
     $xmltv{'sub-title'} = [["S${season}E${episode}"]];
     debug(3, "XMLTV programme episode: $_->[0]")
       foreach (@{ $xmltv{'sub-title'} });
