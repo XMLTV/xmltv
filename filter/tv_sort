@@ -29,6 +29,12 @@ B<--duplicate-error> If the input contains the same programme more than once,
                      consider this as an error. Default is to silently
                      ignore duplicate entries.
 
+B<--gap-error N> If the input contains programmes where there is a gap of
+                 1..N minutes between the end of the previous programme and
+                 the start of the next programme, consider this as an error.
+                 Default is to silently ignore gaps.
+                 This option implies B<--by-channel>.
+
 The time sorting is by start time, then by stop time.  Without
 B<--by-channel>, if start times and stop times are equal then two
 programmes are sorted by internal channel id.  With B<--by-channel>,
@@ -93,7 +99,7 @@ BEGIN {
 
 use XMLTV::Usage <<END
 $0: sort listings by time, sanity-check and add stop time to programmes
-usage: $0 [--help] [--by-channel] [--duplicate-error] [--output FILE] [FILE...]
+usage: $0 [--help] [--by-channel] [--duplicate-error] [--gap-error N] [--output FILE] [FILE...]
 END
 ;
 
@@ -113,18 +119,26 @@ sub programme_cmp();
 sub chan_cmp( $$ );
 sub clumpidx_cmp( $$ );
 sub overlap( $$ );
+sub gap( $$ );
 sub add_stop( $ );
 sub programme_eq( $$ );
 sub pd( $ );
 
 my ($opt_help, $opt_output, $opt_by_channel);
 my $opt_duplicate_error = 0;
+my $opt_gap_error = 0;
 GetOptions('help' => \$opt_help, 'output=s' => \$opt_output,
 	   'by-channel' => \$opt_by_channel,
-           'duplicate-error' => \$opt_duplicate_error )
+	   'duplicate-error' => \$opt_duplicate_error,
+	   'gap-error=i' => \$opt_gap_error,
+)
   or usage(0);
 usage(1) if $opt_help;
 @ARGV = ('-') if not @ARGV;
+
+# gap error check requires data to be sorted by channel, then by start time
+$opt_by_channel = 1 if $opt_gap_error;
+
 my ($encoding, $credits, $channels, $progs) = @{XMLTV::parsefiles(@ARGV)};
 my @progs = @$progs;
 
@@ -245,6 +259,15 @@ END
 overlapping programmes on channel $_:
     $first->{title}->[0]->[0]\tat $first->{start}-|$first->{stop}
 and $second->{title}->[0]->[0]\tat $second->{start}-|$second->{stop}
+END
+  ;
+	    }
+	    elsif ($opt_gap_error && (my $delta = gap($first, $second))) {
+		local $^W = 0;
+		warn <<END
+Gap of $delta minute(s) found between programmes on channel $_:
+    $first->{title}->[0]->[0]\tat $first->{stop}
+and $second->{title}->[0]->[0]\tat $second->{start}
 END
   ;
 	    }
@@ -444,6 +467,35 @@ sub overlap( $$ ) {
     }
 }
 
+
+# Test whether two programmes are consecutive in time, i.e. if
+# there is a gap in the programme data. Any gap longer than
+# N minutes is considered to be the legitimate gap between
+# station sign-off and sign-on.
+#
+sub gap( $$ ) {
+    my ($xa, $xb) = @_;
+
+    # nothing to compare against?
+    return 0 unless exists $xa->{stop};
+
+    my $xb_start = pd($xb->{start});
+    my $xa_stop  = pd($xa->{stop});
+    die unless defined $xa->{stop};
+
+    if (Date_Cmp($xa_stop, $xb_start) == 0) {
+	# B starts when A stops.
+	return 0;
+    }
+    else {
+	# delta days, hours, minutes expressed in minutes
+	my $delta = DateCalc($xa_stop, $xb_start);
+	$delta    = Delta_Format($delta, 0, "%mdm");
+
+	return 0 if $delta > $opt_gap_error;
+	return $delta;
+    }
+}
 
 # Add 'stop time' to a list of programmes (hashrefs).
 # The stop time of a programme is the start time of the next.

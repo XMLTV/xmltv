@@ -133,6 +133,7 @@ foreach my $exe (split(/ /,$files))
 #
 # execute our command
 #
+	$0=$cmd;
     do $exe;
     print STDERR $@ if length($@);
     exit 1 if length($@);

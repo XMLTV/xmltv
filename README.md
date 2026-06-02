@@ -4,7 +4,7 @@
   </a>
 </p>
 
-# XMLTV 1.3.0
+# XMLTV 1.4.0
 
 ## Table of Contents
 
@@ -64,7 +64,8 @@ XMLTV is packaged for most major Linux distributions and FreeBSD. It is recommen
 
 ### Windows
 
-Windows users are strongly advised to use the [pre-built binary](http://alpha-exe.xmltv.org/) as installing all prerequisites is non-trivial. Please also check the Github release page for a pre-built release binary.
+Windows users are strongly advised to use the [official Windows release](https://github.com/XMLTV/xmltv/releases/)
+or the [alpha-exe binary](http://alpha-exe.xmltv.org/) as installing all prerequisites is non-trivial.
 
 For those who want to give it a go, please read the [EXE build instructions](doc/exe_build.html). The instructions can be used for both building xmltv.exe as well as a local install.
 
@@ -150,7 +151,7 @@ Digest::SHA                   (tv_grab_zz_sdjson{,_sqlite}, core module since 5.
 File::HomeDir                 (tv_grab_zz_sdjson_sqlite)
 File::Which                   (tv_grab_zz_sdjson_sqlite)
 HTML::Entities 1.27           (for several of the grabbers, part of HTML::Parser 3.34)
-HTML::Parser 3.34             (tv_grab_it, tv_grab_it_dvb, part of HTML::Parser 3.34)
+HTML::Parser 3.34             (tv_grab_it_dvb, part of HTML::Parser 3.34)
 HTML::Tree                    (for many of the grabbers, part of HTML::Tree)
 HTML::TreeBuilder             (for many of the grabbers, part of HTML::Tree)
 HTTP::Cache::Transparent 1.0  (for several of the grabbers)
@@ -160,6 +161,7 @@ List::MoreUtils               (tv_grab_zz_sdjson_sqlite)
 LWP::Protocol::https          (tv_grab_fi, tv_grab_huro, tv_grab_zz_sdjson)
 LWP::UserAgent::Determined    (tv_grab_zz_sdjson_sqlite)
 SOAP::Lite 0.67               (tv_grab_na_dd)
+Text::Unidecode               (tv_grab_pt_vodafone)
 Time::Piece                   (tv_grab_huro, core module since 5.9.5)
 Time::Seconds                 (tv_grab_huro, core module since 5.9.5)
 Tk                            (tv_check)
@@ -257,4 +259,4 @@ We run the following mailing lists:
 
 We run an IRC channel #xmltv on Libera Chat. Please join us!
 
--- Nick Morrott, knowledgejunkie@gmail.com, 2024-02-24
+-- Nick Morrott, knowledgejunkie@gmail.com, 2025-04-17

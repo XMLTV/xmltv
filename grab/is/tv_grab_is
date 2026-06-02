@@ -76,6 +76,8 @@ replacing a couple of channels with XML feeds, but ended up by removing the
 sjonvarp.is code completely.  Left in the "xxx.sjonvarp.is" XMLTV IDs for
 backwards compatibility.
 
+Version 1.4 Hafþór Hilmarsson ( haffi@haffi.is). Current code did not work since it was missing end tags for some elements. 
+Works now with Dispatcharr tested.
 
 =head1 BUGS
 
@@ -91,6 +93,7 @@ use HTML::TreeBuilder;
 use HTML::Entities; # parse entities
 use IO::File;
 use URI;
+use Encode qw(encode decode FB_CROAK);
 use utf8; # source code is encoded in utf8
 
 use Date::Manip;
@@ -143,9 +146,8 @@ sub basechid($);
 sub ispluschannel($);
 sub process_xml_channel( $$$$$$ );
 sub process_ruv_is( $$$$$$ );
-sub process_skjarinn_is( $$$$$$ );
-sub process_stod2_and_friends( $$$$$$ );
 sub get_categories_map();
+sub normalize_to_text($);
 
 
 # Get options
@@ -231,7 +233,7 @@ if (defined $opt_output) {
     die "cannot write to $opt_output: $!" if not defined $fh;
     $w_args{OUTPUT} = $fh;
 }
-$w_args{encoding} = 'ISO-8859-1';
+$w_args{encoding} = 'UTF-8';
 $w_args{UNSAFE} = 1;    # Needed by process_xml_channel
 my $writer = new XMLTV::Writer(%w_args);
 # TODO: standardize these things between grabbers.
@@ -249,9 +251,10 @@ if ($mode eq 'list-channels') {
 
     foreach my $ch_did (sort(keys %channels)) {
         my $ch_name = $channels{$ch_did};
+        my $display_name = normalize_to_text($ch_name);
         my $ch_xid = "$ch_did.sjonvarp.is";
        $writer->write_channel({ id => $ch_xid,
-                                 'display-name' => [ [ $ch_name ] ],
+                                 'display-name' => [ [ $display_name ] ],
                                  'icon' => [{'src' => get_icon($ch_did)}]
                                 });
     }
@@ -294,23 +297,8 @@ get_categories_map();
 my $now = parse_date('now');
 die if not defined $now;
 
-# Mapping from cannel ID to URL
-my %stod2AndFriends = (
-    "ST2" => "http://www.stod2.is/XML--dagskrar-feed/XML-Stod-2-dagskra-vikunnar",
-    "ST2SPORT" => "http://www.stod2.is/XML--dagskrar-feed/XML-Stod-2-Sport-dagskra-vikunnar",
-    "ST2SPORT2" => "http://www.stod2.is/XML--dagskrar-feed/XML-Stod-2-Sport-2-dagskra-vikunnar",
-    "ST2SPORT3" => "http://www.stod2.is/XML--dagskrar-feed/XML-Stod-2-Sport-3-dagskra-vikunnar",
-    "ST2SPORT4" => "http://www.stod2.is/XML--dagskrar-feed/XML-Stod-2-Sport-4-dagskra-vikunnar",
-    "ST2SPORT5" => "http://www.stod2.is/XML--dagskrar-feed/XML-Stod-2-Sport-5-dagskra-vikunnar",
-    "ST2SPORT6" => "http://www.stod2.is/XML--dagskrar-feed/XML-Stod-2-Sport-6-dagskra-vikunnar",
-    "ST2EXTRA" => "http://www.stod2.is/XML--dagskrar-feed/XML-Stod-2-Extra-dagskra-vikunnar",
-    "ST2BIO" => "http://www.stod2.is/XML--dagskrar-feed/XML-Stod-2-Bio-dagskra-vikunnar",
-);
-
 # Declare array of { date, num_days, channel_id, channel_xid, function }
-# and populate it with all pages we need to get.  For sites that only
-# support getting a single day at a time, we create $opt_days entries
-# per channel, but for the others, we create a single entry
+# and populate it with all pages we need to get.
 my @to_get;
 
 my $startday = UnixDate(DateCalc(UnixDate($now, '%Y-%m-%d'), "+ $opt_offset days"), '%Y-%m-%d'); die if not defined $startday;
@@ -319,29 +307,21 @@ my $startday = UnixDate(DateCalc(UnixDate($now, '%Y-%m-%d'), "+ $opt_offset days
 foreach $ch_did (@channels) {
 
     $ch_name = $channels{$ch_did};
+    my $display_name = normalize_to_text($ch_name);
     my $ch_xid = "$ch_did.sjonvarp.is";
     $writer->write_channel({ id => $ch_xid,
-                 'display-name' => [ [ $ch_name ] ],
+                 'display-name' => [ [ $display_name ] ],
                  'icon' => [{'src' => get_icon($ch_did)}]
                  });
 
     my $timeoffset = ispluschannel($ch_did) ? 1 : 0;
 
-    if (basechid ($ch_did) eq 'RUV') {
-        push @to_get, [ $startday, $opt_days, $ch_did, $ch_xid, $timeoffset, \&process_ruv_is ];
-    } elsif (basechid ($ch_did) eq 'S1') {
-        push @to_get, [ $startday, $opt_days, $ch_did, $ch_xid, $timeoffset, \&process_skjarinn_is ];
-    } elsif (defined ($stod2AndFriends{basechid ($ch_did)} ) ) {
-        push @to_get, [ $startday, $opt_days, $ch_did, $ch_xid, $timeoffset, \&process_stod2_and_friends ];
-    }
+    # RUV is the only supported source at the moment.
+    push @to_get, [ $startday, $opt_days, $ch_did, $ch_xid, $timeoffset, \&process_ruv_is ];
 }
-
-my %warned_ch_name; # suppress duplicate warnings
 
 my $bar = new XMLTV::ProgressBar('fetching data', scalar @to_get)
   if not $opt_quiet;
-my @to_get_detailed;
-my $num_detailed = 0;
 foreach (@to_get) {
     my ($date, $num_days, $ch_tvgids_id, $ch_xmltv_id, $timeoffset, $func) = @$_;
      &{$func}($writer, $date, $num_days, $ch_tvgids_id, $timeoffset, $ch_xmltv_id);
@@ -418,12 +398,40 @@ sub process_xml_channel( $$$$$$ ) {
     # Do some processing on the children and then dump the programme
     # into the writer.
     my @programmeElem = $results->getDocumentElement->getElementsByTagName('programme');
+
+    # Build a date-sorted list so we can derive each programme stop from the
+    # following programme start.
+    my @programmes;
     foreach my $programme (@programmeElem) {
-        my $myDate = ParseDate($programme->getAttribute('start'));
+        my $start = ParseDate($programme->getAttribute('start'));
+        next unless defined $start;
+        push @programmes, { node => $programme, start => $start };
+    }
+    @programmes = sort { Date_Cmp($a->{start}, $b->{start}) } @programmes;
+
+    for (my $idx = 0; $idx <= $#programmes; $idx++) {
+        my $programme = $programmes[$idx]{node};
+        my $myDate = $programmes[$idx]{start};
         if ((Date_Cmp($myDate, $fromdate) >= 0) && (Date_Cmp($myDate, $enddate) < 0)) {
-            $myDate = DateCalc($myDate, "+ " . $timeoffset . " hours"); # Add one hour if this is a plus channel
-            $myDate = UnixDate($myDate,'%q') . " +0000";   # Convert date to "20081231235900 +0000"
-            $programme->setAttribute('start', $myDate);
+            my $startDate = DateCalc($myDate, "+ " . $timeoffset . " hours"); # Add one hour if this is a plus channel
+            $programme->setAttribute('start', UnixDate($startDate,'%q') . " +0000");
+
+            my $nextDate;
+            for (my $next_idx = $idx + 1; $next_idx <= $#programmes; $next_idx++) {
+                if (Date_Cmp($programmes[$next_idx]{start}, $myDate) > 0) {
+                    $nextDate = $programmes[$next_idx]{start};
+                    last;
+                }
+            }
+
+            my $stopDate;
+            if (defined $nextDate) {
+                $stopDate = DateCalc($nextDate, "+ " . $timeoffset . " hours");
+            } else {
+                # Ensure we always emit a stop time, even for the last item.
+                $stopDate = DateCalc($startDate, "+ 1 hour");
+            }
+            $programme->setAttribute('stop', UnixDate($stopDate,'%q') . " +0000");
 
             foreach my $node ($programme->childNodes) {
                 if ($node->nodeName eq 'title' && $node->hasChildNodes()) {
@@ -482,7 +490,8 @@ sub process_xml_channel( $$$$$$ ) {
                 }
             }
 
-            $writer->raw($programme->toString . "\n");
+            my $programme_xml = encode('UTF-8', $programme->toString . "\n");
+            $writer->raw($programme_xml);
         }
 
     }
@@ -600,124 +609,10 @@ EOF
     process_xml_channel($writer, $fromdate, $num_days, $timeoffset, $xsl_transform, $xml);
 }
 
-sub process_skjarinn_is ( $$$$$$ ){
-
-    my ($writer, $fromdate, $num_days, $tv2chan, $timeoffset, $ch_xmltv_id) = @_;
-
-    # NOTE: For Skjar 1, we ignore $fromdate and $num_days and always load the next five days.
-
-    my $xsl_transform = <<"EOF";
-        <xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" version="1.0">
-        <xsl:output method="xml" version="1.0" encoding="iso-8859-1" indent="yes"/>
-
-        <xsl:template match="/">
-            <!-- XML needs a toplevel node, so we wrap the programmes in a channel_wrapper element.  The code will then remove it -->
-            <channel_wrapper>
-            <xsl:apply-templates/>
-            </channel_wrapper>
-        </xsl:template>
-
-        <xsl:template match="event">
-            <programme channel="$ch_xmltv_id" start="">
-                <xsl:attribute name="start">
-                    <xsl:value-of select='translate(\@start-time,"- :","")'/>
-                </xsl:attribute>
-                <title>
-                    <xsl:apply-templates select="title"/>
-                </title>
-                <desc>
-                    <xsl:apply-templates select="description"/>
-                </desc>
-                <credits/>
-            </programme>
-        </xsl:template>
-
-        </xsl:stylesheet>
-EOF
-    my $url = "http://skjareinn.is/einn/dagskrarupplysingar/?channel_id=7&weeks=2&output_format=xml";
-
-    my  $xml = get_nice( $url ); die( "Failed to fetch $url" ) unless defined( $xml );
-
-    process_xml_channel($writer, $fromdate, $num_days, $timeoffset,  $xsl_transform, $xml);
-}
-
-sub process_stod2_and_friends ( $$$$$$ ){
-
-    my ($writer, $fromdate, $num_days, $tv2chan, $timeoffset, $ch_xmltv_id) = @_;
-
-    # NOTE: For Stod 2 et al, we ignore $fromdate and $num_days and always load the next week.
-
-		# [honir] I don't know what this piece of code was intending to do:
-		#             <xsl:apply-templates select="event[not(reference_number/\@value=following::event/reference_number/\@value)]" />
-		# Specifically
-		#             event[not(reference_number/\@value=following::event/reference_number/\@value)]
-		#  ignores nodes where the same 'reference_number' occurs on any following node. But the 'reference_number' is not unique to a showing, i.e. a repeat
-		#  showing of the programme will have the same 'reference_number'; however this code will ignore all matching 'event' except the last!
-		#  I.e. we only grab the last repeated showing of a programme.  This can't be what was intended!
-		#
-    my $xsl_transform = <<"EOF";
-        <xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" version="1.0">
-        <xsl:output method="xml" version="1.0" encoding="iso-8859-1" indent="yes"/>
-
-        <xsl:template match="/schedule">
-            <!-- XML needs a toplevel node, so we wrap the programmes in a channel_wrapper element.  The code will then remove it -->
-            <channel_wrapper>
-            <xsl:apply-templates select="event"/>
-            </channel_wrapper>
-        </xsl:template>
-
-        <xsl:template match="event">
-            <programme channel="$tv2chan.sjonvarp.is" start="">
-                <xsl:attribute name="start">
-                    <xsl:value-of select='translate(\@starttime,"- :","")'/>
-                </xsl:attribute>
-                <title>
-                    <xsl:apply-templates select="title"/>
-                </title>
-                <sub-title>
-                    <xsl:apply-templates select="org_title"/>
-                </sub-title>
-                <desc>
-                    <xsl:apply-templates select="description"/>
-                </desc>
-                <credits/>
-                <xsl:apply-templates select="episode"/>
-            </programme>
-        </xsl:template>
-
-        <xsl:template match="series">
-            <episode-num system="onscreen"><xsl:value-of select="\@episode"/>:<xsl:value-of select="\@series"/>
-            </episode-num>
-        </xsl:template>
-
-        </xsl:stylesheet>
-EOF
-
-    my $url = $stod2AndFriends{basechid($tv2chan)};
-
-    my  $xml = get_nice( $url ); die( "Failed to fetch $url" ) unless defined( $xml );
-
-    process_xml_channel($writer, $fromdate, $num_days, $timeoffset,  $xsl_transform, $xml);
-}
-
 # get channel listing
 sub get_channels {
-    # I'm too lazy to figure out how to append plus channels programatically
     return  (
-    "RUV" => "Ríkissjónvarpið",
-    # "S1" => "Skjár 1",
-    # "ST2" => "Stöð 2",
-    # "ST2SPORT" => "Stöð 2 Sport",
-    # "ST2SPORT2" => "Stöð 2 Sport 2",
-    # "ST2EXTRA" => "Stöð 2 Extra",
-    # "ST2BIO" => "Stöð 2 bíó",
-    "plus.RUV" => "Ríkissjónvarpið+",
-    # "plus.S1" => "Skjár 1+",
-    # "plus.ST2" => "Stöð 2+",
-    # "plus.ST2SPORT" => "Stöð 2 Sport+",
-    # "plus.ST2SPORT2" => "Stöð 2 Sport 2+",
-    # "plus.ST2EXTRA" => "Stöð 2 Extra+",
-    # "plus.ST2BIO" => "Stöð 2 bíó+",
+    "RUV" => "Rikissjonvarpid",
     );
 }
 
@@ -726,18 +621,8 @@ sub get_icon {
     my ($ch_did) = @_;
     $ch_did = basechid($ch_did);
 
-    my %logos = (
-        "RUV" => "ruv",
-        "S1" => "s1",
-        "ST2" => "stod2",
-        "ST2SPORT" => "2sport",
-        "ST2SPORT2" => "2sport2",
-        "ST2EXTRA" => "2extra",
-        "ST2BIO" => "2bio",
-    );
-
-    if (defined($logos{$ch_did})) {
-        return "http://www.sjonvarp.is/images/logos/".$logos{$ch_did}.".gif";
+    if ($ch_did eq "RUV") {
+        return "http://haffi.is/ico/ruv.jpg";
     }
     return "";
 }
@@ -759,4 +644,19 @@ sub get_categories_map () {
 sub trim {
 	# Remove leading & trailing spaces
 	$_[0] =~ s/^\s+|\s+$//g;
+}
+
+# Normalize potentially mixed-encoded text to Perl characters so the writer can
+# output valid UTF-8 consistently.
+sub normalize_to_text($) {
+    my ($text) = @_;
+    return '' if not defined $text;
+    return $text if utf8::is_utf8($text);
+
+    my $decoded;
+    eval { $decoded = decode('UTF-8', $text, FB_CROAK); };
+    if ($@) {
+        $decoded = decode('ISO-8859-1', $text);
+    }
+    return $decoded;
 }

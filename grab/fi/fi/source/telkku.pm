@@ -23,21 +23,18 @@ fi::common->import();
 sub description { 'telkku.com' }
 
 our %categories = (
-  SPORTS => "urheilu",
+  SPORT  => "urheilu",
   MOVIE  => "elokuvat",
 );
 
 #
-# Unfortunately the embedded JSON data generated into the HTML page by
-# the server is (temporarily?) broken and unreliable. The web application
-# is not affected by this, because it always updates its state via XHR
-# calls to the JSON API endpoints.
+# Use the JSON API endpoints from the web application.
 #
 sub _getJSON($) {
   my($api_path) = @_;
 
   # Fetch JSON object from API endpoint and return contents of "response" property
-  return fetchJSON("https://www.telkku.com/api/channel-groups/$api_path", "response");
+  return fetchJSON("https://il-telkku-api.prod.il.fi/v1/channel-groups/$api_path", "response");
 }
 
 # cache for group name to API ID mapping
@@ -54,12 +51,13 @@ sub channels {
   #
   #  [
   #    {
-  #      id       => "default_builtin_channelgroup1"
+  #      id       => "d63736b5-7f72-45d4-8f9e-6505f1bac855"
   #      slug     => "peruskanavat",
   #      channels => [
   #                    {
-  #                      id   => "yle-tv1",
-  #                      name => "Yle TV1",
+  #                      id   => "391",
+  #                      name => "YLE TV1",
+  #                      slug => "yle-tv-1",
   #                      ...
   #                    },
   #                    ...
@@ -75,37 +73,44 @@ sub channels {
 
     foreach my $item (@{$data}) {
       if ((ref($item)             eq "HASH")  &&
-	  (exists $item->{id})                &&
-	  (exists $item->{slug})              &&
-	  (exists $item->{channels})          &&
-	  (ref($item->{channels}) eq "ARRAY")) {
-	my($api_id, $group, $channels) = @{$item}{qw(id slug channels)};
+          (exists $item->{id})                &&
+          (exists $item->{slug})              &&
+          (exists $item->{channels})          &&
+          (ref($item->{channels}) eq "ARRAY")) {
+        my($api_id, $group, $channels) = @{$item}{qw(id slug channels)};
 
-	if (defined($api_id) && length($api_id) &&
-	    defined($group)  && length($group)  &&
-	    (ref($channels) eq "ARRAY")) {
-	  debug(2, "Source telkku.com found group '$group' ($api_id) with " . scalar(@{$channels}) . " channels");
+        if (defined($api_id) && length($api_id) &&
+            defined($group)  && length($group)  &&
+            (ref($channels) eq "ARRAY")) {
+          debug(2, "Source telkku.com found group '$group' ($api_id) with " . scalar(@{$channels}) . " channels");
 
-	  # initialize group name to API ID map
-	  $group2id{$group} = $api_id;
+          # initialize group/channel name to API ID map
+          my %channel2id;
+          $group2id{$group} = {
+            id       => $api_id,
+            channels => \%channel2id,
+          };
 
-	  foreach my $channel (@{$channels}) {
-	    if (ref($channel) eq "HASH") {
-	      my $id   = $channel->{id};
-	      my $name = $channel->{name};
+          foreach my $channel (@{$channels}) {
+            if (ref($channel) eq "HASH") {
+              my($id, $slug, $name) = @{$channel}{qw(id slug name)};
 
-	      if (defined($id) && length($id)   &&
-		  (not exists $duplicates{$id}) &&
-		  length($name)) {
-		debug(3, "channel '$name' ($id)");
-		$channels{"${id}.${group}.telkku.com"} = "fi $name";
+              if (defined($id)  && length($id)    &&
+                  (not exists $duplicates{$id})   &&
+                  defined($slug) && length($slug) &&
+                  length($name)) {
+                debug(3, "channel '$name' '$slug' ($id)");
+                $channels{"${slug}.${group}.telkku.com"} = "fi $name";
 
-		# Same ID can appear in multiple groups - avoid duplicates
-		$duplicates{$id}++;
-	      }
-	    }
-	  }
-	}
+                # Same ID can appear in multiple groups - avoid duplicates
+                $duplicates{$id}++;
+
+                # add channel to group mapping
+                $channel2id{$slug} = $id;
+              }
+            }
+          }
+        }
       }
     }
 
@@ -116,13 +121,16 @@ sub channels {
   return;
 }
 
-sub _group2id($) {
-  my($group) = @_;
+sub _group2id($$) {
+  my($channel, $group) = @_;
 
   # Make sure group to ID map is initialized
   channels() unless %group2id;
 
-  return $group2id{$group};
+  my $href = $group2id{$group};
+  return () unless defined($href);
+
+  return ($href->{id}, $href->{channels}->{$channel});
 }
 
 # Grab one day
@@ -132,84 +140,104 @@ sub grab {
   # Get channel number from XMLTV id
   return unless my($channel, $group) = ($id =~ /^([\w-]+)\.([\w-]+)\.telkku\.com$/);
 
-  # Map group name to API ID
-  return unless my $api_id = _group2id($group);
+  # Map group name to API & channel ID
+  return unless my($api_id, $channel_id) = _group2id($channel, $group);
+  return unless defined($channel_id);
 
   #
   # API parameters:
   #
-  #  - date is $today
-  #  - range is 24 hours (start 00:00:00.000 - end 00:00:00.000)
-  #  - max. 1000 entries per channel
-  #  - detailed information
+  #  - startTime= is $today,    date part of ISO-8601 format
+  #  - endTime=   is $tomorrow, date part of ISO-8601 format
   #
   # Response will include programmes from $yesterday that end $today, to
   # $tomorrow where a programme of $today ends.
   #
-  my $data = _getJSON("$api_id/offering?endTime=00:00:00.000&limit=1000&startTime=00:00:00.000&view=PublicationDetails&tvDate=" . $today->ymdd());
+  my $data = _getJSON("$api_id/offering?startTime=" . $today->ymdd() . "&endTime=" . $tomorrow->ymdd());
 
   #
   # Programme data has the following structure
   #
-  #  publicationsByChannel => [
+  #  [
   #    {
-  #      channel      => {
-  #                        id => "yle-tv1",
-  #                        ...
-  #                      },
-  #      publications => [
-  #                        {
-  #                           startTime     => "2016-08-18T06:25:00.000+03:00",
-  #                           endTime       => "2016-08-18T06:55:00.000+03:00",
-  #                           title         => "Helil kyläs",
-  #                           description   => "Osa 9/10. Asiaohjelma, mikä ...",
-  #                           programFormat => "MOVIE",
-  #                           ...
-  #                        },
-  #                        ...
-  #                      ]
+  #      channelId   => "391",
+  #      channelName => "YLE TV1".
+  #      ...
+  #      programs => {
+  #        21_01_last_day: [
+  #                          {
+  #                             programName   => "Lomittajat",
+  #                             startTime     => "2025-09-03T06:30:00.000Z",
+  #                             endTime       => "2025-09-03T07:00:00.000Z",
+  #                             description   => "1/8. Jouki löytää kadonneen vasikan ...",
+  #                             format        => "EPISODIC",
+  #                             seasonNumber  => 1,
+  #                             episodeNumber => 1,
+  #                             ...
+  #                          },
+  #                          ...
+  #       ],
+  #       ...
   #    },
   #    ...
   #  ]
   #
-  if ((ref($data)                          eq "HASH")  &&
-      (ref($data->{publicationsByChannel}) eq "ARRAY")) {
+  if (ref($data) eq "ARRAY") {
     my @objects;
 
-    foreach my $item (@{ $data->{publicationsByChannel} }) {
-      if ((ref($item)                 eq "HASH")  &&
-	  (ref($item->{channel})      eq "HASH")  &&
-	  (ref($item->{publications}) eq "ARRAY") &&
-	  ($item->{channel}->{id} eq $channel)) {
+    foreach my $item (@{ $data }) {
+      if ((ref($item)             eq "HASH")      &&
+          ($item->{channelId}     eq $channel_id) &&
+          (ref($item->{programs}) eq "HASH")) {
 
-	foreach my $programme (@{$item->{publications}}) {
-	   my($start, $end, $title, $desc) =
-	     @{$programme}{qw(startTime endTime title description)};
+        # NOTE: hash doesn't retain chronological order of the slots!
+        foreach my $programmes (values %{ $item->{programs} }) {
+          if (ref($programmes) eq "ARRAY") {
 
-	   #debug(5, JSON->new->pretty->encode($programme));
+            foreach my $programme (@{$programmes}) {
+              if (ref($programme) eq "HASH") {
 
-	   if ($start && $end && $title && $desc) {
-             $start = UnixDate($start, "%s");
-	     $end   = UnixDate($end,   "%s");
+              my($start, $end, $title, $desc) =
+                @{$programme}{qw(startTime endTime programName description)};
 
-	     # NOTE: entries with same start and end time are invalid
-	     if ($start && $end && ($start != $end)) {
-	       my $category = $categories{$programme->{programFormat}};
+                # NOTE: description can be an empty string
+                if ($start && $end && $title && defined($desc)) {
+                  $start = UnixDate($start, "%s");
+                  $end   = UnixDate($end,   "%s");
 
-	       debug(3, "List entry $channel.$group ($start -> $end) $title");
-	       debug(4, $desc);
-	       debug(4, $category) if defined $category;
+                  # NOTE: entries with same start and end time are invalid
+                  if ($start && $end && ($start != $end)) {
+                    my($category, $season, $episode_number) =
+                      @{$programme}{qw(format seasonNumber episodeNumber)};
+                    $category = $categories{$category};
 
-	       # Create program object
-	       my $object = fi::programme->new($id, "fi", $title, $start, $end);
-	       $object->category($category);
-	       $object->description($desc);
-	       push(@objects, $object);
-	     }
-	   }
-	}
+                    # drop empty description
+                    undef $desc if $desc eq '';
+
+                    debug(3, "List entry $channel.$group ($start -> $end) $title");
+                    debug(4, $desc)     if defined $desc;
+                    debug(4, $category) if defined $category;
+                    debug(4, sprintf("s%02de%02d", $season, $episode_number))
+                      if (defined($season) && defined($episode_number));
+
+                    # Create program object
+                    my $object = fi::programme->new($id, "fi", $title, $start, $end);
+                    $object->category($category);
+                    $object->description($desc);
+                    $object->season($season);
+                    $object->episode_number($episode_number);
+                    push(@objects, $object);
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     }
+
+    # Overlap check requies programmes to be sorted by ascending start time
+    @objects = sort { $a->start() <=> $b->start() } @objects;
 
     # Fix overlapping programmes
     fi::programme->fixOverlaps(\@objects);

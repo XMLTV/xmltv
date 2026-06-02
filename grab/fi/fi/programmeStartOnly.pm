@@ -47,6 +47,7 @@ sub convertProgrammeList($$$$) {
   return([]) unless @{ $programmes };
 
   # Check for day crossings
+  # default case: list contains programmes from today or today & tomorrow
   my @dates = ($today, $tomorrow);
   if (@{ $programmes } > 1) {
     my @day_crossings;
@@ -61,11 +62,20 @@ sub convertProgrammeList($$$$) {
     if (@day_crossings > 1) {
       # Did caller specify yesterday?
       if (defined $yesterday) {
+	# list contains programmes from yesterday, today & tomorrow
         unshift(@dates, $yesterday);
       } else {
         # No, assume the entry after first crossing is broken -> drop it
         splice(@{ $programmes }, $day_crossings[0] + 1, 1);
       }
+    } elsif (
+      # if there is only one day crossing, is at the start?
+      (@day_crossings == 1) && ($day_crossings[0] == 0) &&
+      # this only applies if caller specified yesterday
+      (defined $yesterday)
+    ) {
+      # list contains programmes from yesterday & today
+      @dates = ($yesterday, $today);
     }
   }
 

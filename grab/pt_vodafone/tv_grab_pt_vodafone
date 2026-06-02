@@ -106,24 +106,28 @@ use utf8;
 use XMLTV;
 use XMLTV::Version "$XMLTV::VERSION";
 use DateTime;
-use DateTime::Format::Strptime;
 use Encode; # used to convert 'perl strings' into 'utf-8 strings'
 use XML::LibXML;
 use XMLTV::Configure::Writer;
 use XMLTV::Get_nice qw/get_nice/;
 use XMLTV::Options qw/ParseOptions/;
+use XMLTV::Supplement qw/GetSupplement/;
 use JSON;
+use Text::Unidecode;
 use URI::Escape qw/ uri_escape /;
 use URI::Encode qw/ uri_encode uri_decode/;
-#use Data::Dump qw/pp/; # uncomment to debug
+# use Data::Dump qw/pp/; # uncomment to debug
 
 my $maxdays = 1+6; # data source is limited to 7 days (including today)
 
 my $grabber_name = 'tv_grab_pt_vodafone';
-my $grabber_version = '2.00';
+my $grabber_version = '3.00';
 
-my $json_baseurl = 'https://web.ott-red.vodafone.pt';
-my $json_api = '/ott3_webapp/';
+my $json_baseurl = 'https://cdn.pt.vtv.vodafone.com/epg/';
+
+# Generate with:
+# jq -r '.channels[]|(.epgId,.title,.logo.color.uri)' channel.list.new | sed 'N;N; s/\n/\t/g' | sort > channel.list
+my $channel_list_file = 'channel.list';
 
 my $ua = LWP::UserAgent->new(ssl_opts => {
     SSL_cipher_list => 'DEFAULT:!DH',
@@ -145,10 +149,6 @@ my( $opt, $conf ) = ParseOptions( {
 # limit to maxdays in the future
 if ($opt->{offset} + $opt->{days} > $maxdays) {
     $opt->{days} = $maxdays - $opt->{offset};
-}
-
-if ($opt->{days} < 1) {
-    $opt->{days} = 0;
 }
 
 # Get the actual data and print it to stdout.
@@ -174,10 +174,10 @@ $writer->start({
     'generator-info-name' => "XMLTV/".$opt->{version},
     'generator-info-url' => 'http://www.xmltv.org/',
     'source-info-name' => 'EPG Service for Vodafone',
-    'source-info-url' => $json_baseurl.$json_api."guia-tv",
+    'source-info-url' => $json_baseurl,
 });
 
-if ($opt->{days} > 0) {
+if ( ! undef $opt->{days} ) {
     if( !$opt->{quiet} ) {
         print( STDERR "fetching data\n" );
     }
@@ -193,138 +193,182 @@ if ($opt->{days} > 0) {
 $writer->end();
 
 if( $is_success ) {
-     exit 0;
+    exit 0;
 } else {
-     exit 1;
+    exit 1;
 }
 
 sub config_stage
 {
-     my( $stage, $conf ) = @_;
-     die "Unknown stage $stage" if $stage ne "start";
+    my( $stage, $conf ) = @_;
+    die "Unknown stage $stage" if $stage ne "start";
 
-     my $result;
-     my $writer = new XMLTV::Configure::Writer( OUTPUT => \$result, encoding => 'utf-8' );
-     $writer->start( { grabber => 'tv_grab_pt_vodafone' } );
-     $writer->end( 'select-channels' );
+    my $result;
+    my $writer = new XMLTV::Configure::Writer( OUTPUT => \$result, encoding => 'utf-8' );
+    $writer->start( { grabber => 'tv_grab_pt_vodafone' } );
+    $writer->end( 'select-channels' );
 
-     return $result;
+    return $result;
 }
 
-sub list_channels
+sub list_channels 
 {
-     my( $conf, $opt ) = @_;
+    my ( $conf, $opt ) = @_;
 
-     # Return a string containing an xmltv-document with <channel>-elements
-     # for all available channels.
+    my $channellist = _read_channel_data();
 
-     my $channellist=json_request( 'get', 'v1/channels' );
+    my $output=XML::LibXML::Document->new( '1.0', 'utf-8' );
+    my $root=XML::LibXML::Element->new( 'tv' );
+    $output->setDocumentElement( $root );
 
-     $channellist = $channellist->{data};
+    foreach my $key ( sort keys %$channellist ) {
+        my $channel=$channellist->{$key};
+        my $sigla=$key;
+        my $name=$channel->{name};
+        my $icon=$channel->{icon};
+        my $tmp=XML::LibXML::Element->new( 'channel' );
+        $tmp->setAttribute( 'id', encode( 'UTF-8', $sigla ) );
+        $tmp->appendTextChild( 'display-name', encode( 'UTF-8', $name ) );
+        my $iconElement=XML::LibXML::Element->new( 'icon' );
+        $iconElement->setAttribute( 'src', $icon );
+        $tmp->appendChild( $iconElement );
+        $root->appendChild( $tmp );
+    }
 
-     my $output=XML::LibXML::Document->new( '1.0', 'utf-8' );
-     my $root=XML::LibXML::Element->new( 'tv' );
-     $output->setDocumentElement( $root );
+    return $output->toString();
 
-     foreach my $channel( @$channellist ) {
-         #pp( $channel ) if( $opt->{debug} ); # uncomment to debug
-
-         my $name=$channel->{name};
-         my $sigla=$channel->{id};
-         my $tmp=XML::LibXML::Element->new( 'channel' );
-         $tmp->setAttribute( 'id', encode( 'UTF-8', $sigla ) );
-         $tmp->appendTextChild( 'display-name', encode( 'UTF-8', $name ) );
-         $root->appendChild( $tmp );
-     }
-
-     return $output->toString();
 }
+
+sub _read_channel_data
+{
+    my $channel_list = {};
+    my $c = 0;
+    my $channel_list_str = GetSupplement( 'tv_grab_pt_vodafone', $channel_list_file );
+    foreach my $channel_string (split( /\n/, $channel_list_str )) {
+        chomp($channel_string);
+        # remove commented channels
+        $channel_string =~ s/^#.*//;
+        next if not length $channel_string;
+        my @items = split("\t",$channel_string);
+        $items[1] =~ s/\"//g;
+        $channel_list->{ $items[0] } = {
+            name => decode('UTF-8', $items[1]),
+            icon => $items[2]
+        };
+    }
+
+    return $channel_list
+}
+
 
 sub get_epg
 {
     my( $writer, $startDate, $endDate ) = @_;
 
-    my $baseRequest = 'v1.5/programs/grids/';
     my @channelList = @{$conf->{channel}};
-
-    my $curDate = $startDate;
 
     my %xmlchannels;
     my %xmlprogs;
 
-    my $nr_days = $startDate->delta_days($endDate)->days;
+    my $curDate = $startDate;
 
-    for my $day (0..$nr_days) {
+    my $channelInfo = _read_channel_data();
 
-        my $epg_day = $day + $opt->{offset};
+    while ( $curDate <=  $endDate ) {
 
         for my $channel (@channelList) {
 
-            my $encoded_channel = uri_encode($channel);
-
-            print( STDERR "requesting EPG from " . $curDate->ymd() . " for " . $encoded_channel . "\n" )  if( !$opt->{quiet} );
-            print( STDERR " GET ".$json_baseurl.$json_api.$baseRequest.$encoded_channel."/".$epg_day."\n" )  if( $opt->{debug} );
-
-            my $epgSource = json_request('get', $baseRequest."/".$encoded_channel."/".$epg_day);
-
-            if ( ! $epgSource ){
-                die("Bad EPG download, probably channel list is outdated, rerun the grabber configure to update the list.\n" ); }
-            elsif ( !$epgSource->{data} || scalar @{$epgSource->{data}} == 0 ){
-                print( STDERR " Empty EPG download for ".$channel.", probably channel list is outdated or no API data for that channel\n" .
-                "  Rerun the grabber configure to update the list or check for the channel EPG in the Vodafone app.\n" );
-                next;
-            };
-
-            my $data = $epgSource->{data};
-
-            my $channelId = make_channelid( $data->[0]->{channel}->{id} );
+            my $channelId = make_channelid( $channelInfo->{$channel}->{name} );
             my %ch = (
                 'id' => $channelId,
-                'icon' => [ { src =>  $data->[0]->{channel}->{logo} } ],
+                'icon' => [ { src =>  unquote($channelInfo->{$channel}->{icon}) } ],
             );
             # multiple display-names are ok and may be useful to match other tools lists
-            my @displayname = ( [  sanitizeUTF8( $data->[0]->{channel}->{name} ), 'pt' ] ,
-                                [  sanitizeUTF8( $data->[0]->{channel}->{id} ),   'pt' ] );
+            my @displayname = ( [  sanitizeUTF8( $channelInfo->{$channel}->{name} ), 'pt' ] ,
+                                [  sanitizeUTF8( $channelId ), 'pt' ] ,
+                                [  sanitizeUTF8( $channel ), 'pt' ] );
 
             push @{ $ch{'display-name'} }, @displayname ;
 
             $xmlchannels{ $channelId } = \%ch ;
 
-            PROGRAMME:
-            for my $programme ( @{ $data }) {
-                my %prog;
-                my ($dtstart, $dtend, $starts_today) = make_dates($programme->{startTime}, $programme->{endTime}, $curDate);
-                next PROGRAMME unless $starts_today;
+            my $date_day = $curDate->strftime('%d');
+            my $date_month = $curDate->strftime('%m');
+            my $date_year = $curDate->year;
 
-                $prog{start} = $dtstart;
-                $prog{stop} = $dtend;
+            for my $period ("00-06","06-12","12-18","18-00") {
 
-                $prog{channel} = $channelId;
-                $prog{title} = [ [ sanitizeUTF8($programme->{title}), 'pt' ] ];
-                $prog{desc} = [ [ sanitizeUTF8($programme->{description}), 'pt' ] ]                     if ($programme->{description});
-                $prog{length} = ( $programme->{duration} )                                              if ($programme->{duration});
-                $prog{icon} = [ { src => $programme->{image} } ]                                        if ($programme->{image});
+                print( STDERR "requesting EPG from " . $curDate->ymd() ." [".$period."]". " for " . $channelId . "\n" )  if( !$opt->{quiet} );
+                print( STDERR " GET ".$json_baseurl.$channel."/".$date_year."/".$date_month."/".$date_day."/".$period."\n" )  if( $opt->{debug} );
 
-                $prog{category} = [ [ sanitizeUTF8($programme->{channel}{category}), 'pt' ] ]           if ($programme->{channel}{category});
-                $prog{'sub-title'}   = [ [ sanitizeUTF8($programme->{series}{episodeTitle}), 'pt' ] ]   if ($programme->{series}->{episodeTitle}) ;
+                my $epgSource = json_request('get', $channel."/".$date_year."/".$date_month."/".$date_day."/".$period);
 
-                $prog{'episode-num'} = make_episode_num($programme);
+                if ( ! $epgSource ){
+                    die("Bad EPG download, probably channel list is outdated, rerun the grabber configure to update the list.\n" ); }
+                elsif ( !$epgSource->{result} || !$epgSource->{result}->{objects} || scalar @{$epgSource->{result}->{objects}} == 0 ){
+                    print( STDERR " Empty EPG download for ".$channel.", probably channel list is outdated or no API data for that channel\n" .
+                    "  Rerun the grabber configure to update the list or check for the channel EPG in the Vodafone app.\n" );
+                    next;
+                };
 
-                # We can get the same programme for two different days if it goes past midnight.
-                # Lets remove duplicates here.
-                $xmlprogs{$channelId}{ $dtstart, $dtend } = \%prog;
+                my $data = $epgSource->{result}->{objects};
 
+                PROGRAMME:
+                for my $programme ( @{ $data }) {
+                    my %prog;
+                    my ($dtstart, $dtend, $starts_today) = make_dates($programme->{startDate}, $programme->{endDate}, $curDate);
+
+                    $prog{start} = $dtstart;
+                    $prog{stop} = $dtend;
+                    $prog{channel} = $channelId;
+                    $prog{title} = get_title($programme);
+                    $prog{desc} = get_desc($programme); 
+                    $prog{date} = get_date($programme);
+                    $prog{'episode-num'} = make_episode_num($programme);
+
+                    my $length = get_length($programme);
+                    $prog{length} = $length if $length;
+
+                    my $icon = get_icon($programme);
+                    $prog{icon} = $icon if $icon;
+
+                    my $category = get_category($programme);
+                    $prog{category} = $category if $category;
+
+                    my $country = get_country($programme);
+                    $prog{country} = $country if $country;
+
+                    my $rating = get_rating($programme);
+                    $prog{rating} = $rating if $rating;
+
+                    my $image = get_images($programme);
+                    $prog{image} = $image if $image;
+
+                    my $actors = get_actors($programme);
+                    $prog{credits}{actor} = $actors if $actors;
+
+                    my $directors = get_directors($programme);
+                    $prog{credits}{director} = $directors if $directors;
+
+                    # We can get the same programme for two different days if it goes past midnight.
+                    # Lets remove duplicates here.
+                    $xmlprogs{$channelId}{ $dtstart, $dtend } = \%prog;
+                    print( STDERR "  Adding programme: " . $prog{title}[0][0] . " [" . $dtstart . " - " . $dtend . "]\n" )  if( $opt->{debug} );
+                }
+                
             }
+
         }
 
-
-        $curDate->add( days => 1);
+        $curDate->add(days => 1);
     }
 
     $writer->write_channel($_) for values %xmlchannels;
     for my $ch (keys %xmlchannels) {
         $writer->write_programme($_) for values %{ $xmlprogs{$ch} };
     }
+
+    $is_success=1;
 }
 
 sub sanitizeUTF8 {
@@ -338,13 +382,10 @@ sub sanitizeUTF8 {
 sub json_request {
     my ($method, $path, $content) = @_;
 
-    my $url;
-    if($path =~ /^\//) {
-        $url = $json_baseurl . $path;
-    }
-    else {
-        $url = $json_baseurl . $json_api . $path;
-    }
+    # TODO(nsenica): Implement proper throttling control.
+    sleep(0.1);
+    
+    my $url = $json_baseurl . $path;
 
     print( STDERR "json_request(" . $method . ") url: " . $url . "\n" ) if( $opt->{debug} );
 
@@ -376,34 +417,31 @@ sub make_episode_num
 {
     my ($programme) = @_;
 
-    return unless $programme->{series};
+    return unless $programme->{metas}{'season number'};
 
     my $output;
 
     my $season;
     my $episode;
 
-    if ( $programme->{series}{season} ) {
-        $season = $programme->{series}{season} - 1;
+    if ( $programme->{metas}{'season number'}{value} ) {
+        $season = $programme->{metas}{'season number'}{value} - 1;
     }
 
-    if ( $programme->{series}{episode} ) {
-        $episode = $programme->{series}{episode} - 1;
+    if ( $programme->{metas}{'episode num'}{value} ) {
+        $episode = $programme->{metas}{'episode num'}{value} - 1;
     }
 
     $output = [ [ ($season // "") . "." . ($episode // "") . ".", 'xmltv_ns' ] ] if (defined $season || defined $episode);
 
-    my $seasonLabel = sanitizeUTF8($programme->{series}{seasonLabel})                            if ($programme->{series}{seasonLabel}) ;
-    my $episodeLabel = sanitizeUTF8($programme->{series}{episodeLabel})                          if ($programme->{series}{episodeLabel}) ;
-
-    if ( defined $seasonLabel && defined $episodeLabel ) {
-        push @{ $output }, [ $seasonLabel ." ". $episodeLabel , 'onscreen' ];
+    if ( defined $season && defined $episode ) {
+        push @{ $output }, [ ($season+1) ." ". ($episode+1) , 'onscreen' ];
     }
-    elsif ( defined $seasonLabel ) {
-        push @{ $output }, [ $seasonLabel , 'onscreen' ];
+    elsif ( defined $season ) {
+        push @{ $output }, [ ($season+1) , 'onscreen' ];
     }
-    elsif ( defined $episodeLabel ) {
-        push @{ $output }, [ $episodeLabel , 'onscreen' ];
+    elsif ( defined $episode ) {
+        push @{ $output }, [ ($episode+1) , 'onscreen' ];
     }
     return $output;
 
@@ -413,19 +451,16 @@ sub make_dates
 {
     my( $startTime, $endTime, $curDate ) = @_;
 
-    my $strp = new DateTime::Format::Strptime( pattern => '%FT%TZ' );
-
-    my $dtstart = $strp->parse_datetime($startTime);
+    my $dtstart = DateTime->from_epoch(epoch => $startTime);
     my $starts_today = 0;
     # does the programme start on the day we want listings for?
     if ($dtstart->day == $curDate->day) {
         $starts_today = 1;
     }
 
-    my $dtend = $strp->parse_datetime($endTime);
+    my $dtend = DateTime->from_epoch(epoch =>$endTime);
 
     # dates look like GMT, we tried UTC but in summer time they fail
-    #return ($dtstart->strftime( '%Y%m%d%H%M%S %z' ), $dtend->strftime( '%Y%m%d%H%M%S %z' ));
     return ($dtstart->strftime( '%Y%m%d%H%M%S +0000' ), $dtend->strftime( '%Y%m%d%H%M%S +0000' ), $starts_today);
 
 }
@@ -437,8 +472,123 @@ sub make_channelid
     $id =~ s/\s+//g;      # remove whitespace
     $id =~ s/&//g;        # remove ampersand
     $id =~ s/!//g;        # remove !
-    $id =~ s/\x{e7}/c/g;  # turn c-cecille into plain c
+    $id =~ s/\"//g;       # remove ""
     $id =~ s/\+/-plus/g;  # turn + into -plus
+    $id = unidecode($id);
     $id .= '.tv.vodafone.pt'; # append domain part
     return( $id );
+}
+
+sub unquote {
+    my ($str) = @_;
+    $str =~ s/^"//;
+    $str =~ s/"$//;
+    return $str;
+}
+
+sub get_title {
+    my ($programme) = @_;
+    return [ [ sanitizeUTF8($programme->{name}), 'pt' ] ];
+}
+
+sub get_desc {
+    my ($programme) = @_;
+    return [ [ sanitizeUTF8($programme->{description}), 'pt' ] ] if ($programme->{description});
+}
+
+sub get_length {
+    my ($programme) = @_;
+    if ($programme->{metas}{'display duration'}{value}) {
+        my $duration_str = $programme->{metas}{'display duration'}{value};
+        my @duration_items = split(/[PTHMS]/, $duration_str);
+        return $duration_items[2] * 3600 + $duration_items[3] * 60 + $duration_items[4] if scalar @duration_items;
+    }
+}
+
+sub get_icon {
+    my ($programme) = @_;
+    if ($programme->{images}[0]{url} && $programme->{images}[0]{imageTypeName} eq "ca") {
+        return [ { src => $programme->{images}[0]{url} . "/width/360/height/640/quality/95" } ];
+    }
+    if ($programme->{images}[0]{url} && $programme->{images}[0]{imageTypeName} eq "cc") {
+        return [ { src => $programme->{images}[0]{url} . "/width/640/height/360/quality/95" } ];
+    }
+}
+
+sub get_category {
+    my ($programme) = @_;
+    if ($programme->{tags}{genre}) {
+        my @category = map { [ sanitizeUTF8($_->{value}), 'pt' ] } @{$programme->{tags}{genre}{objects}};
+        return \@category;
+    }
+}
+
+sub get_country {
+    my ($programme) = @_;
+    return [ [ sanitizeUTF8($programme->{tags}{'country of production'}{objects}[0]{value}), 'pt' ] ] if $programme->{tags}{'country of production'};
+}
+
+sub get_rating {
+    my ($programme) = @_;
+    if ($programme->{tags}{'parental Rating'}) {
+        my $rating;
+        if ($programme->{tags}{'parental Rating'}{objects}[0]{value} == 0) {
+            $rating = [ [ "All Ages", 'Portuguese Movie Rating' ] ];
+        } else {
+            $rating = [ [ "M/" . $programme->{tags}{'parental Rating'}{objects}[0]{value}, 'Portuguese Movie Rating' ] ];
+        }
+        return $rating if $rating;
+    }
+}
+
+sub get_images {
+    my ($programme) = @_;
+    my @images;
+    for my $image (@{$programme->{images}}) {
+        next if !$image->{url};
+
+        my $type = "";
+        my $orient = "";
+        my $size = 3;
+        my $system = "vodafone";
+        my $width = 640;
+        my $height = 360;
+
+        if ($image->{imageTypeName} eq "cc") {
+            $orient = "L";
+            $type = "still";
+        } elsif ($image->{imageTypeName} eq "ca") {
+            $orient = "P";
+            $type = "poster";
+            $width = 360;
+            $height = 640;
+        } elsif ($image->{imageTypeName} eq "bg") {
+            $orient = "L";
+            $type = "backdrop";
+        }
+
+        push @images, [ $image->{url} . "/width/" . $width . "/height/" . $height . "/quality/95", { type => $type, size => $size, orient => $orient, system => $system } ];
+    }
+    return \@images if scalar @images;
+}
+
+sub get_date {
+    my ($programme) = @_;
+    return sanitizeUTF8($programme->{metas}{year}{value}) if $programme->{metas}{year}{value};
+}
+
+sub get_actors {
+    my ($programme) = @_;
+    if ($programme->{tags}{actors}) {
+        my @actors = map { sanitizeUTF8($_->{value}) } @{$programme->{tags}{actors}{objects}};
+        return \@actors;
+    }
+}
+
+sub get_directors {
+    my ($programme) = @_;
+    if ($programme->{tags}{director}) {
+        my @directors = map { sanitizeUTF8($_->{value}) } @{$programme->{tags}{director}{objects}};
+        return \@directors;
+    }
 }

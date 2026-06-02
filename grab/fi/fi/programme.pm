@@ -271,6 +271,15 @@ sub dump {
 	# Repeat the above match on remaining description
 	($left, $special, $right) = ($remainder =~ $match_description);
 
+    # Check for "K<season>, J<episode: <sub-title>...."
+    } elsif (($desc_season, $desc_episode, $remainder) =
+	     ($description =~ m/^K(\d+),\s+J(\d+):\s+(.*)$/)) {
+	$season  = $desc_season;
+	$episode = $desc_episode;
+
+	# Repeat the above match on remaining description
+	($left, $special, $right) = ($remainder =~ $match_description);
+
     # Check for "<sub-title>. Kausi <season>, (jakso )?<episode>/<# of episodes>...."
     } elsif (($desc_subtitle, $desc_season, $desc_episode, $desc_total, $remainder) =
 	     ($description =~ m!^(.+)\s+Kausi\s+(\d+),\s+(?:jakso\s+)?(\d+)(?:/(\d+))?\.\s*(.*)$!)) {
@@ -326,6 +335,15 @@ sub dump {
       unless ref($subtitle);
     $xmltv{'sub-title'} = $subtitle;
     debug(3, "XMLTV programme episode ($_->[1]): $_->[0]")
+      foreach (@{ $xmltv{'sub-title'} });
+  #
+  # When no subtitle is given, use season/episode.
+  #
+  # NOTE: this feature is optional and needs to be enabled manually in the configuration!
+  #
+  } elsif (getOption("programme", "episode-num-as-default-subtitle") && defined($season) && defined($episode)) {
+    $xmltv{'sub-title'} = [["S${season}E${episode}"]];
+    debug(3, "XMLTV programme episode: $_->[0]")
       foreach (@{ $xmltv{'sub-title'} });
   }
   if (defined($category) && length($category)) {

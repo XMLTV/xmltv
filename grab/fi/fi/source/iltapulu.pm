@@ -121,14 +121,16 @@ sub grab {
     #     </a>
     #     <ul>
     #      <li class="running g-e">
-    #       <time datetime="2020-12-26T15:20:00+02:00">15.20</time>
-    #       <b class="pl">
-    #        <a href="/joulumaa" class="op" ... title="... description ...">
-    #         Joulumaa
-    #        </a>
-    #        ...
-    #       </b>
-    #       ...
+    #       <a href="/the-edge-reunalla" class="op" title="... description ...">
+    #        <time datetime="2025-04-26T22:45:00+03:00">22.45</time>
+    #        <b>The Edge - Reunalla
+    #         <span class="imdb">
+    #          <span class="imdb-t">IMDb</span>
+    #          <span class="imdb-r"> 6,9 </span>
+    #         </span>
+    #         ...
+    #        </b>
+    #       </a>
     #      </li>
     #      ...
     #     </ul>
@@ -139,15 +141,16 @@ sub grab {
 					  "id" => qr/^channel-${channel}/)) {
 	if (my @entries = $section->look_down("_tag" => "li")) {
 	  foreach my $entry (@entries) {
-	    my $start = $entry->look_down("_tag" => "time");
+	    my $start = $entry->look_down("_tag"  => "time");
 	    my $link  = $entry->look_down("class" => "op");
+	    my $title = $entry->look_down("_tag"  => "b");
 
-	    if ($start && $link) {
+	    if ($start && $link && $title) {
 	      if (my($hour, $minute) =
 		  $start->as_text() =~ /^(\d{2})[:.](\d{2})$/) {
-	        my $title = $link->as_text();
+		($title) = $title->content_list();
 
-	        if (length($title)) {
+	        if (defined $title && length($title)) {
 		  my $desc      = $link->attr("title");
 		  my($category) = ($entry->attr("class") =~ /g-(\w+)$/);
 		  $category = $categories{$category} if $category;

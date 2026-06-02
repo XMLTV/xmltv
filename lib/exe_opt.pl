@@ -17,6 +17,7 @@ print '
 -M Date::Language::
 -M Class::MethodMaker::
 -M Encode::Byte::
+-M Specio::
 -X JSON::PP58
 -X Test::Builder::IO::Scalar
 -X Win32::Console
